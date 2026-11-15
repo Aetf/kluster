@@ -406,7 +406,7 @@ waves leave it:
     than the cancellation, which takes its member off the network at the
     next `physical` apply and its `*.zt` record out of `dns`
     (physical/gateway.md §2.1, dns.md §2). DNSControl is not among the
-    trackers retired here: it retires at the zones' cutover, the `dns`
+    trackers retired here: it retired at the zones' cutover, the `dns`
     up of §1 item 2 (sources-of-truth.md, row R1).
 2.  Homelab host: the legacy cluster stopped and k3s uninstalled after
     Waves C/D, its retained-volume census finished. **The CI runners a

@@ -2206,11 +2206,11 @@ address of the row's node, and is empty on every other node.
 ### 8.2 The `dns` stack's first `up`
 
 This `up` is the zones' cutover (sources-of-truth.md, row R1): from it
-on, the `dns` stack is what writes every zone, and Aetf/dns takes no
-push (note N1 there). The stack runs under the stack passphrase that
-`mise.toml` hands every run, so it needs no wrapper, and it refuses
-until step 5 has published the anchors' addresses (`stacks/dns.py`,
-`_usable_address`).
+on, the `dns` stack is what writes every zone, and Aetf/dns, retired
+and archived, writes none (note N1 there). The stack runs under the
+stack passphrase that `mise.toml` hands every run, so it needs no
+wrapper, and it refuses until step 5 has published the anchors'
+addresses (`stacks/dns.py`, `_usable_address`).
 
 **First, the records already gone live leave state.** The records
 Aetf/dns removed after `e865032`, a class of sources-of-truth.md note
@@ -2351,10 +2351,16 @@ sources-of-truth.md §4, prints one digest on every line.
 **The way back is forward.** A row the `up` got wrong is corrected in
 the census and applied again; that is the ordinary path from here on,
 and it is the only one that keeps the `dns` stack and the zones in
-agreement. The earlier declaration exists only as Aetf/dns's
-`dnsconfig.js`, and a push to its `master` runs DNSControl over every
-zone. It is an emergency measure, and what it costs is the reason it is
-one:
+agreement. The earlier declaration exists only in Aetf/dns's history,
+as `dnsconfig.js` at `47ab103`, the parent of the pointer commit
+`fe7cc03` that removed it with every workflow (sources-of-truth.md note
+N1). The repository is archived, and an archived repository takes no
+push, so that way back starts with lifting the archive. Once the
+repository holds a `CLOUDFLARE_API_TOKEN` secret again, a revert of
+`fe7cc03` pushed to its `master` restores `dnsconfig.js` and
+`push.yml`, and that push runs DNSControl over every zone. Reading C1 (sources-of-truth.md §4)
+previews what it would change. It is an emergency measure, and what it
+costs is the reason it is one:
 
 -   it recreates every record the `up` deleted, the list in
     sources-of-truth.md note N1;
