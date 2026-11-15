@@ -55,10 +55,12 @@ operation:
     EPHEMERAL partition into the new space only at boot (homelab-host.md §1).
     The declaration cannot state a size at all: the provider refuses `size`
     beside `source` and sets the volume's capacity from the source file's
-    length. That file is the Talos image followed by the room Talos needs to
-    create its data partitions at first boot
-    (`components/talos/image.py`, `HOMELAB_DISK_ROOM`), so the disk is
-    created bootable and its working size is the host-side step's to reach.
+    length. That file is the Talos image followed by the room Talos creates
+    its data partitions in at first boot, sized so that EPHEMERAL clears
+    day 1's health gate (`components/talos/image.py`, `HOMELAB_DISK_ROOM`).
+    So the disk is created bootable and passes the gate of the run that
+    creates it, and its bootstrap and working sizes are the host-side step's
+    to reach.
     The file and the declaration part company from the moment that step runs —
     which is why `size` is ignored here as well. Every field of a libvirt
     volume replaces the volume, so a program insisting on a size would propose
@@ -133,8 +135,11 @@ MIB_PER_GIB = 1024
 
 #: Raw, not qcow2: the image lives on a nodatacow subvolume, where qcow2's
 #: allocation layer buys indirection and nothing else (homelab-host.md §1).
-#: The volume is created sparse — the provider declares a capacity and no
-#: allocation — so the file occupies what the guest has written.
+#: The volume is created with a capacity and no allocation, and the upload
+#: then writes every byte of its source into it, the room after the image
+#: included (`components/talos/image.py`, `HOMELAB_DISK_ROOM`). Growth past
+#: that is `truncate` on the host, so the file occupies the source's length
+#: and what the guest writes beyond it.
 DISK_FORMAT = 'raw'
 
 #: The seed's format as libvirt records it. libvirt probes an uploaded ISO

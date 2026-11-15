@@ -122,7 +122,32 @@ HOMELAB_EXTENSIONS = ('siderolabs/i915', 'siderolabs/mei')
 #: shapes from, packaged beside the disk image in the archive it imports.
 IMAGE_METADATA_TEMPLATE = 'templates/image_metadata.json.j2'
 
+MIB = 1 << 20
 GIB = 1 << 30
+
+#: The STATE partition Talos creates past a disk image's last partition at
+#: first boot, at this fixed size (talos v1.13.9
+#: `pkg/machinery/imager/quirks/partitions.go`, `StateSize`).
+TALOS_STATE_SIZE = 100 * MIB
+
+#: The least EPHEMERAL that day 1's health gate accepts on a node.
+#:
+#: Talos's disk-size check (talos v1.13.9 `pkg/cluster/check/nodes.go`,
+#: `AllNodesDiskSizes`) takes its minimal disk, 6 GiB (`pkg/minimal/limits.go`,
+#: `DiskSize`), less every other partition and 10 MiB of GPT overhead: the UKI
+#: EFI partition at 2101 MiB, STATE at 100 MiB and META at 1 MiB
+#: (`pkg/machinery/imager/quirks/partitions.go`, the sizes `quirks.New("")`
+#: gives). An EPHEMERAL below what is left, 3932 MiB, fails the gate with
+#: `ephemeral partition … is too small`. That is more than the least Talos
+#: will create (`EphemeralMinSize`, 2 GiB), so a disk that only boots does
+#: not pass.
+TALOS_EPHEMERAL_FLOOR = 3932 * MIB
+
+#: What the room holds beyond STATE and the floor, for the partition alignment
+#: and the backup GPT Talos lays out past the image. Talos's own check allows
+#: 10 MiB for both; this is well over an order of magnitude above that, so
+#: the room clears the floor without counting on spare space inside the image.
+HOMELAB_DISK_ALIGNMENT_MARGIN = 256 * MIB
 
 #: The room the worker's disk has past the end of the Talos image when it is
 #: created, which is the room Talos has to boot into before anything grows it.
@@ -131,18 +156,21 @@ GIB = 1 << 30
 #: which holds the boot partitions and META and nothing more: from v1.8 on, a
 #: disk image carries no data partitions, and Talos creates STATE and
 #: EPHEMERAL past the image's last partition at first boot (talos v1.13.0
-#: `cmd/installer/pkg/install/install.go`, `SkipDataPartitions`). EPHEMERAL is
-#: where the kubelet runs from, and Talos will not make it smaller than its
-#: minimum (`pkg/machinery/imager/quirks/partitions.go`, `EphemeralMinSize`), so
-#: a disk at the image's own size boots a node whose kubelet never starts.
+#: `cmd/installer/pkg/install/install.go`, `SkipDataPartitions`). EPHEMERAL
+#: takes all of the room STATE leaves.
 #:
-#: 3 GiB holds STATE and EPHEMERAL's minimum with most of a gigabyte to spare
-#: for partition alignment and the kubelet's own image. It is not the worker's
-#: working size: the libvirt provider uploads every byte of the file it creates
-#: a volume from, zeros included, over the session to the host, so the room is
-#: kept to what the first boot needs, and the disk reaches its working size on
-#: the host afterwards (physical/homelab-host.md §1).
-HOMELAB_DISK_ROOM = 3 * GIB
+#: So the room is STATE, the health gate's floor for EPHEMERAL, and the
+#: alignment margin: the first `physical up` passes its gate on the disk as
+#: created. It is the least that does so rather than the worker's bootstrap
+#: size, because the libvirt provider uploads every byte of the file it
+#: creates a volume from, zeros included, over the session to the host
+#: (terraform-provider-libvirt v0.8.1 `libvirt/utils_volume.go`, an upload
+#: with no sparse-stream flag), and libvirt writes each of them into the
+#: volume's file on the host. Room the guest has not used yet would cost the
+#: host's disk its full length and its writes. The disk reaches its bootstrap
+#: and working sizes on the host afterwards, by `truncate`, which allocates
+#: nothing (physical/homelab-host.md §1).
+HOMELAB_DISK_ROOM = TALOS_STATE_SIZE + TALOS_EPHEMERAL_FLOOR + HOMELAB_DISK_ALIGNMENT_MARGIN
 
 #: Where the machine running the program keeps the factory's artifacts, a
 #: directory for each stack: `IMAGE_CACHE/<project>/<stack>/<file>`, the file
@@ -433,8 +461,9 @@ class TalosNocloudImage(TalosArtifact, pulumi_type='kluster:talos:TalosNocloudIm
     `path` is what a libvirt volume is created from, and the volume's capacity
     is that file's length: the provider refuses `size` alongside `source`. So
     the file carries `HOMELAB_DISK_ROOM` after the image, and the disk is
-    created with the room Talos needs to boot. Its working size is reached on
-    the host afterwards (physical/homelab-host.md §1).
+    created with the room Talos boots into and day 1's health gate accepts.
+    Its bootstrap and working sizes are reached on the host afterwards
+    (physical/homelab-host.md §1).
     """
 
     def __init__(
