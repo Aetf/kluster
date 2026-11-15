@@ -9,6 +9,7 @@ per-zone view derived from them.
 """
 
 import ipaddress
+import re
 import sys
 from collections import Counter
 from collections.abc import Iterable
@@ -257,6 +258,74 @@ def test_the_spf_record_is_quoted() -> None:
     assert ' ' in content.strip('"'), 'what the quoting protects is the spaces'
 
 
+def _character_strings(content: str) -> list[str]:
+    """A TXT content string read the way Cloudflare's read-back writes it.
+
+    Each character-string is quoted, and consecutive ones are joined by one
+    space (developers.cloudflare.com/dns/faq/, "Why does my TXT record show a
+    double quote in the middle of the value?"); anything else is not that form.
+    """
+    assert re.fullmatch(r'"[^"]*"( "[^"]*")*', content), content
+    return re.findall(r'"([^"]*)"', content)
+
+
+#: A DKIM-shaped value of the length `dkim-k8s` has: 402 characters, so one
+#: full string of 255 and a remainder.
+LONG_VALUE = 'v=DKIM1; k=rsa; p=' + ''.join(chr(ord('A') + i % 26) for i in range(402 - 18))
+
+
+def test_a_txt_value_over_255_characters_is_the_strings_cloudflare_reads_back() -> None:
+    """Declared as one string, the value differs from Cloudflare's read-back on every refresh.
+
+    The refresh of the live zone read the 402-character DKIM value back as
+    its first 255 characters and the rest, each quoted, one space between.
+    """
+    record = txt('k8s._domainkey', LONG_VALUE)
+
+    assert record.content == f'"{LONG_VALUE[:255]}" "{LONG_VALUE[255:]}"'
+
+
+@pytest.mark.parametrize('length', [256, 510, 511, 1000])
+def test_every_string_of_a_long_txt_value_is_full_but_the_last_and_they_join_to_the_value(length: int) -> None:
+    value = ''.join(chr(ord('a') + i % 26) for i in range(length))
+
+    content = txt('@', value).content
+    assert isinstance(content, str)
+    strings = _character_strings(content)
+
+    assert ''.join(strings) == value
+    assert all(len(string) == 255 for string in strings[:-1]), [len(string) for string in strings]
+    assert 0 < len(strings[-1]) <= 255
+
+
+@pytest.mark.parametrize('length', [1, 254, 255])
+def test_a_txt_value_of_255_characters_or_fewer_stays_one_quoted_string(length: int) -> None:
+    value = 'x' * length
+
+    assert txt('@', value).content == f'"{value}"'
+
+
+def test_the_published_dkim_key_reads_back_as_the_value_the_census_holds() -> None:
+    """What DKIM reads from the zone is the strings concatenated, which is `DKIM_K8S` whole."""
+    for zone in MAIL_ZONES:
+        (dkim,) = (record for record in _records(zone) if record.label == 'k8s._domainkey')
+        assert isinstance(dkim.content, str)
+
+        strings = _character_strings(dkim.content)
+
+        assert ''.join(strings) == conventions.DKIM_K8S, zone
+        assert all(len(string) <= 255 for string in strings), zone
+
+
+def test_an_srv_records_priority_is_at_the_top_level_and_in_its_data() -> None:
+    """Cloudflare reads an SRV record's priority back in both places, so both are declared."""
+    record = srv('_x._tcp', priority=10, weight=0, port=443, target='example.test')
+
+    assert record.priority == 10
+    assert record.data is not None
+    assert record.data['priority'] == 10
+
+
 def test_the_mail_zones_carry_one_identical_block() -> None:
     """Both Workspace domains take the same exchangers, SPF, DKIM and DMARC.
 
@@ -482,6 +551,21 @@ async def test_a_reasons_wording_changes_nothing_a_zone_carries(comment: str) ->
     other = cname('photos', 'example.test', comment=comment, unproxied='bodies the proxy would cap')
 
     assert await _rendered(one) == await _rendered(other)
+
+
+@pytest.mark.asyncio
+async def test_the_zone_hands_the_provider_an_srv_records_priority_at_the_top_level_and_in_its_data() -> None:
+    declared = await _rendered(srv('_x._tcp', priority=10, weight=5, port=443, target='example.test'))
+
+    assert declared['priority'] == 10
+    assert declared['data']['priority'] == 10
+
+
+@pytest.mark.asyncio
+async def test_the_zone_hands_the_provider_a_long_txt_value_as_its_character_strings() -> None:
+    declared = await _rendered(txt('k8s._domainkey', LONG_VALUE))
+
+    assert declared['content'] == f'"{LONG_VALUE[:255]}" "{LONG_VALUE[255:]}"'
 
 
 def test_a_parked_zone_carries_the_web_origin_and_its_caa_and_nothing_else() -> None:
