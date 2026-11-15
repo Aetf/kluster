@@ -50,8 +50,9 @@ operation:
     domain, redefines it and starts it again. The disk is a separate resource
     and survives; the workloads on it do not, so the growth belongs in a
     drained window.
--   *Disk* grows on the host — `truncate` plus `virsh blockresize`, and Talos
-    extends its EPHEMERAL partition into the new space (homelab-host.md §1).
+-   *Disk* grows on the host — `truncate` plus `virsh blockresize`, and then
+    a reboot of the worker (`talosctl reboot`), because Talos extends its
+    EPHEMERAL partition into the new space only at boot (homelab-host.md §1).
     The declaration cannot state a size at all: the provider refuses `size`
     beside `source` and sets the volume's capacity from the source file's
     length. That file is the Talos image followed by the room Talos needs to

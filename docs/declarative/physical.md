@@ -112,7 +112,11 @@ credential (`ci_zerotier_identity_physical`,
     on whatever `user_data` it holds. So the declaration ignores
     changes to both and the instance keeps the values it launched with;
     a node that is replaced for any reason boots the current image and
-    configuration.
+    configuration, and takes its predecessor's name, the declared one
+    (§2), whatever hostname the VCN gives the new instance. While both
+    run they are two nodes of one name, which evict each other's etcd
+    member, so the order of a control plane's replacement is settled
+    on its own (Aetf/kluster-ops#742).
     **Legacy IMDS (v1) is disabled** on every instance; note OCI's v2
     auth header is a static string, so the control that actually keeps
     pods away from `user_data` (= the machine config, secrets included)
@@ -194,8 +198,8 @@ machine_secrets
 ```
 
 -   **Patches are Python.** Per-node machine config is assembled from
-    typed Python dicts (our framework's home turf), covering: KubeSpan
-    on, at the link MTU `conventions.KUBESPAN_MTU`, which rfc-007 §4.1
+    typed Python dicts (our framework's home turf), covering: the
+    node's hostname, its declared name; KubeSpan on, at the link MTU `conventions.KUBESPAN_MTU`, which rfc-007 §4.1
     has `k8s-base` size Cilium from; KubePrism; host DNS with the cluster DNS
     forwarded to it, which Talos' generated configuration already turns
     on and which is stated because the baseline network policy is shaped
@@ -227,6 +231,26 @@ machine_secrets
     it (`conventions.NODE_VOLUME_LABEL`), which the pods that consume
     the volume's class select, hath's client among them, in the
     configuration the node boots with.
+-   **Each node is named what the declaration names it.** The node's
+    name in the rolls (`conventions.CLOUD_NODES`,
+    `conventions.HOMELAB_NODE`) is its hostname, stated in a
+    `HostnameConfig` document, the form v1.13 gives in place of the
+    deprecated `machine.network.hostname`. That name is what etcd knows
+    a control plane's member by and what the kubelet registers the node
+    under. A static hostname outranks every other source Talos reads one
+    from: the VCN's hostname for a cloud instance, which carries a
+    suffix when its label is still held, as it is by the predecessor of
+    a replacement created before it is deleted (§1); the nocloud seed's
+    `local-hostname`; and the name Talos generates. The document states
+    `auto: off` beside the name, because the configuration the provider
+    generates for v1.13 already carries a `HostnameConfig` with
+    `auto: stable`, the patch merges into it, and Talos refuses
+    `hostname` beside any `auto` but `off`. A changed name needs no
+    reboot: Talos decides whether an apply goes in without one on the
+    `v1alpha1` document alone, and this one is not part of it. The
+    kubelet restarts under the new name and registers a second Node
+    object beside the old one, which nothing deletes; etcd takes the new
+    name when it next starts.
 -   **Each node names its own factory installer.** The configuration
     sets `machine.install.image` to the installer the Image Factory
     builds from the schematic of the image that node boots, for that
@@ -340,6 +364,9 @@ machine_secrets
     documents the component emits:
     -   `KubeSpanConfig`, on every node: KubeSpan on at the link MTU
         `conventions.KUBESPAN_MTU`, every other setting Talos' default.
+    -   `HostnameConfig`, on every node: the node's declared name as a
+        static hostname, with `auto: off` (the item on node names
+        above).
     -   `LinkAliasConfig`, naming the node's one physical link
         `uplink`, and a `LinkConfig` on that alias — on the two nodes
         whose machine configuration states an address. The
@@ -556,7 +583,10 @@ them for day-2 once v0.12 is stable *and* has reached the Pulumi bridge.
     §4).
 -   **Seed**: an ISO 9660 image labelled `cidata` holding `user-data`,
     the worker's machine configuration, and `meta-data`, derived from
-    the node and static, with no `network-config`. Talos' `nocloud`
+    the node and static, with no `network-config`. Its
+    `local-hostname` is the domain's name, `kluster-worker`; the static
+    hostname the machine configuration states (§2) outranks it, so the
+    worker is named `worker` and that field decides nothing. Talos' `nocloud`
     platform finds a `cidata` filesystem on any disk whatever its bus,
     and reads `meta-data` at every boot and `user-data` only while the
     disk's STATE partition holds no complete configuration. The program

@@ -42,7 +42,11 @@ a file it is — the shape makes that rational:
     so every size the disk has after that is `truncate` on the file + `virsh blockresize`, the ~60 GB
     bootstrap size as much as the 100+ GB end state reached
     interleaved with reclamation (migration.md §0.4). Talos grows its
-    EPHEMERAL partition into the new space on its own, and the
+    EPHEMERAL partition into the new space on its own, but only at
+    boot: a volume grows on its way to being mounted, and Talos does
+    not take up a mounted one again. So every growth of the file is
+    followed by a reboot of the worker, `talosctl -n <worker> reboot`,
+    and the partition has its new size once the node is back. The
     declaration stops matching the file from the first `truncate`
     onwards, which is why it ignores the size rather than stating one.
 -   **virtio-blk with `discard=unmap`, `cache=none`**: in-guest TRIM

@@ -1536,13 +1536,18 @@ enough to reach every node, by its private address. This recovery is
 for a cluster that has not been bootstrapped, which is the only state
 that fault leaves behind, since nothing past the first apply is
 created. It is two runs, because the node that is given the SAN is a
-replaced instance, and its predecessor keeps running, under the same
-hostname and with valid cluster secrets, until the run that replaces
-it deletes it at its end. A control plane joining etcd with an empty
-data directory first removes any member that carries its own hostname,
-so bootstrapping while both exist would leave two nodes named
-`kluster-cp3` removing each other. The second run therefore starts only
-once the state holds no pending delete.
+replaced instance, and its predecessor keeps running, with valid
+cluster secrets, until the run that replaces it deletes it at its end.
+A control plane joining etcd with an empty data directory first removes
+any member that carries its own hostname, and which hostname each of
+the two carries depends on the rendering it booted. The predecessor
+here booted a rendering that states no hostname, so it carries the
+VCN's, `kluster-cp3`, while the replacement boots the current
+rendering and takes the declared `cp3` (declarative/physical.md §2).
+Between two instances that both booted a rendering stating it, the
+name is shared, and bootstrapping while both exist would leave two
+nodes named `cp3` removing each other. The second run therefore starts
+only once the state holds no pending delete.
 
 **The operator gives a go before each run**, and each `up` is
 confirmed only after its own preview has been read. **The gateway stop

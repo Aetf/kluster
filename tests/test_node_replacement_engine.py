@@ -5,8 +5,9 @@ certificate replaces one control plane's instance in a run of its own, and
 bootstraps in the next (physical/gateway-cutover.md §4 step 5). The second
 run is safe only if the first leaves no predecessor behind: a replaced
 instance whose original is still in the state as a pending delete keeps
-running under the same hostname with valid cluster secrets, and stays a
-backend of every forward, while the next run bootstraps etcd. A preview does
+running with valid cluster secrets, and stays a backend of every forward,
+while the next run bootstraps etcd; it shares its replacement's hostname
+whenever both booted a rendering that states one. A preview does
 not show such a pending delete, and a run whose flags forbid deletes still
 exits zero, so what the runbook's flags do is read off the engine.
 

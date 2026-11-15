@@ -512,6 +512,38 @@ async def test_only_the_node_holding_the_dedicated_vip_is_configured_twice(fake:
         assert not links(await patches_of(day1, node))
 
 
+def hostnames_in(patches: list[dict[str, Any]]) -> list[str]:
+    """The hostnames a node's patches state, in the order they state them."""
+    return [str(patch['hostname']) for patch in patches if patch.get('kind') == 'HostnameConfig']
+
+
+@pytest.mark.asyncio
+async def test_every_node_is_named_what_the_declaration_names_it(fake: Talos) -> None:
+    """Each node's configuration names it as the rolls do, in both of its renderings.
+
+    The name is otherwise the platform's: the hostname OCI's VCN hands a
+    replacement whose predecessor still holds the label, or one Talos
+    generates. Nodes of one name evict each other's etcd member, so a
+    rendering that gave one node's name to another would be that failure.
+    The rolls are the declaration's own, and the dedicated-VIP node is
+    rendered twice, once to boot with and once to be applied.
+    """
+    from kluster import conventions
+
+    nodes = (*conventions.CLOUD_NODES, conventions.HOMELAB_NODE)
+    cluster = build_cluster(
+        control_plane_nodes=conventions.CLOUD_NODES, worker_nodes=(conventions.HOMELAB_NODE,), bgp_peers={}
+    )
+    day1 = build(
+        cluster=cluster,
+        addresses={node: f'10.20.0.{11 + index}' for index, node in enumerate(nodes)},
+        secondary_addresses={conventions.DEDICATED_VIP_NODE: SECONDARY},
+    )
+    for node in nodes:
+        assert hostnames_in(await patches_of(cluster, node)) == [node]
+        assert hostnames_in(await patches_of(day1, node)) == [node]
+
+
 @pytest.mark.asyncio
 async def test_only_the_worker_takes_bgp(fake: Talos) -> None:
     from kluster.components.talos import BGP_PORT
