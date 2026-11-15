@@ -36,10 +36,12 @@ def documents(**kwargs: Any) -> list[dict[str, Any]]:
 
 
 def deep_merge(into: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
-    """Talos' strategic merge, as far as these patches use it: maps merge, leaves win."""
+    """Talos' strategic merge, as far as these patches use it: maps merge, a list is appended to, other leaves win."""
     for key, value in patch.items():
         if isinstance(value, dict) and isinstance(into.get(key), dict):
             deep_merge(cast('dict[str, Any]', into[key]), cast('dict[str, Any]', value))
+        elif isinstance(value, list) and isinstance(into.get(key), list):
+            into[key] = [*cast('list[Any]', into[key]), *cast('list[Any]', value)]
         else:
             into[key] = value
     return into
@@ -281,6 +283,76 @@ def test_the_node_holding_the_dedicated_vip_answers_for_its_second_address() -> 
     # The address is all the link document says: no route and no MTU of its
     # own, so the lease's routes and the link's MTU stand.
     assert set(link) == {'apiVersion', 'kind', 'name', 'addresses'}
+
+
+def filter_ips(addresses: Sequence[str], subnets: Sequence[str]) -> list[str]:
+    """The addresses a Talos subnet list keeps, folded in order as `net.FilterIPs` folds it (siderolabs/net).
+
+    A subnet adds the addresses it holds that are not kept yet; a negation
+    (`!<subnet>`) drops, from what is kept so far, the addresses it holds. A
+    negation listed before the subnets it carves from therefore drops
+    nothing. Talos filters the kubelet's node IP and etcd's advertised
+    addresses with it.
+    """
+    kept: list[str] = []
+    for subnet in subnets:
+        network = ip_network(subnet.removeprefix('!'))
+        if subnet.startswith('!'):
+            kept = [address for address in kept if ip_address(address) not in network]
+        else:
+            kept += [address for address in addresses if ip_address(address) in network and address not in kept]
+    return kept
+
+
+#: The shapes that add an address beside the one the node is leased, and those that do not.
+SECONDARY_SHAPES = [name for name, shape in SHAPES.items() if 'secondary_address' in shape]
+PLAIN_SHAPES = [name for name in SHAPES if name not in SECONDARY_SHAPES]
+
+
+@pytest.mark.parametrize('shape', SECONDARY_SHAPES)
+def test_the_kubelet_never_takes_an_added_address_for_the_nodes_own(shape: str) -> None:
+    """The node's Kubernetes address stays the lease's, wherever the cloud put the two.
+
+    The kubelet takes the numerically first admitted address of each family,
+    so an added address it admits is the node's address whenever it is the
+    lower one. Every other address the node could hold, of either family, is
+    still a candidate: the addresses on both sides of the added one, the
+    ends of the node network, and a global IPv6 address.
+    """
+    secondary = str(SHAPES[shape]['secondary_address'])
+    subnets = cast('list[str]', merged('machine', **SHAPES[shape])['kubelet']['nodeIP']['validSubnets'])
+    beside = ip_address(secondary)
+    others = [*map(str, [beside - 1, beside + 1, conventions.VCN_CIDR[1], conventions.VCN_CIDR[-2]]), '2001:db8::11']
+    assert filter_ips([secondary, *others], subnets) == others, subnets
+
+
+#: The control-plane shapes, which run an etcd member.
+CONTROL_PLANE_SHAPES = [name for name, shape in SHAPES.items() if shape.get('role', 'controlplane') == 'controlplane']
+
+
+@pytest.mark.parametrize('shape', CONTROL_PLANE_SHAPES)
+def test_an_etcd_member_advertises_the_lease_alone_whatever_else_the_node_holds(shape: str) -> None:
+    """Every address the node holds inside the advertised subnets becomes a peer URL, so only the lease's may be.
+
+    The health gate requires every peer-URL host to be a control-plane
+    address it was given, which is the lease's. The advertised list is the
+    rendering's, merged as Talos merges the patches and folded in order as
+    Talos folds it, and read against the lease on either side of the added
+    address, since which of the two the cloud made lower is the cloud's
+    choice.
+    """
+    inputs = SHAPES[shape]
+    subnets = cast('list[str]', merged('cluster', **inputs)['etcd']['advertisedSubnets'])
+    added = inputs.get('secondary_address')
+    held = [] if added is None else [str(added)]
+    beside = ip_address(str(added)) if added is not None else conventions.VCN_CIDR[11]
+    for lease in (str(beside - 1), str(beside + 1)):
+        assert filter_ips([lease, *held], subnets) == [lease], subnets
+
+
+@pytest.mark.parametrize('shape', PLAIN_SHAPES)
+def test_a_node_with_no_added_address_leaves_the_kubelets_choice_to_talos(shape: str) -> None:
+    assert 'nodeIP' not in merged('machine', **SHAPES[shape])['kubelet']
 
 
 def test_the_node_holding_the_dedicated_vip_keeps_its_lease() -> None:
