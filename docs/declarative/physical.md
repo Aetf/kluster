@@ -907,12 +907,14 @@ physical() {
         pulumi "$@" --stack physical
 }
 URN=$(physical stack --show-urns | sed -n "s/.*URN: \(.*::kluster-$V-attachment\)$/\1/p")
-physical refresh --target "$URN"
+physical refresh --run-program --target "$URN"
 physical preview --diff     # one create, of that attachment, and nothing else
 physical up
 ```
 
-The refresh drops the detached attachment from state, and the preview
+The refresh runs the program first, which writes the libvirt session's
+working files a refresh of this stack dials with (homelab-host.md §6).
+It drops the detached attachment from state, and the preview
 then plans its create and nothing else. Both pinned releases predict
 the drop, and the first drill is what confirms it: the OCI provider
 voids the state of an attachment that reads `DETACHED`, and the engine

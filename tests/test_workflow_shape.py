@@ -22,6 +22,10 @@ returned. The conditions are read by a model of how GitHub evaluates a job's
 condition written another way is held to what it does rather than to how it
 is spelled.
 
+And every refresh of `physical` that a workflow or a composite action runs
+puts the program first (physical/homelab-host.md §6), read off the `pulumi`
+commands the steps run in each matrix combination rather than off one step.
+
 The workflow files are read the way the other seams read them, through the
 loaders in `workflow_files`.
 """
@@ -29,6 +33,7 @@ loaders in `workflow_files`.
 from __future__ import annotations
 
 import re
+import shlex
 import tomllib
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -709,3 +714,152 @@ def test_a_stack_after_dns_runs_on_its_own_gate_whatever_dns_returned() -> None:
                 findings.append(f'{name} under {results}: runs={condition.runs(results)}, its gate={gate(results)}')
 
     assert findings == [], findings
+
+
+#: A matrix property spelled inside a step's text, wherever it sits.
+MATRIX_REFERENCE = re.compile(r'\$\{\{\s*matrix\.([\w-]+)\s*\}\}')
+#: The `pulumi` options that take a value, so that the value is not read as
+#: the subcommand.
+PULUMI_VALUE_OPTIONS = frozenset({'--stack', '-s', '--cwd', '-C'})
+#: The subcommands that refresh when given `--refresh`.
+REFRESHING_UPDATES = frozenset({'preview', 'up', 'update'})
+
+
+@dataclass(frozen=True)
+class PulumiCommand:
+    """One `pulumi` invocation a step runs: where, and the arguments after `pulumi`."""
+
+    where: str
+    arguments: tuple[str, ...]
+
+    def _option(self, *names: str) -> str | None:
+        for index, argument in enumerate(self.arguments):
+            for name in names:
+                if argument == name and index + 1 < len(self.arguments):
+                    return self.arguments[index + 1]
+                if argument.startswith(f'{name}='):
+                    return argument.removeprefix(f'{name}=')
+        return None
+
+    @property
+    def subcommand(self) -> str | None:
+        """The first argument that is no option and no option's value."""
+        skip = False
+        for argument in self.arguments:
+            if skip:
+                skip = False
+            elif argument in PULUMI_VALUE_OPTIONS:
+                skip = True
+            elif not argument.startswith('-'):
+                return argument
+        return None
+
+    @property
+    def stack(self) -> str | None:
+        return self._option('--stack', '-s')
+
+    @property
+    def refreshes(self) -> bool:
+        """`pulumi refresh`, or an update or preview told to refresh first."""
+        if self.subcommand == 'refresh':
+            return True
+        if self.subcommand not in REFRESHING_UPDATES:
+            return False
+        flags = [argument for argument in self.arguments if argument in {'--refresh', '-r'}]
+        valued = [argument.split('=', 1)[1] for argument in self.arguments if argument.startswith('--refresh=')]
+        return bool(flags) or any(value != 'false' for value in valued)
+
+    @property
+    def runs_the_program(self) -> bool:
+        return '--run-program' in self.arguments or '--run-program=true' in self.arguments
+
+
+def _expanded(text: str, row: dict[str, object] | None) -> str:
+    """A step's text as one matrix combination makes it, or as written when the matrix cannot be read.
+
+    A property the combination does not carry expands to the empty string, as
+    GitHub dereferences a property an object lacks.
+    """
+    if row is None:
+        return text
+    return MATRIX_REFERENCE.sub(lambda reference: str(row.get(reference.group(1), '')), text)
+
+
+def _pulumi_commands(text: str, where: str) -> list[PulumiCommand]:
+    """Every `pulumi` invocation in a step's shell text, one simple command at a time.
+
+    The text is split as the shell splits words, a quoted string across lines
+    included, and cut at every newline and control operator, so `if mise x --
+    pulumi preview …; then` reads as the preview it runs. A backslash that
+    continues a line is read as the space it stands for. A step whose text
+    never names `pulumi` runs none and is not split at all.
+    """
+    if 'pulumi' not in text:
+        return []
+    lexer = shlex.shlex(text.replace('\\\n', ' '), posix=True, punctuation_chars='();<>|&\n')
+    lexer.whitespace = ' \t\r'
+    lexer.whitespace_split = True
+    try:
+        tokens = list(lexer)
+    except ValueError as error:
+        raise AssertionError(f'{where}: a step does not split as shell words ({error})') from error
+    commands: list[PulumiCommand] = []
+    simple: list[str] = []
+    for token in [*tokens, ';']:
+        if token and set(token) <= set('();<>|&\n'):
+            if 'pulumi' in simple:
+                start = simple.index('pulumi') + 1
+                commands.append(PulumiCommand(where, tuple(simple[start:])))
+            simple = []
+        else:
+            simple.append(token)
+    return commands
+
+
+def _every_pulumi_command() -> list[PulumiCommand]:
+    """Every `pulumi` invocation any workflow or composite action runs, one per matrix combination."""
+    found: list[PulumiCommand] = []
+    for path in workflows_and_actions():
+        document = read_workflow(path)
+        groups: dict[str, tuple[object, list[dict[str, object]] | None]]
+        if path.parent.name == 'workflows':
+            jobs = workflow_jobs(document, github_name(path))
+            groups = {
+                f'{github_name(path)}: {name}': (job.get('steps'), _matrix_rows(job, f'{github_name(path)}: {name}'))
+                for name, job in jobs.items()
+            }
+        else:
+            runs = mapping(document.get('runs'), f'{github_name(path)} runs:')
+            groups = {github_name(path): (runs.get('steps'), [{}])}
+        for where, (steps, rows) in groups.items():
+            for step in cast('list[object]', steps or []):
+                run = mapping(step, f'{where} step').get('run')
+                if not isinstance(run, str):
+                    continue
+                for row in [None] if rows is None else rows:
+                    found.extend(_pulumi_commands(_expanded(run, row), where))
+    return found
+
+
+def test_every_refresh_of_physical_runs_the_program_first() -> None:
+    """A refresh builds each provider from state, before the program runs.
+
+    `physical`'s libvirt provider reads its identity and its `known_hosts` by
+    path, and only the program writes them (physical/homelab-host.md §6), so a
+    refresh of that stack on a runner, whose checkout is fresh, dials with
+    neither unless the program runs first. Every `pulumi` command a workflow or
+    a composite action runs is read, in every matrix combination of its job,
+    and each one that refreshes `physical` -- `pulumi refresh`, or a preview or
+    update with `--refresh` -- must carry `--run-program`. A refresh whose
+    stack this read cannot resolve fails here too, since it could be
+    `physical`'s.
+    """
+    commands = _every_pulumi_command()
+    refreshes = [command for command in commands if command.refreshes]
+    unread = [command for command in refreshes if command.stack is None or '$' in command.stack]
+    physical = [command for command in refreshes if command.stack == conventions.STACK_NAMES.physical]
+
+    # A read that stopped finding the drift check's refresh would pass on nothing.
+    assert physical, 'no workflow step refreshes physical'
+    assert unread == [], f'refreshes whose stack is not read here: {unread}'
+    assert [command for command in physical if not command.runs_the_program] == []

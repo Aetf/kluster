@@ -47,6 +47,12 @@ jobs:
             routes: ''
             wait_for: '10.144.1.1:22'
             lock: zt-physical
+            # The libvirt provider reads two files by path that the program
+            # writes before it builds the provider, and a refresh builds
+            # providers from state before the program runs: without the
+            # program first, this fresh checkout has neither file when the
+            # refresh dials (physical/homelab-host.md §6).
+            run_program: --run-program
           - stack: dns
             environment: dns
             # The AdGuard rewrites are on the UDM (declarative/dns.md §3).
@@ -112,7 +118,11 @@ jobs:
           # `physical`'s own in `physical-plan`, the stack passphrase in the
           # others (credentials.md §3).
           PULUMI_CONFIG_PASSPHRASE: ${{ secrets.PULUMI_CONFIG_PASSPHRASE }}
-        run: mise x -- pulumi preview --stack ${{ matrix.stack }} --refresh --diff --expect-no-changes
+        # `run_program` is set on the stack whose providers read a file the
+        # program writes, and on no other: every other provider here is built
+        # from values its inputs in state carry whole, so a refresh needs
+        # nothing on disk. An entry without it expands to nothing.
+        run: mise x -- pulumi preview --stack ${{ matrix.stack }} --refresh ${{ matrix.run_program }} --diff --expect-no-changes
 
   # The alert job (framework/ci.md §3). This workflow has no pull-request
   # trigger, so the guard on the event is never what stands it down; it is kept
