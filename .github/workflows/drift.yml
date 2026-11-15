@@ -43,17 +43,21 @@ jobs:
             environment: physical-plan
             zerotier: true
             # The join waits for the gateway's shell, as deploy.yml's
-            # `physical` joins do.
+            # `physical` joins do, and installs no route of its own.
+            routes: ''
             wait_for: '10.144.1.1:22'
             lock: zt-physical
           - stack: dns
             environment: dns
             # The AdGuard rewrites are on the UDM (declarative/dns.md §3).
             zerotier: true
-            # No wait: a resolver is a leaf whose absence fails only its own
-            # rewrites, and a wait would fail the whole job
-            # (physical/gateway.md §3).
-            wait_for: ''
+            # The two resolver APIs, reached through the gateway by routes
+            # this run installs for itself, and the first to answer ends the
+            # join, as deploy.yml's `dns` join does (framework/ci.md §2).
+            routes: |
+              10.0.5.3/32 via 10.144.1.1
+              10.0.5.4/32 via 10.144.1.1
+            wait_for: '10.0.5.3:80 10.0.5.4:80'
             lock: zt-dns
           - stack: k8s-base
             environment: k8s-base
@@ -92,6 +96,7 @@ jobs:
         with:
           network_id: ${{ secrets.ZEROTIER_NETWORK_ID }}
           identity: ${{ secrets.ZEROTIER_IDENTITY }}
+          routes: ${{ matrix.routes }}
           wait_for: ${{ matrix.wait_for }}
       - uses: ./.github/actions/state-backend
         timeout-minutes: 5

@@ -45,6 +45,12 @@
     and §10.1 gains slice 49, which makes it one. Slices 7 and 11 come
     after it, the first for workloads.md, and slice 11's server reads
     the key from that row's Secret.
+*   **Updated:** 2026-11-15. §4.7's row for a home-only service from
+    off-site follows the overlay's role
+    ([Aetf/kluster-ops#755](https://github.com/Aetf/kluster-ops/issues/755)):
+    the overlay carries no route to the home, and such a name is reached
+    at its one name through the tunnel a device opens itself, rather
+    than at a VIP's address over the device's own routes.
 *   **Authority:** AGENTS.md,
     [framework/dispatch.md](../framework/dispatch.md),
     [framework/rfc.md](../framework/rfc.md) and the style rules
@@ -1565,7 +1571,7 @@ reads from the code.
 | The cloud syncthing replica, and its volume | The operator's ruling: its role was an always-reachable port, which the balancer gives the NAS instance | A roaming device syncs at the home uplink's speed, and with the homelab down there is no anchor: devices fall back on relays and each other. The replica's 3 GiB of file versions are not carried |
 | The separate `sync-nas` name | One instance has one interface, at `sync`, as ruled (§11.4) | A bookmark of the old name stops resolving |
 | The name `btsync.unlimitedcodeworks.xyz` | `syncapi` is the newer name for the same ports, as ruled (§11.4) | A device still holding the old name falls back on discovery |
-| A home-only service from off-site | `homelan` also answered on the overlay; a home-only name has no public record, and no overlay member is steered to a VIP (dns.md §4) | Each home-only name (§4.1) is reached off-site only by a VIP's address, over the device's own routes |
+| A home-only service from off-site | `homelan` also answered on the overlay; a home-only name has no public record, and the overlay is a path into the home audience rather than an audience of its own (architecture.md §3.3) | Each home-only name (§4.1) is reached at its one name by a device that has opened the overlay's tunnel, exactly as from home (physical/gateway.md §2.2, §2.7) |
 | The `lan.ucw.phd` names | One service has one name (§4.1), and dns.md §4 retires the zone, the `thread`, `ups`, `gw` and resolver names its proxy serves with it | Each is re-entered where a client holds it, at its wave: bookmarks, the printer's `server`, and Home Assistant's configured addresses, which each wave's head reads. There is no redirect: a printer's connection follows none, an integration is re-entered anyway, and a browser's would last days, until the zone goes in Wave D |
 | The discovery server's raw port on 8443 and its balancer listeners | kluster-code's `passthroughHosts` and syncthing's configured `https://syncapi…` put it on 443 (§4.1) | Nothing |
 | The matrix identity SRV, with `Extra`, `Srv` and `SELF` | The code deploys no identity service, so the record has no target | Nothing. Its one row was why the types existed |

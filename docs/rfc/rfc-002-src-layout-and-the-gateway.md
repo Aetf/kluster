@@ -125,6 +125,18 @@
     declared as the site's BGP configuration on the controller, through
     `kluster.providers.unifi_bgp` (kluster-ops#736). The design is
     [physical/gateway.md](../physical/gateway.md) §1.3.
+*   **Updated:** 2026-11-15 — the overlay's route order of 2026-11-14
+    above no longer has a subject
+    ([Aetf/kluster-ops#755](https://github.com/Aetf/kluster-ops/issues/755)).
+    The overlay carries no route to the home: its table is its own
+    subnet and a default route via the gateway, which a device installs
+    only by its own setting, so §6.1's routes to the home subnets are
+    not built and a member at home takes no route it would have to lose
+    or refuse. The order of 2026-11-14 stands for the default route: the
+    run targeting the gateway's member alone creates it and reads it
+    answering, and only then does the run with no targets write the
+    route that names it ([physical/gateway.md](../physical/gateway.md)
+    §2.2, §2.5).
 *   **Created:** 2026-08-28
 *   **Authority:** the style rules (`docs/style/`) are what this document
     obeys; where they are silent, a rule proposed here is marked **new rule**.

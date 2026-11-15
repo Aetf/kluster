@@ -92,8 +92,8 @@ that changes daily — reaches the cluster and Cloudflare and nothing on
 the LAN, because the split-horizon rewrites its routes imply are applied by `dns` from the
 same plain-data declaration (dns.md §3). A typical app image bump
 stays entirely public-endpoint, and ZeroTier's availability is not a
-dependency of it. The AdGuard rewrite resources tolerate an
-unreachable UDM by failing only their own resources, not the whole
+dependency of it. The AdGuard rewrite resources tolerate one
+unreachable resolver by failing only their own resources, not the whole
 up. Each CI overlay identity is **confined by Central flow rules**
 (managed with the rest of the Central config, architecture.md §5.3)
 to the targets its own stack calls — today `ci-physical` to UDM SSH,
@@ -102,7 +102,30 @@ APIs — so a leaked join credential buys neither general LAN access nor
 the other identity's reach. The rules name each identity by its node
 address rather than its role tag, because a tag is a credential the
 member itself presents and a holder of a leaked identity could
-withhold it (gateway.md §2.3). Residual on
+withhold it (gateway.md §2.3).
+
+**A route only one run needs is that run's own, installed by the step
+that joins it, for the addresses the run dials.** The overlay carries
+no route to the home (gateway.md §2.2), and the one run that dials a
+home address no member holds is `dns`: the two resolver APIs, on the
+container VLAN behind the gateway. So the join action takes a
+`routes` input, one `<target> via <next hop>` per line, and installs
+each route once its next hop is on a link of the runner, which it is
+once the member holds its overlay address. Every `dns` join passes a
+host route to each resolver via the gateway's overlay address, and
+waits for the resolvers' APIs: the first to answer ends the wait,
+which proves the route, the flow rules' leg and the gateway's
+forwarding before the stack runs. One resolver down fails only its own
+rewrites; both down, or no path to them, fails the job at its join,
+naming the targets. Both the route and the wait run under the join's
+one deadline. The route grants nothing the flow rules do not: they
+admit `ci-dns` to exactly those two addresses on the API port, and
+whatever else the runner dials through the route is dropped at the
+first hop. `test_workflow_shape` holds every `dns` join's routes and
+targets against the resolver census, and every `physical` join to the
+gateway's shell with no route.
+
+Residual on
 record (audit M6): the AdGuard credential is full-admin (AdGuard has
 no scoped API), so LAN-DNS control rides the `dns` tier — the tier
 that already holds the Cloudflare token, and therefore the whole of

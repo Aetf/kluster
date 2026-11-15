@@ -171,11 +171,11 @@ def gateway_faults(roster: Iterable[conventions.overlay.RosterEntry]) -> set[str
     """Which ways the gateway entries `roster` holds are wrong: `address`, `role`, or none.
 
     Two things the gateway's entry must say. The device's SSH, the
-    controller's API and the next hop of every route to the home all derive
+    controller's API and the next hop of the default route all derive
     from `conventions.overlay.UDM`, so an entry at any
     other address would point all three somewhere the member is not. And the
     gateway is infrastructure: an entry carrying the permissive default role
-    would put the box every route runs through on the same footing as a phone.
+    would put the box every tunnel runs through on the same footing as a phone.
     """
     faults: set[str] = set()
     for entry in roster:
@@ -299,74 +299,133 @@ def test_the_network_carries_the_census_routes_and_stamps_no_via_of_its_own(stac
     assert network['enableBroadcast'] is True
 
 
-def test_a_route_with_no_via_covers_every_address_the_roster_places() -> None:
+def test_the_route_that_places_every_roster_address_is_one_with_no_via() -> None:
     """The controller's condition for handing a member its address, held on the census.
 
     A member's static assignment is pushed only when some route's target
-    contains it, with that route's netmask; a via-less route is the one
-    ZeroTier installs on the member's own interface for the network's subnet.
-    So a table whose via-less routes cover less than the roster is a table
-    that leaves some member with no address at its next config refresh -- and
-    a table with none leaves every member that way. Held over the roster, not
-    over the subnet constant: what has to be true is that every placed member
-    is covered, whatever the table's targets are.
+    contains it, and with the prefix length of the longest such route
+    (`EmbeddedNetworkController.cpp`, at the 1.16.2 release the repository's
+    ZeroTier action pins). A via-less route is the one ZeroTier installs on
+    the member's own interface for the network's subnet. So every placed
+    address has to fall under a via-less route that no route with a `via` is
+    longer than: the default route contains every address, and were it the
+    longest match the member would be handed its address as a `/0`. Held over
+    the roster, not over the subnet constant: what has to be true is that
+    every placed member is covered, whatever the table's targets are.
     """
-    own = [route.target for route in conventions.overlay.MANAGED_ROUTES if route.via is None]
-    assert own, 'no via-less route: the controller would push no member an address'
+    routes = conventions.overlay.MANAGED_ROUTES
+    assert [route for route in routes if route.via is None], 'no via-less route: no member would have a subnet'
 
     for entry in conventions.overlay.ROSTER:
-        assert any(entry.address in target for target in own), entry.name
+        holding = [route for route in routes if entry.address in route.target]
+        assert holding, entry.name
+        longest = max(route.target.prefixlen for route in holding)
+        assert [route for route in holding if route.target.prefixlen == longest and route.via is None], entry.name
 
 
-def test_the_gateway_is_the_only_next_hop_and_only_for_the_home() -> None:
-    """A `via` is the gateway's address, and the gateway forwards for the home alone.
+#: The default route: the tunnel, the one route a device installs only by its
+#: own setting.
+DEFAULT = IPv4Network('0.0.0.0/0')
 
-    A route via an address no member holds is a route to nothing. A route via
-    any other member would put a machine that is not a router on a forwarding
-    path -- every member installs every route, so the whole network would send
-    that subnet through it -- and the gateway forwarding for anything but the
-    home would make it the next hop of a subnet it has no leg on. A home
-    subnet with no `via` at all is the route ZeroTier installs on a member's
-    own interface: every member would take the LAN for a subnet of the
-    overlay and look for its hosts there.
+
+def home_prefixes() -> tuple[IPv4Network, ...]:
+    """Every IPv4 prefix the home is addressed from: its networks, and the `lan` pool the gateway learns over BGP."""
+    return (*(network.v4 for network in conventions.SITE_NETWORKS), conventions.LAN_POOL.v4)
+
+
+def route_faults(
+    routes: Iterable[conventions.overlay.ManagedRoute], roster: Iterable[conventions.overlay.RosterEntry]
+) -> set[str]:
+    """Which ways a route table breaks the overlay's rule: `home`, `not-default`, `next-hop`, `tunnel`, or none.
+
+    The rule (physical/gateway.md §2.2): no managed route names a home
+    prefix; the one route with a `via` is the default route, the tunnel; and
+    its next hop is the gateway's entry, the one member that routes for the
+    home.
+
+    -   `home`: a route other than the default route overlaps a home prefix.
+        Every member that takes the routes would install it, at home as well
+        as away, and send that part of the home through the gateway's
+        ZeroTier process whether it asked to or not.
+    -   `not-default`: a route with a `via` that is not the default route. A
+        member installs such a route under `allowManaged`, which is on by
+        default, so it is a data path every member takes rather than one a
+        device opens by its own setting.
+    -   `next-hop`: the default route goes via an address that is not the
+        gateway entry's, a member that is no router for the home.
+    -   `tunnel`: there is no default route, so the escape hatch does not
+        exist.
     """
-    home = {network.v4 for network in conventions.SITE_NETWORKS} | {conventions.LAN_POOL.v4}
+    routes = tuple(routes)
+    gateways = {entry.address for entry in roster if entry.name == conventions.overlay.MEMBER_UDM}
+    faults: set[str] = set()
+    for route in routes:
+        if route.target != DEFAULT and any(route.target.overlaps(home) for home in home_prefixes()):
+            faults.add('home')
+        if route.via is not None and route.target != DEFAULT:
+            faults.add('not-default')
+        if route.target == DEFAULT and route.via not in gateways:
+            faults.add('next-hop')
+    if not any(route.target == DEFAULT for route in routes):
+        faults.add('tunnel')
+    return faults
 
-    for route in conventions.overlay.MANAGED_ROUTES:
-        if route.target in home:
-            assert route.via == conventions.overlay.UDM, route
-        elif route.via is not None:
-            raise AssertionError(f'{route} is via {route.via} for a subnet that is not the home')
+
+def test_no_route_names_the_home_and_the_tunnel_goes_through_the_gateway() -> None:
+    """`route_faults` over the census as it stands, with the roster it is declared against.
+
+    The case below is what shows the check refuses each way of breaking it.
+    """
+    assert route_faults(conventions.overlay.MANAGED_ROUTES, conventions.overlay.ROSTER) == set()
+
+
+def test_the_route_check_refuses_each_way_of_breaking_the_rule() -> None:
+    """The check applied to constructed tables, each wrong in one way and reported for that way.
+
+    Each table starts from the census, so a check that refused the census's
+    own rows fails here as surely as one that refused nothing. A home prefix
+    is caught whether the route sits inside one (a single VLAN) or merely
+    covers one (a supernet of the site), and with a `via` or without one.
+    """
+    overlay = conventions.overlay
+    homelab = overlay.member(overlay.MEMBER_HOMELAB)
+    census = overlay.MANAGED_ROUTES
+    vlan = conventions.CONTAINER_VLAN.v4
+    supernet = vlan.supernet(new_prefix=8)
+    tunnel = tuple(route for route in census if route.target == DEFAULT)
+    assert tunnel, 'the census has no default route to build the cases from'
+
+    assert route_faults((*census, overlay.ManagedRoute(vlan, overlay.UDM)), overlay.ROSTER) == {'home', 'not-default'}
+    assert route_faults((*census, overlay.ManagedRoute(supernet, overlay.UDM)), overlay.ROSTER) == {
+        'home',
+        'not-default',
+    }
+    assert route_faults((*census, overlay.ManagedRoute(vlan, None)), overlay.ROSTER) == {'home'}
+    assert route_faults((*census, overlay.ManagedRoute(IPv4Network('100.64.0.0/24'), overlay.UDM)), overlay.ROSTER) == {
+        'not-default'
+    }
+    assert route_faults(
+        tuple(route if route.target != DEFAULT else replace(route, via=homelab.address) for route in census),
+        overlay.ROSTER,
+    ) == {'next-hop'}
+    assert route_faults(census, tuple(entry for entry in overlay.ROSTER if entry.name != overlay.MEMBER_UDM)) == {
+        'next-hop'
+    }
+    assert route_faults(tuple(route for route in census if route.target != DEFAULT), overlay.ROSTER) == {'tunnel'}
 
 
 def test_every_next_hop_is_an_address_the_roster_places() -> None:
     """A route via an address no member holds is a route to nothing.
 
-    The gateway's entry is what answers for the next hop of every route to the
-    home, so a roster without it, or one placing it elsewhere, leaves the whole
-    home unreachable over the overlay while every run still applies clean.
+    The gateway's entry is what answers for the next hop of the default
+    route, so a roster without it, or one placing it elsewhere, makes every
+    device that opens the tunnel lose its whole network while every run still
+    applies clean.
     """
     placed = {entry.address for entry in conventions.overlay.ROSTER}
 
     for route in conventions.overlay.MANAGED_ROUTES:
         assert route.via is None or route.via in placed, route
-
-
-def test_the_census_carries_the_cluster_vlan_and_the_pool_by_name() -> None:
-    """Both halves of the cluster's home addressing are reachable off-site.
-
-    They are two subnets and two reasons: the VLAN is where a person off-site
-    reaches the worker's own machine API, which no run dials, and the pool is
-    where a person off-site reaches a service the cluster publishes on the LAN. Named rather than numbered: the
-    route table and the two subnets are one census, so what is assertable here
-    is which subnets the table carries and not what either one is numbered.
-    """
-    targets = [route.target for route in conventions.overlay.MANAGED_ROUTES]
-
-    # The pool is not a subnet anything is attached to: it is carried because
-    # the gateway learns host routes into it over BGP.
-    assert conventions.LAN_POOL.v4 in targets
-    assert conventions.CLUSTER_VLAN.v4 in targets
 
 
 def test_the_network_carries_the_rules_it_was_handed_and_composes_none(stack: Central) -> None:
@@ -479,12 +538,11 @@ def test_no_pool_holds_an_address_the_roster_places_or_the_gateways(stack: Centr
 
     That member is the legacy cluster's CI job, which authorizes itself at
     Central (physical/gateway.md §2.1). A pool holding a placed address could
-    hand it the gateway's -- the next hop of every route to the home -- a CI
+    hand it the gateway's -- the next hop of the default route -- a CI
     identity's, or a person's.
-    The pools stay among the subnet's host addresses: the controller hands out
-    an IPv4 pool address under any route whose target holds it, the routes to
-    the home included, so a range past the subnet could give a legacy job a
-    home-LAN address.
+    The pools stay among the subnet's host addresses: an address past the
+    subnet is one no member's interface route covers, so a legacy job holding
+    one would be unreachable from every other member.
     And there is at least one, because the provider's field is optional and
     computed, so an empty list can read as no declaration and keep whatever
     pools Central already holds.
@@ -587,8 +645,8 @@ async def test_routes_giving_no_one_subnet_are_refused_before_anything_is_declar
     be drawn from whichever was read first. The refusal names the routes it
     found, and comes before the component's first resource.
     """
-    homes = tuple(route for route in conventions.overlay.MANAGED_ROUTES if route.via is not None)
-    routes = (*homes, *(conventions.overlay.ManagedRoute(target, None) for target in via_less))
+    hops = tuple(route for route in conventions.overlay.MANAGED_ROUTES if route.via is not None)
+    routes = (*hops, *(conventions.overlay.ManagedRoute(target, None) for target in via_less))
     declared = len(stack.declared)
 
     async with declaring():
@@ -608,12 +666,11 @@ async def test_routes_giving_no_one_subnet_are_refused_before_anything_is_declar
 async def test_a_route_via_an_address_the_roster_does_not_place_is_refused_before_anything_is_declared(
     stack: Central,
 ) -> None:
-    """Every member installs every route, so a next hop nobody holds takes the subnet from all of them.
+    """A device that opens the tunnel sends everything to its next hop, so one nobody holds is a tunnel into nothing.
 
     The roster handed in is the census less the gateway's entry, which is the
-    roster a bring-up has before its ceremony records that entry: the routes
-    to the home still name the gateway's address, and nothing would answer
-    there. The refusal names the routes, and comes before the component's
+    roster a bring-up has before its ceremony records that entry: the default
+    route still names the gateway's address, and nothing would answer there. The refusal names the routes, and comes before the component's
     first resource.
     """
     without = tuple(entry for entry in conventions.overlay.ROSTER if entry.name != conventions.overlay.MEMBER_UDM)
@@ -715,13 +772,14 @@ def gateway_member_target() -> str:
 
 
 def test_the_ceremonys_one_target_is_the_member_of_the_gateways_node(stack: Central) -> None:
-    """The run that creates the gateway's member ahead of the routes names that member and nothing else.
+    """The run that creates the gateway's member names that member and nothing else.
 
     A target the program does not declare is refused by the engine, which is
     safe: the run stops, and a stale URN fails before it writes anything. One
-    that names another member creates the wrong member and writes no route,
-    and it passes, so the run that writes the routes would follow it with no
-    member answering at their next hop (physical/gateway.md §2.2). So the
+    that names another member creates the wrong member, and it passes, so the
+    reading that follows it would find nothing answering at the address the
+    `physical` identity's legs and the default route name (physical/gateway.md
+    §2.5). So the
     target the ceremony's command names is read here as a URN the overlay
     declares, and that declaration is the member whose node id is the gateway
     entry's.

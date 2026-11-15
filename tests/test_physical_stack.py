@@ -206,7 +206,7 @@ def test_the_controller_is_dialed_where_the_roster_placed_the_gateway(ran: Run) 
     The gateway's overlay address is handed out by this program's own ZeroTier
     roster, so every client of the gateway reads it from the same constant:
     the shell the desired state travels over, the controller's API endpoint,
-    and the next hop of the managed routes into the site. A value typed in
+    and the next hop of the default route, the tunnel into the site. A value typed in
     beside the API key would be a second copy of that, free to disagree with
     the roster that decides it.
     """
@@ -526,15 +526,15 @@ def test_the_windows_targets_take_the_gateway_and_what_the_runs_adoption_depends
     assert {urn: missing for urn, missing in unselected.items() if missing} == {}
 
 
-def test_the_overlay_pushes_the_block_domain_and_the_resolvers_it_admits_a_run_to(ran: Run) -> None:
+def test_the_overlay_pushes_the_conventions_domain_and_the_resolvers_it_admits_a_run_to(ran: Run) -> None:
     """The managed DNS reaches the network from `conventions`, not composed here.
 
-    The domain is the convention's -- the overlay block's name, which
-    `test_conventions` holds it to -- and the servers are the resolver census
-    the flow rules above admit a run to, at the same container-VLAN
-    addresses, because the resolvers have no others. A value composed in the
-    program would be a second spelling of either, free to disagree with the
-    block or the census.
+    The domain is the convention's -- the zone the home-only names are
+    published in, which `test_conventions` holds it to -- and the servers are
+    the resolver census the flow rules above admit a run to, at the same
+    container-VLAN addresses, because the resolvers have no others. A value
+    composed in the program would be a second spelling of either, free to
+    disagree with the zone or the census.
     """
     network = ran.recorded.inputs_of(f'{conventions.CLUSTER_NAME}-network')
     ci_dns = f'{conventions.CLUSTER_NAME}-identity-{conventions.overlay.MEMBER_CI_DNS}-node'
@@ -1050,10 +1050,10 @@ def test_the_worker_is_configured_through_the_cluster_endpoint(ran: Run) -> None
 def test_no_talos_call_is_dialed_into_the_cluster_vlan(ran: Run) -> None:
     """A run names the worker's address, and dials none on its VLAN.
 
-    The overlay routes the cluster VLAN via the gateway for a person off-site,
-    and the flow rules give a run no leg into it (physical/gateway.md §2.2,
-    §2.3), so a Talos call the run dialed at an address there would fail from
-    continuous integration while passing from a workstation. Every address one
+    No managed route names the cluster VLAN, a run installs none to it, and
+    the flow rules give a run no leg into it (physical/gateway.md §2.2,
+    §2.3), so a Talos call the run dialed at an address there would fail
+    from continuous integration while passing from a workstation. Every address one
     is dialed at is read here (`talos_dialed`), the worker's apply among them.
     """
     invoked = ran.recorded.invoked

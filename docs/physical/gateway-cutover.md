@@ -1392,9 +1392,8 @@ object with no file behind it and goes at the next boot, or to
 workstation, once every reading above has been taken and every check
 with a pass condition has passed, and the resolvers are answering
 again. Outside the window, and no longer against a clock. It is two
-runs, because the overlay's network carries the routes to the home,
-and a route is written only once the member at its next hop has been
-read answering (gateway.md §2.2).
+runs: the first leaves the overlay's network and members out, and the
+second, with no targets, converges them (gateway.md §2.5).
 
 **First, everything but the overlay's network and members**, run until
 it passes:
@@ -1581,45 +1580,21 @@ late is reported too, and its reading and when the same command runs
 again are declarative/physical.md §6. The run passes by step 5's own condition: the same command,
 run again, reports no changes.
 
-**Then the homelab host refuses the home routes**, once, by hand, as
-root on the host, ahead of the declaration in its configuration
-management that carries the same content (homelab-host.md §4). It needs
-nothing of this program and may come at any point before the run below:
-
-```sh
-f=/var/lib/zerotier-one/networks.d/83048a0632b6ba9b.local.conf
-cat "$f"                    # what is there today; every other line is kept
-zt=$(ip -4 -o addr show | awk '$4 ~ /^10\.144\./ {print $2}')
-ip -4 route show dev "$zt"  # the baseline the readings below compare against
-sed -i 's|^allowManaged=.*|allowManaged=10.144.0.0/16|' "$f"
-grep -Fx 'allowManaged=10.144.0.0/16' "$f" || echo 'allowManaged=10.144.0.0/16' >> "$f"
-systemctl restart zerotier-one
-```
-
-The restart takes the overlay interface down and up, and with it the
-legacy cluster's flannel route over it. Read on the host afterward:
-`ip -4 addr show dev "$zt"` holds `10.144.180.10/16`;
-`ip -4 route show dev "$zt"` lists what the baseline listed —
-`10.144.0.0/16`, and the route to the VPS's pod subnet via
-`10.144.160.212`; and `nc -w 5 10.144.160.212 22 </dev/null` prints the VPS's
-banner. The host's two IPv6 overlay addresses, the ones derived from
-the network id, are gone after the restart, and that is expected: the
-list holds no IPv6 prefix, and the run with no targets takes them from
-every member anyway (homelab-host.md §4). **Stop** if the IPv4 address
-does not come back: the file goes back
-to `allowManaged=1`, the daemon is restarted, and the run below waits on
-a finding. A missing pod route is repaired in the legacy cluster before
-anything else runs.
-
-**Last, the run with no targets**, once step 5's first run has passed,
-the ceremony's step 2 has, and the homelab host refuses the home routes.
-Where the workstation is at home and takes the routes,
-`gatewayBootstrapHost` names the device's leg on the workstation's own
-subnet: once the routes land, the workstation sends its traffic to every
-other home subnet over the overlay, so a dial address on another leg
-would move the run's sessions to the device onto the overlay mid-run. A
-knob on another leg is moved to that one first, which is an ordinary
-change of dial address (gateway.md §2.5).
+**Last, the run with no targets**, once step 5's first run and the
+ceremony's step 2 have passed: it writes the default route, the tunnel,
+whose next hop step 2 creates and reads answering, and the flow rules
+that confine the CI identities to that address. The order protects a
+device that opts in and the CI identities, not the home: no route it
+writes names a home prefix, and no member that has not opted in
+installs anything new (gateway.md §2.2). Each personal device's setting is read
+before it — `zerotier-cli get <network id> allowDefault` and
+`allowDNS` on a desktop, Route Via ZeroTier and the DNS mode on a phone
+— because a device left opted in takes the route and the block the
+moment Central holds them. So is the homelab host's, as root on the
+host, `zerotier-cli get 83048a0632b6ba9b allowDefault`, which prints
+`0`: its whitelist refuses the route either way (homelab-host.md §4),
+and the read moves the finding the route-table reading after the `up`
+would make ahead of the write.
 
 ```sh
 physical preview
@@ -1630,32 +1605,23 @@ The preview is read as gateway.md §2.5 step 3 reads it: the network
 row, a `+` for every roster entry but the gateway's, and no row for
 `zerotier:index:Member kluster-member-udm`. Any row there, `+`, `~` or
 `+-`, and the run is not made: a `+` means step 2 has not been made
-against this state, and the others write to the gateway's admission in
-the run that writes the routes. That the bridged provider plans no row
-there is unproven live, and gateway.md §2.5 step 3 says what the first
-such preview settles. After the `up`:
+against this state, and the others write to the gateway's admission
+beside the flow rules that confine the CI identities to its address.
+That the bridged provider plans no row there is unproven live, and gateway.md §2.5 step 3 says what the first such preview
+settles. After the `up`:
 
--   On the homelab host, `ip -4 route show | grep -F 'via 10.144.1.1'`
-    prints nothing, `ip route get 10.0.5.3` names the LAN interface,
-    and `dig @10.0.5.3 cloudflare.com +short` answers.
+-   On the homelab host and on the operator's workstation,
+    `ip -4 route show | grep -F 'via 10.144.1.1'` prints nothing: a
+    member that has not opted in installs the subnet route alone.
 -   From a LAN client, Home Assistant answers through the reverse proxy,
     and so does a service of the legacy cluster.
--   On `Aetf-Arch-VPS`, `ip route get 10.0.5.3` names its ZeroTier
-    interface, and the `curl` of the ceremony's step 2 prints a status
-    with no route added by hand.
--   On a member at home that takes the routes, the operator's
-    workstation where it is one, `ip route get 10.0.5.3` names its
-    ZeroTier interface and `dig @10.0.5.3 cloudflare.com +short`
-    answers.
 
-**Stop, and the way back:** an at-home member that has lost a home
-subnet, or a route via `10.144.1.1` on the homelab host. On the host the
-repair is local: the file and the restart above. For anything else the
-home routes are deleted at Central by hand, from an uplink that still
-resolves, by setting the network's route table back to the one route
-Central held before this run. The request goes from the root of the
-checkout that holds `.credentials/`, and the token reaches `curl` on
-its standard input rather than on its command line:
+**Stop, and the way back:** a route via `10.144.1.1` on a member that
+has not opted in. The default route is deleted at Central by hand, from
+an uplink that still resolves, by setting the network's route table
+back to the one route Central held before this run. The request goes
+from the root of the checkout that holds `.credentials/`, and the token
+reaches `curl` on its standard input rather than on its command line:
 
 ```sh
 { printf 'Authorization: token '; physical config get zerotierApiToken; } |
@@ -1665,11 +1631,11 @@ its standard input rather than on its command line:
     jq -c .config.routes                     # [{"target":"10.144.0.0/16","via":null}]
 ```
 
-Each member drops the home routes at its next configuration refresh.
+Each member drops the route at its next configuration refresh.
 **Until the cause is fixed, every `physical` run is made in step 5's
 first form**, `--exclude` on the network with `--exclude-dependents`,
 the ceremony's remaining applies included, because a run with no
-targets writes the routes back. The next `physical preview` shows them
+targets writes the route back. The next `physical preview` shows it
 as the diff of record.
 
 **It passes when a further `physical up` reports no changes**, which is
@@ -2427,9 +2393,9 @@ gh run view <databaseId> --repo Aetf/kluster --log-failed
 It passes when the `physical` job succeeds, and the `dns` job either
 succeeds or fails in its `Refresh and compare` step with §8.2's
 `pending` DNSSEC status as its only diff. The step listing is what
-tells the two kinds of red apart: a `dns` job red at its join step
-failed to install its identity, and one red at `Refresh and compare`
-with that diff alone did not. The `physical` job proves its join
+tells the two kinds of red apart: a `dns` job red at its join failed to
+install its identity, its routes or its path to the resolvers, and one
+red at `Refresh and compare` with that diff alone did not. The `physical` job proves its join
 twice. Its join step is called with `wait_for: 10.144.1.1:22`, so it
 returns only once the device's shell answers over the overlay, printing
 `10.144.1.1:22 reachable after N attempts, S s`, and its preview then
@@ -2439,17 +2405,19 @@ drop having recovered within the wait, and S is item 7's join latency,
 the seconds the wait took from `zerotier-cli join` returning to the
 connect that answered. Every later `physical` job prints the same
 line. The `dns` job
-proves less. Its join is the one called with no `wait_for`, because a
-resolver is a leaf whose absence fails only its own rewrites
-(gateway.md §3) and a wait would fail the whole job; so its join step
-returns once `zerotier-cli join` does, admitted or not, and while
-the exposure census implies no rewrite
-the `dns` preview reaches nothing over the overlay. What it shows is
-that the identity installs and the stack previews. That `ci-dns` is a
-member Central admits is read in Central's member list, which shows it
-seen during the run. Its path to the resolvers is first exercised by
-the first rewrite the stack writes. Until §8.4 has run for every
-zone the `dns` job stays red that way. The `k8s-base` and `apps` jobs
+proves its own path. Its join installs a host route to each resolver
+through the gateway, once the member holds its overlay address,
+printing `10.0.5.3/32 via 10.144.1.1 installed` and the same for
+`10.0.5.4`, and then waits for the first resolver API to answer,
+printing `10.0.5.3:80 reachable after N attempts, S s` or the same for
+`10.0.5.4:80` (framework/ci.md §2). That line is the reading of the
+run-installed route: it prints only once `ci-dns` is a member Central
+admits, the flow rules pass its leg, and the gateway forwards it. A
+join red at `Install the run's routes` names a next hop that never came
+onto a link, which is a member that was not admitted; one red at
+`Wait for the target` names both resolver APIs, which is the gateway
+or the path through it. Until §8.4 has run for every zone the `dns`
+job stays red at `Refresh and compare`. The `k8s-base` and `apps` jobs
 fail, and go on failing until the second milestone's first step copies
 the kubeconfig into those stacks (operations.md §2.5); their failure makes the run red and
 starts its alert job, which dispatches into the ops repository, where

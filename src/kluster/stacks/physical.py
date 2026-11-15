@@ -404,18 +404,19 @@ async def main() -> None:
         conventions.CLUSTER_NAME,
         network_id=conventions.overlay.NETWORK_ID,
         roster=conventions.overlay.ROSTER,
-        # The routes to the home name the gateway's member as their next hop,
-        # and every member installs them whether that member answers or not,
-        # so the run that writes them follows the one that creates the
-        # gateway's member alone: an order the ceremony keeps, which no edge
-        # here can (physical/gateway.md §2.2, §2.5).
+        # The overlay's own subnet and the default route via the gateway's
+        # member, which only a device that opens the tunnel installs: no
+        # route names a home prefix, so a member that has not opted in takes
+        # nothing new. The run that writes the default route follows the one
+        # that creates the gateway's member alone, an order the ceremony
+        # keeps and no edge here can (physical/gateway.md §2.2, §2.5).
         managed_routes=conventions.overlay.MANAGED_ROUTES,
-        # The search domain and the resolvers the network pushes: the overlay
-        # host block's own name, answered by the same two resolvers the flow
-        # rules below admit a run to, at the same container-VLAN addresses.
-        # Written by the same request as the routes and the rules, with the
-        # token the component already holds; no member applies it until its
-        # own `allowDNS` is on (physical/gateway.md §2.7).
+        # The tunnel's resolver: the primary zone, answered by the same two
+        # resolvers the flow rules below admit a run to, at the same
+        # container-VLAN addresses. Written by the same request as the routes
+        # and the rules, with the token the component already holds; no
+        # member applies it until its own setting is on (physical/gateway.md
+        # §2.7).
         dns=conventions.overlay.MANAGED_DNS,
         # Composed here rather than inside the component, because what a run
         # may reach is a fact about how continuous integration gets to this
@@ -427,7 +428,8 @@ async def main() -> None:
         # A run reaches the two resolvers at their LAN addresses on the
         # container VLAN, not at overlay addresses, because they have none:
         # they are containers on the device, not members of the overlay. The
-        # packets are routed by the gateway, and a routed packet still carries
+        # packets are routed by the gateway, over a host route each run
+        # installs for itself (framework/ci.md §2), and a routed packet still carries
         # the destination it had before the forward, so the rule matches the
         # LAN address.
         flow_rules=flow_rules(

@@ -317,18 +317,14 @@ first DS of each zone in that order.
     reads. Nothing here crosses the StackReference: an entry carries
     the member's name and its overlay address together, so the whole
     block is code, and it is declared identically before and after
-    `physical` is applied. The block's name
-    as a client sees it is `conventions.dns.OVERLAY_DOMAIN`, and it has
-    a second reader: the `physical` stack pushes it to the overlay's
-    members as the network's managed-DNS search domain, with alice and
-    bob as the resolvers for it (physical/gateway.md §2.7). A member
-    that opts in resolves `*.zt` at home and nothing else there, and
-    the resolvers answer such a name today by forwarding it upstream,
-    which returns this block's record; a member that does not opt in,
-    and every Linux member, resolves the block through the public
-    records as before. Application names are outside the pushed domain
-    by design, so the push changes nothing about how any of them
-    resolves.
+    `physical` is applied. The block sits under the primary, which is
+    the network's managed-DNS search domain (physical/gateway.md §2.7),
+    so on a macOS or Android device that holds the overlay's tunnel and
+    applies its resolver a member's bare label completes as
+    `<label>.zt`, and on Windows and Linux the member is reached at its
+    full name (physical/gateway.md §2.7); the resolvers answer such a
+    name by forwarding it upstream, which returns this block's record. Every other device resolves the block
+    through the public records.
 -   **Apps are CNAMEs to anchors**: `<app>.<zone>` → `kluster.hosts.…`
     declared inside the app component. A node rebuild or VIP re-home
     touches exactly one anchor record, previewed in `dns`.
@@ -408,10 +404,12 @@ first DS of each zone in that order.
 LAN clients must resolve split-horizon apps to their `lan` VIPs,
 never the cloud path. Which clients the rewrites steer is defined in
 architecture.md §3.4: those whose resolver is alice/bob for the name
-asked — every LAN lease, and an overlay member only under the pushed
-domain, which application names sit outside — so an overlay member is
-steered to a `lan` VIP by nothing. The AdGuard pair (alice/bob) lives
-on the UDM.
+asked — every LAN lease, and an overlay member that holds the tunnel and
+applies its resolver, which is a home client by then (physical/gateway.md
+§2.7). There is one view: the overlay is a path into the home audience
+and not an audience of its own (architecture.md §3.3), so no rewrite
+answers an overlay client differently from a home one. The AdGuard pair
+(alice/bob) lives on the UDM.
 
 -   **Mechanism**: a dynamic-provider resource wrapping the AdGuard
     rewrite API (the legacy golinks work established the technique),
@@ -431,10 +429,11 @@ on the UDM.
     what changed.
 -   **Owned by this stack, not by `apps`.** Split-horizon is DNS, and
     the AdGuard pair is on the UDM: putting the rewrites here keeps the
-    LAN reachability requirement — the ZeroTier join, and its
-    availability as a dependency of every CI run that touches the stack
-    — off the busiest stack in the repo and on the quietest one. `apps`
-    then needs no LAN access at all.
+    LAN reachability requirement — the ZeroTier join, the host route to
+    each instance its join installs, and their availability as a
+    dependency of every CI run that touches the stack — off the busiest
+    stack in the repo and on the quietest one. `apps` then needs no LAN
+    access at all.
 -   **adguardhome-sync retires.** With Pulumi dual-writing the dynamic
     config, the sync service is redundant *and* a conflict source (it
     would overwrite bob's Pulumi-written rewrites), and one standing
@@ -479,7 +478,9 @@ on the UDM.
     container VLAN, at the port `conventions.gateway.ADGUARD_API_PORT`
     names — the same constant the caddy vhost that proxies the instance,
     the initial state that tells it where to listen, and the overlay
-    flow rule that admits a `dns` run all meet on. There is no endpoint
+    flow rule that admits a `dns` run all meet on. The overlay carries
+    no route to that address: a run's join installs one through the
+    gateway for itself (framework/ci.md §2). There is no endpoint
     key to set, and therefore nothing for a stale one to disagree with;
     `Pulumi.dns.yaml` carries the AdGuard login and nothing else about
     the pair. Dialing the instance's own public name instead would have
@@ -508,7 +509,10 @@ plane names:
 2.  **Service plane — public-zone names, resolved via AdGuard**:
     every LAN-reachable service uses its *public* hostname
     (`<app>.<zone>`); AdGuard rewrites (§3) steer LAN clients to the
-    `lan` VIP, and no overlay member (architecture.md §3.4).
+    `lan` VIP, a device holding the overlay's tunnel among them
+    (architecture.md §3.4). The home-only names sit directly under the
+    primary, the domain the tunnel's resolver is scoped to on a desktop
+    (physical/gateway.md §2.7).
     **LAN-only services are rewrite-only**: the row yields
     the AdGuard rewrite (from `dns`, §3) and the `lan-gw` route (from
     `apps`, §5) but *no* Cloudflare record — public resolvers see

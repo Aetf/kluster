@@ -165,9 +165,9 @@ def test_no_run_reaches_the_worker_and_a_personal_member_does() -> None:
     and names the worker only as the node a control plane proxies the call to
     (`stacks/physical.py`); nothing a run does opens a connection into the
     cluster VLAN. So every port the worker's firewall opens is closed to both
-    identities, in both directions. The cluster VLAN's managed route is for a
-    person off-site, whose traffic to the worker's machine API falls through to
-    the final accept.
+    identities, in both directions. A person whose device has opened the
+    tunnel reaches the cluster VLAN through the gateway, and that traffic to
+    the worker's machine API falls through to the final accept.
     """
     rendered = rules()
     worker = conventions.HOMELAB_NODE_IPV4
