@@ -1,8 +1,9 @@
 """The ZeroTier network the gateway routes for: membership, routes, flow rules, managed DNS.
 
-The overlay is how the home site is reached from anywhere that is not the home
-site — by a person on a phone, and by a continuous-integration job that has to
-configure the gateway itself. It is a network several machines belong to rather
+The overlay is how the home site is managed from anywhere that is not the home
+site — by a person on a laptop, and by a continuous-integration job that has
+to configure the gateway itself — and a person's way into the home audience
+from away, by a tunnel through the gateway that the device opens itself. It is a network several machines belong to rather
 than a fact about any one of them, so it is declared beside the gateway and not
 under it (rfc-002 §6). The gateway is one member, and the two components meet
 only in `conventions`, where the roster says which address the gateway answers
@@ -31,18 +32,15 @@ Four things are declared here, and each answers a different question
     the gateway component's, and only the route table is here: two systems
     being told two different things (gateway.md §2.2). The table is
     written as declared, `via` where the census has one and absent where it
-    has none: the home subnets go via the gateway's own member, the one
-    machine that was already routing them, and the overlay's own subnet goes
-    via nothing, because that route is what the controller assigns every
-    member's address under. The network is adopted with its routes declared
-    in full, so a route the census lacks is one the update deletes at
-    Central. A `via` is an address the roster places, and a route naming any
-    other is refused before anything is declared: every member installs every
-    route, so a next hop nobody holds takes from each member the subnet it
-    routes. That the member holding it *answers* is not something a
-    declaration can say, which is why the run that writes the routes is
-    ordered after the one that creates the gateway's member, by the ceremony
-    rather than by the graph (gateway.md §2.2, §2.5).
+    has none: the overlay's own subnet goes via nothing, because that route
+    is what the controller assigns every member's address under, and the
+    default route goes via the gateway's own member, the one machine that
+    routes for the home. The network is adopted with its routes declared in
+    full, so a route the census lacks is one the update deletes at Central.
+    A `via` is an address the roster places, and a route naming any other
+    is refused before anything is declared: a member that opens the tunnel
+    sends everything outside its own subnets to that next hop, so a next
+    hop nobody holds is a tunnel into nothing.
 -   **The flow rules** — what a member may do once admitted. They arrive as a
     parameter, because what confines a run is a fact about how continuous
     integration reaches this site rather than about the network, and this
@@ -51,13 +49,13 @@ Four things are declared here, and each answers a different question
     a confined member by its node address and the generated identities' are
     minted here; the component renders the program over the addresses of the
     members it declares, and adds nothing else to it.
--   **The managed DNS** — the one domain the network asks its members to
-    resolve at home, and the resolvers that answer for it. It arrives as a
-    parameter, from `conventions.overlay.MANAGED_DNS`, because the `dns` stack
-    answers under the same domain and the two must agree. It is a field of the
-    network like the routes: the controller hands it to every member, and each
-    member applies it only under its own `allowDNS` setting, which is off by
-    default and which nothing here can set (gateway.md §2.7).
+-   **The managed DNS** — the tunnel's resolver: the home resolvers, and the
+    domain a desktop scopes them to. It arrives as a parameter, from
+    `conventions.overlay.MANAGED_DNS`, because the resolvers are the gateway's
+    census and the domain the `dns` stack's zone. It is a field of the network
+    like the routes: the controller hands it to every member, and each member
+    applies it only under its own setting, off by default, which nothing here
+    can set (gateway.md §2.7).
 
 **The roster is the whole of this program's admission.** A member is authorized
 because it has an entry, and the entry carries the node id that says which
@@ -145,8 +143,8 @@ class Overlay(Component, pulumi_type='kluster:overlay:Overlay'):
     it acts on rather than reading one for itself. They live in `conventions`
     rather than in the stack program because the `dns` stack publishes the
     `*.zt` host block from the same roster. `dns` arrives the same way and for
-    the same reason: the domain it pushes is the one that block is published
-    under, and the servers are the site's resolvers, both decided in
+    the same reason: the domain it pushes is the zone the `dns` stack
+    publishes, and the servers are the site's resolvers, both decided in
     `conventions` and read by more than this program.
     """
 
@@ -169,10 +167,10 @@ class Overlay(Component, pulumi_type='kluster:overlay:Overlay'):
             raise ValueError(f'the flow rules name {unknown}, which the overlay roster does not carry')
         # A route is forwarded by the member that holds its `via`, and a
         # member installs it whether anyone holds that address or not, so a
-        # `via` no entry places is a route that captures the traffic of every
-        # member that takes the routes and delivers none of it
-        # (physical/gateway.md §2.2). Refused by the routes that name it,
-        # before anything is declared.
+        # `via` no entry places is a tunnel that captures everything a device
+        # that opens it sends and delivers none of it (physical/gateway.md
+        # §2.2). Refused by the routes that name it, before anything is
+        # declared.
         placed = {entry.address for entry in roster}
         unplaced = [f'{route.target} via {route.via}' for route in managed_routes if route.via not in {None, *placed}]
         if unplaced:
@@ -260,8 +258,8 @@ class Overlay(Component, pulumi_type='kluster:overlay:Overlay'):
             # One element, declared as one object: the provider folds every
             # element of this list into the network's single DNS setting, so a
             # second element would overwrite the first rather than add a
-            # domain. Like the routes, this reaches every member; unlike them
-            # it is inert until the member's own `allowDNS` is on.
+            # domain. Like the routes, this reaches every member, and like the
+            # default route it is inert until the member's own setting is on.
             dns=[zerotier.NetworkDnArgs(domain=dns.domain, servers=[str(server) for server in dns.servers])],
             opts=pulumi.ResourceOptions.merge(child, pulumi.ResourceOptions(import_=network_id, protect=True)),
         )

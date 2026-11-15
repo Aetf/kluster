@@ -1362,13 +1362,13 @@ CI (§2.6); the legacy cluster's stays because that cluster is trusted
 until it retires, the residual
 [threat-model.md](../threat-model.md) §2.10 accepts. No entry admits
 such a member and no flow rule names it, so it reaches the final
-`accept` and, from §2.5 step 3, the home subnets via `10.144.1.1`.
+`accept`, a personal member's reach (§2.3). It is a Linux client on its
+defaults, so it installs the subnet route alone (§2.2).
 
 **The assignment pools are what the roster leaves.** Central hands such
 a member an address out of the network's IPv4 assignment pools, so a
 pool holding a placed address could give a legacy job the gateway's —
-the next hop of every route to the home — a CI identity's, or a
-person's. The pools are therefore derived and never written down:
+the next hop of the tunnel — a CI identity's, or a person's. The pools are therefore derived and never written down:
 every host address of `10.144.0.0/16` less the addresses the roster
 places and every route's next hop
 (`conventions.overlay.assignment_pools`). The suite holds the
@@ -1383,15 +1383,28 @@ deletes its member.
 
 | Member | role tag | Notes |
 | --- | --- | --- |
-| `udm` | `infra` | The gateway: a static managed address, and the next hop of every route to the home (§2.2). Its entry holds the node id its daemon minted, which §2.5 step 2 reads off the device. |
-| `Aetf-Arch-Homelab` | `infra` | The homelab host: a plain member, never a router, which refuses the home routes on the device (§2.2), and the recovery side-door (§3). The one address the flow rules and the libvirt session look up rather than take from a constant. |
+| `udm` | `infra` | The gateway: a static managed address, and the next hop of the default route, the tunnel (§2.2). Its entry holds the node id its daemon minted, which §2.5 step 2 reads off the device. |
+| `Aetf-Arch-Homelab` | `infra` | The homelab host: a plain member, never a router, which accepts only the overlay's own prefix from the controller (§2.2), and the recovery side-door (§3). The one address the flow rules and the libvirt session look up rather than take from a constant. |
 | `Aetf-Arch-VPS` | `infra` | The legacy deployment. Its entry leaves the roster in Wave F, no later than the machine is cancelled (cluster/migration.md §4). |
-| `haos` | `infra` | Home automation, reachable while the cluster is not. It sits at home and serves other subnets, as the homelab host does, and it still takes the home routes (§2.2). |
+| `haos` | `infra` | Home automation, reachable while the cluster is not. A Linux client on its defaults, so it installs the subnet route alone (§2.2). |
 | `ci-physical` | `ci` | The `physical` stack's identity: `plan-physical`, `up-physical`, and the drift matrix's `physical` entry join with it. Identity generated in state (`zerotier_identity`), private key an Environment secret; `zt-physical` keeps it live in one job at a time (§2.6). IPv4-only (§2.3). |
 | `ci-dns` | `ci` | The `dns` stack's identity: `up-dns`, a pull request's `preview (dns)` and `prove (dns)`, and the drift matrix's `dns` entry join with it — the LAN-touching work is the AdGuard rewrites (declarative/dns.md §3). Same generation, its own confinement (§2.3), serialized by `zt-dns` (§2.6). IPv4-only (§2.3). |
-| Personal devices | `personal` | Phones and laptops, each named in the roster. Full access — parity with sitting on the LAN. Whether a device applies the network's managed DNS (§2.7) is its own `allowDNS` setting, decided on the device: not a roster field, because the controller can neither read nor set it. |
+| Personal devices | `personal` | Phones and laptops, each named in the roster. Full access — parity with sitting on the LAN — and the escape hatch: the tunnel into the home, which the device opens itself. Whether a device holds the tunnel and applies its resolver (§2.2, §2.7) is its own setting, decided on the device: not a roster field, because the controller can neither read nor set it. |
 
 ### 2.2 Managed routes
+
+**The overlay is the management network, the return path of the CI
+runs, and a person's escape hatch.** It is a transport: no service's
+declared path crosses it, and the cluster serves nothing at an overlay
+address. The escape hatch is the tunnel, a default route through the
+gateway that a device installs only by its own setting and that makes
+the device a home client. No managed route names a home prefix. The
+rule is architecture.md §5.3's, restated here.
+
+The test of the rule: **with ZeroTier stopped on every machine, every
+service answers as before, from home and from the internet.** What
+stops is management from away, the runs of `physical` and `dns`, and
+the escape hatch.
 
 The route table is **`conventions.overlay.MANAGED_ROUTES`**, and it is
 everything the network carries: the network is adopted with its routes
@@ -1400,25 +1413,27 @@ first converge deletes at Central. Each row is `{target, via}`:
 
 | Route | Target | Via |
 | --- | --- | --- |
-| The overlay's own subnet | `10.144.0.0/16` | None. This is the route ZeroTier installs on every member's own interface, and **it is what gives a member its address at all**: the controller pushes a member's static assignment only when some route's target contains it, with that route's prefix length, so a table without it hands every member no address at its next configuration refresh. |
-| The cluster VLAN | `192.168.70.0/24` | `10.144.1.1`, the UDM member — how a person off-site reaches the worker's own machine API, the one way to it that passes through no control plane. No run dials this VLAN (§2.3). |
-| The server LAN | `192.168.80.0/24` | `10.144.1.1` |
-| The IoT VLAN | `192.168.90.0/24` | `10.144.1.1` |
-| The container VLAN | `10.0.5.0/24` | `10.144.1.1` — the resolvers' addresses, which the managed DNS (§2.7) names. |
-| The `lan` pool | `192.168.71.0/24` | `10.144.1.1`, reached through the UDM's own BGP-learned route, one hop — how a person off-site reaches a cluster service. |
+| The overlay's own subnet | `10.144.0.0/16` | None. This is the route ZeroTier installs on every member's own interface, and **it is what gives a member its address at all**: the controller pushes a member's static assignment only when some route's target contains it, with the prefix length of the longest such route, so a table without it hands every member no address at its next configuration refresh. |
+| The tunnel | `0.0.0.0/0` | `10.144.1.1`, the UDM member. A device installs it only by its own setting (below). |
 
-All reachability into the home is via the UDM member's overlay address; the
-homelab host advertises nothing. The suite holds the table's shape
-rather than its rows: some via-less route covers every address the
-roster places, and every `via` is the gateway's address, for a home
-subnet.
+The suite holds the table's shape rather than its rows: the longest
+route holding each roster address has no `via`; no route but the
+default one overlaps a home network or the `lan` pool; the one route
+with a `via` is the default route, and its next hop is the gateway's
+entry; and every next hop is an address the roster places, which
+`Overlay` also refuses to be built without.
 
-**The legacy cluster's pod subnet is not on the table.** That cluster
-needs no managed route: its flannel runs in `host-gw` mode over the
-homelab host's overlay interface and installs the route to the VPS's
-pods on that host itself. A managed route for it would be installed by
-every member as a path to the VPS's pod addresses past its ingress,
-which nothing uses.
+**A route only one run needs is that run's own**, installed by the step
+that joins it, for the addresses the run dials, and never a row of this
+table. The `dns` runs dial the two resolver APIs on the container VLAN,
+and their join installs a host route to each through the gateway
+before the stack runs ([framework/ci.md](../framework/ci.md) §2). The
+flow rules already admit `ci-dns` to exactly those two addresses on the
+API port (§2.3), so the route grants nothing they do not.
+
+**The legacy cluster's pod subnet is not on the table.** Its flannel
+runs in `host-gw` mode over the homelab host's overlay interface and
+installs the route to the VPS's pods on that host itself.
 
 **There is no router object.** ZeroTier's model is an emulated switch:
 a route is `{target, via}` on the *network*, and `via` is nothing but
@@ -1426,118 +1441,115 @@ an address belonging to some member. That member forwards because
 forwarding is configured on the device, not because the controller
 made it a router — ZeroTier has no concept of one. So the UDM is told
 two separate things by two separate mechanisms: the route table here,
-and its own forwarding configuration on the box (§1). The rest of the mechanism follows from that, and is worth
-stating because the intuitive answers are wrong:
+and its own forwarding configuration on the box (§1). The rest of the
+mechanism follows from that, and is worth stating because the
+intuitive answers are wrong:
 
 -   **Routes reach every member, not the ones that need them.** The
     controller hands the whole network configuration, routes included,
-    to each member as it joins or refreshes. A route added here is
-    added to every joined device.
+    to each member as it joins or refreshes. No setting at Central
+    scopes a route to some members.
 -   **Each member installs them into its own operating system**, gated
-    by a client-side setting: `allowManaged`, on by default for
-    private ranges, and `allowGlobal` and `allowDefault`, both off. A
-    phone off-site routes the home subnets into its overlay interface
-    because its own client put them there, not because anything
-    server-side steered it.
+    by client-side settings: `allowManaged`, on by default for private
+    ranges, and `allowGlobal` and `allowDefault`, both off. A
+    default-route target is decided by `allowDefault` alone, before any
+    scope test (`OneService::checkIfManagedIsAllowed`, at the 1.16.2
+    release the repository's ZeroTier action pins), so with it off the
+    route is not installed, at home or away.
 -   **Nothing on the member asks whether anyone holds `via`.** The
-    client skips a route only when `allowManaged` refuses its target,
-    when `via` is one of the member's own addresses — so the gateway
-    never installs the routes it is the next hop of — when the member
-    holds no address of the target's family, or when the route is the
-    one a managed address already implies
-    (`OneService::syncManagedStuff`, at the 1.16.2 release the
-    repository's ZeroTier action pins). The gate reads the target and
-    never `via`. A route deleted on the member by hand comes back at the
-    client's next interface pass, so `ip route del` is no way back.
--   **On Linux every route with a `via` carries the same metric, and it
-    decides only against an equal prefix.** The client installs each one
-    into the main table at its fixed metric, 5000:
-    `10.0.5.0/24 via 10.144.1.1 dev zt… proto static metric 5000`. A
-    member sitting on one of the home subnets keeps its directly
-    connected path to *that* subnet, a route to the same prefix with a
-    lower metric; on BSD-derived systems the add fails against the
-    existing route, to the same effect. Towards every *other* home
-    subnet the member's only competing route is its default route, and
-    a `/24` at any metric wins over a `/0`. A managed default route is
-    installed only under `allowDefault`, split into two halves that win
-    on prefix length.
+    client skips a route only when its settings refuse the target, when
+    `via` is one of the member's own addresses — so the gateway never
+    installs the route it is the next hop of — when the member holds no
+    address of the target's family, or when the route is the one a
+    managed address already implies (`OneService::syncManagedStuff`). A
+    route deleted on the member by hand comes back at the client's next
+    interface pass, so `ip route del` is no way back.
+-   **A desktop that opens the tunnel installs it as two halves.**
+    `0.0.0.0/1` and `128.0.0.0/1` through the gateway
+    (`osdep/ManagedRoute.cpp`), only while the node is online. They win
+    over the system's default route on prefix length, lose to every
+    connected subnet, and go when ZeroTier stops.
 -   **The return path is not part of this at all.** A managed route
-    fixes one direction. Replies come back because the UDM is the
-    LAN's default gateway, which it is here; anywhere that were not
-    true the return leg would need a static route on whatever is, or
-    masquerading.
+    fixes one direction. A reply from a home subnet comes back because
+    the UDM is that subnet's default gateway; a reply from the internet
+    comes back because the uplink's source NAT masquerades an overlay
+    source as it does any other (§4.1).
 
-**A member at home is in one of two states while it takes the routes.**
-A member away from home had no path to the home subnets, so a route to
-an absent router costs it nothing. One at home does:
+**Who installs the tunnel**:
 
--   **While the next hop is not a member**, it loses every home subnet
-    but its own, and an Android phone its own as well (below): the
-    resolvers on the container VLAN, which every lease
-    on the LAN names, and whatever it serves to another subnet, since a
-    reply is routed by its destination too. The kernel does not fall
-    back to the default route when nothing answers ARP for `10.144.1.1`.
--   **While the next hop is a member**, it reaches the other home
-    subnets through the gateway's ZeroTier daemon instead of across the
-    LAN. What it initiates leaves from its overlay address; what it
-    answers leaves the overlay interface carrying its LAN address, and
-    whether the device forwards a packet whose source lives on another
-    of its legs is the device's reverse-path setting for that
-    interface. Those paths stop with the gateway's `zerotier` machine
-    (§3).
+| Member | What decides | With the setting off |
+| --- | --- | --- |
+| Linux, macOS, Windows | `allowDefault`, per network, off in a new network's settings (`zerotier-cli set <network id> allowDefault=1`, or Allow Default in the tray menu) | Nothing is installed. |
+| Android | Route Via ZeroTier, per network, in the app's network page | The default route is skipped; the system's VPN gets the overlay subnet and the multicast range (`kaaass/ZerotierFix`, `ZeroTierOneService.java`). |
+| The homelab host | Its `allowManaged=10.144.0.0/16` (below) | Refused whatever `allowDefault` says: an entry of that list admits a target it contains with a prefix no longer than the target's. |
+| The gateway | The route's `via` is its own address | Never installed. |
+| `haos`, the VPS, the CI runners | Linux clients on their defaults, a runner joining fresh each run | Nothing is installed. |
+| iOS | Not established: the app is closed source, and no roster member is known to be one | |
 
-No setting at Central scopes a route to some members. The one lever is
-on the member: the client reads an `allowManaged` value that is not a
-boolean as a comma-separated list of prefixes, and under such a list it
-passes the managed address and the route with no `via` and refuses every
-target outside the list.
+So **a member that has not opted in holds the subnet route alone**, at
+home or away, and its routing table is the one it would have with no
+tunnel declared. Each personal device's setting is read before the
+route is first written, because a device left opted in from earlier
+use takes it the moment Central holds it.
 
-**A managed route is written to Central only while its next hop is a
-member that has been read answering at that address.** The rule has a
-declared half and a performed half. Declared: every `via` is an address
-the roster places, which `Overlay` refuses to be built without and the
-suite holds over the two censuses. Performed: the ceremony creates the
-gateway's member by a run of its own and reads the device answering and
-forwarding before the run that writes the routes (§2.5 step 2), because
-"authorized at Central" and "answering" are separated by the device's
-daemon fetching its configuration, which no edge of the graph can wait
-for.
+**What the gateway does with the tunnel's traffic.** It forwards it:
+`zt*` interfaces match no zone, so overlay-forwarded traffic rides
+FORWARD's default `ACCEPT` in both directions (§4.1), to the internet
+and to every home subnet, and the Central flow rules are its only
+policing layer (§2.3). **The tunnel reaches the home subnets, and that
+is intended**: it is the escape hatch's general form, what reaches a
+raw port, a passthrough row, a device's own page and the home
+resolvers. A personal member is trusted at the network layer
+([threat-model.md](../threat-model.md) §2.10), and a managed route
+distributes without authorizing, so the tunnel hands that member a
+path its reach already allowed. A CI identity gains nothing by it: its
+drops precede the final `accept` (§2.3), so a runner that installed the
+route would have it dropped at the first hop.
 
-**A member that lives on a home subnet and serves from it refuses the
-home routes on the device**, by `allowManaged=10.144.0.0/16` in its
-`networks.d/<network id>.local.conf`. Such a member needs no route to
-the home, and what it serves to the other home subnets would otherwise
-answer through the gateway's daemon, or into nothing. The value is the
-overlay's own subnet rather than a list of the home subnets to refuse,
-so a route the census gains later is refused with no change on the
+Under the tunnel a home machine that is itself a member — the homelab
+host, `haos` — is dialed at its overlay address. Dialed at its LAN
+address, the request goes through the gateway and the reply returns
+directly over that machine's own overlay interface, so the gateway sees
+half a flow. Every other flow the gateway forwards enters and leaves by
+the same pair of interfaces in both directions, and arrives on the
+overlay interface from an overlay source, which a strict reverse-path
+check passes.
+
+**The tunnel's limits**:
+
+-   **IPv4 only.** The network assigns no IPv6 (below), so a desktop's
+    IPv6 stays on its own network, and the tunnel gives reach, not
+    concealment. On Android a VPN that adds no IPv6 address, route or
+    server blocks that family for its apps, and the app adds none, so a
+    connected phone has no IPv6 with or without the tunnel.
+-   **A Linux client** sets `net.ipv4.conf.all.rp_filter=2` before it
+    opens the tunnel (ZeroTier's exit-node page).
+-   **At home** an opted-in device sends everything outside its own
+    subnet through the gateway's ZeroTier process, and an Android phone
+    its own subnet too. It works and is slower; the setting is turned
+    off at home.
+-   **Capacity** is the UDM's uplink and its ZeroTier process, which
+    forwards in user space. The tunnel is sized for one person's
+    temporary use.
+-   **The gateway unreachable while a device holds the tunnel** leaves
+    that device with no network until the setting is off. Nobody else
+    is touched.
+
+**A member that serves from a home subnet accepts from the controller
+only the overlay's own prefix**, by `allowManaged=10.144.0.0/16` in its
+`networks.d/<network id>.local.conf`. The client reads an `allowManaged`
+value that is not a boolean as a comma-separated list of prefixes,
+passes the managed address and the route with no `via`, and refuses
+every target outside the list, the default route included. So for the
+machine that serves storage and hosts the worker, "Central holds no
+home route" becomes "this host cannot take one". The value is the
+overlay's own subnet rather than a list of prefixes to refuse, so a
+route added to the census by mistake is refused with no change on the
 device. The setting is the device's, as `allowDNS` is (§2.7), so no
 roster field carries it. The homelab host is the instance this
-repository states the requirement for, because it is also the way in
-when the gateway's `zerotier` machine is down (§3), and its
-configuration management declares the file
-([homelab-host.md](homelab-host.md) §4). `haos` is in the same class,
-and it takes the routes: how the Home Assistant add-on's client is given
-a `local.conf` that survives the add-on's restarts is not established
-here.
-
-**A device that roams sends the home through the overlay while it is at
-home with its ZeroTier running, and that is accepted.** A laptop or phone
-at home whose client runs reaches the other home subnets, its resolvers
-among them, through the gateway's ZeroTier daemon, and loses them while
-that daemon is down. On Android the overlay takes the phone's own subnet
-too: the app hands every managed route to the system's VPN, and Android
-consults the VPN's routing table ahead of the Wi-Fi network's, by rule
-priority rather than by prefix, so the connected route that keeps a
-Linux member's own subnet on the LAN decides nothing there. With its
-ZeroTier stopped, every platform keeps its LAN path, because a client
-that stops takes its routes with it: the desktop client's go with its
-networks' teardown, the Android app's with the VPN it closes. Stopping
-the client is the member's own remedy. Nothing at Central can scope a
-route to the members that are away, and the Android app has no
-whitelist to set. What would remove the behavior is not routing the
-home through the overlay at all, which is what this section is for.
-Each platform's behavior, with its source:
-[Aetf/kluster-ops#747](https://github.com/Aetf/kluster-ops/issues/747#issuecomment-6887971571).
+repository states it for, because it is also the way in when the
+gateway's `zerotier` machine is down (§3), and its configuration
+management declares the file ([homelab-host.md](homelab-host.md) §4).
 
 **Every managed route is IPv4, and the pool's ULA /64 is deliberately
 not among them.** The overlay assigns no v6 address to any member
@@ -1566,8 +1578,8 @@ the node holds. The worker's configuration apply names the worker's
 cluster-VLAN address, and whichever control plane answers forwards the
 call over KubeSpan; the health check names the worker the same way and
 reads Kubernetes at the balancer. So a run needs nothing on the
-cluster VLAN, and that VLAN's route (§2.2) is there for personal
-members.
+cluster VLAN, and the overlay carries no route to it (§2.2): a person
+reaches it through the tunnel.
 
 Facts about the rules engine that shape the draft (docs.zerotier.com
 /rules; ZeroTierOne 1.16 `node/Network.cpp`; quirks from ZeroTierOne
@@ -1730,7 +1742,7 @@ discovery *does* depend on, declared rather than assumed:
 
 **Boundary fact**: discovery across the overlay↔LAN boundary does not
 work and never did — link-local multicast does not cross a routed
-hop, and the new managed routes carry unicast only. An overlay member
+hop, and the tunnel carries unicast only. An overlay member
 discovers other overlay members, not LAN devices. If that is ever wanted,
 the shape is an mDNS reflector on the UDM spanning `zt*` and the
 VLANs — deliberately not designed in.
@@ -1818,7 +1830,7 @@ Where each is read:
 
 | Item | On a scratch network (§2.4.1) | On the real network |
 | --- | --- | --- |
-| 1 | every leg of both identities, with the negative half: each reaches nothing the other's legs name | §2.4.2: the doors at the overlay address, and the resolvers over the managed route; gateway-cutover.md §8.3: `ci-physical`'s legs, with its real identity |
+| 1 | every leg of both identities, with the negative half: each reaches nothing the other's legs name | §2.4.2: the doors at the overlay address, and the resolvers over the run's own route; gateway-cutover.md §8.3: `ci-physical`'s legs, with its real identity |
 | 2 | whole | — |
 | 3 | whole | none of its own; §2.4.2's resolver reading implies it |
 | 4 | a CI stand-in's first dial after its first join, against a gateway stand-in running the device's binary | gateway-cutover.md §8.3: the readiness line of the `physical` join |
@@ -2327,14 +2339,23 @@ confirm, before any reading depends on it.
 
 It runs after the ceremony's last step and before
 [gateway-cutover.md](gateway-cutover.md) §8.2. Step 2 of the ceremony
-reads two of the same things early — a door at the overlay address, and
-the routed path — as the stop condition for writing the routes (§2.5);
-those readings do not discharge this one, and the ARP attribution and
-the controller door below are read here alone. The reader is an
-overlay member that is **not** a CI identity and not the homelab host,
-and whose route to the container VLAN is the managed one:
-`ip route get 10.0.5.3` names its ZeroTier interface. `Aetf-Arch-VPS`
-is off the LAN and qualifies.
+reads one of the same things early, a door at the overlay address, as
+the stop condition for its own run (§2.5); that reading does not
+discharge this one, and the routed path, the ARP attribution and the
+controller door below are read here alone. The reader is an overlay
+member that is **not** a CI identity and not the homelab host, and
+whose route to the two resolvers goes through the gateway, the route a
+`dns` join installs (§2.2): `Aetf-Arch-VPS`, which is off the LAN, with
+the two host routes added by hand for the reading and removed after it,
+as root:
+
+```sh
+zt=$(ip -4 -o addr show | awk '$4 ~ /^10\.144\./ {print $2}')
+for r in 10.0.5.3 10.0.5.4; do ip route add "$r/32" via 10.144.1.1 dev "$zt"; done
+ip route get 10.0.5.3                    # names the ZeroTier interface
+# ... the readings below ...
+for r in 10.0.5.3 10.0.5.4; do ip route del "$r/32" via 10.144.1.1 dev "$zt"; done
+```
 
 A CI identity would add nothing here. What only the device can show is
 the address its kernel sends ARP from, its doors answering at its overlay
@@ -2410,9 +2431,9 @@ by reaching it before the window rather than derived here
 The ceremony is four steps, and each of them applies. Step 1 is the
 window's targeted run and then the rest of the stack less the overlay's
 network and members, and neither writes to Central; step 2 creates the
-gateway's member and nothing else; step 3 converges the network, routes
-included, and applies again with the worker's address; step 4 applies
-over the overlay.
+gateway's member and nothing else; step 3 converges the network and
+applies again with the worker's address; step 4 applies over the
+overlay.
 
 1.  **Set `gatewayBootstrapHost`, then `physical` up, the overlay's
     network and members left out.** The push goes
@@ -2528,9 +2549,6 @@ over the overlay.
     ```sh
     leader=$(machinectl show --property=Leader --value zerotier)
     nsenter --target "$leader" --mount -- /usr/sbin/zerotier-cli listnetworks   # OK, 10.144.1.1/16
-    zt_if=$(ip -4 -o addr show | awk '$4 ~ /^10\.144\.1\.1\// {print $2}')
-    echo "$zt_if"                                     # the ZeroTier interface
-    sysctl net.ipv4.conf.all.rp_filter "net.ipv4.conf.$zt_if.rp_filter"
     ```
 
     The daemon is admitted at its next configuration request, so an
@@ -2538,42 +2556,33 @@ over the overlay.
     finding; one that persists is read against `zerotier-cli info`,
     whose node id is the entry's or the entry is wrong. Then, from any
     member, the homelab host included, `nc -w 5 10.144.1.1 22
-    </dev/null` prints the device's `SSH-2.0-` banner. Then the routed
-    path, ahead of the managed route, as root on `Aetf-Arch-VPS`, which
-    has no other path to the address:
-
-    ```sh
-    zt=$(ip -4 -o addr show | awk '$4 ~ /^10\.144\./ {print $2}')
-    ip route add 10.0.5.3/32 via 10.144.1.1 dev "$zt"
-    curl -s -o /dev/null -m 5 -w '%{http_code}\n' http://10.0.5.3/   # a status, not 000
-    ip route del 10.0.5.3/32 via 10.144.1.1 dev "$zt"
-    ```
-
-    **Stop** on a missing banner or a `000`: the device's forwarding
-    between its overlay interface and the home subnets is a finding to
-    close before any route is written. A `1` in either reverse-path
-    value is a stop for step 3 while `haos` takes the routes (§2.2):
-    Home Assistant's answer to another subnet arrives on the overlay
-    interface carrying a LAN source, which strict reverse-path
-    filtering drops. None of these stops has a way back to walk,
-    because nothing at home routes through the member yet.
+    </dev/null` prints the device's `SSH-2.0-` banner. **Stop** on a
+    missing banner: the gateway's member is a finding to close before
+    step 3, whose converge writes the default route via that address and
+    the flow rules that confine the CI identities to it. The stop has no
+    way back to walk, because nothing routes through the member until a
+    device opens the tunnel.
 3.  **Converge the network, then read the worker's GUA and apply again,
     knob still set.**
 
     **The run with no targets converges the network, and is read before
-    it is run.** It runs once step 2 has passed and the homelab host
-    refuses the home routes ([homelab-host.md](homelab-host.md) §4), and
-    gateway-cutover.md §5 step 5 makes it and reads it afterward on
-    a member at home. It plans one `~` update on the network, from
+    it is run.** It runs once step 5's first run and step 2 of this
+    ceremony have passed, because it writes the default route whose next
+    hop step 2 creates and reads answering, and the flow rules that
+    confine the CI identities to that address. The order protects a
+    device that opts in and the CI identities, not the home: no route it
+    writes names a home prefix, and no member that has not opted in
+    installs anything new (§2.2). gateway-cutover.md §5 step 5 makes it
+    and reads it afterward. It plans one `~` update on the network, from
     Central's values to the declaration, and one `+` create per roster
-    entry but the gateway's — a create, because a member is written onto
-    its node id whether Central already holds one or not, and needs no
+    entry but the gateway's — a create, because a member is written onto its
+    node id whether Central already holds one or not, and needs no
     adoption. **There is no row for `zerotier:index:Member
     kluster-member-udm`.** Any row there, `+`, `~` or `+-`, and the run
     is not made: a `+` means step 2 has not been made against this
-    state, and the others are a write to the gateway's admission in the
-    run that writes the routes — a replace deletes the member before it
-    creates one, right after its routes land.
+    state, and the others are a write to the gateway's admission beside
+    the flow rules that confine the CI identities to its address — a
+    replace deletes the member before it creates one.
 
     **Unproven live: that the preview plans no row there.** The member
     takes `networkId` from the network, which this run updates, and the
@@ -2588,7 +2597,7 @@ over the overlay.
     only after the preview shows, on the network row:
 
     -   `routes`: the via-less `10.144.0.0/16` route on **both**
-        sides, and the home subnets of §2.2 added via `10.144.1.1`.
+        sides, and `0.0.0.0/0` added via `10.144.1.1`.
         The diff is printed as a list and pairs rows by position, so
         what is read is the set of targets and next hops, not the row
         count.
@@ -2635,17 +2644,17 @@ over the overlay.
         jq -c .config.routes                 # [{"target":"10.144.0.0/16","via":null}]
     ```
 
-    The same request is the way back for the run's home routes
+    The same request is the way back for the default route
     (gateway-cutover.md §5 step 5), and until its cause is fixed every
     `physical` run is made in step 5's first form, the network
-    excluded, since a run with no targets writes the routes back. A via-less route whose target is anything
+    excluded, since a run with no targets writes the route back. A via-less route whose target is anything
     but `10.144.0.0/16` on the left side means the census's subnet
     constant is wrong, not Central; the ceremony stops and the constant
     is corrected.
 
-    The routes to the home are written by this run, each `via
-    10.144.1.1`, where step 2 read the gateway's member answering and
-    forwarding.
+    The default route is written by this run. Each personal device's
+    setting is read before it (§2.2), because a device left opted in
+    takes the route the moment Central holds it.
 
     Then **read the worker's GUA off the VLAN-7 advertisement** — the
     address it formed by SLAAC once step 1 declared the network and
@@ -2710,18 +2719,18 @@ update as the tens of minutes of container pulling the window is made
 of, and a red `pulumi up` says the update failed rather than which
 half of it converged.
 
-**Why the overlay's network and members wait for step 3.** Every
-member takes the network's id from the network resource, so inside one
-run the network's update, routes included, precedes every member's
-create. That is the order the CI members need, rules before
-authorization, and the wrong one for the gateway: the routes would be
-at Central before its member existed, and would stay there without a
-next hop for as long as a failed create, or a node id that is not the
-one the device holds, took to repair (gateway-cutover.md §6). §2.2's
-rule wants the member read answering between the two writes, and one
-run leaves no point between them to read it at. An edge putting the gateway's member ahead of
-the network's update would order the writes at Central and still not
-the answer, so the reading and its run would be needed all the same.
+**Why the overlay's network and members wait for step 3, and the
+gateway's member has a run of its own.** The network's update writes the
+composed flow rules, which confine the CI identities to the gateway's
+overlay address among others, and step 1's run has no member to confine
+yet. The gateway's member is created alone in step 2, ahead of the
+network's update, because that update writes the default route via the
+member's address and the flow rules naming it: step 2's reading of the
+device answering there comes between the two writes, and a node id that
+is not the one the device holds is found by that reading with nothing
+else written to repair around it (gateway-cutover.md §6). One run leaves
+no point between the member's create and the network's update to read
+it at.
 
 **The gateway converges independently, which is what makes the split
 safe.** `Gateway` is built from configuration and `conventions` alone
@@ -2752,16 +2761,13 @@ that starts from a gateway which is off the overlay (§3).
 
 Two things that are *not* part of the cycle:
 
--   **The routes to the home are net-new additions** — the home-LAN
-    and lan-pool routes via the UDM member appear where none existed.
-    A member away from home gains reachability and loses no route,
-    because the census also carries the route Central holds today
-    (sources-of-truth.md R7), the overlay's own. A member at home that
-    takes the routes moves its paths to the other home subnets onto the
-    gateway's member at step 3, in the second state of §2.2, and the
-    homelab host, which refuses them, keeps its own.
+-   **The default route is a net-new addition, and inert** — it appears
+    where none existed, and only a device that opens the tunnel installs
+    it (§2.2). No member loses a route, because the census also carries
+    the route Central holds today (sources-of-truth.md R7), the
+    overlay's own.
 -   **CI's per-run overlay join becomes load-bearing only after §2.4.1
-    and §2.4.2 pass** — until the flow rules and routes are verified,
+    and §2.4.2 pass** — until the flow rules are verified,
     `physical` runs stay operator-local. What makes it load-bearing is
     the identity sync, which pushes the two CI identities into their
     Environments: one `credentials derived sync --only` run per row,
@@ -2775,9 +2781,8 @@ Two things that are *not* part of the cycle:
 There are no ordering edges between the three places the ceremony
 reaches — ZeroTier Central, the device, and this program's dial to it: the
 graph cannot express "authorize a member, wait for the device to join,
-then dial it", nor "create the gateway's member, read it answering, then
-write the routes that name it", because the middle step of each happens
-on the device and not in this program. The ceremony is that ordering,
+then dial it", because the middle step happens on the device and not in
+this program. The ceremony is that ordering,
 performed by the operator once.
 
 ### 2.6 CI join mechanics: two identities, serialized per stack
@@ -2818,82 +2823,109 @@ Facts that shape it (decided 2026-08-24):
     identity, which waits for the gateway's shell. If it stays minutes
     it is a per-job fixed cost, not a correctness problem.
 
-### 2.7 Managed DNS: the pushed search domain
+### 2.7 Managed DNS: the tunnel's resolver
 
 The network carries one managed-DNS block,
-`conventions.overlay.MANAGED_DNS`: the search domain `zt.<primary>` —
-`conventions.dns.OVERLAY_DOMAIN`, the overlay host block's own name
-(declarative/dns.md §2) — and the two home resolvers, alice and bob,
-at their container-VLAN addresses (`conventions.gateway.RESOLVERS`).
-It is a field of the network beside the routes and the rules, written
-by the same `physical` apply with the token the overlay component
-already holds; Central mints no narrower credential, and none is
-added. The resolvers have no overlay address to push instead: they are
-containers on the gateway, not members, and a member reaches them
-through the managed route for the container VLAN via the gateway
-(§2.2), the reply returning because the gateway is that VLAN's
-default gateway. The flow rules do not stand in the way: they confine
-the two continuous-integration identities only (§2.3), and those are
-Linux runners, on which the push is a no-op (below).
+`conventions.overlay.MANAGED_DNS`: the search domain `<primary>`, the
+zone the home-only names sit directly under (declarative/dns.md §4),
+and the two home resolvers, alice and bob, at their container-VLAN
+addresses (`conventions.gateway.RESOLVERS`). It is a field of the
+network beside the routes and the rules, written by the same
+`physical` apply with the token the overlay component already holds;
+Central mints no narrower credential, and none is added. The resolvers
+have no overlay address to push instead: they are containers on the
+gateway, not members.
+
+**The managed DNS block is the tunnel's resolver.** Its servers are
+reached only through the tunnel or from home, and a device applies it
+only while it holds the tunnel. A tunnelled device then asks the
+resolvers every home client asks and gets the answers a home client
+gets: the VIPs, the home-only names, filtering. That keeps
+the rule that a block is carried by the network that carries a route to
+its servers: the default route is that route, for the devices that
+take it (§2.2). No route of its own reaches the resolvers, so the flow
+rules do not stand in the way of a personal member, and the two CI
+identities, which they do confine (§2.3), are Linux runners, on which
+the push is a no-op (below).
 
 **The push reaches every member and is inert on each until that member
 opts in.** The controller hands the block to every joined device the
 way it hands out the routes, and each device applies it only under its
-own `allowDNS` setting — off by default, set on the device, and neither
-readable nor settable from Central. That is why opting in is a device's
-decision and not a roster field (§2.1): a field would be a claim
-nothing enforces.
+own setting — off by default, set on the device, and neither readable
+nor settable from Central. That is why opting in is a device's decision
+and not a roster field (§2.1): a field would be a claim nothing
+enforces.
 
-**What an opted-in member installs is a resolver scoped to the pushed
-domain, not a replacement for the device's resolver.** On macOS the client registers a supplemental
-resolver whose match domain and search domain are both the pushed one;
-on Windows it writes a Name Resolution Policy Table rule for it. Names
-outside the domain never see the pushed servers. So on a device that
-has opted in:
+| Member | Applies the block | If its setting is on without the tunnel |
+| --- | --- | --- |
+| Linux: the homelab host, `haos`, the gateway, the VPS, the runners, a laptop | Never. The client implements no DNS there, and `allowDNS` changes nothing. | Does not arise. |
+| Windows, macOS | Only under `allowDNS`, off by default. The client registers a resolver scoped to the pushed domain: a supplemental resolver on macOS, a Name Resolution Policy Table rule on Windows. | At home, it reaches alice and bob directly. Away, every `*.<primary>` name fails on that device, and nothing else does. |
+| Android | Only in the app's Network DNS mode. The join dialog starts in No DNS, where the VPN carries no server and resolution stays with the network the phone is on. | Away from home, every lookup fails (below). |
 
--   Every `*.zt.<primary>` query goes to alice or bob over the overlay,
-    and a bare label completes under the search domain: `ssh haos`
-    resolves `haos.zt.<primary>`. Labels are the roster names as the
-    record helper normalizes them (`pixel-7-pro`, `aetf-arch-homelab`).
-    Today the resolvers answer such a name by forwarding it upstream and
-    returning the public record — the same address, derived from the
-    same roster entry.
--   Every other name resolves where it resolved before. **Application
-    names stay outside the pushed domain on purpose**: the domain is
-    the block's and not the primary because the primary would put every
-    application name behind the home resolvers for an opted-in device,
-    and a device off-site with home unreachable would then lose the
-    applications the cloud path exists to keep up. Split-horizon for
-    application names is not what this layer does — an off-site overlay
-    client asks its own resolver for an application name and takes the
-    cloud path, as it does with the push absent.
--   Windows, macOS, Android and iOS apply it. **Linux clients get
-    nothing**: the client does not implement `allowDNS` there, so the
-    homelab host, the VPS and haos keep resolving `*.zt` through the
-    public records, and no service is run to change that.
+**On Android the block takes every query, not the domain's.** A VPN
+that provides DNS servers receives every query of the apps it applies
+to (AOSP `netd`, `NetworkController.cpp`), so in Network DNS mode alice
+and bob answer everything while ZeroTier is connected. The app adds the
+pushed servers and no route for them, and adds the default route only
+under Route Via ZeroTier; `netd` sends the queries to the servers,
+falling through to the default network when the VPN has no route to
+them. With the tunnel off, a phone away from home therefore asks
+`10.0.5.3` on whatever network it is on, where nobody answers, and
+every lookup fails. A phone in No DNS mode never sees the servers.
+
+**So the block and the tunnel are one setting in two places on a
+device, switched together.** What a person does:
+
+| Device | Once | Per use |
+| --- | --- | --- |
+| Android | Joined in Network DNS mode, Route Via ZeroTier checked. | Connect, disconnect. |
+| Linux | `net.ipv4.conf.all.rp_filter=2`. | `zerotier-cli set <network id> allowDefault=1`, then `resolvectl dns <zt> 10.0.5.3 10.0.5.4` and `resolvectl domain <zt> '~<primary>'`. Off: `allowDefault=0` and `resolvectl revert <zt>`. |
+| Windows, macOS | Nothing. | `allowDefault` and `allowDNS` on together, off together. |
+
+On Android the hatch is the ZeroTier switch itself. The app fixes the
+DNS mode in its join dialog and offers no later edit, while Route Via
+ZeroTier is a checkbox on the network's page (`kaaass/ZerotierFix`,
+`JoinNetworkFragment.java`, `NetworkDetailFragment.java`). A phone is
+therefore either a hatch device as above or a members-only device, No
+DNS with the route off, and moving between the two is a leave and a
+join.
+
+**Names under the block:**
+
+-   A home-only name resolves as it does at home, through the tunnel.
+    A split-horizon name resolves to its VIP, as at home, rather than
+    to its public record.
+-   A bare label completes under the search domain on the clients that
+    install one: macOS, which sets the domain as a search domain
+    (`osdep/MacDNSHelper.mm`), and the Android app. There a member's
+    label completes as `haos.zt` rather than `haos`; `ssh haos.zt`
+    resolves `haos.zt.<primary>`. Windows gets the scoping rule and no
+    suffix (`osdep/WinDNSHelper.cpp`), and the Linux recipe above sets a
+    routing-only domain, `~<primary>`, so on both a member is reached at
+    its full name. Labels are the roster names as the record helper
+    normalizes them (`pixel-7-pro`, `aetf-arch-homelab`), and the
+    resolvers answer such a name by forwarding it upstream and returning
+    the public record (declarative/dns.md §2).
 -   A client keeps at most four pushed servers and drops the rest
     silently; two are pushed, and the block is held inside the bound —
     the client's `ZT_MAX_DNS_SERVERS` — in `test_conventions`.
 
-**The failure mode is scoped to the domain, and it is per device.**
-While both resolvers are unreachable from an opted-in device — the
-gateway down, or the device's overlay link down while home is otherwise
-up — `*.zt.<primary>` is dead on that device for the duration, the
-name of a member it could still reach directly as a peer included: the
-scoped resolver pre-empts the public record that would have answered,
-and does not fall through to the device's default resolver. Recovery is
-the device's own flag — turning `allowDNS` off removes the scoped
-resolver at once — and a device that never opted in was never exposed.
-The domain is what sets the blast radius, which is the other reason it
-is the block's name and not the primary.
+**The failure mode is per device.** A tunnelled device whose gateway is
+unreachable has no network at all until its setting is off (§2.2), so a
+scope on the block buys nothing there. A desktop that left `allowDNS` on
+without the tunnel loses every `*.<primary>` name while it is away from
+home, the application names on the cloud path included, because the
+scoped resolver pre-empts the public records and does not fall through
+to the device's default resolver. Turning the setting off removes the
+scoped resolver at once, and a device that never opted in was never
+exposed.
 
-**A device opts in only while the gateway is a member that answers.**
-The pushed servers are reached through the gateway's member, so the
-block is written as the routes are: by the run with no targets, after
-the ceremony has created that member and read it answering (§2.2,
-§2.5). What remains is a gateway that is down, or one being replaced
-(§3): an opted-in device then carries dead `*.zt` resolution for the
-duration, and a device does not opt in during a replacement.
+**A forged answer is bounded by the certificates.** The pushed servers
+are home addresses, so a device that applies the block away without the
+tunnel asks whatever holds those addresses on the network it is on.
+Every home name is served over TLS under the zone's certificate, which
+bounds what a forged answer achieves, and the combination is the
+misconfiguration the table above already names.
 
 **The block is not expected to drift.** The network is adopted, so the
 block takes the provider's update path, and a `plan-physical` after an
@@ -2927,10 +2959,13 @@ converges (framework/ci.md §2). The two are asymmetric because the
 gateway is `physical`'s own management path, so a plan made without
 reaching it would describe a device the apply cannot touch either,
 while a resolver is a leaf whose absence says nothing about the records
-at the registrar.
+at the registrar. The `dns` join waits for the first of the two
+resolvers to answer, which proves the run's own route through the
+gateway (§2.2), so one resolver down fails its own rewrites and both
+down, or the gateway, fail the job at the join.
 
 -   **ZeroTier container down on the UDM** — trigger: physical-stack CI runs
-    fail to reach the UDM; personal devices lose LAN reachability;
+    fail to reach the UDM; a device holding the tunnel loses its network;
     `gateway-health` reports the member neither `ONLINE` nor `TUNNELED`
     while its machine
     runs (§1.6). The
@@ -2939,12 +2974,10 @@ at the registrar.
     address** (member-to-member traffic needs no managed routes), hop to the LAN, SSH the
     UDM, restart the machine or rerun the boot chain's two machine
     scripts (§1.1). The hop reaches the whole LAN because the host
-    refuses the home routes on the device (§2.2); a host that took
-    them would reach only its own subnets. If the host is also down:
-    physical presence (LAN). For the duration, an at-home member with
-    its client on that takes the routes loses the other home subnets,
-    the resolvers among them (§2.2), and its own remedy is its
-    client's switch.
+    takes no route through the gateway (§2.2). If the host is also
+    down: physical presence (LAN). For the duration, a device holding
+    the tunnel has no network, and its own remedy is its setting's
+    switch.
 -   **Firmware update wiped the services** — trigger: post-update, the
     machines' links are gone from `/var/lib/machines`. The boot chain
     re-establishes them autonomously (§1.1); verify the overlay comes
@@ -2963,14 +2996,14 @@ at the registrar.
     device-files provider for the services, and replace the node id in
     the gateway's roster entry with the one the new device mints
     (identity lives in `/data`, lost with the box); the entry, its
-    address and the routes that name it stay. It is the §2.5 ceremony
+    address and the default route that names it stay. It is the §2.5 ceremony
     over again, bootstrap knob and all, since a replacement box is a
     device with no identity and no services; the new node id is a new
     member, created by step 2's targeted run. For the length of the
-    replacement no member answers at `10.144.1.1`, so every at-home
-    member that takes the routes is in the first state of §2.2, its
-    other home subnets gone (personal members' direct paths still work
-    throughout).
+    replacement no member answers at `10.144.1.1`, so a device holding
+    the tunnel has no network until its setting is off (personal
+    members' direct paths still work throughout), and no device opens
+    the tunnel during a replacement.
 
 The readings of §1.6 name the entries below: `gateway-health`'s
 findings first, then the ones `check-gateway` raises of its own. Every
@@ -3155,8 +3188,18 @@ complete set and the zone-matrix target state.
     NAT/IPS/content-filter interference on the LAN→pool path. Any
     rule naming the pool must use address groups — forever.
 -   `zt*` interfaces match no zone; overlay-forwarded traffic rides
-    FORWARD's default ACCEPT — the Central flow rules (§2.3) are its
-    only policing layer.
+    FORWARD's default ACCEPT in both directions — the Central flow rules
+    (§2.3) are its only policing layer. That is what carries the
+    tunnel's traffic (§2.2) to every home subnet and to the uplink with
+    nothing added, outside the zone policy both ways.
+-   **UBIOS masquerades by outgoing interface** (read 2026-11-15,
+    `iptables -t nat -S`): `UBIOS_POSTROUTING_USER_HOOK` holds, for each
+    WAN interface, `-o eth8 -m set ! --match-set UBIOS_ALL_ADDRv4_eth8
+    src … -j MASQUERADE` and the same for `eth9`. Every source leaving a
+    WAN interface that is not that interface's own address is
+    masqueraded, so the tunnel's traffic from `10.144.0.0/16` reaches
+    the internet with no rule of this program's
+    ([Aetf/kluster-ops#755](https://github.com/Aetf/kluster-ops/issues/755#issuecomment-6893045703)).
 
 ### 4.2 Declared-objects census
 

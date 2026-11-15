@@ -383,11 +383,12 @@ def test_the_block_quota_admits_the_largest_volume_and_a_restore_beside_it() -> 
 # --------------------------------------------------------------------------
 # The overlay's managed DNS.
 # --------------------------------------------------------------------------
-# `conventions.overlay.MANAGED_DNS` is derived from two other tables -- its
-# domain from the overlay block's name, its servers from the resolver census --
-# and what holds it is its relation to each, never a copy of either. That the
-# `physical` program hands it to the network is held where that program runs
-# (`test_physical_stack`).
+# `conventions.overlay.MANAGED_DNS` is the tunnel's resolver
+# (physical/gateway.md §2.7): its servers from the resolver census, its domain
+# the zone the home-only names are published in. What holds it is its relation
+# to each, and to the route table that carries the tunnel, never a copy of
+# either. That the `physical` program hands it to the network is held where
+# that program runs (`test_physical_stack`).
 
 #: What a member keeps of the pushed list: `ZT_MAX_DNS_SERVERS` in the
 #: client's `include/ZeroTierOne.h`. A longer list is truncated on the
@@ -400,55 +401,93 @@ def test_the_push_fits_what_a_member_keeps() -> None:
     assert len(conventions.overlay.MANAGED_DNS.servers) <= ZT_MAX_DNS_SERVERS
 
 
-def test_the_pushed_domain_is_where_the_block_is_published() -> None:
-    """Every name the block publishes is one label under the domain a member scopes to.
+def under(name: str, domain: str) -> bool:
+    """Whether `name` is `domain` or a name below it."""
+    return name == domain or name.endswith(f'.{domain}')
 
-    Held against the `dns` program's own spelling of the block -- its labels,
-    in the one zone it is declared in -- rather than against the join that
-    builds the constant: a member that opts in resolves exactly the names
-    under the pushed domain at home, so the domain has to be the block's
-    suffix and nothing wider or narrower. The primary itself would put every
-    application name behind the home resolvers for an opted-in device off-site
-    (physical/gateway.md §2.7); any other zone would scope the resolver to
-    names nothing publishes.
+
+def unscoped_home_only(exposures: Iterable[conventions.routes.Exposure], domain: str) -> list[str]:
+    """Every home-only name of `exposures` that a resolver scoped to `domain` would not answer.
+
+    A home-only row -- a home side and no `internet` side -- has no public
+    record, so a device away resolves it through the tunnel's resolver or not
+    at all, and on Windows and macOS that resolver is scoped to the pushed
+    domain. A row with an `internet` side resolves through its public record
+    wherever the scope does not reach, and is no failure here.
     """
-    (zone,) = conventions.PRIMARY_ONLY
-    published = {f'{record.label}.{zone}' for record in overlay_records()}
-    assert published, 'the block is empty'
+    routes = conventions.routes
+    missed: list[str] = []
+    for exposure in exposures:
+        for row in exposure.routes:
+            row = row.row if isinstance(row, routes.Held) else row
+            if isinstance(row, routes.Apex) or row.internet is not None:
+                continue
+            missed += [f'{row.host}.{zone}' for zone in row.zones if not under(f'{row.host}.{zone}', domain)]
+    return missed
 
-    for name in published:
-        _, dot, domain = name.partition('.')
-        assert dot and domain == conventions.overlay.MANAGED_DNS.domain, name
-    assert conventions.overlay.MANAGED_DNS.domain == conventions.OVERLAY_DOMAIN
+
+def test_the_pushed_domain_covers_every_home_only_name() -> None:
+    """A desktop that opens the tunnel resolves the home-only names through the scope it is pushed.
+
+    Applied to the census, and to censuses of its own: a home-only row in the
+    primary passes, one in another zone is reported by its name, and a
+    split-horizon row in another zone is not, because its public record
+    answers outside the scope. The block's own `*.zt` names, published in the
+    primary, fall under the domain too, so a member's label completes as
+    `<label>.zt` there.
+    """
+    domain = conventions.overlay.MANAGED_DNS.domain
+    routes = conventions.routes
+    (primary,) = conventions.PRIMARY_ONLY
+    other = next(zone for zone in conventions.WEB_ZONES if zone != primary)
+
+    assert unscoped_home_only(routes.EXPOSURES.values(), domain) == []
+    home_only = routes.Route('a-home-page', lan=routes.REWRITE)
+    elsewhere = routes.Route('a-home-page', lan=routes.REWRITE, zones=(other,))
+    split = routes.Route('a-split-page', internet=routes.PROXIED, lan=routes.REWRITE, zones=(other,))
+    assert unscoped_home_only([routes.Exposure(routes=(home_only,))], domain) == []
+    assert unscoped_home_only([routes.Exposure(routes=(elsewhere,))], domain) == [f'a-home-page.{other}']
+    assert unscoped_home_only([routes.Exposure(routes=(split,))], domain) == []
+
+    published = [f'{record.label}.{primary}' for record in overlay_records()]
+    assert published, 'the block is empty'
+    assert [name for name in published if not under(name, domain)] == []
 
 
 def test_the_pushed_servers_are_the_resolver_census_in_its_order_and_nothing_else() -> None:
     """The resolvers a member is told to use are the site's, all of them, as listed.
 
     Each direction is a different failure. A resolver the census carries and
-    the push lacks is one no opted-in member ever tries, so that resolver's
+    the push lacks is one no tunnelled member ever tries, so that resolver's
     replaceability -- the reason there are two -- does not reach the overlay;
     an address pushed that the census does not carry is one nothing on the
     container VLAN answers at, and a member that tries it first waits on it
-    for every `*.zt` name. The order is the census's own, alice before bob,
-    because a member tries them in the order pushed.
+    for every name. The order is the census's own, alice before bob, because
+    a member tries them in the order pushed.
     """
     assert conventions.overlay.MANAGED_DNS.servers == tuple(
         resolver.address for resolver in conventions.gateway.RESOLVERS
     )
 
 
-def test_every_pushed_server_sits_behind_a_route_the_network_manages() -> None:
-    """A member reaches the resolvers only through a route it was handed.
+def test_every_pushed_server_is_a_home_address_only_the_tunnel_reaches() -> None:
+    """The block is the tunnel's resolver: its servers are reached from home, or through the tunnel and nothing else.
 
-    The resolvers are containers on the gateway and not members, so an address
-    of theirs the managed routes do not cover -- an overlay address, or a
-    subnet the census stopped routing -- is one an opted-in member sends
-    `*.zt` queries to and never reaches, with the public record it would
-    otherwise have used pre-empted by the scoped resolver.
+    A server outside every home network is one a device at home does not
+    reach either, and the block's resolution fails wherever the device is.
+    And a server some route other than the default one covers is reached
+    through a route that every member takes, the shape the overlay's rule
+    excludes (physical/gateway.md §2.2): a device that applies the block
+    without the tunnel would then reach the resolvers through the gateway's
+    ZeroTier process whether it opened the tunnel or not.
     """
+    homes = [network.v4 for network in conventions.SITE_NETWORKS]
+    routes = conventions.overlay.MANAGED_ROUTES
     for server in conventions.overlay.MANAGED_DNS.servers:
-        assert any(server in route.target for route in conventions.overlay.MANAGED_ROUTES), server
+        assert any(server in home for home in homes), server
+        covering = [route for route in routes if server in route.target]
+        assert covering, f'{server}: no route reaches it, the tunnel included'
+        assert all(route.target.prefixlen == 0 and route.via is not None for route in covering), (server, covering)
 
 
 # --------------------------------------------------------------------------

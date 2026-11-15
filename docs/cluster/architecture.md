@@ -343,6 +343,18 @@ decisions without X-Forwarded-For games. The Gateways share one
 `GatewayClass` whose configuration states `Cluster`, no node ports and
 both IP families (cluster-infra.md §2).
 
+**An audience is a set of clients a row can name, with a Gateway and a
+resolver view of its own. A path that brings a client into an existing
+audience is not an audience, and gets neither.** `internet`, `lan` and
+`media` differ in their clients and in what each is trusted with,
+which is what a row chooses between (rfc-008 §4.1, declarative/dns.md §5).
+The overlay's tunnel (§5.3) is such a path: a household device that
+opens it from away is a `lan` client, with `lan`'s trust, reached at the
+same VIPs and answered by the same resolvers, and differs from one at
+home only in the path, a network-layer fact. So no row names the
+overlay, no Gateway or VIP is announced on it, and the resolvers keep
+one home view.
+
 ### 3.4 LAN specifics: BGP to the UDM, dedicated subnet, split DNS
 
 1.  **Dedicated subnet**: the `lan` pool (`192.168.71.0/24` + ULA `/64`)
@@ -419,20 +431,17 @@ both IP families (cluster-infra.md §2).
     traverse the VPS. Which clients those are is a question of whose
     resolver alice/bob is for the name asked, not of where the client
     sits. On the LAN that is DHCP's doing: every lease names them, for
-    every name. On the overlay it is the device's own opt-in —
-    `allowDNS`, off by default, set on the device and not settable from
-    Central — and what the opt-in installs is a resolver scoped to the
-    pushed search domain, the overlay host block `*.zt.<primary>`, so
-    alice/bob see an opted-in member's `*.zt` queries and nothing else;
-    application names sit outside that domain on purpose, so no overlay
-    member is steered to a `lan` VIP by its opt-in. The overlay half is
-    [declarative/dns.md](../declarative/dns.md) §2; what an opted-in
-    member gets, and what it risks, is
+    every name. On the overlay it is the tunnel's resolver, the network's
+    managed DNS block, which a device applies by its own setting only
+    while it holds the tunnel (§5.3): it then asks alice and bob as a
+    home client does and reaches the `lan` VIPs through the gateway. On
+    Windows and macOS that resolver is scoped to the pushed domain, the
+    primary zone, where the home-only names sit; on Android it takes
+    every query. What a tunnelled member gets, and what it risks, is
     [physical/gateway.md](../physical/gateway.md) §2.7. Everyone else
     resolves publicly and reaches the same service at the address the
-    public record gives: a device on neither network, a member that has
-    not opted in, and an opted-in member off the LAN asking for an
-    application name.
+    public record gives: a device on neither network, and a member that
+    has not opened the tunnel.
 
 ### 3.5 Egress Design
 
@@ -1010,8 +1019,9 @@ The entire stack is deployed via Pulumi using multiple providers:
     are already enumerated in the code rather than rediscovered by
     outage. **No management inbound exists at the home network**: the
     control plane lives cloud-side, the homelab worker dials out
-    (KubeSpan), and management traffic terminates at the NLB. Personal
-    devices reach LAN services over ZeroTier (§5.3).
+    (KubeSpan), and management traffic terminates at the NLB. A personal
+    device away from home reaches LAN services through the overlay's
+    tunnel, as a home client (§5.3).
 4.  **Cloudflare (pulumi-cloudflare)**: **all** public DNS records move
     into Pulumi — zones/base records/anchors in the `dns` stack, per-app
     records beside their apps (declarative/dns.md). The standalone
@@ -1109,31 +1119,45 @@ that pushes those files itself**:
 
 ### 5.3 ZeroTier terminates on the UDM (decided 2026-08-23)
 
-**The UDM runs the ZeroTier daemon as a standing member and is the home
-side's overlay router.** Today's shape — the homelab host as the only home
-member, and no managed route but the overlay's own subnet — means
-overlay members have *no* route to the home LANs at all, and every
-design that adds one through the host would put a single non-gateway
-machine on the management data path. Moving the daemon to the UDM puts overlay termination where routing
-already lives:
+**The overlay is the management network, the return path of the CI
+runs, and a person's escape hatch.** It is a transport: no service's
+declared path crosses it, and the cluster serves nothing at an overlay
+address. The escape hatch is the tunnel, a default route through the
+gateway that a device installs only by its own setting and that makes
+the device a home client (§3.3). No managed route names a home prefix.
+The test of the rule: with ZeroTier stopped on every machine, every
+service answers as before, from home and from the internet; what stops
+is management from away, the `physical` and `dns` runs, and the escape
+hatch. Its form on the network, and who installs the tunnel, is
+[physical/gateway.md](../physical/gateway.md) §2.2. Sustained access
+from outside goes through the exposure model's public side (§3), and
+the legacy deployment's use of the overlay as a backbone retires with
+it.
 
--   **Routes become trivial**: ZeroTier Central managed routes for the home
-    VLAN subnets and the `lan` pool (`10.0.5.0/24`, `192.168.70.0/24`,
-    `192.168.80.0/24`, `192.168.90.0/24`, and `192.168.71.0/24`) all
-    via the UDM's overlay address. Every managed route is IPv4: the
-    pool's ULA /64 is deliberately not among them, and the overlay
-    assigns no IPv6 address (physical/gateway.md §2.2). The UDM reaches the pool through its own
-    BGP-learned route (§3.4) — one hop, no host in the path. The
-    legacy cluster's pod subnet takes no managed route: its flannel
-    installs that route on the homelab host itself (physical/gateway.md
-    §2.2).
+**The UDM runs the ZeroTier daemon as a standing member and is the home
+side's overlay router.** It is the one member that forwards for the
+home, so the escape hatch needs no other machine on its path, and the
+management path to the device itself is independent of the homelab
+host:
+
+-   **The route table is two routes**: the overlay's own subnet, with
+    no next hop, and `0.0.0.0/0` via the UDM's overlay address, the
+    tunnel. Every managed route is IPv4: the pool's ULA /64 is
+    deliberately not among them, and the overlay assigns no IPv6
+    address (physical/gateway.md §2.2). A tunnelled device reaches the
+    home subnets and the `lan` pool through the UDM, which reaches the
+    pool through its own BGP-learned route (§3.4) — one hop, no host in
+    the path. A route only one run needs is that run's own, installed
+    by the step that joins it (ci.md §2). The legacy cluster's pod
+    subnet takes no managed route: its flannel installs that route on
+    the homelab host itself (physical/gateway.md §2.2).
 -   **Management-path independence**: CI's per-run overlay join (ci.md §2)
-    and roaming personal devices reach the UDM (SSH, AdGuard APIs) and
-    everything behind it even when the homelab host is down — matching
-    the CP-in-the-cloud principle that no single home machine gates the
-    management plane. The host keeps its plain overlay membership (direct
-    address, useful as a fallback path) and never takes a router role
-    — today it has none either; the routes via the UDM are net-new.
+    and personal devices reach the UDM (SSH, the controller) even when
+    the homelab host is down, and a tunnelled device everything behind
+    it — matching the CP-in-the-cloud principle that no single home
+    machine gates the management plane. The host keeps its plain overlay
+    membership (direct address, useful as a fallback path) and never
+    takes a router role.
 -   **Deployment shape**: a fourth of the device's nspawn services
     (alpine rootfs image from homelab-containers CI, pinned and pulled
     like the other three, unit + config via the device-files provider,
@@ -1148,7 +1172,9 @@ already lives:
 -   **Firewall fact on record**: the UBIOS zone firewall classifies by
     known interfaces/ipsets; `zt*` interfaces match neither, so
     overlay-forwarded traffic rides the FORWARD chain's default ACCEPT —
-    unpoliced, accepted knowingly (overlay membership is the auth boundary).
+    unpoliced, accepted knowingly (overlay membership is the auth
+    boundary). The tunnel's traffic is that traffic, outside the zone
+    policy in both directions.
 -   **ZeroTier Central config joins Pulumi**: network managed routes, the
     managed DNS block (gateway.md §2.7), member authorizations
     (including the CI ephemeral-member pre-auth), and

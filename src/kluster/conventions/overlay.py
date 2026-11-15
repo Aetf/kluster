@@ -1,7 +1,7 @@
 """The overlay: its subnet, its roles, the routes it carries, its roster, its managed DNS.
 
-The ZeroTier network every unattended run reaches the home site over
-(physical/gateway.md §2).
+The ZeroTier network every unattended run reaches the home site over, and a
+person's way into the home audience from away (physical/gateway.md §2).
 
 Read qualified — `conventions.overlay.ROSTER` — because "the overlay" is what
 tells an address, a member or a route apart from the site's own
@@ -16,9 +16,8 @@ from enum import IntEnum
 from ipaddress import IPv4Address, IPv4Network
 from typing import final
 
-from kluster.conventions.dns import OVERLAY_DOMAIN
+from kluster.conventions.dns import ZONE_PRIMARY
 from kluster.conventions.gateway import RESOLVERS
-from kluster.conventions.site import CLUSTER_VLAN, CONTAINER_VLAN, IOT_VLAN, LAN_POOL, SERVER_LAN
 
 #: The network this program adopts, as ZeroTier Central minted it. An identity
 #: rather than a setting: it is what the network *is*, it is stable, and
@@ -33,8 +32,8 @@ NETWORK_ID = '83048a0632b6ba9b'
 
 SUBNET = IPv4Network('10.144.0.0/16')
 
-#: Static managed overlay addresses. The UDM is the nexthop of every route to
-#: the home (`MANAGED_ROUTES`); each CI identity is confined by the flow rules
+#: Static managed overlay addresses. The UDM is the next hop of the default
+#: route, the tunnel a device opens into the home (`MANAGED_ROUTES`); each CI identity is confined by the flow rules
 #: to the destinations its own stack needs, named by its node address rather
 #: than by its role tag, because a tag is a credential the member pushes and a
 #: member holding a leaked identity could withhold it
@@ -83,33 +82,35 @@ CI_MEMBERS = (MEMBER_CI_PHYSICAL, MEMBER_CI_DNS)
 class ManagedDns:
     """What the network pushes to a member that applies it: a domain, and who answers for it.
 
-    ZeroTier's own term for the setting `allowDNS` admits. A member that opts
-    in installs a resolver scoped to `domain` and nothing wider, so the domain
-    is the whole reach of the push: names under it go to `servers` and to
-    nothing else, names outside it are untouched. Opting in is the device's
+    ZeroTier's own term for the setting `allowDNS` admits. How far the push
+    reaches is the platform's: Windows and macOS install a resolver scoped to
+    `domain`, so names under it go to `servers` and names outside it are
+    untouched; the Android app in its Network DNS mode sends every query to
+    `servers`; the Linux client applies nothing. Applying it is the device's
     own setting, which the controller neither reads nor sets, so no field
     here says which members apply it (physical/gateway.md §2.7).
     """
 
-    #: The search domain, and the scope of the resolver an opted-in member
-    #: installs.
+    #: The search domain, and the scope of the resolver a desktop that applies
+    #: the block installs.
     domain: str
     #: The resolvers, in the order the member tries them. Addresses rather
-    #: than names, because they are what the push carries, and every one of
-    #: them has to be reachable from the overlay by a route the network
-    #: already manages.
+    #: than names, because they are what the push carries.
     servers: tuple[IPv4Address, ...]
 
 
-#: The one managed-DNS block the network pushes. The domain is the overlay host
-#: block's, so a member that opts in resolves `*.zt` at home and everything
-#: else where it did before. The servers are the site's own resolvers at their
-#: container-VLAN addresses: they are containers on the gateway and not
-#: members, so they have no overlay address, and a member reaches them through
-#: the managed route for that VLAN (`MANAGED_ROUTES`) via the gateway. What a
+#: The one managed-DNS block the network pushes: the tunnel's resolver
+#: (physical/gateway.md §2.7). A device applies it only while it holds the
+#: tunnel, the default route via the gateway (`MANAGED_ROUTES`), and is then
+#: answered as a home client is. The servers are the site's own resolvers at
+#: their container-VLAN addresses, the ones every home lease names: they are
+#: containers on the gateway and not members, so they have no overlay address,
+#: and they are reached through the tunnel or from home and by no route of
+#: their own. The domain is the primary zone, the one the home-only names sit
+#: directly under, so that a desktop's scoped resolver covers them. What a
 #: client keeps of the list is bounded by the client's `ZT_MAX_DNS_SERVERS`,
 #: held in `test_conventions`.
-MANAGED_DNS = ManagedDns(domain=OVERLAY_DOMAIN, servers=tuple(resolver.address for resolver in RESOLVERS))
+MANAGED_DNS = ManagedDns(domain=ZONE_PRIMARY, servers=tuple(resolver.address for resolver in RESOLVERS))
 
 #: The gateway, as the roster names it. Its node id is minted by the overlay
 #: daemon's first run, and that daemon is a container this program delivers, so
@@ -195,15 +196,15 @@ RosterEntry = EnrolledMember | GeneratedMember
 #:
 #: The gateway's entry is the one a bring-up records rather than starts from:
 #: the ceremony read its node id off the device (`MEMBER_UDM`), and the entry
-#: is what declares its member, the one that answers for the next hop of every
-#: route to the home, and publishes its `udm.zt` record.
+#: is what declares its member, the one that answers for the next hop of the
+#: default route, and publishes its `udm.zt` record.
 ROSTER: tuple[RosterEntry, ...] = (
     EnrolledMember(
         name=MEMBER_UDM,
         node_id='537a9626fa',
         address=UDM,
         role=Role.INFRA,
-        note='the gateway: the next hop of every route to the home',
+        note='the gateway: the next hop of the tunnel into the home',
     ),
     EnrolledMember(
         name=MEMBER_HOMELAB,
@@ -282,8 +283,8 @@ def assignment_pools(roster: Iterable[RosterEntry], routes: Iterable[ManagedRout
     member something other than this program authorized at Central: the legacy
     cluster's CI jobs, until that cluster retires (physical/gateway.md §2.1).
     Central picks such a member's address out of the pools, so a pool holding a
-    placed address could hand it out — the gateway's, the next hop of every
-    route to the home; a CI identity's, which its runs send from; or a
+    placed address could hand it out — the gateway's, the next hop of the
+    default route; a CI identity's, which its runs send from; or a
     person's. So the pools are derived rather than written down, from the two
     things the network is declared with: the subnet is the target of the one
     route with no `via` (`ManagedRoute`), and what is left out is every address
@@ -344,29 +345,18 @@ class ManagedRoute:
 #: The whole route table the network carries, and the only one: the network is
 #: adopted with its routes declared in full, so what is absent here is deleted
 #: at Central. First the overlay's own subnet, with no `via`, which is what
-#: keeps every member addressed; then the home subnets the gateway forwards
-#: for -- the container VLAN because the resolvers are there, which a run of
-#: `dns` calls and the managed DNS names, the pool because that is how a person off-site
-#: reaches a cluster service, and the rest because a person off-site reaches
-#: the home as a machine on the LAN does. The cluster VLAN is one of the rest:
-#: it gives such a person the worker's own machine API, the one way to it that
-#: passes through no control plane. No run dials it: every Talos call the
-#: `physical` stack makes is dialed at the balancer (`stacks/physical.py`),
-#: and the flow rules admit a run to no address on it.
-#: The gateway is the only next hop, and every member that takes the routes
-#: installs every one here, at home as well as away; a member at home that
-#: serves the other home subnets refuses them on the device, and the run that
-#: writes them follows the one that creates the gateway's member
-#: (physical/gateway.md §2.2). The legacy
-#: cluster's pod subnet is not here: its flannel, in `host-gw` mode over the
-#: overlay interface, installs that route on the homelab host itself, and a
-#: managed route would hand every member a path to the legacy deployment's pods
-#: that nothing uses.
+#: keeps every member addressed; then the default route via the gateway, which
+#: is the tunnel: a device that opens it sends everything outside its own
+#: connected subnets to the gateway and is a home client, at home or away.
+#: Only a device's own setting installs it -- `allowDefault` on a desktop,
+#: Route Via ZeroTier on Android -- so a member that has not opted in takes
+#: nothing but the subnet, and no route names a home prefix
+#: (physical/gateway.md §2.2). A route only one run needs is that run's own,
+#: installed by the step that joins it, not a row here (framework/ci.md §2).
+#: The legacy cluster's pod subnet is not here either: its flannel, in
+#: `host-gw` mode over the overlay interface, installs that route on the
+#: homelab host itself.
 MANAGED_ROUTES: tuple[ManagedRoute, ...] = (
     ManagedRoute(SUBNET, None),
-    ManagedRoute(SERVER_LAN.v4, UDM),
-    ManagedRoute(CLUSTER_VLAN.v4, UDM),
-    ManagedRoute(IOT_VLAN.v4, UDM),
-    ManagedRoute(CONTAINER_VLAN.v4, UDM),
-    ManagedRoute(LAN_POOL.v4, UDM),  # reached via the UDM's BGP-learned route
+    ManagedRoute(IPv4Network('0.0.0.0/0'), UDM),
 )

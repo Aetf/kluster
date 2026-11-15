@@ -12,20 +12,41 @@ inputs:
   identity:
     description: The member's identity.secret
     required: true
+  routes:
+    description: >
+      Routes the run needs and the network does not carry, one
+      `<target> via <next hop>` per line, installed once the next hop is on
+      the member's overlay link (framework/ci.md §2)
+    required: false
+    default: ''
   wait_for:
-    description: host:port to wait for before returning, if any
+    description: >
+      host:port targets, separated by spaces or newlines, to wait for before
+      returning: the first one that answers ends the wait
     required: false
     default: ''
 
 runs:
   using: composite
   steps:
-    # The join's clock starts before the install, so the wait below can hold
-    # the whole action to one deadline however long the install took.
+    # The join's clock starts before the install, so the steps below that
+    # wait can hold the whole action to one deadline however long the install
+    # took.
+    #
+    # The deadline is JOIN_DEADLINE seconds after this step, derived from the
+    # tightest cap a caller puts on this action -- the smaller of the step's
+    # `timeout-minutes` and the job's -- and sits a minute inside it, so that
+    # what runs once it has passed (one last attempt per target of at most a
+    # second each, and the listings, each under its own `timeout`) ends in the
+    # waiting step's own error before the cap ends the step without one.
+    # `test_zerotier_action` holds every caller's cap that far above the
+    # deadline.
     - name: Start the join's clock
       id: clock
       shell: bash
-      run: echo "started=$(date +%s)" >>"$GITHUB_OUTPUT"
+      env:
+        JOIN_DEADLINE: '240'
+      run: echo "deadline=$(($(date +%s) + JOIN_DEADLINE))" >>"$GITHUB_OUTPUT"
 
     # ZeroTier from its own apt repository, pinned twice over: the package at
     # a release written here, and the repository's signing key trusted only
@@ -82,57 +103,102 @@ runs:
         sudo systemctl start zerotier-one
         sudo zerotier-cli join ${{ inputs.network_id }}
 
+    # A route only this run needs is installed here rather than carried by
+    # the network, which would hand it to every member (framework/ci.md §2).
+    # The kernel takes a `via` only on a link it is directly connected to, so
+    # each route waits for its next hop to be on one: the member's overlay
+    # link, once the member holds its address. The flow rules, not the route,
+    # are what confine where the run may go.
+    - name: Install the run's routes
+      if: inputs.routes != ''
+      shell: bash
+      env:
+        ROUTES: ${{ inputs.routes }}
+        DEADLINE: ${{ steps.clock.outputs.deadline }}
+      run: |
+        set -euo pipefail
+        # A clock step that was skipped, or wrote its output under another
+        # name, leaves DEADLINE empty, which the arithmetic would read as the
+        # epoch: the wait would fail at once and blame the next hop.
+        if [ -z "$DEADLINE" ]; then
+          echo "::error::the join's clock set no deadline, so the routes have none to wait under"
+          exit 1
+        fi
+        routes=()
+        while IFS= read -r line; do
+          read -r target word hop rest <<<"$line" || true
+          [ -z "${target:-}" ] && continue
+          if [ "$word" != via ] || [ -z "$hop" ] || [ -n "$rest" ]; then
+            echo "::error::'${line}' is not a route of the form '<target> via <next hop>'"
+            exit 1
+          fi
+          routes+=("$target $hop")
+        done <<<"$ROUTES"
+        for route in "${routes[@]}"; do
+          read -r target hop <<<"$route"
+          waiting=$(date +%s)
+          echo "waiting for ${hop} to be on a link of this host, to route ${target} through it"
+          # `ip route get` names a gateway of its own for an address that is
+          # not on a connected link, none for one that is, and fails for one
+          # it has no route to at all.
+          until found="$(ip -4 route get "$hop" 2>/dev/null)" && [[ "$found" != *' via '* ]]; do
+            if [ "$(date +%s)" -ge "$DEADLINE" ]; then
+              echo "::error::${hop} is on no link of this host after $(($(date +%s) - waiting)) s, so ${target} cannot be routed through it; the join's deadline has passed"
+              timeout 5 sudo zerotier-cli listnetworks || true
+              exit 1
+            fi
+            sleep 1
+          done
+          sudo ip route replace "$target" via "$hop"
+          echo "${target} via ${hop} installed"
+        done
+
     # The flow rules drop a run's first packets until the peer's certificate
     # of ownership has arrived (`chr ipauth`, physical/gateway.md §2.3), and a
     # fresh runner needs a moment to find a path, so readiness is asserted
-    # against the actual dependency rather than assumed.
-    #
-    # The wait runs against a wall-clock deadline, JOIN_DEADLINE seconds after
-    # the join's clock started, so the install and the wait share one budget
-    # and a slow install shortens the wait rather than outlasting the step.
-    # The deadline is derived from the tightest cap a caller puts on this
-    # action -- the smaller of the step's `timeout-minutes` and the job's --
-    # and sits a minute inside it, so that what runs once it has
-    # passed (one last connect attempt of at most a second, and the listings
-    # below, each under its own `timeout`) ends in this step's own error
-    # before the cap ends the step without one. `test_zerotier_action` holds
-    # every caller's cap that far above the deadline.
+    # against the actual dependency rather than assumed. The first target to
+    # answer ends the wait, so a caller that reaches several equivalent
+    # services -- the two resolvers -- fails here only when none of them
+    # does, and one that is down fails only what depends on it.
     - name: Wait for the target
       if: inputs.wait_for != ''
       shell: bash
       env:
-        TARGET: ${{ inputs.wait_for }}
-        STARTED: ${{ steps.clock.outputs.started }}
-        JOIN_DEADLINE: '240'
+        TARGETS: ${{ inputs.wait_for }}
+        DEADLINE: ${{ steps.clock.outputs.deadline }}
       run: |
         set -euo pipefail
         # A clock step that was skipped, or wrote its output under another
-        # name, leaves STARTED empty, which the arithmetic would read as the
+        # name, leaves DEADLINE empty, which the arithmetic would read as the
         # epoch: the wait would fail at once and blame the target.
-        if [ -z "$STARTED" ]; then
-          echo "::error::the join's clock set no start time, so the wait has no deadline"
+        if [ -z "$DEADLINE" ]; then
+          echo "::error::the join's clock set no deadline, so the wait has none"
           exit 1
         fi
-        deadline=$((STARTED + JOIN_DEADLINE))
+        # Every line, not the first: a caller may write the targets one
+        # per line, as it writes `routes`.
+        read -r -d '' -a targets <<<"$TARGETS" || true
         waiting=$(date +%s)
         attempts=0
         while :; do
           attempts=$((attempts + 1))
-          left=$((deadline - $(date +%s)))
-          if timeout "$((left < 1 ? 1 : left < 3 ? left : 3))" \
-            bash -c "cat < /dev/null > /dev/tcp/${TARGET/:/\/}" 2>/dev/null; then
-            # Read by physical/gateway-cutover.md §8.3, which takes gateway.md
-            # §2.4's item 4 off its leading `<host> reachable after N
-            # attempts` and item 7 off its trailing `S s`, the seconds from
-            # `zerotier-cli join` returning to this connect.
-            echo "${TARGET} reachable after ${attempts} attempts, $(($(date +%s) - waiting)) s"
-            exit 0
-          fi
+          for target in "${targets[@]}"; do
+            left=$((DEADLINE - $(date +%s)))
+            if timeout "$((left < 1 ? 1 : left < 3 ? left : 3))" \
+              bash -c "cat < /dev/null > /dev/tcp/${target/:/\/}" 2>/dev/null; then
+              # Read by physical/gateway-cutover.md §8.3, which takes gateway.md
+              # §2.4's item 4 off its leading `<host> reachable after N
+              # attempts` and item 7 off its trailing `S s`, the seconds from
+              # `zerotier-cli join` returning to this connect.
+              echo "${target} reachable after ${attempts} attempts, $(($(date +%s) - waiting)) s"
+              exit 0
+            fi
+          done
           if [ $((attempts % 10)) -eq 0 ]; then timeout 5 sudo zerotier-cli peers || true; fi
-          left=$((deadline - $(date +%s)))
+          left=$((DEADLINE - $(date +%s)))
           if [ "$left" -le 0 ]; then break; fi
           sleep "$((left < 3 ? left : 3))"
         done
-        echo "::error::${TARGET} unreachable over ZeroTier after ${attempts} attempts, $(($(date +%s) - waiting)) s; the join's ${JOIN_DEADLINE} s deadline has passed"
+        echo "::error::${TARGETS} unreachable over ZeroTier after ${attempts} attempts, $(($(date +%s) - waiting)) s; the join's deadline has passed"
         timeout 5 sudo zerotier-cli listnetworks || true
         exit 1

@@ -32,6 +32,7 @@ import re
 import tomllib
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from ipaddress import IPv4Address, IPv4Network
 from itertools import product
 from pathlib import Path
 from typing import cast
@@ -381,10 +382,11 @@ MATRIX_FLAG = re.compile(r'^matrix\.([\w-]+)$')
 
 @dataclass(frozen=True)
 class Join:
-    """One way a job can join the overlay: where, in which Environment, and what it waits for."""
+    """One way a job can join the overlay: where, in which Environment, what it routes, and what it waits for."""
 
     where: str
     environment: str
+    routes: str
     wait_for: str
 
 
@@ -454,23 +456,49 @@ def _joins() -> list[Join]:
                 environment = cast('dict[str, object]', environment).get('name')
             inputs = mapping(step.get('with', {}), f'{where} join with:')
             joins.extend(
-                Join(where, _resolved(environment, row, where), _resolved(inputs.get('wait_for'), row, where))
+                Join(
+                    where,
+                    _resolved(environment, row, where),
+                    _resolved(inputs.get('routes'), row, where),
+                    _resolved(inputs.get('wait_for'), row, where),
+                )
                 for row in rows
             )
     return joins
 
 
-def test_a_physical_join_waits_for_the_gateways_shell_and_a_dns_join_waits_for_nothing() -> None:
-    """Which identity a job joins with decides whether its join waits, and on what.
+def _routes(text: str) -> set[tuple[IPv4Network, IPv4Address]]:
+    """A join's `routes` input as the action reads it: one `<target> via <next hop>` per line."""
+    routes: set[tuple[IPv4Network, IPv4Address]] = set()
+    for line in text.splitlines():
+        if not line.strip():
+            continue
+        target, word, hop = line.split()
+        assert word == 'via', line
+        routes.add((IPv4Network(target), IPv4Address(hop)))
+    return routes
+
+
+def test_a_physical_join_waits_for_the_gateways_shell_and_a_dns_join_routes_to_and_waits_for_the_resolvers() -> None:
+    """Which identity a job joins with decides what its join routes and waits on.
 
     The identity is the Environment's secret, so the Environment decides it
     (`slots.ZEROTIER_PHYSICAL`, `slots.ZEROTIER_DNS`). A `physical` run's first
     dial is the device-files push's single connect to the gateway's shell, and
     the flow rules can drop a fresh member's first packets (physical/gateway.md
     §2.3), so its join waits for that shell; the readiness line it prints is
-    where §2.4 there reads items 4 and 7. A `dns` run reaches the resolvers,
-    each a leaf whose absence fails only its own rewrites (§3 there), so a wait
-    on one would fail the whole job, and its join waits for nothing.
+    where §2.4 there reads items 4 and 7. It dials members only, and installs
+    no route.
+
+    A `dns` run dials the resolvers' APIs at their container-VLAN addresses,
+    which the network carries no route to: a route only one run needs is that
+    run's own (framework/ci.md §2). So its join installs a host route to each
+    resolver the census lists, via the gateway, and nothing wider -- a route
+    the census lacks would be one the flow rules drop anyway, and a resolver
+    left out one the run cannot reach -- and waits for those same APIs, any
+    one answering. Held against the resolver census, the API port and the
+    gateway's overlay address, which the workflows spell as text no import
+    reaches.
     """
     joins = _joins()
     physical = [join for join in joins if join.environment in slots.ZEROTIER_PHYSICAL]
@@ -483,7 +511,13 @@ def test_a_physical_join_waits_for_the_gateways_shell_and_a_dns_join_waits_for_n
     assert [join for join in joins if join not in physical + dns] == []
     gateway_shell = f'{conventions.overlay.UDM}:{SSH_PORT}'
     assert [join for join in physical if join.wait_for != gateway_shell] == []
-    assert [join for join in dns if join.wait_for] == []
+    assert [join for join in physical if join.routes.strip()] == []
+
+    resolvers = [resolver.address for resolver in conventions.gateway.RESOLVERS]
+    routes = {(IPv4Network(f'{address}/32'), conventions.overlay.UDM) for address in resolvers}
+    apis = {f'{address}:{conventions.gateway.ADGUARD_API_PORT}' for address in resolvers}
+    assert [join.where for join in dns if _routes(join.routes) != routes] == []
+    assert [join.where for join in dns if set(join.wait_for.split()) != apis] == []
 
 
 #: A token of a job condition, by kind: a string literal, an operator or

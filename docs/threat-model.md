@@ -367,7 +367,13 @@ Grouped by who controls their software:
     household's computers and phones, the homelab host, and the gateway's
     own container services, the resolvers among them. **Trusted at the
     network layer**: an address one of them spoofs, or a reply one of them
-    forges, is accepted.
+    forges, is accepted. The gateway is an exit for the personal overlay
+    members: a device that opens the overlay's tunnel reaches the home
+    and the internet through it as a home client does, so its parity with
+    sitting on the LAN is literal, and the traffic the gateway forwards
+    for it bypasses the zone policy in both directions
+    ([physical/gateway.md](physical/gateway.md) §2.2, §4.1). Nothing is
+    published on the overlay for them.
 -   **IoT devices**, on the IoT VLAN, whose firmware the operator does not
     control. **In scope**, as the likeliest compromised host at home.
     Their VLAN reaches the cluster's pool through an enumerated allow
@@ -394,10 +400,10 @@ Grouped by who controls their software:
     also runs its cleanup step from a moving ref (`util/post@main`). What
     those jobs install and run is inside the trust as well. A fork's pull request receives no
     secret and does not join. No roster entry admits such a member and
-    no flow rule names it, so it reaches the rules' final `accept`: from
-    step 3 of the first bring-up, when the gateway answers at
-    `10.144.1.1`, that is every home subnet the managed routes carry
-    (physical/gateway.md §2.1, §2.2). The token also rewrites the
+    no flow rule names it, so it reaches the rules' final `accept`, a
+    personal member's reach, the gateway's forwarding to every home
+    subnet included for a route it adds itself (physical/gateway.md
+    §2.1, §2.2). The token also rewrites the
     network's flow rules and routes, so whoever holds it is held by
     neither. What retires it is a step of kluster-code's retirement
     (Aetf/kluster-ops#79): its workflows disabled or the repository
