@@ -1,0 +1,21 @@
+# Managed by the {{ cluster }} physical stack. Local edits are overwritten.
+#
+# The host-side ports of this program's machines, held out of systemd-networkd's
+# hands. systemd-nspawn brings each port up and sets its master itself, and
+# nspawn-bridge-watchdog restores a master the port lost, so networkd has
+# nothing to do here; a link networkd manages is one whose every
+# reconfiguration may remove what networkd did not create, and on this device
+# that is the firmware's policy routing (physical/gateway.md §1.2).
+#
+# The [Match] is the one systemd's own 80-container-vb.network carries, and
+# this file's name sorts ahead of it: .network files from every directory are
+# sorted together by name, and the first that matches a link is the one applied.
+# It matches what this program's machines create and nothing else, so no
+# .network the firmware ships is overridden.
+
+[Match]
+Kind={{ kind }}
+Name={{ name }}
+
+[Link]
+Unmanaged=yes

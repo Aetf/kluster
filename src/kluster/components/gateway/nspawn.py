@@ -4,8 +4,9 @@ The framework the container services run on, in the same relation to them as a
 cluster is to its workloads. It owns no service and knows no image: what it
 owns is the shape of `machines/<name>/`, the two boot-chain scripts that
 converge it, the watchdog that keeps a started machine attached to its bridge,
-and the one command that puts a machine back on the root filesystem the last
-push displaced.
+what systemd-networkd is told about the ports the machines attach with, and the
+one command that puts a machine back on the root filesystem the last push
+displaced.
 
 **Everything one machine is lives in one directory**, so that a machine can be
 inspected, moved or deleted whole:
@@ -67,6 +68,20 @@ to. Nothing there watches the bridge once the machine is up; the watchdog below
 is what does, for an interface that fell off a bridge that is still there, which
 is a state systemd has no view of.
 
+**systemd-networkd is given none of the machines' ports.** The firmware enables
+networkd, and networkd under its defaults removes the firmware's policy
+routing from any link it configures; the host-side `vb-*` port of every
+machine is the one kind of link this program puts within its reach. So the
+runtime declares two files of networkd's configuration, delivered by the
+persistence layer (`DevicePersistence.networkd_file`): a `.network` that marks
+those ports `Unmanaged=yes`, which takes away the event that removes the rules,
+and a `networkd.conf` drop-in that turns networkd's foreign management off,
+which guards a link networkd comes to manage for any other reason. The drop-in
+is a workaround of the firmware's and is held to its one declaration here
+(`NETWORKD_DROPIN`). Both are among the convergers every machine's file waits
+on, so no port exists before networkd has been told of it (physical/gateway.md
+§1.2).
+
 **A failed push stays failed, and the root filesystem goes back.** A machine's
 post-apply hook does not stop at converging: it asks whether the machine
 reached active, and a machine that did not fails the operation. The root
@@ -81,7 +96,9 @@ from __future__ import annotations
 import fnmatch
 import shlex
 import string
+from collections.abc import Mapping
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import ClassVar, final
 
 import pulumi
@@ -95,13 +112,19 @@ from kluster.providers.device_files.ssh import STAGING_SUFFIX
 from putils import Component
 
 __all__ = (
+    'FOREIGN_MANAGEMENT',
     'INITIAL_STATE',
     'LIVE_MACHINES_DIR',
     'LIVE_NSPAWN_DIR',
     'MACHINES',
+    'MACHINES_NETWORK',
     'MACHINES_SCRIPT',
     'MACHINE_DROPIN',
+    'MACHINE_PORT_KIND',
+    'MACHINE_PORT_NAME',
     'MARKER_SUFFIX',
+    'NETWORKD_DROPIN',
+    'NETWORKD_SECTION',
     'NSPAWN_SUFFIX',
     'NSPAWN_UNITS_SCRIPT',
     'REJECTED_SUFFIX',
@@ -119,6 +142,7 @@ __all__ = (
     'NspawnRuntime',
     'ReservedName',
     'UnstampedName',
+    'foreign_management_settings',
     'initial_state_path',
     'interface_device_unit',
     'machine_dropin',
@@ -126,7 +150,9 @@ __all__ = (
     'machine_hook',
     'machine_path',
     'machine_unit',
+    'machines_network',
     'machines_script',
+    'networkd_dropin',
     'nspawn_path',
     'nspawn_units_script',
     'rollback_program',
@@ -199,6 +225,47 @@ MACHINE_DROPIN = f'10-{conventions.CLUSTER_NAME}.conf'
 #: the unit (physical/gateway.md §1).
 RESTART_POLICY = 'always'
 RESTART_DELAY = '5s'
+
+#: The host-side port systemd-nspawn creates for a machine on a bridge: a veth
+#: whose name it prefixes `vb-` (systemd-nspawn(1), `--network-bridge=`). The
+#: pair is the `[Match]` of systemd's own `80-container-vb.network`, so the
+#: file below matches exactly the links that one does.
+MACHINE_PORT_KIND = 'veth'
+MACHINE_PORT_NAME = 'vb-*'
+
+#: The `.network` that holds those ports out of networkd's hands, and the
+#: `networkd.conf` drop-in that turns networkd's foreign management off. Both
+#: names carry the cluster's, as `MACHINE_DROPIN` does and for the same reason:
+#: they sit in directories the firmware shares, and the name is what keeps one
+#: from shadowing a firmware file called the same. The number places the
+#: `.network` ahead of `80-container-vb.network`, since the first file that
+#: matches a link is the one networkd applies; the drop-in's places it among
+#: networkd's other drop-ins, which apply in name order with the last
+#: assignment winning, so a later one that turns an option back on is what
+#: `gateway-health` reports (physical/gateway.md §1.6).
+MACHINES_NETWORK = f'10-{conventions.CLUSTER_NAME}-machines.network'
+NETWORKD_DROPIN = f'10-{conventions.CLUSTER_NAME}.conf'
+
+#: What the drop-in sets, in the one section of `networkd.conf` that holds
+#: these options (networkd.conf(5)). Each defaults to on; off, networkd neither
+#: enumerates nor removes the routes, next hops and routing policy rules it did
+#: not create. `ManageForeignNextHops=` is from systemd 256 and the other two
+#: from before 255. The health reading reads the device against this same
+#: mapping, so the file and the reading cannot part.
+#:
+#: This is the workaround layer: the firmware enables a networkd whose defaults
+#: delete the firmware's own policy routing as soon as it manages a link. It
+#: goes, with `NETWORKD_DROPIN` and the declaration of that file, when the
+#: firmware sets these itself or stops running networkd; the `.network`, the
+#: delivery and the other readings stay (physical/gateway.md §1.2).
+NETWORKD_SECTION = 'Network'
+FOREIGN_MANAGEMENT: Mapping[str, bool] = MappingProxyType(
+    {
+        'ManageForeignRoutingPolicyRules': False,
+        'ManageForeignRoutes': False,
+        'ManageForeignNextHops': False,
+    }
+)
 
 #: The escaped sysfs path every network interface's device unit is named
 #: under, and the characters that escaping leaves alone — every other byte
@@ -501,6 +568,67 @@ def machine_dropin(machine: str, *, bridge: str | None) -> str:
     )
 
 
+@final
+@dataclass(frozen=True)
+class _MachinesNetworkParams:
+    """What `machines.network.j2` reads: the links it matches."""
+
+    cluster: str
+    kind: str
+    name: str
+
+
+@final
+@dataclass(frozen=True)
+class _NetworkdDropinParams:
+    """What `networkd-dropin.conf.j2` reads: the section, what it sets, and the file it guards behind."""
+
+    cluster: str
+    machines_network: str
+    section: str
+    settings: tuple[tuple[str, str], ...]
+
+
+def foreign_management_settings() -> tuple[tuple[str, str], ...]:
+    """`FOREIGN_MANAGEMENT` as networkd spells it: each option with `yes` or `no`.
+
+    One spelling, for the drop-in that sets the options and for the health
+    reading that holds the device to them.
+    """
+    return tuple((option, 'yes' if on else 'no') for option, on in FOREIGN_MANAGEMENT.items())
+
+
+def machines_network() -> str:
+    """The `.network` that marks every machine's host-side port `Unmanaged=yes`.
+
+    systemd.network(5) names `Unmanaged=` as the way to keep later matching
+    files from interfering with an interface another program fully controls,
+    and these ports are such interfaces: systemd-nspawn brings each up and sets
+    its master, and the bridge watchdog restores a master the port lost. A
+    networkd that manages no link runs none of the removals that delete the
+    firmware's policy routing.
+    """
+    return templates.render(
+        persistence.TEMPLATE_PACKAGE,
+        'templates/machines.network.j2',
+        _MachinesNetworkParams(cluster=conventions.CLUSTER_NAME, kind=MACHINE_PORT_KIND, name=MACHINE_PORT_NAME),
+    )
+
+
+def networkd_dropin() -> str:
+    """The `networkd.conf` drop-in that turns networkd's foreign management off."""
+    return templates.render(
+        persistence.TEMPLATE_PACKAGE,
+        'templates/networkd-dropin.conf.j2',
+        _NetworkdDropinParams(
+            cluster=conventions.CLUSTER_NAME,
+            machines_network=MACHINES_NETWORK,
+            section=NETWORKD_SECTION,
+            settings=foreign_management_settings(),
+        ),
+    )
+
+
 def nspawn_units_script() -> str:
     """The boot-chain script that mirrors each machine's settings where systemd reads them.
 
@@ -644,6 +772,18 @@ class NspawnRuntime(Component, pulumi_type='kluster:gateway:NspawnRuntime'):
             WATCHDOG_WORKER, watchdog_worker(), opts=self.child_opts()
         )
         self.watchdog: DeviceFile = mechanism.unit(WATCHDOG_UNIT, watchdog_unit(), opts=self.child_opts())
+        # networkd told before any machine creates a port for it to act on.
+        # The guard lands first, so that the restart the `.network` file's
+        # delivery causes is one under foreign management already off.
+        self.networkd_dropin: DeviceFile = mechanism.networkd_file(
+            persistence.NETWORKD_CONF, NETWORKD_DROPIN, networkd_dropin(), opts=self.child_opts()
+        )
+        self.machines_network: DeviceFile = mechanism.networkd_file(
+            persistence.NETWORKD_NETWORK,
+            MACHINES_NETWORK,
+            machines_network(),
+            opts=self.child_opts(depends_on=[self.networkd_dropin]),
+        )
 
         self.register_outputs({})
 
@@ -660,8 +800,20 @@ class NspawnRuntime(Component, pulumi_type='kluster:gateway:NspawnRuntime'):
         does not ship, so a machine whose files landed before that script ran
         would be a machine nothing could fetch a tree for. It belongs to the
         layer below, and this is where the requirement is made an edge.
+
+        networkd's two files are in it because a started machine is a port on
+        the device, and a port networkd may configure under its defaults is one
+        whose reconfiguration removes the firmware's policy routing.
         """
-        return (self._packages, self.skeleton, self.nspawn_units, self.machines, self.rollback)
+        return (
+            self._packages,
+            self.skeleton,
+            self.nspawn_units,
+            self.machines,
+            self.rollback,
+            self.networkd_dropin,
+            self.machines_network,
+        )
 
     def dropin(self, machine: str, *, bridge: str | None, opts: pulumi.ResourceOptions) -> DeviceFile:
         """One machine's drop-in on the template unit, as a resource of the caller's.

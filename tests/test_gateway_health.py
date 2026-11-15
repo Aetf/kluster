@@ -6,10 +6,13 @@ reading, `--certificates` for the list a LAN probe works from. Its systemd is
 `tests/fake_systemd.py`, behind a `systemctl` that answers `--version` itself
 with the release a case sets. `machinectl`, which names the overlay member's
 leader, `nsenter`, which runs `zerotier-cli info` in that leader's mount
-namespace, and the package script, whose `--check` the reading relays, are
-stand-ins that answer what a case sets and record what they were asked. The
-base is read under the stand-in's tree: its `/etc/debian_version` and its
-`/bin/sh` are files there.
+namespace, the package script, whose `--check` the reading relays, and `ip`,
+which lists the policy rules, are stand-ins that answer what a case sets and
+record what they were asked. `networkctl` and `systemd-analyze` are the
+stand-in systemd's own: the links it reports are the ones a case set, and the
+configuration it assembles is the files under the stand-in's tree. The base is
+read under that tree too: its `/etc/debian_version` and its `/bin/sh` are
+files there.
 
 What it reads it reads against the declaration, so the wiring of the
 declaration into the program -- which machines, which units -- is
@@ -28,12 +31,12 @@ from pathlib import Path
 import device_shell
 import process_sessions
 import pytest
-from fake_systemd import FakeSystemd
+from fake_systemd import NETWORKCTL, SYSTEMD_ANALYZE, FakeSystemd
 from gateway_services import caddy, pin
 
 from kluster import conventions
 from kluster.components import gateway
-from kluster.components.gateway import container, persistence, routing
+from kluster.components.gateway import container, nspawn, persistence, routing
 
 #: The playbook section every finding points into.
 PLAYBOOK_DOC = Path(__file__).parent.parent / 'docs' / 'physical' / 'gateway.md'
@@ -59,6 +62,20 @@ SYSTEMD = 'systemd'
 
 MACHINE_UNITS = tuple(declaration.unit_name for declaration in (caddy(), *RESOLVERS, OVERLAY))
 
+#: The policy rules of a healthy gateway, in the form `ip rule show` prints
+#: them: the firmware's rule that looks up the main table, and no kernel-default
+#: `32766` one, which the device does not hold.
+RULES = '0:\tfrom all lookup local\n32000:\tfrom all lookup main\n'
+#: The same rules after networkd removed what it did not create, which leaves
+#: the kernel's own.
+RULES_WITHOUT_MAIN = '0:\tfrom all lookup local\n'
+
+#: A port one of the machines attaches with, as nspawn names it.
+PORT = 'vb-caddy'
+
+#: The address family the reading reads the rules of first.
+FAMILY = gateway.POLICY_RULE_FAMILIES[0]
+
 
 def playbook_titles() -> set[str]:
     """The bullet titles of gateway.md §3, which is where every playbook a finding names lives."""
@@ -82,9 +99,14 @@ class _Device:
     check_fails: Path
     #: The release `systemctl --version` names.
     systemd_release: Path
+    #: What `ip -<family> rule show` prints, one file per family.
+    rules: Path
+    #: The directories networkd's configuration is assembled from, most specific first.
+    etc_networkd: Path
     machinectl_calls: Path
     nsenter_calls: Path
     check_calls: Path
+    ip_calls: Path
 
 
 def _stub(path: Path, body: str) -> None:
@@ -112,9 +134,12 @@ def _device(tmp_path: Path, *, legacy: tuple[conventions.gateway.LegacyVhost, ..
     logs = tmp_path / 'logs'
     tools = tmp_path / 'tools'
     live = root / 'etc-systemd-system'
-    for directory in (root, logs, tools, live, root / 'etc', root / 'bin'):
-        directory.mkdir()
-    systemd = FakeSystemd(root / SYSTEMD, unit_path=(live,))
+    etc_networkd = root / 'etc' / 'systemd' / 'networkd.conf.d'
+    for directory in (root, logs, tools, live, root / 'etc', root / 'bin', root / 'rules', etc_networkd):
+        directory.mkdir(parents=True)
+    systemd = FakeSystemd(
+        root / SYSTEMD, unit_path=(live,), config_path=(root / 'etc', root / 'run', root / 'usr' / 'lib')
+    )
     device = _Device(
         root=root,
         systemd=systemd,
@@ -123,9 +148,12 @@ def _device(tmp_path: Path, *, legacy: tuple[conventions.gateway.LegacyVhost, ..
         member=root / 'member-info',
         check_fails=root / 'check-fails',
         systemd_release=root / 'systemd-release',
+        rules=root / 'rules',
+        etc_networkd=etc_networkd,
         machinectl_calls=logs / 'machinectl',
         nsenter_calls=logs / 'nsenter',
         check_calls=logs / 'packages',
+        ip_calls=logs / 'ip',
     )
     # `machinectl` as systemd 247 answers for a machine whose init is not
     # systemd: `show` names the leader of a running machine and knows no other,
@@ -179,6 +207,18 @@ def _device(tmp_path: Path, *, legacy: tuple[conventions.gateway.LegacyVhost, ..
         f'echo "$*" >>{device.check_calls}\n[ -e {device.check_fails} ] || exit 0\ncat {device.check_fails}\nexit 1\n',
     )
     _ = device.member.write_text(ONLINE)
+    # `ip -<family> rule show`, which prints the rules a case set for that
+    # family; nothing else is modeled.
+    _stub(
+        tools / 'ip',
+        f'echo "$*" >>{device.ip_calls}\n'
+        'case "$*" in\n'
+        f'-?" rule show") cat {device.rules}/"${{1#-}}" ;;\n'
+        '*) echo "stand-in ip: modeled for -<family> rule show only, not $*" >&2; exit 1 ;;\n'
+        'esac\n',
+    )
+    for family in gateway.POLICY_RULE_FAMILIES:
+        _ = (device.rules / family).write_text(RULES)
     # `systemctl --version` as Debian's systemd answers it, the release first;
     # every other question goes to the stand-in systemd.
     _stub(
@@ -215,6 +255,13 @@ def _device(tmp_path: Path, *, legacy: tuple[conventions.gateway.LegacyVhost, ..
         systemd.activate(unit)
     systemd.ship(routing.FRR_SERVICE)
     systemd.activate(routing.FRR_SERVICE)
+    # networkd as the firmware runs it, told what the runtime declares, and
+    # managing none of the device's links.
+    systemd.ship(persistence.NETWORKD_UNIT)
+    systemd.activate(persistence.NETWORKD_UNIT)
+    _ = (etc_networkd / nspawn.NETWORKD_DROPIN).write_text(nspawn.networkd_dropin())
+    for name, kind in (('lo', 'loopback'), ('eth8', 'ether'), ('br0', 'bridge'), (PORT, 'veth')):
+        systemd.link(name, kind=kind)
     _ = systemd.take_calls()
     return device
 
@@ -302,6 +349,24 @@ def _move_systemd_across_the_terminate_release(device: _Device) -> None:
     _ = device.systemd_release.write_text(str(_systemd_release(terminate_signals_nspawn=moved)))
 
 
+def _lose_the_main_rule(device: _Device) -> None:
+    _ = (device.rules / FAMILY).write_text(RULES_WITHOUT_MAIN)
+
+
+def _let_networkd_manage_a_port(device: _Device) -> None:
+    device.systemd.link(PORT, kind='veth', setup='configured')
+
+
+#: One of the options the declared drop-in turns off.
+GUARDED = next(iter(nspawn.FOREIGN_MANAGEMENT))
+
+
+def _turn_an_option_back_on_in_a_later_drop_in(device: _Device) -> None:
+    later = f'9{nspawn.NETWORKD_DROPIN}'
+    assert later > nspawn.NETWORKD_DROPIN
+    _ = (device.etc_networkd / later).write_text(f'[{nspawn.NETWORKD_SECTION}]\n{GUARDED}=yes\n')
+
+
 @pytest.mark.parametrize(
     ('deviation', 'subject', 'playbook'),
     [
@@ -315,6 +380,9 @@ def _move_systemd_across_the_terminate_release(device: _Device) -> None:
         (_move_the_debian_release, '/etc/debian_version', gateway.PLAYBOOKS.base),
         (_replace_bin_sh, '/bin/sh', gateway.PLAYBOOKS.base),
         (_move_systemd_across_the_terminate_release, 'systemd', gateway.PLAYBOOKS.base),
+        (_lose_the_main_rule, f'ip -{FAMILY} rule', gateway.PLAYBOOKS.networkd),
+        (_let_networkd_manage_a_port, PORT, gateway.PLAYBOOKS.networkd),
+        (_turn_an_option_back_on_in_a_later_drop_in, GUARDED, gateway.PLAYBOOKS.networkd),
     ],
     ids=[
         'machine',
@@ -327,6 +395,9 @@ def _move_systemd_across_the_terminate_release(device: _Device) -> None:
         'debian-release',
         'bin-sh',
         'systemd',
+        'no-main-rule',
+        'managed-link',
+        'option-on',
     ],
 )
 def test_each_deviation_is_exactly_one_finding_that_names_its_subject_and_its_playbook(
@@ -470,6 +541,69 @@ def test_a_systemctl_that_names_no_release_is_a_finding(tmp_path: Path) -> None:
     assert reading.errors == ''
 
 
+def test_a_networkd_that_is_not_running_is_not_asked_about_its_links(tmp_path: Path) -> None:
+    """A daemon that is not running manages nothing, whatever a stale state file says about a link."""
+    device = _device(tmp_path)
+    device.systemd.stop(persistence.NETWORKD_UNIT)
+    _let_networkd_manage_a_port(device)
+    _ = device.systemd.take_calls(NETWORKCTL)
+
+    reading = _read(device)
+
+    assert (reading.status, reading.lines) == (0, [])
+    assert device.systemd.take_calls(NETWORKCTL) == []
+
+
+def test_an_option_turned_on_by_an_earlier_drop_in_is_turned_off_by_the_declared_one(tmp_path: Path) -> None:
+    """Drop-ins apply in name order and the last assignment wins, so only a later file can undo the declared one."""
+    device = _device(tmp_path)
+    earlier = f'0{nspawn.NETWORKD_DROPIN}'
+    assert earlier < nspawn.NETWORKD_DROPIN
+    _ = (device.etc_networkd / earlier).write_text(f'[{nspawn.NETWORKD_SECTION}]\n{GUARDED}=yes\n')
+
+    reading = _read(device)
+
+    assert (reading.status, reading.lines) == (0, [])
+
+
+def test_an_option_a_later_drop_in_spells_otherwise_is_read_as_networkd_reads_it(tmp_path: Path) -> None:
+    """A boolean has more spellings than `yes`, and the finding says what networkd is left with, not the characters."""
+    device = _device(tmp_path)
+    _ = (device.etc_networkd / f'9{nspawn.NETWORKD_DROPIN}').write_text(f'[{nspawn.NETWORKD_SECTION}]\n{GUARDED}=on\n')
+
+    (finding,) = _findings(_read(device))
+
+    assert finding['subject'] == GUARDED
+    assert finding['state'].startswith('reads yes'), finding['state']
+
+
+@pytest.mark.parametrize('later', [f'{GUARDED}=\n', f'{GUARDED}=maybe\n'], ids=['emptied', 'unparsable'])
+def test_an_assignment_networkd_cannot_parse_leaves_the_earlier_value_standing(tmp_path: Path, later: str) -> None:
+    """networkd ignores an assignment that does not parse as a boolean, an empty one included.
+
+    So a later drop-in holding one leaves the declared value in force, and the
+    reading reports nothing: a finding there would name an exposure networkd
+    does not have.
+    """
+    device = _device(tmp_path)
+    _ = (device.etc_networkd / f'9{nspawn.NETWORKD_DROPIN}').write_text(f'[{nspawn.NETWORKD_SECTION}]\n{later}')
+
+    reading = _read(device)
+
+    assert (reading.status, reading.lines) == (0, [])
+
+
+def test_with_no_networkd_configuration_on_disk_every_guarded_option_is_a_finding(tmp_path: Path) -> None:
+    """A firmware update that does not carry `/etc` across takes the drop-in, and every option is back at its default."""
+    device = _device(tmp_path)
+    (device.etc_networkd / nspawn.NETWORKD_DROPIN).unlink()
+
+    findings = _findings(_read(device))
+
+    assert {finding['subject'] for finding in findings} == set(nspawn.FOREIGN_MANAGEMENT)
+    assert {finding['title'] for finding in findings} == {gateway.PLAYBOOKS.networkd}
+
+
 def _site_blocks(caddyfile: str) -> set[str]:
     """The zone of each site block in a `Caddyfile`: each block is one wildcard certificate."""
     return set(re.findall(r'^\*\.(\S+) \{$', caddyfile, re.MULTILINE))
@@ -520,14 +654,26 @@ def _healthy(_: _Device) -> None:
 
 
 @pytest.mark.parametrize(
-    'deviation', [_healthy, _stop_a_machine, _fail_the_boot_chain, _take_the_member_offline, _leave_a_member_uncached]
+    'deviation',
+    [
+        _healthy,
+        _stop_a_machine,
+        _fail_the_boot_chain,
+        _take_the_member_offline,
+        _leave_a_member_uncached,
+        _lose_the_main_rule,
+        _let_networkd_manage_a_port,
+        _turn_an_option_back_on_in_a_later_drop_in,
+    ],
 )
 def test_the_reading_writes_nothing(tmp_path: Path, deviation: Callable[[_Device], None]) -> None:
     """Healthy or not, a reading asks and changes nothing: no systemctl verb that acts, no file touched.
 
     The package script is asked only for `--check`, the mode that writes
     nothing (its own suite holds that), and the overlay member only for
-    `zerotier-cli info`, run in its leader's mount namespace.
+    `zerotier-cli info`, run in its leader's mount namespace. networkd is asked
+    only to list its links and to assemble its configuration, and the kernel
+    only to list its rules.
     """
     device = _device(tmp_path)
     deviation(device)
@@ -542,6 +688,9 @@ def test_the_reading_writes_nothing(tmp_path: Path, deviation: Callable[[_Device
     # member is read on each of them: one machine looked up, one read verb run.
     assert [call.split()[0] for call in device.machinectl_calls.read_text().splitlines()] == ['show']
     assert [call.split()[-1] for call in device.nsenter_calls.read_text().splitlines()] == ['info']
+    assert {call.split(' ', 1)[1] for call in device.ip_calls.read_text().splitlines()} == {'rule show'}
+    assert {call.split()[0] for call in device.systemd.take_calls(NETWORKCTL)} == {'list'}
+    assert {call.split()[-2] for call in device.systemd.take_calls(SYSTEMD_ANALYZE)} == {'cat-config'}
     assert (_tree(device.root), device.systemd.enabled, device.systemd.active) == before
 
 

@@ -35,7 +35,7 @@ import pulumi
 import pytest
 import pytest_asyncio
 import yaml
-from device_places import DEVICE_TYPE_PREFIX, PLACES, stated_type
+from device_places import DEVICE_FILE, DEVICE_TYPE_PREFIX, PLACES, stated_type
 from google.protobuf import json_format
 from mock_monitor import Recorder, declaring, run_under_backstop
 from oci_conventions import with_compartment
@@ -64,8 +64,8 @@ from unifi_controller import zone_id
 from kluster import conventions
 from kluster.components.backup import BackupBucket, etcd_scope
 from kluster.components.cloud.guardrails import Guardrails
-from kluster.components.gateway import Gateway
-from kluster.components.gateway.container import CaddyService
+from kluster.components.gateway import Gateway, nspawn, persistence
+from kluster.components.gateway.container import CaddyService, Container
 from kluster.components.gateway.unifi import SiteFirewall
 from kluster.components.homelab.rebuild import ImageMissing
 from kluster.components.overlay import Overlay, flow_rules
@@ -629,6 +629,62 @@ def test_no_two_resources_claim_one_place_on_the_device(ran: Run) -> None:
     device_types = {typ for typ in ran.recorded.types if typ.startswith(DEVICE_TYPE_PREFIX)}
     assert device_types <= set(PLACES), device_types - set(PLACES)
     assert ran.recorded.places_claimed_more_than_once(PLACES) == {}
+
+
+def test_every_machines_resources_wait_on_what_networkd_is_told(ran: Run) -> None:
+    """No machine's file lands, and so no machine starts, before networkd's two files are on the device.
+
+    A started machine is a port, and networkd under its defaults removes the
+    firmware's policy rules from a port it configures. So each device resource
+    of every machine the program declares, the overlay member's included,
+    depends on the `.network` that holds the ports unmanaged and on the drop-in
+    that turns networkd's foreign management off. The two are found by the
+    places the runtime declares them at, and the machines by their component.
+    """
+    registrations = ran.recorded.registrations
+    places = {
+        persistence.networkd_source(persistence.NETWORKD_CONF, nspawn.NETWORKD_DROPIN),
+        persistence.networkd_source(persistence.NETWORKD_NETWORK, nspawn.MACHINES_NETWORK),
+    }
+    told = {
+        urn
+        for urn, request in registrations.items()
+        if request.type == DEVICE_FILE and ran.recorded.inputs_of(request.name, DEVICE_FILE)['path'] in places
+    }
+    assert len(told) == len(places), told
+    containers = {urn for urn, request in registrations.items() if request.type == Container.__pulumi_type__}
+    machine_resources = {
+        urn: request
+        for urn, request in registrations.items()
+        if request.parent in containers and request.type.startswith(DEVICE_TYPE_PREFIX)
+    }
+    assert {request.parent for request in machine_resources.values()} == containers
+
+    missing = {urn: sorted(told - set(request.dependencies)) for urn, request in machine_resources.items()}
+    assert {urn: edges for urn, edges in missing.items() if edges} == {}
+
+
+def test_the_network_file_waits_on_the_drop_in_that_turns_foreign_management_off(ran: Run) -> None:
+    """On a push the drop-in lands first, so the restart the `.network` file's delivery causes is already guarded.
+
+    That restart reconfigures whatever links `networkd` still manages, and
+    under its defaults each such configuration removes the firmware's policy
+    rules. Both files are found by the places the runtime declares them at.
+    """
+    registrations = ran.recorded.registrations
+
+    def at(place: str) -> str:
+        (urn,) = [
+            urn
+            for urn, request in registrations.items()
+            if request.type == DEVICE_FILE and ran.recorded.inputs_of(request.name, DEVICE_FILE)['path'] == place
+        ]
+        return urn
+
+    dropin = at(persistence.networkd_source(persistence.NETWORKD_CONF, nspawn.NETWORKD_DROPIN))
+    network = at(persistence.networkd_source(persistence.NETWORKD_NETWORK, nspawn.MACHINES_NETWORK))
+
+    assert dropin in registrations[network].dependencies
 
 
 def test_no_two_resources_declare_one_image_file(ran: Run) -> None:

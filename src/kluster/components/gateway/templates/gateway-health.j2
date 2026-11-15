@@ -4,14 +4,16 @@
 # The device read against what the physical stack declares for it: every
 # declared machine running, every unit the persistence layer delivers enabled
 # and active, the routing daemon running, the overlay member online, an offline
-# package cache that would carry an offline boot, and the base under the
-# firmware being the one the program is written for. Nothing on the device
+# package cache that would carry an offline boot, the base under the firmware
+# being the one the program is written for, and systemd-networkd kept from the
+# firmware's policy routing. Nothing on the device
 # runs this. The homelab host's daily check runs it over SSH, and an operator
 # can run it by hand (physical/gateway.md §1.6).
 #
 # Read-only. It asks systemd questions and changes nothing: the package script
-# runs in its --check mode, which writes nothing, and the overlay member is read
-# with `zerotier-cli info` in its machine's mount namespace.
+# runs in its --check mode, which writes nothing, the overlay member is read
+# with `zerotier-cli info` in its machine's mount namespace, and networkd's state
+# with `ip rule show`, `networkctl list` and `systemd-analyze cat-config`.
 #
 # A healthy device gives no output and exit status 0. Otherwise it prints one
 # line per finding, each naming its playbook in physical/gateway.md §3, and
@@ -106,6 +108,85 @@ done
 
 # The routing daemon. Nothing enables its unit, so only whether it runs is read.
 ask is-active {{ routing_daemon }} || finding {{ routing_daemon }} "$answer" {{ playbooks.routing }}
+
+# networkd and the firmware's policy routing, read three ways. networkd under
+# its defaults removes every policy rule it did not create from a link it
+# configures, and the firmware's rules are such rules.
+#
+# The consequence: a rule that looks up the main table, which the gateway's own
+# packets are routed by. With it gone the gateway cannot route its replies, so
+# no reading run over SSH reports its absence; this one serves an operator who
+# runs it at the device after a controller apply, as its playbook says.
+for family in{% for family in rule_families %} {{ family }}{% endfor %}; do
+    rules=$(ip -"$family" rule show 2>/dev/null)
+    status=$?
+    if [ "$status" -ne 0 ]; then
+        finding "ip -$family rule" "no answer (exit $status)" {{ playbooks.networkd }}
+    elif ! printf '%s\n' "$rules" | awk -v table={{ main_table }} '
+        { for (i = 1; i < NF; i++) if ($i == "lookup" && $(i + 1) == table) found = 1 }
+        END { exit !found }'; then
+        finding "ip -$family rule" "holds no rule that looks up "{{ main_table }} {{ playbooks.networkd }}
+    fi
+done
+
+# The trigger: a link networkd manages, which is a link whose every
+# reconfiguration runs that removal. None is the declared state, since the
+# machines' ports are marked unmanaged. A networkd that is not running manages
+# nothing, and is not asked.
+if ask is-active {{ networkd_unit }}; then
+    links=$(networkctl list --no-legend --no-pager 2>/dev/null)
+    status=$?
+    if [ "$status" -ne 0 ]; then
+        finding networkctl "list gave no answer (exit $status)" {{ playbooks.networkd }}
+    else
+        managed=$(printf '%s\n' "$links" | awk 'NF >= 5 && $5 != "unmanaged" { print $2 "=" $5 }')
+        for link in $managed; do
+            finding "${link%%=*}" "networkd's setup state is ${link#*=}, not unmanaged" {{ playbooks.networkd }}
+        done
+    fi
+fi
+
+# The guard: every option the declared drop-in sets reads as declared in
+# networkd's configuration as systemd-analyze assembles it, the main file and
+# the drop-ins in the order networkd applies them, so a later-sorted file that
+# turns one back on is a finding. Within the section, the last assignment
+# that parses as a boolean wins, read the ways systemd parses one; an
+# assignment that does not parse, an empty one included, is ignored and the
+# earlier value stands, as networkd's own parser does. An option no assignment
+# sets is at networkd's default. This is what the disk says: nothing reports what the
+# running daemon loaded, which is why the boot chain restarts networkd on every
+# change.
+config=$(systemd-analyze --no-pager cat-config {{ networkd_config }} 2>/dev/null)
+status=$?
+if [ "$status" -ne 0 ]; then
+    finding systemd-analyze "cat-config "{{ networkd_config }}" gave no answer (exit $status)" {{ playbooks.networkd }}
+else
+    for setting in{% for setting in networkd_settings %} {{ setting }}{% endfor %}; do
+        option=${setting%%=*}
+        want=${setting#*=}
+        have=$(printf '%s\n' "$config" | awk -v section={{ networkd_section }} -v option="$option" '
+            { sub(/\r$/, ""); line = $0; sub(/^[ \t]+/, "", line) }
+            line == "" || line ~ /^[#;]/ { next }
+            line ~ /^\[/ { current = substr(line, 2, index(line, "]") - 2); next }
+            current == section && index(line, "=") {
+                key = substr(line, 1, index(line, "=") - 1)
+                sub(/[ \t]+$/, "", key)
+                if (key != option) next
+                value = substr(line, index(line, "=") + 1)
+                sub(/^[ \t]+/, "", value)
+                sub(/[ \t]+$/, "", value)
+                folded = tolower(value)
+                if (folded ~ /^(1|yes|y|true|t|on)$/) last = "yes"
+                else if (folded ~ /^(0|no|n|false|f|off)$/) last = "no"
+            }
+            END { print last }')
+        case $have in
+        "$want") ;;
+        '') finding "$option" "unset in "{{ networkd_config }}", so networkd's default applies, not $want" {{ playbooks.networkd }} ;;
+        *) finding "$option" "reads $have in "{{ networkd_config }}", not $want" {{ playbooks.networkd }} ;;
+        esac
+    done
+fi
 
 # The offline cache, judged by the package script itself, whose reasons become
 # one finding.

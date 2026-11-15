@@ -1169,7 +1169,7 @@ dig @10.0.5.4 cloudflare.com +short          # bob answers
 machinectl list                              # four machines, all running
 ls /var/lib/machines                         # four links, and nothing stale
 ls /etc/systemd/nspawn                       # four settings files, nothing else
-ls /data/on_boot.d    # the four rendered scripts, and 50-authorized-keys.sh until §7
+ls /data/on_boot.d    # the rendered scripts, 05-networkd.sh to 40-machines.sh, and 50-authorized-keys.sh until §7
 leader=$(machinectl show --property=Leader --value zerotier)
 nsenter --target "$leader" --mount -- /usr/sbin/zerotier-cli info
 nsenter --target "$leader" --mount -- /usr/sbin/zerotier-cli listnetworks   # the overlay's network, ACCESS_DENIED

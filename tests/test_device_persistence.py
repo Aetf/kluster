@@ -24,7 +24,7 @@ from __future__ import annotations
 import itertools
 import re
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 from typing import final
 
@@ -63,6 +63,7 @@ UNIT = 'example.service'
 TEMPLATE_UNIT = 'example@instance.service'
 DROPIN = '10-example.conf'
 DIRECTORY = 'machines'
+NETWORK_FILE = '10-example.network'
 
 
 class Layer(Component, pulumi_type='test:gateway:Layer'):
@@ -82,6 +83,9 @@ class Layer(Component, pulumi_type='test:gateway:Layer'):
             TEMPLATE_UNIT, DROPIN, '[Service]\nRestart=always\n', opts=self.child_opts()
         )
         self.directory: DeviceDirectory = mechanism.skeleton_dir(DIRECTORY, opts=self.child_opts())
+        self.network: DeviceFile = mechanism.networkd_file(
+            persistence.NETWORKD_NETWORK, NETWORK_FILE, '[Match]\nName=example*\n', opts=self.child_opts()
+        )
         self.register_outputs({})
 
 
@@ -2545,3 +2549,246 @@ def test_a_run_that_moved_no_drop_in_succeeds(tmp_path: Path) -> None:
 
     assert status == 0
     assert commands == []
+
+
+##
+## networkd's configuration: delivered, and restarted onto only when it moved
+##
+
+
+def test_a_networkd_file_lands_in_its_source_directory_and_belongs_to_the_caller(monitor: Recorder) -> None:
+    """The source sits under the custom root, where a firmware update leaves it, and the resource is the asker's."""
+    name = f'{CONSUMER}-networkd-{persistence.NETWORKD_NETWORK.source}/{NETWORK_FILE}'
+
+    assert monitor.inputs_of(name)['path'] == persistence.networkd_source(persistence.NETWORKD_NETWORK, NETWORK_FILE)
+    assert str(PurePosixPath(monitor.inputs_of(name)['path']).parent) == persistence.skeleton_path(
+        persistence.NETWORKD_NETWORK.source
+    )
+    assert monitor.options_of(name).parent.endswith(f'::{CONSUMER}')
+
+
+@pytest.mark.asyncio
+async def test_a_networkd_file_waits_for_the_converger_and_the_directory_it_lands_in(
+    monitor: Recorder, mechanism: DevicePersistence
+) -> None:
+    """Its hook runs `05-networkd.sh`, and a destroy removes the directory only once the file has gone."""
+    edges = monitor.depends_on(f'{CONSUMER}-networkd-{persistence.NETWORKD_NETWORK.source}/{NETWORK_FILE}')
+
+    assert str(await mechanism.networkd.urn.future()) in edges
+    assert str(await mechanism.skeleton[persistence.NETWORKD_NETWORK.source].urn.future()) in edges
+
+
+def test_a_networkd_file_networkd_would_read_by_nothing_is_refused(mechanism: DevicePersistence) -> None:
+    """A suffix networkd does not read in that directory would land and mean nothing, with no error anywhere."""
+    with pytest.raises(ValueError, match=re.escape(persistence.NETWORKD_CONF.live)):
+        _ = mechanism.networkd_file(
+            persistence.NETWORKD_CONF, '10-example.network', '[Network]\n', opts=pulumi.ResourceOptions()
+        )
+
+
+@final
+@dataclass(frozen=True)
+class _Networkd:
+    """The networkd converger rendered against a tree, and a systemd whose networkd reads that tree's live side."""
+
+    script: Path
+    #: networkd's directories, pointed at the tree: sources under it, live directories under it.
+    directories: tuple[persistence.NetworkdDirectory, ...]
+    systemd: FakeSystemd
+    complaints: Path
+
+    def source(self, directory: persistence.NetworkdDirectory, name: str, content: str) -> Path:
+        """One source, as a delivery leaves it."""
+        path = Path(persistence.networkd_source(self.moved(directory), name))
+        path.parent.mkdir(parents=True, exist_ok=True)
+        _ = path.write_text(content)
+        return path
+
+    def moved(self, directory: persistence.NetworkdDirectory) -> persistence.NetworkdDirectory:
+        """The tree's copy of one of the device's directories."""
+        (moved,) = [it for it in self.directories if it.source == directory.source]
+        return moved
+
+    def live(self, directory: persistence.NetworkdDirectory) -> Path:
+        return Path(self.moved(directory).live)
+
+
+@pytest.fixture
+def networkd(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> _Networkd:
+    """The production converger, with the custom root and both live directories moved under `tmp_path`.
+
+    networkd is running, as the firmware runs it, and reads both live
+    directories when it starts, so what it was last started on is what they
+    held at that moment.
+    """
+    custom = tmp_path / 'custom'
+    custom.mkdir()
+    monkeypatch.setattr(conventions.gateway, 'CUSTOM_ROOT', str(custom))
+    directories = tuple(
+        replace(directory, live=str(tmp_path / 'etc' / PurePosixPath(directory.live).name))
+        for directory in persistence.NETWORKD_DIRECTORIES
+    )
+    monkeypatch.setattr(persistence, 'NETWORKD_DIRECTORIES', directories)
+    systemd = FakeSystemd(tmp_path / 'systemd')
+    systemd.ship(persistence.NETWORKD_UNIT, reads=tuple(Path(directory.live) for directory in directories))
+    systemd.activate(persistence.NETWORKD_UNIT)
+    box = _Networkd(
+        script=tmp_path / persistence.NETWORKD_SCRIPT,
+        directories=directories,
+        systemd=systemd,
+        complaints=tmp_path / 'complaints',
+    )
+    _ = box.script.write_text(persistence.networkd_script())
+    return box
+
+
+def _deliver(networkd: _Networkd) -> tuple[int, list[str]]:
+    """Run the networkd converger once, and read back what it asked of systemd."""
+    _ = networkd.systemd.take_calls()
+    completed = process_sessions.run(
+        ['/bin/bash', str(networkd.script)],
+        env={'PATH': f'{networkd.systemd.tools}:/usr/bin:/bin'},
+        check=False,
+        timeout=30,
+    )
+    _ = networkd.complaints.write_bytes(completed.stderr)
+    return completed.returncode, networkd.systemd.take_calls()
+
+
+def _restarts(commands: list[str]) -> list[str]:
+    """The calls that start networkd anew, whatever verb they use."""
+    return [
+        command
+        for command in commands
+        if command.split()[0] in {'start', 'restart', 'try-restart'}
+        and command.split()[-1] == persistence.NETWORKD_UNIT
+    ]
+
+
+#: One file of each of networkd's directories, as a layer above would hand them over.
+CONF = ('10-example.conf', '[Network]\nManageForeignRoutes=no\n')
+NETWORK = (NETWORK_FILE, '[Match]\nName=example*\n\n[Link]\nUnmanaged=yes\n')
+
+
+def test_networkd_is_restarted_once_onto_everything_a_run_delivered(networkd: _Networkd) -> None:
+    """One restart after every copy, so networkd never starts on half of what the run delivered.
+
+    A restart and not a reload, because networkd reads `networkd.conf` and its
+    drop-ins only when it starts: what is read back is what networkd's last
+    start read off both live directories.
+    """
+    _ = networkd.source(persistence.NETWORKD_CONF, *CONF)
+    _ = networkd.source(persistence.NETWORKD_NETWORK, *NETWORK)
+
+    status, commands = _deliver(networkd)
+    started_on = networkd.systemd.started_on(persistence.NETWORKD_UNIT)
+
+    assert status == 0, networkd.complaints.read_text()
+    assert len(_restarts(commands)) == 1, commands
+    assert started_on is not None
+    assert started_on.reads == {
+        str(networkd.live(persistence.NETWORKD_CONF) / CONF[0]): CONF[1],
+        str(networkd.live(persistence.NETWORKD_NETWORK) / NETWORK[0]): NETWORK[1],
+    }
+
+
+def test_a_second_run_with_nothing_changed_restarts_nothing(networkd: _Networkd) -> None:
+    """A restart is the one act that can cost the firmware its policy rules, so a run that moved nothing performs none."""
+    _ = networkd.source(persistence.NETWORKD_CONF, *CONF)
+    _ = networkd.source(persistence.NETWORKD_NETWORK, *NETWORK)
+    status, _ = _deliver(networkd)
+    assert status == 0, networkd.complaints.read_text()
+
+    status, commands = _deliver(networkd)
+
+    assert status == 0, networkd.complaints.read_text()
+    assert _restarts(commands) == []
+
+
+def test_a_run_whose_copy_failed_restarts_nothing_and_fails(networkd: _Networkd) -> None:
+    """A restart onto part of a delivery is the act the script exists to prevent.
+
+    One live directory refuses the copy while the other takes it -- a file
+    stands where the directory should be, which refuses root as well as
+    anybody -- so the run exits non-zero, the push that ran it fails, and
+    `networkd` keeps running on what it started with.
+    """
+    refusing = networkd.live(persistence.NETWORKD_CONF)
+    refusing.parent.mkdir(parents=True, exist_ok=True)
+    _ = refusing.write_text('not a directory\n')
+    _ = networkd.source(persistence.NETWORKD_CONF, *CONF)
+    _ = networkd.source(persistence.NETWORKD_NETWORK, *NETWORK)
+
+    status, commands = _deliver(networkd)
+
+    assert status != 0
+    assert (networkd.live(persistence.NETWORKD_NETWORK) / NETWORK[0]).read_text() == NETWORK[1]
+    assert _restarts(commands) == []
+    assert persistence.NETWORKD_UNIT in networkd.systemd.active
+
+
+def test_a_networkd_that_is_not_running_is_not_started(networkd: _Networkd) -> None:
+    """The firmware decides whether networkd runs; one that is not running reads the files when it next starts."""
+    networkd.systemd.stop(persistence.NETWORKD_UNIT)
+    _ = networkd.source(persistence.NETWORKD_CONF, *CONF)
+
+    status, commands = _deliver(networkd)
+
+    assert status == 0, networkd.complaints.read_text()
+    assert (networkd.live(persistence.NETWORKD_CONF) / CONF[0]).read_text() == CONF[1]
+    assert _restarts(commands) == []
+    assert persistence.NETWORKD_UNIT not in networkd.systemd.active
+
+
+@pytest.mark.parametrize(
+    'directory', [persistence.NETWORKD_CONF, persistence.NETWORKD_NETWORK], ids=['networkd.conf.d', 'network']
+)
+def test_a_file_the_firmware_placed_in_a_live_directory_survives_the_converger(
+    networkd: _Networkd, directory: persistence.NetworkdDirectory
+) -> None:
+    """Both directories are shared with the firmware, so a live file with no source is somebody else's and stays."""
+    firmware = networkd.live(directory) / f'50-firmware{directory.suffixes[0]}'
+    firmware.parent.mkdir(parents=True)
+    _ = firmware.write_text("# the firmware's\n")
+    _ = networkd.source(persistence.NETWORKD_CONF, *CONF)
+    _ = networkd.source(persistence.NETWORKD_NETWORK, *NETWORK)
+
+    status, _ = _deliver(networkd)
+
+    assert status == 0, networkd.complaints.read_text()
+    assert firmware.read_text() == "# the firmware's\n"
+
+
+def test_the_delete_takes_the_live_copy_away_and_leaves_networkd_running(
+    networkd: _Networkd, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A delete only loosens, and loosening is never urgent: the file goes, and networkd is not restarted."""
+    on_boot = tmp_path / 'on_boot.d'
+    on_boot.mkdir()
+    monkeypatch.setattr(conventions.gateway, 'ON_BOOT_D', str(on_boot))
+    converger = Path(persistence.on_boot_path(persistence.NETWORKD_SCRIPT))
+    _ = converger.write_text(networkd.script.read_text())
+    converger.chmod(0o755)
+    directory = networkd.moved(persistence.NETWORKD_CONF)
+    hook = persistence.networkd_hook(directory, CONF[0])
+    source = networkd.source(persistence.NETWORKD_CONF, *CONF)
+
+    def run_hook() -> list[str]:
+        _ = networkd.systemd.take_calls()
+        ran = process_sessions.run(
+            ['sh', '-c', hook], env={'PATH': f'{networkd.systemd.tools}:/usr/bin:/bin'}, check=False, timeout=30
+        )
+        assert ran.returncode == 0, ran.stderr
+        return networkd.systemd.take_calls()
+
+    # Delivered: the source is there, and the hook converges.
+    assert len(_restarts(run_hook())) == 1
+    live = networkd.live(persistence.NETWORKD_CONF) / CONF[0]
+    assert live.exists()
+
+    # Retired: the delete took the source, and the hook takes the live copy.
+    source.unlink()
+    commands = run_hook()
+    assert not live.exists()
+    assert _restarts(commands) == []
+    assert persistence.NETWORKD_UNIT in networkd.systemd.active

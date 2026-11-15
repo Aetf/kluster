@@ -26,7 +26,9 @@ where a wiring mistake would surface.
 from __future__ import annotations
 
 import errno
+import fnmatch
 import os
+import re
 import shlex
 import subprocess
 from collections.abc import Iterator
@@ -39,6 +41,7 @@ import psutil
 import pulumi
 import pytest
 import pytest_asyncio
+from device_places import DEVICE_DIRECTORY, DEVICE_FILE
 from fake_systemd import FakeSystemd
 from mock_monitor import Declaration, Recorder, declaring, run_with
 
@@ -139,9 +142,9 @@ def test_the_framework_reaches_the_device_only_through_the_mechanism(monitor: Re
     """Every piece is a file layer one placed, and each belongs to this layer.
 
     The runtime decides what it needs on the device; where a boot-chain script,
-    an executable, a unit or a directory goes and what runs once it lands is
-    layer one's, and the resource comes back as a child of the component that
-    asked.
+    an executable, a unit, a file of networkd's configuration or a directory
+    goes and what runs once it lands is layer one's, and the resource comes
+    back as a child of the component that asked.
     """
     for name in (
         f'{NAME}-on-boot-{nspawn.NSPAWN_UNITS_SCRIPT}',
@@ -150,6 +153,8 @@ def test_the_framework_reaches_the_device_only_through_the_mechanism(monitor: Re
         f'{NAME}-bin-{nspawn.WATCHDOG_WORKER}',
         f'{NAME}-unit-{nspawn.WATCHDOG_UNIT}',
         f'{NAME}-skeleton-{nspawn.SKELETON}',
+        f'{NAME}-networkd-{persistence.NETWORKD_CONF.source}/{nspawn.NETWORKD_DROPIN}',
+        f'{NAME}-networkd-{persistence.NETWORKD_NETWORK.source}/{nspawn.MACHINES_NETWORK}',
     ):
         assert monitor.options_of(name).parent.endswith(f'::{NAME}'), name
 
@@ -1449,7 +1454,9 @@ async def test_a_machines_file_waits_for_the_convergers_that_act_on_it(
     So what a machine's files must be behind is the two convergers, the
     rollback the health gate reaches for, the directory they all work in — and
     the package script, because the two programs the device pulls and unpacks a
-    root filesystem with are not on the box until it has run.
+    root filesystem with are not on the box until it has run. And networkd's two
+    files, because a started machine is a port, and a port networkd may
+    configure under its defaults costs the firmware its policy routing.
     """
     urns = {str(await resource.urn.future()) for resource in runtime.convergers}
 
@@ -1459,6 +1466,8 @@ async def test_a_machines_file_waits_for_the_convergers_that_act_on_it(
         str(await runtime.nspawn_units.urn.future()),
         str(await runtime.machines.urn.future()),
         str(await runtime.rollback.urn.future()),
+        str(await runtime.networkd_dropin.urn.future()),
+        str(await runtime.machines_network.urn.future()),
     }
 
 
@@ -1553,3 +1562,137 @@ def test_the_pieces_of_one_machine_are_all_under_its_own_directory() -> None:
     # Of the pieces' names only the settings file's is a contract: what the
     # mirror installs is read by systemd-nspawn as `<machine>.nspawn`.
     assert nspawn.nspawn_path('plain') == f'{directory}/plain.nspawn'
+
+
+##
+## networkd, told before the first port exists
+##
+
+
+#: The roots of the device the boot chain writes under, which a run here moves
+#: under a temporary tree: the persistent root, systemd's configuration, and
+#: the directory machines are linked into.
+DEVICE_ROOTS = ('/data', '/etc/systemd', nspawn.LIVE_MACHINES_DIR)
+
+
+def _relocated(text: str, tree: Path) -> str:
+    """`text` with every path under one of `DEVICE_ROOTS` moved under `tree`."""
+    roots = '|'.join(re.escape(root) for root in DEVICE_ROOTS)
+    return re.sub(rf'(?<![\w.~/-])({roots})(?![\w.-])', lambda match: f'{tree}{match[1]}', text)
+
+
+def _materialize(monitor: Recorder, tree: Path) -> None:
+    """Put on a tree what the mechanism and the runtime declare, as a device holds it after the apply that wrote it.
+
+    Every directory and file of the two components, at its path moved under
+    `tree` and with every path in its content moved the same way, so the
+    scripts act on the tree and on nothing outside it. The package script is
+    the one stand-in: it needs an apt and a dpkg, and its own suite runs it
+    (`test_device_persistence`).
+    """
+    ours = (f'{MECHANISM}-', f'{NAME}-')
+    for declaration in monitor.of_type(DEVICE_DIRECTORY):
+        if declaration.name.startswith(ours):
+            Path(_relocated(declaration.inputs['path'], tree)).mkdir(parents=True, exist_ok=True)
+    for declaration in monitor.of_type(DEVICE_FILE):
+        if not declaration.name.startswith(ours):
+            continue
+        path = Path(_relocated(declaration.inputs['path'], tree))
+        content = _relocated(declaration.inputs['content'], tree)
+        if path.name == persistence.PACKAGES_SCRIPT:
+            content = '#!/bin/sh\nexit 0\n'
+        assert not re.search(r'(?<![\w.~/-])/data(?![\w.-])', content), f'{path} still names the device'
+        path.parent.mkdir(parents=True, exist_ok=True)
+        _ = path.write_text(content, encoding='utf-8')
+        path.chmod(int(declaration.inputs['mode'], 8))
+
+
+def _boot_chain(tree: Path) -> list[str]:
+    """The boot chain as `udm-boot.service` runs it: its own `ExecStart`, over the tree's `on_boot.d`."""
+    (exec_start,) = re.findall(r'^ExecStart=(.*)$', persistence.udm_boot_unit(), re.MULTILINE)
+    return shlex.split(_relocated(exec_start.replace('%n', persistence.UDM_BOOT_UNIT), tree))
+
+
+def _effective(reads: dict[str, str], directory: Path) -> dict[str, str]:
+    """The `[Network]` assignments of every drop-in read from `directory`, in name order, the last one winning."""
+    settings: dict[str, str] = {}
+    for path in sorted(path for path in reads if Path(path).parent == directory):
+        section = ''
+        for line in reads[path].splitlines():
+            line = line.strip()
+            if line.startswith('['):
+                section = line.strip('[]')
+            elif section == 'Network' and '=' in line and not line.startswith(('#', ';')):
+                option, _, value = line.partition('=')
+                settings[option.strip()] = value.strip()
+    return settings
+
+
+def _unmanaged(reads: dict[str, str], directory: Path, port: str) -> bool:
+    """Whether a `.network` read from `directory` matches `port` by name and marks it unmanaged."""
+    for path, content in reads.items():
+        if Path(path).parent != directory or not path.endswith('.network'):
+            continue
+        names = re.findall(r'^Name=(.*)$', content, re.MULTILINE)
+        if any(fnmatch.fnmatchcase(port, glob) for name in names for glob in name.split()):
+            return re.search(r'^Unmanaged=yes$', content, re.MULTILINE) is not None
+    return False
+
+
+def test_networkd_is_restarted_onto_its_configuration_before_the_first_machine_starts(
+    monitor: Recorder, tmp_path: Path
+) -> None:
+    """A device whose `/etc` was wiped boots with networkd under its defaults, and the chain constrains it first.
+
+    The firmware enables networkd, and networkd under its defaults removes the
+    firmware's policy rules from any link it configures; a machine started is
+    such a link, its host-side port. So what is read back after the whole
+    chain has run, from `udm-boot.service`'s own `ExecStart`, is what
+    networkd's last start read, and where that start falls among the
+    machines': foreign management off, the machine's port held unmanaged, and
+    both before any machine came up. A networkd still on its defaults, or
+    restarted only after a machine started, is the outage this guards against.
+    """
+    tree = tmp_path / 'device'
+    _materialize(monitor, tree)
+    # What the firmware ships, which a wiped /etc keeps: the unit directory and
+    # networkd's own, and the units this program starts without writing.
+    for directory in ('etc/systemd/system', 'etc/systemd/network'):
+        (tree / directory).mkdir(parents=True, exist_ok=True)
+    live = tuple(Path(_relocated(directory.live, tree)) for directory in persistence.NETWORKD_DIRECTORIES)
+    systemd = FakeSystemd(tmp_path / 'systemd', unit_path=(tree / 'etc/systemd/system',))
+    systemd.ship('machines.target')
+    systemd.ship(f'{nspawn.UNIT_TEMPLATE}.service', '[Install]\nWantedBy=machines.target\n')
+    systemd.ship(persistence.NETWORKD_UNIT, reads=live)
+    systemd.activate(persistence.NETWORKD_UNIT)
+    # One machine on the device, as a push leaves one.
+    machine = Path(_relocated(nspawn.machine_path(MACHINE), tree))
+    machine.mkdir(parents=True)
+    _ = (machine / f'{MACHINE}{nspawn.NSPAWN_SUFFIX}').write_text('[Network]\nBridge=br5\n', encoding='utf-8')
+    (machine / nspawn.ROOTFS).mkdir()
+    _ = (machine / f'{nspawn.ROOTFS}{nspawn.MARKER_SUFFIX}').write_text('sha256:one\n', encoding='utf-8')
+    _ = systemd.take_calls()
+
+    completed = process_sessions.run(
+        _boot_chain(tree), env={'PATH': f'{systemd.tools}:/usr/bin:/bin'}, check=False, timeout=CONVERGER_TIMEOUT
+    )
+    calls = [call.split() for call in systemd.take_calls()]
+
+    assert completed.returncode == 0, completed.stderr
+    starts = [
+        (position, words[-1])
+        for position, words in enumerate(calls)
+        if next(word for word in words if not word.startswith('-')) in {'start', 'restart', 'try-restart'}
+    ]
+    networkd = [position for position, unit in starts if unit == persistence.NETWORKD_UNIT]
+    machines = [position for position, unit in starts if unit.startswith(nspawn.UNIT_TEMPLATE)]
+    assert machines, calls
+    assert networkd and networkd[-1] < machines[0], calls
+    started_on = systemd.started_on(persistence.NETWORKD_UNIT)
+    assert started_on is not None
+    conf, network = (
+        Path(_relocated(it.live, tree)) for it in (persistence.NETWORKD_CONF, persistence.NETWORKD_NETWORK)
+    )
+    assert _effective(started_on.reads, conf) == dict.fromkeys(nspawn.FOREIGN_MANAGEMENT, 'no')
+    # The host-side port systemd-nspawn creates for a machine on a bridge.
+    assert _unmanaged(started_on.reads, network, f'vb-{MACHINE}')

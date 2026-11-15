@@ -2,12 +2,14 @@
 
 The device's boot-chain scripts are run by the suites, against temporary trees,
 and every one of them asks systemd something: whether a unit is enabled or
-running, to enable, start, stop or restart one, to read its unit files again. This
+running, to enable, start, stop or restart one, or restart one only if it runs,
+to read its unit files again. This
 is the one stand-in all of them run against, so a converger's conditions are
 reachable — a unit the case left disabled, stopped, or failing is answered as
 such, and whatever the script does about it shows in the state afterwards.
 
-It keeps what systemd keeps, and no more than the convergers ask about:
+It keeps what systemd keeps, and no more than the convergers and the health
+reading ask about:
 
 -   **units**, as the unit files in the directories it is given plus the ones a
     case ships as the firmware's own; an instance `a@b.service` is found
@@ -15,11 +17,15 @@ It keeps what systemd keeps, and no more than the convergers ask about:
 -   **enabled and active state**, per unit;
 -   **what a unit was started on** — the unit file and drop-ins systemd had
     loaded when it started it, and the files a shipped unit's process reads at
-    start. systemd reads a unit on first use and reads every loaded unit again
-    at `daemon-reload`, which a successful `enable` or `disable` also runs, so a
-    start after a unit file or drop-in changed but before a reload runs on the
-    old definition, as it does on the device;
--   **every invocation**, in order.
+    start, a directory standing for every file in it. systemd reads a unit on
+    first use and reads every loaded unit again at `daemon-reload`, which a
+    successful `enable` or `disable` also runs, so a start after a unit file or
+    drop-in changed but before a reload runs on the old definition, as it does
+    on the device;
+-   **every invocation**, in order, per program;
+-   **the links networkd reports**, with the setup state a case gives each,
+    and **the configuration files systemd's tools assemble**, from the
+    directories a case gives as the configuration search path.
 
 It refuses what the real one refuses, with the exit status the device's
 systemd gives and the substance of its message: a unit with no unit file to
@@ -32,9 +38,16 @@ and `is-enabled` answer with. A verb or option no converger uses is refused as
 one the stand-in does not model, rather than answered as if it had done
 something.
 
-The same module is the executable: `systemctl` in `tools` is a stub that hands
-its arguments to `systemctl()` below, with the state directory baked in. It
-runs once per call, so this module imports nothing beyond `os` and `sys`.
+Beside `systemctl` it answers the two other systemd tools the health reading
+asks, each for the one question it asks: `networkctl list`, from the links a
+case set, and `systemd-analyze cat-config`, from the files on disk, assembled
+the way systemd assembles them. Neither changes anything, and each refuses
+what it does not model, as `systemctl` does.
+
+The same module is the executable: each tool in `tools` is a stub that hands
+its arguments to the function below of its name, with the state directory
+baked in. It runs once per call, so this module imports nothing beyond `os`
+and `sys`.
 """
 
 from __future__ import annotations
@@ -46,6 +59,8 @@ import sys
 INSTALLABLE = '[Install]\nWantedBy=multi-user.target\n'
 
 _CALLS = 'calls'
+#: What `networkctl list` reports, one link per line.
+_LINKS = 'links'
 _ENABLED = 'enabled'
 _ACTIVE = 'active'
 _FAILING = 'failing'
@@ -68,8 +83,14 @@ _PART = '\x1e'
 
 #: What `is-active` exits with for a unit that is not running.
 _INACTIVE = 3
-#: What `start`, `stop` and `restart` exit with for a unit systemd has no file for.
+#: What `start`, `stop`, `restart` and `try-restart` exit with for a unit systemd has no file for.
 _NOT_FOUND = 5
+
+#: The programs a case can read the invocations of, each with its own log.
+SYSTEMCTL = 'systemctl'
+NETWORKCTL = 'networkctl'
+SYSTEMD_ANALYZE = 'systemd-analyze'
+_PROGRAMS = (SYSTEMCTL, NETWORKCTL, SYSTEMD_ANALYZE)
 
 _OPTIONS = {
     'is-active': {'--quiet'},
@@ -173,8 +194,10 @@ def _start(state: str, search: tuple[str, ...], unit_file: str, unit: str) -> No
     fields: list[str] = []
     reads = _flag(state, _READS, unit)
     for path in _read(reads).splitlines() if os.path.exists(reads) else []:
-        if os.path.isfile(path):
-            fields += [path, _read(path)]
+        paths = [os.path.join(path, name) for name in sorted(os.listdir(path))] if os.path.isdir(path) else [path]
+        for read in paths:
+            if os.path.isfile(read):
+                fields += [read, _read(read)]
     _set(state, _ACTIVE, unit, True)
     _write(_flag(state, _STARTED, unit), definition + _PART + _SEPARATOR.join(fields))
 
@@ -195,10 +218,14 @@ def _refuse(message: str, status: int = 1) -> int:
     return status
 
 
+def _record(state: str, program: str, argv: list[str]) -> None:
+    with open(os.path.join(state, f'{_CALLS}-{program}'), 'a', encoding='utf-8') as calls:
+        calls.write(' '.join(argv) + '\n')
+
+
 def systemctl(state: str, search: tuple[str, ...], argv: list[str]) -> int:
     """One invocation: what the real `systemctl` would do and exit with."""
-    with open(os.path.join(state, _CALLS), 'a', encoding='utf-8') as calls:
-        calls.write(' '.join(argv) + '\n')
+    _record(state, SYSTEMCTL, argv)
 
     options = [argument for argument in argv if argument.startswith('-')]
     words = [argument for argument in argv if not argument.startswith('-')]
@@ -210,7 +237,7 @@ def systemctl(state: str, search: tuple[str, ...], argv: list[str]) -> int:
     if verb == 'daemon-reload':
         _reload(state, search)
         return 0
-    if verb not in {'is-active', 'is-enabled', 'enable', 'disable', 'start', 'stop', 'restart'}:
+    if verb not in {'is-active', 'is-enabled', 'enable', 'disable', 'start', 'stop', 'restart', 'try-restart'}:
         return _refuse(f'fake systemctl: the verb {verb!r} is not modeled')
     if len(units) != 1:
         return _refuse(f'fake systemctl: {verb} is modeled for one unit at a time, not {units}')
@@ -265,7 +292,7 @@ def systemctl(state: str, search: tuple[str, ...], argv: list[str]) -> int:
         _set(state, _ACTIVE, unit, False)
         return 0
 
-    # start and restart
+    # start, restart and try-restart
     if unit_file is None:
         return _refuse(f'Failed to {verb} {unit}: Unit {unit} not found.', _NOT_FOUND)
     if _is(state, _LOADED, unit) and _load(state, search, unit_file, unit) != _definition(search, unit_file, unit):
@@ -276,6 +303,10 @@ def systemctl(state: str, search: tuple[str, ...], argv: list[str]) -> int:
         )
     if verb == 'start' and _is(state, _ACTIVE, unit):
         return 0
+    # Restart if running, and otherwise nothing: a unit that is not running is
+    # not started by it.
+    if verb == 'try-restart' and not _is(state, _ACTIVE, unit):
+        return 0
     if _is(state, _FAILING, unit):
         _set(state, _ACTIVE, unit, False)
         return _refuse(
@@ -283,6 +314,77 @@ def systemctl(state: str, search: tuple[str, ...], argv: list[str]) -> int:
             f'See "systemctl status {unit}" and "journalctl -xe" for details.'
         )
     _start(state, search, unit_file, unit)
+    return 0
+
+
+def networkctl(state: str, argv: list[str]) -> int:
+    """`networkctl list`: every link a case set, with the setup state it gave.
+
+    Its columns are networkctl's, `IDX LINK TYPE OPERATIONAL SETUP`, with the
+    header and the count line it prints around them unless `--no-legend`.
+    """
+    _record(state, NETWORKCTL, argv)
+    options = [argument for argument in argv if argument.startswith('-')]
+    words = [argument for argument in argv if not argument.startswith('-')]
+    for option in options:
+        if option not in {'--no-legend', '--no-pager'}:
+            return _refuse(f'fake networkctl: {option} is not modeled')
+    if words != ['list']:
+        return _refuse(f'fake networkctl: {" ".join(words) or "no verb"} is not modeled; only list is')
+    path = os.path.join(state, _LINKS)
+    links = [line.split() for line in _read(path).splitlines()] if os.path.exists(path) else []
+    legend = '--no-legend' not in options
+    if legend:
+        print('IDX LINK             TYPE     OPERATIONAL SETUP')
+    for index, (name, kind, operational, setup) in enumerate(links, start=1):
+        print(f'{index:>3} {name:<16} {kind:<8} {operational:<11} {setup}')
+    if legend:
+        print(f'\n{len(links)} links listed.')
+    return 0
+
+
+def systemd_analyze(config_path: tuple[str, ...], argv: list[str], state: str) -> int:
+    """`systemd-analyze cat-config <name>`: the main file and its drop-ins, as systemd assembles them.
+
+    `config_path` is the configuration search path, most specific first, as
+    `/etc`, `/run` and `/usr/lib` are on a device. The main file is the first
+    of the path that holds one; the drop-ins are every `.conf` in a `<name>.d`
+    of any of them, one of a name taken from the first directory that has it,
+    in name order. Each file is printed under a `# <path>` line, with an empty
+    line between files, and a missing main file is said to be missing.
+    """
+    _record(state, SYSTEMD_ANALYZE, argv)
+    options = [argument for argument in argv if argument.startswith('-')]
+    words = [argument for argument in argv if not argument.startswith('-')]
+    for option in options:
+        if option != '--no-pager':
+            return _refuse(f'fake systemd-analyze: {option} is not modeled')
+    if len(words) != 2 or words[0] != 'cat-config':
+        return _refuse(
+            f'fake systemd-analyze: {" ".join(words) or "no verb"} is not modeled; only cat-config <name> is'
+        )
+    name = words[1]
+    main = next(
+        (os.path.join(root, name) for root in config_path if os.path.exists(os.path.join(root, name))),
+        None,
+    )
+    dropins: dict[str, str] = {}
+    for root in config_path:
+        directory = os.path.join(root, f'{name}.d')
+        if not os.path.isdir(directory):
+            continue
+        for conf in os.listdir(directory):
+            path = os.path.join(directory, conf)
+            if conf.endswith('.conf') and conf not in dropins and os.path.isfile(path):
+                dropins[conf] = path
+    if main is None:
+        print(f'# Main configuration file {name} not found')
+    files: list[str] = [] if main is None else [main]
+    files += [dropins[conf] for conf in sorted(dropins)]
+    for position, path in enumerate(files):
+        print(f'{"" if position == 0 else chr(10)}# {path}')
+        for line in _read(path).splitlines():
+            print(line)
     return 0
 
 
@@ -303,11 +405,18 @@ class FakeSystemd:
 
     `unit_path` is where the unit files a converger writes live, searched in
     order; the firmware's own units follow, which a case ships with `ship`.
-    Prepending `tools` to `PATH` is what makes the script under test find this
-    `systemctl` rather than the host's.
+    `config_path` is where `systemd-analyze cat-config` looks, most specific
+    first. Prepending `tools` to `PATH` is what makes the script under test
+    find these tools rather than the host's.
     """
 
-    def __init__(self, root: os.PathLike[str], *, unit_path: tuple[os.PathLike[str], ...] = ()) -> None:
+    def __init__(
+        self,
+        root: os.PathLike[str],
+        *,
+        unit_path: tuple[os.PathLike[str], ...] = (),
+        config_path: tuple[os.PathLike[str], ...] = (),
+    ) -> None:
         import shlex  # the executable imports this module once per call and never needs it
 
         self._root = os.fspath(root)
@@ -321,13 +430,20 @@ class FakeSystemd:
         # A shell stub rather than a shebang naming the interpreter: the kernel
         # splits a shebang line at spaces and truncates it, and the path of
         # the interpreter running this suite is not ours to constrain.
-        program = (
-            f'import sys; sys.path.insert(0, {os.path.dirname(os.path.abspath(__file__))!r}); import fake_systemd; '
-            f'sys.exit(fake_systemd.systemctl({self._state!r}, {self._search!r}, sys.argv[1:]))'
-        )
-        stub = os.path.join(self.tools, 'systemctl')
-        _write(stub, f'#!/bin/sh\nexec {shlex.quote(sys.executable)} -IS -c {shlex.quote(program)} "$@"\n')
-        os.chmod(stub, 0o755)
+        config = tuple(os.fspath(directory) for directory in config_path)
+        calls = {
+            SYSTEMCTL: f'systemctl({self._state!r}, {self._search!r}, sys.argv[1:])',
+            NETWORKCTL: f'networkctl({self._state!r}, sys.argv[1:])',
+            SYSTEMD_ANALYZE: f'systemd_analyze({config!r}, sys.argv[1:], {self._state!r})',
+        }
+        for tool, call in calls.items():
+            program = (
+                f'import sys; sys.path.insert(0, {os.path.dirname(os.path.abspath(__file__))!r}); import fake_systemd; '
+                f'sys.exit(fake_systemd.{call})'
+            )
+            stub = os.path.join(self.tools, tool)
+            _write(stub, f'#!/bin/sh\nexec {shlex.quote(sys.executable)} -IS -c {shlex.quote(program)} "$@"\n')
+            os.chmod(stub, 0o755)
 
     def ship(self, unit: str, content: str = INSTALLABLE, *, reads: tuple[os.PathLike[str], ...] = ()) -> None:
         """A unit the firmware carries, which no converger writes, and the files its process reads at start."""
@@ -353,6 +469,12 @@ class FakeSystemd:
         """The unit went down outside the converger: it exited, or somebody stopped it."""
         _set(self._state, _ACTIVE, unit, False)
 
+    def link(self, name: str, *, kind: str = 'ether', operational: str = 'routable', setup: str = 'unmanaged') -> None:
+        """A link the kernel has, as `networkctl list` reports it; set again, it replaces what it said."""
+        path = os.path.join(self._state, _LINKS)
+        lines = [line for line in (_read(path).splitlines() if os.path.exists(path) else []) if line.split()[0] != name]
+        _write(path, ''.join(f'{line}\n' for line in [*lines, f'{name} {kind} {operational} {setup}']))
+
     def failing(self, unit: str, fails: bool = True) -> None:
         """Whether starting the unit fails, as a unit whose process exits non-zero does."""
         _set(self._state, _FAILING, unit, fails)
@@ -370,9 +492,11 @@ class FakeSystemd:
         started = _flag(self._state, _STARTED, unit)
         return Definition(_read(started)) if os.path.exists(started) else None
 
-    def take_calls(self) -> list[str]:
-        """Every invocation since the last take, as its arguments joined by spaces."""
-        path = os.path.join(self._state, _CALLS)
+    def take_calls(self, program: str = SYSTEMCTL) -> list[str]:
+        """Every invocation of `program` since the last take, as its arguments joined by spaces."""
+        if program not in _PROGRAMS:
+            raise ValueError(f'{program} is not a tool this stand-in provides')
+        path = os.path.join(self._state, f'{_CALLS}-{program}')
         if not os.path.exists(path):
             return []
         calls = _read(path).splitlines()

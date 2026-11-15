@@ -43,11 +43,12 @@ from typing import final
 import pulumi
 
 from kluster import conventions
-from kluster.components.gateway import access, routing
+from kluster.components.gateway import access, nspawn, routing
 from kluster.components.gateway.access import AuthorizedKeys, PublicKey
 from kluster.components.gateway.container import CaddyService, Container, OverlayDaemon, ResolverService, Rootfs
 from kluster.components.gateway.nspawn import WATCHDOG_UNIT, NspawnRuntime
 from kluster.components.gateway.persistence import (
+    NETWORKD_UNIT,
     PACKAGES_SCRIPT,
     TEMPLATE_PACKAGE,
     UDM_BOOT_UNIT,
@@ -67,7 +68,9 @@ __all__ = (
     'DELIVERED_UNITS',
     'DEVICE_BASE',
     'HEALTH_PROGRAM',
+    'NETWORKD_CONFIG',
     'PLAYBOOKS',
+    'POLICY_RULE_FAMILIES',
     'SYSTEMD_TERMINATE_RELEASE',
     'ZEROTIER_CLI',
     'CaddyService',
@@ -102,6 +105,22 @@ HEALTH_PROGRAM = 'gateway-health'
 #: and missing here is one nothing reads, which the gateway suite catches by
 #: comparing this reading against every unit source the program declares.
 DELIVERED_UNITS: tuple[str, ...] = (UDM_BOOT_UNIT, WATCHDOG_UNIT, routing.CONVERGER_UNIT, access.CONVERGER_UNIT)
+
+#: The address families whose policy rules the health reading holds to a rule
+#: that looks up the main table: the rule the gateway's own packets are routed
+#: by, and one networkd under its defaults removes with every other rule it did
+#: not create (physical/gateway.md §1.2). IPv4 is the family the device's
+#: rules have been read in; IPv6 joins once a reading of the healthy device
+#: shows such a rule there too.
+POLICY_RULE_FAMILIES: tuple[str, ...] = ('4',)
+
+#: The name `systemd-analyze cat-config` reads networkd's configuration by,
+#: main file and drop-ins together in the order networkd applies them.
+NETWORKD_CONFIG = 'systemd/networkd.conf'
+
+#: The routing table a policy rule must look up for the gateway to route its
+#: own packets. The name is the kernel's.
+_MAIN_TABLE = 'main'
 
 #: Where the overlay image installs its client, which the health reading runs in
 #: the member's mount namespace, entered through the machine's leader as the
@@ -165,6 +184,7 @@ class Playbooks:
     overlay: str = 'ZeroTier container down on the UDM'
     packages: str = 'The offline cache would not carry an offline boot'
     base: str = "The device's base moved"
+    networkd: str = "The firmware's policy rules exposed to removal"
 
 
 PLAYBOOKS = Playbooks()
@@ -193,6 +213,12 @@ class _HealthParams:
     shell: str
     systemd_release: int
     terminate_signals_nspawn: bool
+    rule_families: tuple[str, ...]
+    main_table: str
+    networkd_unit: str
+    networkd_config: str
+    networkd_section: str
+    networkd_settings: tuple[str, ...]
     playbooks: Mapping[str, str]
 
 
@@ -217,6 +243,13 @@ def health_program(
     The base is `DEVICE_BASE`, read off `/etc/debian_version`, `/bin/sh` and
     `systemctl --version`. `root` is the tree those paths are read under, empty
     for the device's own, and a parameter for the same reason.
+
+    networkd is read three ways: the consequence, a policy rule that looks up
+    the main table in each of `POLICY_RULE_FAMILIES`; the trigger, a link
+    networkd manages; and the guard, every option of
+    `nspawn.FOREIGN_MANAGEMENT` reading as declared in networkd's effective
+    configuration. The options are the declaration's, rendered in, so the
+    drop-in and the reading cannot part.
 
     `--certificates` lists one name per site block of the proxy's `Caddyfile`,
     each block being one wildcard certificate: the controller's vhost, and the
@@ -248,6 +281,14 @@ def health_program(
             shell=shlex.quote(DEVICE_BASE.shell),
             systemd_release=SYSTEMD_TERMINATE_RELEASE,
             terminate_signals_nspawn=DEVICE_BASE.terminate_signals_nspawn,
+            rule_families=tuple(shlex.quote(family) for family in POLICY_RULE_FAMILIES),
+            main_table=shlex.quote(_MAIN_TABLE),
+            networkd_unit=shlex.quote(NETWORKD_UNIT),
+            networkd_config=shlex.quote(NETWORKD_CONFIG),
+            networkd_section=shlex.quote(nspawn.NETWORKD_SECTION),
+            networkd_settings=tuple(
+                shlex.quote(f'{option}={value}') for option, value in nspawn.foreign_management_settings()
+            ),
             playbooks={field: shlex.quote(title) for field, title in asdict(PLAYBOOKS).items()},
         ),
     )
@@ -340,10 +381,10 @@ class Gateway(Component, pulumi_type='kluster:gateway:Gateway'):
 
         # The mechanism under everything else on the device: what puts the
         # customization back after a firmware update, and the way the layers
-        # above deliver a script, an executable, a unit or a directory. The
-        # package set it renders is the union of what its consumers require, so
-        # each of them states its own requirement and none of them writes the
-        # script.
+        # above deliver a script, an executable, a unit, a file of networkd's
+        # configuration or a directory. The package set it renders is the union
+        # of what its consumers require, so each of them states its own
+        # requirement and none of them writes the script.
         self.persistence = DevicePersistence(
             f'{name}-persistence',
             connection=connection,
