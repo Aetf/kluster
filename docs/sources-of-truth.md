@@ -44,7 +44,7 @@ Column 5 names issues in the ops repository, where the drift is tracked.
 
 | Row | Domain | (1) Live source of truth today | (2) Stack · apply state | (3) Tracker until the flip · what "take" means | (4) Flip → retirement | (5) Known drift |
 |---|---|---|---|---|---|---|
-| R1 | `dns` · the Cloudflare zones: base records, mail with DKIM, the `*.zt` block, `legacy.py`'s application records, anchors, CAA, DNSSEC | the `dns` stack, applied by the operator as column 3 gives it. Aetf/dns is archived and declares nothing: its pointer commit `fe7cc03` removed `dnsconfig.js` and every workflow, and it holds no secret (G5; note N1) | `dns` · **applied locally.** Its first `up` ran on 2026-11-15 from the operator's checkout (physical/gateway-cutover.md §8.2) and reported 57 created, 67 updated and 55 deleted, the deletes being the records note N1 lists, the set B6 printed before it. A second `up`, from `main` once Aetf/kluster#708 declared a TXT over 255 characters and an SRV's priority as Cloudflare reads them back, followed it. On 2026-11-15 the stack against the zones, the first reading of physical/gateway-cutover.md §8.2, reports nothing but the `status` of the `ZoneDnssec` in each zone it signed first, peifeng.phd, ucw.phd, jiahui.id and jiahui.love, read back as `pending` against the declared `active` | none: flipped. A change is a pull request to `components/dns/` or the conventions it reads. Until physical/gateway-cutover.md §8.3 enables `deploy.yml`, the operator applies it once merged, from a checkout, with `mise x -- pulumi up --stack dns`; from then the merge applies it (§3) | flipped by `kluster-ops#75`'s `dns` first `up` (physical/gateway-cutover.md §8.2) → `kluster-ops#7`: Aetf/dns's pointer commit and its archive, and the revocation at Cloudflare of the token its workflow held (note N1) | the `pending` DNSSEC status of column 2, which physical/gateway-cutover.md §8.4 clears zone by zone (`kluster-ops#75`) |
+| R1 | `dns` · the Cloudflare zones: base records, mail with DKIM, the `*.zt` block, `legacy.py`'s application records, anchors, CAA, DNSSEC | the `dns` stack, applied as column 3 gives it. Aetf/dns is archived and declares nothing: its pointer commit `fe7cc03` removed `dnsconfig.js` and every workflow, and it holds no secret (G5; note N1) | `dns` · **applied locally.** Its first `up` ran on 2026-11-15 from the operator's checkout (physical/gateway-cutover.md §8.2) and reported 57 created, 67 updated and 55 deleted, the deletes being the records note N1 lists, the set B6 printed before it. A second `up`, from `main` once Aetf/kluster#708 declared a TXT over 255 characters and an SRV's priority as Cloudflare reads them back, followed it. On 2026-11-15 the stack against the zones, the first reading of physical/gateway-cutover.md §8.2, reports nothing but the `status` of the `ZoneDnssec` in each zone it signed first, peifeng.phd, ucw.phd, jiahui.id and jiahui.love, read back as `pending` against the declared `active` | none: flipped. A change is a pull request to `components/dns/` or the conventions it reads, and the merge applies it (§3) | flipped by `kluster-ops#75`'s `dns` first `up` (physical/gateway-cutover.md §8.2) → `kluster-ops#7`: Aetf/dns's pointer commit and its archive, and the revocation at Cloudflare of the token its workflow held (note N1) | the `pending` DNSSEC status of column 2, which physical/gateway-cutover.md §8.4 clears zone by zone (`kluster-ops#75`) |
 | R2 | `dns` · the split-horizon answers on alice and bob | alice, by hand. adguardhome-sync, a homelab user unit that is running (H2), copies alice to bob. Both instances answer from `$dnsrewrite` user rules, 18 each, with the rewrite list the stack writes empty and switched off (U3) | `dns` · declares none: B3 lists no rewrite among the stack's types. Its first rows are Aetf/kluster#454, open and held | alice's UI, which the sync carries to bob, and the weekly backup pull, `gateway-backup-pull`, records in yadm's `~/.config/gw-backups` (physical/gateway.md §1.6). Here: every rule the instances answer from, declared in the `user_rules` list of each instance, a list one resource per instance owns whole (`kluster-ops#507`, way (b)), same sitting, unapplied. The `lan.ucw.phd` rules are declared too until their application migrates (rule 4), since the first apply of that list removes every rule it does not declare | Aetf/kluster#454, which declares the user-rules list, merged and applied after R1's flip; adguardhome-sync stopped before it (note N2) → its unit's removal (`kluster-ops#79`); the pull's AdGuard transfer, which keeps column 3's record until the flip (rule 4), is removed in the change that applies #454 | `kluster-ops#507`; `kluster-ops#482`; `kluster-ops#223`; `kluster-ops#143` |
 | R3 | `physical` · the cloud fleet in compartment `kluster-physical` (network, nodes, load balancer, addresses, volumes, guardrails) and the Talos day-1 chain | the `physical` stack, for what its runs have created; nothing else declares the rest | `physical` · **created by step 5's first run** (physical/gateway-cutover.md §5), from 2026-11-14, as far as that run has reached: a resource it has not reached is absent, with nothing standing in for it. On 2026-11-14 it stopped short of the instances and the Talos configuration, on the image (`kluster-ops#729`). The console read of OCI (O1) was not taken | none | `physical`'s step 5 in `kluster-ops#75`: its first run, which leaves out the overlay's network and members (physical/gateway-cutover.md §5) → none | none known |
 | R4 | `physical` · the homelab's libvirt objects: the pool on the `nodatacow` subvolume, and the worker's volume, seed and domain | the `physical` stack, for what its runs have created. The host preparation under them is aconfmgr's, and applied (physical/homelab-host.md, status) | as R3. On 2026-11-14 the run created the pool and the worker's volume and stopped short of the worker's domain; beside them the host holds the domain `haos` and the pool `images` (H3) | none for these. The host preparation stays aconfmgr's for good, and a pool defined there would fail the first apply (physical/homelab-host.md §4) | the same run as R3, then the host-side `truncate` and `virsh blockresize` (physical/homelab-host.md §1) → none | none known |
@@ -162,29 +162,21 @@ application's, in that order: `deploy.yml` runs `up-k8s-base` and
 ## 3. What keeps an unapplied stack unapplied
 
 Merging to `main` is an apply for the stacks the CI chain deploys
-(framework/ci.md §3), so the interim rule's "never applied" rests, stack
-by stack, on something other than the merge:
+(framework/ci.md §3), and every merge runs that chain: `deploy.yml` is
+enabled, by physical/gateway-cutover.md §8.3, and
+`gh api repos/Aetf/kluster/actions/workflows/deploy.yml --jq .state`
+answers `active`. So the interim rule's "never applied" rests, stack by
+stack, on something other than the merge:
 
--   **Every stack:** `deploy.yml` is disabled (operator ruling,
-    2026-10-17), so a merge starts no deploy at all until
-    physical/gateway-cutover.md §8.3 enables it as the step that arms
-    CI, once that step's drift reading has passed; `kluster-ops#761`
-    and `kluster-ops#762` stand in the reading's way. That is the lock.
-    Read it with
-    `gh api repos/Aetf/kluster/actions/workflows/deploy.yml --jq .state`,
-    which answers `disabled_manually` until then.
--   **`dns`:** nothing, since it has flipped (R1). Until the chain is
-    enabled the operator applies it from a checkout; from then every
-    merge applies it. Behind the lock nothing else stops the chain
-    there: physical/gateway-cutover.md §8.3's sync has put a ZeroTier
-    identity in each of the `dns`, `physical` and `physical-plan`
-    Environments (G3), without which the chain stops at
-    `plan-physical`, and the `dns` Environment has no protection rule
-    (G2). No reviewer is added (operator ruling, `kluster-ops#505`).
+-   **`dns`:** nothing, since it has flipped (R1): every merge applies
+    it. Nothing stops the chain there: physical/gateway-cutover.md
+    §8.3's sync has put a ZeroTier identity in each of the `dns`,
+    `physical` and `physical-plan` Environments (G3), without which the
+    chain stops at `plan-physical`, and the `dns` Environment has no
+    protection rule (G2). No reviewer is added (operator ruling,
+    `kluster-ops#505`).
 -   **`physical`:** the required reviewer on the `physical` Environment
-    (G2; framework/ci.md §3). From the window's preparation on, the
-    committed `gatewayBootstrapHost` also fails CI's `physical` jobs
-    (physical/gateway-cutover.md §3).
+    (G2; framework/ci.md §3).
 -   **`k8s-base` and `apps`:** no copy of the cluster credential exists
     in their configuration (framework/ci.md §5). `physical`'s first `up`
     in the first milestone makes the credential and copies it nowhere;
@@ -506,7 +498,7 @@ gh run list --repo Aetf/kluster-code --workflow pulumi-deploy.yml --limit 3
     `gh run` reads.
 -   **G3**, and **G5**'s last command, list secret names, never values.
     A `ZEROTIER_IDENTITY` on `dns` and on `physical-plan` means the next
-    push to `main` applies `dns` once `deploy.yml` is enabled (§3).
+    push to `main` applies `dns` (§3).
 
 #### H — the homelab host
 

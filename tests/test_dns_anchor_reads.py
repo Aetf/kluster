@@ -1,16 +1,17 @@
-"""The dns program against a `physical` stack that has not handed out its addresses.
+"""The dns program against a `physical` stack that does not hand it a usable address.
 
-The anchors are where this stack reaches across a StackReference, and
-`physical` is a placeholder until the cloud site is built: its stack exists and
-publishes nothing. What a StackReference reads back in place of an address
-then is not an address -- `None` for an output that is absent, an unknown in a
-preview of a `physical` a targeted apply left holding Pulumi's unknown
-sentinel, `None` for that sentinel in an update, `{}` for a secret the reader
-cannot decrypt (framework/pulumi.md §1.4, §3.1) -- and a record's content is
-whatever the program hands on. So the anchors refuse each of them by name, in
-a preview as in an update, and no record is ever declared with one as its
-content: neither an `up` in that window nor a preview read as the plan
-publishes `None` as an address.
+The anchors are where this stack reaches across a StackReference. A
+`physical` stack that exists and has never been applied, as a fresh
+installation's is before its first `up`, publishes nothing, and what a
+StackReference reads back in place of an address is then not an address --
+`None` for an output that is absent, an unknown in a preview of a `physical` a
+targeted apply left holding Pulumi's unknown sentinel, `None` for that
+sentinel in an update, `{}` for a secret the reader cannot decrypt
+(framework/pulumi.md §1.4, §3.1) -- and a record's content is whatever the
+program hands on. So the anchors refuse each of them by name, in a preview as
+in an update, and no record is ever declared with one as its content: neither
+an `up` against such a `physical` nor a preview read as the plan publishes
+`None` as an address.
 
 The ZeroTier host block and the rest of the census are here for the opposite
 reason: they reach across nothing at all, so an unusable `physical` costs them
