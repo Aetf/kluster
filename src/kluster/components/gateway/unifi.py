@@ -62,7 +62,7 @@ Three facts about the device shape the whole module (physical/gateway.md
 
 Authentication is an API key belonging to a dedicated local administrator,
 carried by a provider instance that exists only for these resources and read
-by the order's provider for its own session. It is never the SSH credential
+by the order's provider and the BGP configuration's for their own sessions. It is never the SSH credential
 the device's own desired state travels on, and it never reaches the environment that deploys applications — that separation is
 the reason these resources live in the `physical` stack rather than beside
 the applications whose traffic they admit. The connection is told not to
@@ -82,10 +82,11 @@ import pulumi
 import pulumi_unifi as unifi
 
 from kluster import conventions
+from kluster.providers.unifi_bgp import BgpConfiguration
 from kluster.providers.unifi_zone_policy_order import ZonePolicyOrder
 from putils import Component, own_provider_opts, with_provider
 
-__all__ = ('CENSUS', 'SiteFirewall', 'controller_provider', 'policy_order', 'return_flag')
+__all__ = ('CENSUS', 'SiteFirewall', 'controller_provider', 'policy_order', 'return_flag', 'site_bgp')
 
 #: The predefined zones of a UniFi OS 9 controller, looked up by name rather
 #: than by id: an id is per-site state, a name is stock. `Internal` holds
@@ -161,9 +162,10 @@ API_KEY = 'unifiApiKey'
 #: overlay member; a dial over the cluster VLAN is not covered by that
 #: acceptance.
 #:
-#: The order's session takes the same posture (`policy_order`). Its transport
-#: could pin the certificate, and that would change nothing: the same key
-#: crosses the same connection on the bridged provider's every request.
+#: The order's session and the BGP configuration's take the same posture
+#: (`policy_order`, `site_bgp`). Their transport could pin the certificate, and
+#: that would change nothing: the same key crosses the same connection on the
+#: bridged provider's every request.
 ALLOW_INSECURE = True
 
 
@@ -221,6 +223,34 @@ def policy_order(
         source_zone_id=source_zone_id,
         destination_zone_id=destination_zone_id,
         policy_ids=[policy.id for policy in policies],
+        opts=opts,
+    )
+
+
+def site_bgp(
+    name: str,
+    *,
+    api_url: pulumi.Input[str],
+    site: pulumi.Input[str],
+    config: pulumi.Input[str],
+    description: str,
+    file_name: str,
+    opts: pulumi.ResourceOptions | None = None,
+) -> BgpConfiguration:
+    """The site's BGP configuration: `config`, switched on, written through the controller's API key.
+
+    One function for the reason `policy_order` is one: the posture is
+    `ALLOW_INSECURE`, stated once, and this is the one line the
+    configuration's layer touches here (`kluster.providers.unifi_bgp`).
+    """
+    return BgpConfiguration(
+        name,
+        api_url=api_url,
+        allow_insecure=ALLOW_INSECURE,
+        site=site,
+        config=config,
+        description=description,
+        file_name=file_name,
         opts=opts,
     )
 

@@ -210,9 +210,9 @@ DPKG_STATUS = '/var/lib/dpkg/status'
 
 #: The firmware's release string, one line in the read-only image, of the form
 #: `UDMPROSE.al324.v5.1.33.44ce47b.260909.0025`. It is part of the image, so it
-#: changes with every firmware update and with nothing else, which is what the
-#: layers that key a record to the firmware read it for: `10-packages.sh`'s
-#: base, and the routing converger's stamp (`routing.FRR_APPLIED`).
+#: changes with every firmware update and with nothing else, which is what a
+#: layer that keys a record to the firmware reads it for: `10-packages.sh`'s
+#: base.
 FIRMWARE_RELEASE = '/usr/lib/version'
 
 #: Where systemd reads the units `20-units.sh` installs, which is off `/data`

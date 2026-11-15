@@ -5,8 +5,8 @@ through two doors, and `Gateway` owns both because each needs its own
 credential and neither implies the other:
 
 -   **The device itself**, over SSH. There is no API for most of what matters
-    here — routing, the container services, the boot chain that re-establishes
-    both after a firmware update — but there is a proven convention:
+    here — the container services, and the boot chain that re-establishes
+    them after a firmware update — but there is a proven convention:
     desired-state files under `/data`, written idempotently. That is
     `kluster.providers.device_files`, a dynamic provider whose `diff` reads the
     device and whose `create`/`update` writes and then runs a hook. Bulk
@@ -17,8 +17,9 @@ credential and neither implies the other:
     `conventions`; the credential that opens the session is the provider's own,
     read in its `configure` and handled by nothing here (framework/pulumi.md
     §5.2).
--   **The UniFi controller**, over its API, for the firewall. Those resources
-    live in this stack and not beside the applications whose traffic they
+-   **The UniFi controller**, over its API, for the firewall and for the
+    site's BGP configuration, which the routing session is (physical/gateway.md
+    §1.3). Those resources live in this stack and not beside the applications whose traffic they
     admit — the one deliberate exception to co-location, because a gateway
     credential must not be handed to the environment that deploys
     applications. The key configures the controller provider and nothing else,
@@ -43,7 +44,7 @@ from typing import final
 import pulumi
 
 from kluster import conventions
-from kluster.components.gateway import access, nspawn, routing
+from kluster.components.gateway import access, nspawn
 from kluster.components.gateway.access import AuthorizedKeys, PublicKey
 from kluster.components.gateway.container import CaddyService, Container, OverlayDaemon, ResolverService, Rootfs
 from kluster.components.gateway.nspawn import WATCHDOG_UNIT, NspawnRuntime
@@ -72,6 +73,7 @@ __all__ = (
     'PLAYBOOKS',
     'POLICY_RULE_FAMILIES',
     'SYSTEMD_TERMINATE_RELEASE',
+    'VTYSH',
     'ZEROTIER_CLI',
     'CaddyService',
     'DeviceBase',
@@ -101,10 +103,10 @@ HEALTH_PROGRAM = 'gateway-health'
 
 #: The units the persistence layer delivers, which the health reading holds
 #: enabled and active: the boot chain's anchor, the runtime's bridge watchdog,
-#: and the routing and key convergers. A unit delivered through the mechanism
+#: and the key converger. A unit delivered through the mechanism
 #: and missing here is one nothing reads, which the gateway suite catches by
 #: comparing this reading against every unit source the program declares.
-DELIVERED_UNITS: tuple[str, ...] = (UDM_BOOT_UNIT, WATCHDOG_UNIT, routing.CONVERGER_UNIT, access.CONVERGER_UNIT)
+DELIVERED_UNITS: tuple[str, ...] = (UDM_BOOT_UNIT, WATCHDOG_UNIT, access.CONVERGER_UNIT)
 
 #: The address families whose policy rules the health reading holds to a rule
 #: that looks up the main table: the rule the gateway's own packets are routed
@@ -127,6 +129,11 @@ _MAIN_TABLE = 'main'
 #: cutover runbook's verification does: the image runs s6-overlay rather than
 #: systemd, so `machinectl shell` has no guest systemd to start a command with.
 ZEROTIER_CLI = '/usr/sbin/zerotier-cli'
+
+#: The routing suite's shell, which the health reading asks the BGP daemon
+#: through. The firmware ships it on the device's `PATH` beside the suite it
+#: runs for the controller (physical/gateway.md §1.3).
+VTYSH = 'vtysh'
 
 
 @final
@@ -181,7 +188,7 @@ class Playbooks:
     port: str = "A machine's port off its bridge"
     boot_chain: str = "The boot chain's last run failed"
     unit: str = 'A delivered unit disabled or failed'
-    routing: str = 'The routing daemon not running'
+    routing: str = 'The routing daemon not holding the declared peer'
     overlay: str = 'ZeroTier container down on the UDM'
     packages: str = 'The offline cache would not carry an offline boot'
     base: str = "The device's base moved"
@@ -205,7 +212,9 @@ class _HealthParams:
     zerotier_cli: str
     units: tuple[str, ...]
     boot_chain_unit: str
-    routing_daemon: str
+    vtysh: str
+    peer: str
+    peer_asn: int
     packages_script: str
     packages_check: str
     certificates: tuple[str, ...]
@@ -230,14 +239,15 @@ def health_program(
     caddy: CaddyService,
     resolvers: Sequence[ResolverService],
     overlay_daemon: OverlayDaemon,
+    peer: IPv4Address,
     packages_script: str = on_boot_path(PACKAGES_SCRIPT),
     root: str = '',
 ) -> str:
     """The executable that reads the device against the declaration, rendered from the declaration.
 
     The machines are the declarations `Gateway` builds its containers from,
-    the units are `DELIVERED_UNITS`, and the routing daemon is the one the
-    routing converger starts. Each machine whose declaration names a bridge is
+    the units are `DELIVERED_UNITS`, and `peer` is the routing session's
+    neighbor, which the BGP daemon must hold at the cluster's AS. Each machine whose declaration names a bridge is
     read for its port having that bridge as its master; one in the host's
     network namespace has no port and is not read. The offline cache is judged by `10-packages.sh
     --check` itself, so the rule for a cache that would carry an offline boot is
@@ -280,7 +290,9 @@ def health_program(
             zerotier_cli=shlex.quote(ZEROTIER_CLI),
             units=tuple(shlex.quote(unit) for unit in DELIVERED_UNITS),
             boot_chain_unit=shlex.quote(UDM_BOOT_UNIT),
-            routing_daemon=shlex.quote(routing.FRR_SERVICE),
+            vtysh=shlex.quote(VTYSH),
+            peer=shlex.quote(str(peer)),
+            peer_asn=conventions.CLUSTER_ASN,
             packages_script=shlex.quote(packages_script),
             packages_check=shlex.quote(f'{PACKAGES_SCRIPT} --check'),
             certificates=tuple(shlex.quote(f'{caddy.service.address} {name}') for name in names),
@@ -417,16 +429,16 @@ class Gateway(Component, pulumi_type='kluster:gateway:Gateway'):
             )
             for declaration in (caddy, *resolvers)
         )
-        # The two customizations with no machine behind them: what the device
-        # is told about the site's routing, and who may open a session on it.
-        # Each is its own files plus its own converger, built through the
-        # mechanism the same way the runtime's are.
+        # The same address the shell goes to, for the same reason: the
+        # controller answers on the gateway itself. Recording it separately
+        # would be a second copy of one fact, free to disagree with the first.
+        api_url = f'https://{url_host(host)}'
+
+        # The site's routing, which the controller holds, and who may open a
+        # session on the device, which is its own files plus its own converger,
+        # built through the mechanism the same way the runtime's are.
         self.routing = SiteRouting(
-            f'{name}-routing',
-            connection=connection,
-            mechanism=self.persistence,
-            session=routing,
-            opts=self.child_opts(),
+            f'{name}-routing', api_url=api_url, site=site, session=routing, opts=self.child_opts()
         )
         self.access = AuthorizedKeys(
             f'{name}-access',
@@ -437,11 +449,7 @@ class Gateway(Component, pulumi_type='kluster:gateway:Gateway'):
         )
         self.firewall = SiteFirewall(
             f'{name}-firewall',
-            # The same address the shell goes to, for the same reason: the
-            # controller answers on the gateway itself. Recording it separately
-            # would be a second copy of one fact, free to disagree with the
-            # first.
-            api_url=f'https://{url_host(host)}',
+            api_url=api_url,
             site=site,
             worker_gua=worker_gua,
             peer_on_worker=peer_on_worker,
@@ -454,7 +462,7 @@ class Gateway(Component, pulumi_type='kluster:gateway:Gateway'):
         # member is last: a session may be riding the tunnel it carries.
         self.health: DeviceFile = self.persistence.executable(
             HEALTH_PROGRAM,
-            health_program(caddy=caddy, resolvers=resolvers, overlay_daemon=overlay_daemon),
+            health_program(caddy=caddy, resolvers=resolvers, overlay_daemon=overlay_daemon, peer=routing.neighbor),
             opts=self.child_opts(),
         )
 

@@ -1322,11 +1322,11 @@ ROWS: dict[str, Row] = {
     devices.BGP: _device(
         devices.BGP,
         # The stack reads the password out of its configuration and renders it
-        # into the routing daemon's configuration on the device
-        # (`components/gateway/routing.py`); the worker's end of the same
+        # into the site's BGP configuration, which the gateway's controller
+        # holds (`components/gateway/routing.py`); the worker's end of the same
         # session is Cilium's BGPv2 `authSecretRef`, the sealed copy
         # `Device.sealed` names.
-        onward=(DeviceSecret("the routing daemon's configuration"),),
+        onward=(DeviceSecret("the site's BGP configuration on the gateway's controller"),),
     ),
     'alertmanager-read': Row(
         register='Alertmanager read token',

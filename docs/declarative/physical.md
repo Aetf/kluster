@@ -714,14 +714,7 @@ by the provider itself, out of stack configuration, in its own
 process, and appearing on no resource: what a resource carries is a
 short digest of it, which is what makes a rotation visible in a
 preview) manages the device's
-entire desired state — FRR/BGP
-(neighbor = `conventions.HOMELAB_NODE_IPV4`, a constant and deliberately not an
-output of the libvirt resource: the worker's address is written statically into
-its machine config, and everything that names it — the routing session, the
-peer-port forward, the name day 1's apid calls give the worker — reads that same constant, so no session
-depends on a lease; the IPv6 routes' next hop =
-`conventions.HOMELAB_NODE_LINK_LOCAL`, a constant of the same kind, derived from
-the MAC the libvirt domain is declared with), the nspawn container services
+entire desired state — the nspawn container services
 (units + digest-pinned rootfs images from homelab-containers CI via
 `DeviceArtifact` (architecture.md §5.2) — including
 the **ZeroTier member container**, host-networking + `/dev/net/tun` +
@@ -761,14 +754,22 @@ work to do.
 
 The **unifi provider (filipowm/unifi via the Terraform bridge,
 architecture.md §5.1)** manages the controller-side resources, each
-pair's order aside, which is a dynamic resource of this repository's
-own, **all in this stack** — the co-location exception on record: gateway
+pair's order and the site's BGP configuration aside, which are dynamic
+resources of this repository's own, **all in this stack** — the co-location exception on record: gateway
 resources follow the gateway's credential tier, so the `apps` CI
 environment never holds a controller credential; app components keep
 a pointer (workloads.md §4). The census: the **cluster VLAN network
 object** (id 7, `192.168.70.0/24`) and the **firewall zone of its
 own** it is placed in — the isolation the shared server LAN could not
-offer (physical/gateway.md §4.2) — the IoT→lan-pool zone
+offer (physical/gateway.md §4.2) — the **site's BGP configuration**,
+the FRR text the routing session is (physical/gateway.md §1.3), with
+neighbor = `conventions.HOMELAB_NODE_IPV4`, a constant and deliberately not an
+output of the libvirt resource: the worker's address is written statically into
+its machine config, and everything that names it — the routing session, the
+peer-port forward, the name day 1's apid calls give the worker — reads that same constant, so no session
+depends on a lease; the IPv6 routes' next hop =
+`conventions.HOMELAB_NODE_LINK_LOCAL`, a constant of the same kind, derived from
+the MAC the libvirt domain is declared with — the IoT→lan-pool zone
 policies with their address groups, Home Assistant's allow to the
 whole pool ahead of the IoT VLAN's drop among them (architecture.md
 §3.4 — the v4 group and the ULA group are separate objects, UniFi
@@ -812,7 +813,7 @@ declarative/dns.md.)
 
 Order within the first `pulumi up`: OCI network → instances (user_data
 configs) ∥ libvirt VM → bootstrap (first CP) → health → outputs; the
-NLB and the device's FRR settle in parallel once IPs exist, and the `dns`
+NLB and the site's BGP configuration settle in parallel once IPs exist, and the `dns`
 stack's anchors follow from the IP outputs.
 Manual preconditions: OCI tenancy on PAYG and the homelab host-prep
 change-set (§3); beside them, the `state-backend` stack applied
@@ -1148,6 +1149,17 @@ If it applies, with `kluster-tripwire unlisted` left behind
 order's layer is met (`kluster.providers.unifi_zone_policy_order`).
 Whatever `destroy` cannot delete is removed in the console by its
 `kluster-tripwire` name before the directory goes.
+
+**The BGP configuration's tripwire** is the regeneration of `sdks/unifi`
+on a change of the `filipowm/unifi` pin (framework/ci.md §3). A
+regenerated SDK carrying a BGP resource is the cue to try it on the
+site's configuration: what removes `kluster.providers.unifi_bgp`, with
+the one construction that builds its resource, is that resource
+round-tripping the declared text with the stack's key, the session's
+password included. The swap takes this resource out of state with
+`pulumi state delete` before the apply that declares the bridged one,
+since in one apply its delete would remove what the bridged create
+wrote (the provider's docstring).
 
 Security verifications (from the 2026-08-23 audit,
 cluster/security-audit.md): a pod's request to `169.254.169.254` is

@@ -4,7 +4,7 @@
 # The device read against what the physical stack declares for it: every
 # declared machine running, every machine on a bridge attached to it, every
 # unit the persistence layer delivers enabled
-# and active, the routing daemon running, the overlay member online, an offline
+# and active, the BGP daemon holding the declared peer, the overlay member online, an offline
 # package cache that would carry an offline boot, the base under the firmware
 # being the one the program is written for, and systemd-networkd kept from the
 # firmware's policy routing. Nothing on the device
@@ -14,9 +14,9 @@
 # Read-only. It asks systemd questions and changes nothing: the package script
 # runs in its --check mode, which writes nothing, the overlay member is read
 # with `zerotier-cli info` in its machine's mount namespace, a machine's port with
-# `ip link show` in its machine's network namespace and in the device's, and
-# networkd's state with `ip rule show`, `networkctl list` and
-# `systemd-analyze cat-config`.
+# `ip link show` in its machine's network namespace and in the device's, the
+# BGP daemon with `vtysh -c 'show bgp neighbors <peer> json'`, and networkd's
+# state with `ip rule show`, `networkctl list` and `systemd-analyze cat-config`.
 #
 # A healthy device gives no output and exit status 0. Otherwise it prints one
 # line per finding, each naming its playbook in physical/gateway.md §3, and
@@ -178,8 +178,62 @@ for unit in{% for unit in units %} {{ unit }}{% endfor %}; do
     [ -z "$wrong" ] || finding "$unit" "$wrong" "$title"
 done
 
-# The routing daemon. Nothing enables its unit, so only whether it runs is read.
-ask is-active {{ routing_daemon }} || finding {{ routing_daemon }} "$answer" {{ playbooks.routing }}
+# The BGP daemon, read by what it answers: the firmware runs the routing suite as
+# the controller's children and ships no unit for it, so no unit's state says
+# anything about it. It answers for the declared peer, and names that peer at the
+# declared remote AS, which proves the controller's configuration accepted; the
+# session's state is not read, since it stays down until the worker peers. The
+# remote AS is the one key `remoteAs` of the peer's own object, found by
+# walking the answer's braces and strings rather than by matching a line, so a
+# key of that name in an object nested inside it is not the one read.
+if ! command -v {{ vtysh }} >/dev/null 2>&1; then
+    finding {{ peer }} {{ vtysh }}" is not on the device's PATH" {{ playbooks.routing }}
+else
+    neighbor=$({{ vtysh }} -c "show bgp neighbors "{{ peer }}" json" </dev/null 2>&1)
+    status=$?
+    if [ "$status" -ne 0 ]; then
+        said=$(printf '%s\n' "$neighbor" | oneline)
+        finding {{ peer }} {{ vtysh }}" answered ${said:-nothing} (exit $status)" {{ playbooks.routing }}
+    else
+        remote=$(printf '%s\n' "$neighbor" | awk -v peer={{ peer }} '
+            { text = text $0 "\n" }
+            END {
+                n = length(text); depth = 0; key = ""; last = ""; held = 0; within = 0
+                for (i = 1; i <= n; i++) {
+                    c = substr(text, i, 1)
+                    if (c == "\"") {
+                        s = ""
+                        for (i++; i <= n && (c = substr(text, i, 1)) != "\""; i++) {
+                            if (c == "\\") { i++; c = substr(text, i, 1) }
+                            s = s c
+                        }
+                        last = s
+                    } else if (c == ":") {
+                        key = last
+                        if (within && depth == 2 && key == "remoteAs") {
+                            value = substr(text, i + 1)
+                            sub(/^[ \t\n]+/, "", value)
+                            if (match(value, /^[0-9]+/)) { print substr(value, 1, RLENGTH); exit }
+                            print "-"; exit
+                        }
+                    } else if (c == "{") {
+                        depth++
+                        if (depth == 2 && key == peer) { held = 1; within = 1 }
+                    } else if (c == "}") {
+                        if (depth == 2) within = 0
+                        depth--
+                    }
+                }
+                if (held) print "-"
+            }')
+        case $remote in
+        '') finding {{ peer }} "the BGP daemon holds no such neighbor" {{ playbooks.routing }} ;;
+        -) finding {{ peer }} "the BGP daemon names no remote AS for it" {{ playbooks.routing }} ;;
+        {{ peer_asn }}) ;;
+        *) finding {{ peer }} "neighbor at remote AS $remote, not "{{ peer_asn }} {{ playbooks.routing }} ;;
+        esac
+    fi
+fi
 
 # networkd and the firmware's policy routing, read three ways. networkd under
 # its defaults removes every policy rule it did not create from a link it
