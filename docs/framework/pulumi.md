@@ -888,9 +888,10 @@ then waits for a reader ([ci.md](ci.md) §3).
 Every system here that Pulumi has no provider for is driven by code of
 this repository's own, one package per system under
 `src/kluster/providers/`: today the desired-state files on the gateway
-device, the Talos image factory's artifacts, the rewrites on an AdGuard
-instance, the objects OCI imports a custom image from, and the
-appliance's TLS handshake waited for. Every one of them is
+device, the UniFi controller's rank of a zone pair's policies and its
+site BGP configuration, the Talos image factory's artifacts, the
+rewrites on an AdGuard instance, the objects OCI imports a custom image
+from, and the appliance's TLS handshake waited for. Every one of them is
 a **dynamic provider**, and this section is what that costs and how one
 is written. *Which* of them
 should be one is a design decision, argued where each is designed

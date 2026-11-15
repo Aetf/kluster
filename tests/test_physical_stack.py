@@ -87,6 +87,11 @@ BOOTSTRAP_HOST = '192.0.2.1'
 #: The shape the knob forbids, spelled out for the case that proves the refusal.
 BOOTSTRAP_NAME = 'gateway.invalid'
 
+#: One file the gateway is sent, as the sample of how every one of them reaches
+#: the device: its host, its port and the key it pins. The health executable is
+#: the gateway's own, so it is there whatever the gateway's components are.
+DEVICE_SAMPLE = f'{conventions.CLUSTER_NAME}-bin-gateway-health'
+
 
 @dataclass(frozen=True)
 class Run:
@@ -204,7 +209,7 @@ def test_the_controller_is_dialed_where_the_roster_placed_the_gateway(ran: Run) 
     the roster that decides it.
     """
     controller = urlsplit(cast('str', ran.recorded.inputs_of(f'{conventions.CLUSTER_NAME}-firewall-unifi')['apiUrl']))
-    pushed = ran.recorded.inputs_of(f'{conventions.CLUSTER_NAME}-routing-config')['host']
+    pushed = ran.recorded.inputs_of(DEVICE_SAMPLE)['host']
     routes = ran.recorded.inputs_of(f'{conventions.CLUSTER_NAME}-network')['routes']
     hops = {route['via'] for route in routes if route.get('via')}
     assert controller.scheme == 'https'
@@ -554,12 +559,13 @@ async def test_the_bootstrap_knob_moves_both_doors_to_the_gateway_at_once(setup:
     async with declaring():
         await physical.main()
 
-    assert setup.inputs_of(f'{conventions.CLUSTER_NAME}-routing-config')['host'] == BOOTSTRAP_HOST
+    assert setup.inputs_of(DEVICE_SAMPLE)['host'] == BOOTSTRAP_HOST
     assert setup.inputs_of(f'{conventions.CLUSTER_NAME}-firewall-unifi')['apiUrl'] == f'https://{BOOTSTRAP_HOST}'
+    assert setup.inputs_of(f'{conventions.CLUSTER_NAME}-routing-bgp')['api_url'] == f'https://{BOOTSTRAP_HOST}'
     # Nothing else about the channels moves — the pin in particular is a bare
     # key with no host name in front of it, so it matches the device at either
     # address (`test_device_files`).
-    assert setup.inputs_of(f'{conventions.CLUSTER_NAME}-routing-config')['port'] == 22
+    assert setup.inputs_of(DEVICE_SAMPLE)['port'] == 22
 
 
 @pytest.mark.usefixtures('setup')
@@ -587,7 +593,7 @@ def test_the_pin_a_preview_shows_is_the_constant_the_repository_holds(ran: Run) 
     is what puts it in the preview a reviewer reads, in the clear, instead of
     behind the redaction a secret-typed value carries wherever it goes.
     """
-    declared = ran.recorded.inputs_of(f'{conventions.CLUSTER_NAME}-routing-config')['host_key']
+    declared = ran.recorded.inputs_of(DEVICE_SAMPLE)['host_key']
     assert not isinstance(declared, dict), 'the pin reached the engine marked secret'
 
 
@@ -780,11 +786,12 @@ def test_the_gateway_routes_ipv6_through_the_link_local_the_workers_declared_mac
     gateway routes every IPv6 VIP through the address the session names. A next
     hop that is not that address installs routes that go nowhere, and the
     session stays up and reports nothing, so the two are read here off what
-    the run declared: the domain's interface and the file the gateway is sent.
+    the run declared: the domain's interface and the configuration the
+    gateway's controller is given.
     """
     domain = f'{conventions.CLUSTER_NAME}-{conventions.HOMELAB_NODE}'
     (interface,) = ran.recorded.inputs_of(domain, 'libvirt:index/domain:Domain')['networkInterfaces']
-    config = _unwrapped(ran.recorded.inputs_of(f'{conventions.CLUSTER_NAME}-routing-config')['content'])
+    config = _unwrapped(ran.recorded.inputs_of(f'{conventions.CLUSTER_NAME}-routing-bgp')['config'])
 
     next_hops = re.findall(r'^ set ipv6 next-hop local (\S+)$', config, re.M)
     assert next_hops == [str(conventions.eui64_link_local(interface['mac']))]

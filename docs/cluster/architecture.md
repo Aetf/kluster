@@ -356,7 +356,8 @@ both IP families (cluster-infra.md §2).
     Firewall policy references it via address groups instead. The ULA
     range follows the same `::1`-style host-address discipline as §1.3.
 2.  **BGP session**: Cilium BGPv2 (cluster-infra.md §2) peers with the
-    UDM SE (FRR, AS 65000) over one IPv4 session, which negotiates and
+    UDM SE (FRR, AS 65000, run by the controller from the site's BGP
+    configuration) over one IPv4 session, which negotiates and
     advertises both address families, Service VIPs as /32 + /128 (§5.2
     automates the UDM side). The /128s arrive with an IPv4-mapped next
     hop, which the UDM's kernel will not route through, so the UDM's
@@ -1022,12 +1023,11 @@ The entire stack is deployed via Pulumi using multiple providers:
 
 ### 5.2 UDM Configuration: a device-files dynamic provider
 
-The unifi provider has no BGP API, but the UDM already has a proven
-declarative mechanism: `~/.config/gw-config` (the retiring repo) pushed
+The UDM already has a proven declarative mechanism for what no API
+reaches: `~/.config/gw-config` (the retiring repo) pushed
 desired-state files idempotently over SSH (`deploy.sh`, `/data` +
-`on_boot.d` persistence model). Rather than the earlier "generate an FRR
-.conf, upload by hand" plan, Pulumi grows a small **dynamic provider that
-pushes those files itself**:
+`on_boot.d` persistence model). Pulumi grows a small **dynamic provider
+that pushes those files itself**:
 
 -   **Resource model**: a `DeviceFile` (path + content + owner/mode +
     optional post-apply hook such as `vtysh reload` or a container restart).
@@ -1063,22 +1063,23 @@ pushes those files itself**:
     never renders in plain preview or state output; an artifact's
     reference and digest, a directory's path, mode and owner, and the
     pinned host key are public by design.
--   **FRR/BGP**: the FRR config (neighbor = the libvirt VM's IP, both
-    address families, with an inbound prefix-list and a prefix cap, and
-    on the IPv6 family an inbound route-map setting the VM's link-local
-    as the next hop) is rendered from `conventions.HOMELAB_NODE_IPV4`
-    and `conventions.HOMELAB_NODE_LINK_LOCAL` — constants, deliberately
-    not outputs of the libvirt resource — and delivered
-    as a `DeviceFile` under `/data`. An executable of this program's
-    own — the file's post-apply hook, and a `Type=oneshot` unit at boot
-    — installs it into `/etc/frr`, switches the BGP daemon on in the
-    firmware's own daemon list, and restarts the daemon. **The UniFi
-    BGP feature is never configured**: it drives the same binaries from
-    a blob of its own, and the two managers cannot coexist, so a BGP
-    object on the controller is drift (physical/gateway.md §1.3).
+-   **FRR/BGP is the controller's, not a device file.** The FRR
+    configuration (neighbor = the libvirt VM's IP, both address
+    families, with an inbound prefix-list and a prefix cap, and on the
+    IPv6 family an inbound route-map setting the VM's link-local as the
+    next hop) is rendered from `conventions.HOMELAB_NODE_IPV4` and
+    `conventions.HOMELAB_NODE_LINK_LOCAL` — constants, deliberately not
+    outputs of the libvirt resource — and declared as the site's BGP
+    configuration on the controller, through a dynamic provider of this
+    repository's own, `kluster.providers.unifi_bgp`, because the pinned
+    unifi provider has no BGP resource. The firmware ships the routing
+    suite with no unit of its own and runs it as the controller's
+    children, so the controller is the session's one manager: nothing
+    is put under `/etc/frr` and no daemon is started or delivered
+    (physical/gateway.md §1.3).
 -   **Scope — full absorption of the push direction (2026-08-22)**:
     the provider manages *all* desired-state files on the device —
-    FRR/BGP, the nspawn container services (unit files, rootfs
+    the nspawn container services (unit files, rootfs
     image pushes for AdGuard alice/bob and caddy, images from
     `~/homelab-containers`), the on_boot.d recovery scripts (pushed
     files that execute autonomously at firmware updates — Pulumi need

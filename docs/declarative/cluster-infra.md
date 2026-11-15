@@ -478,7 +478,8 @@ All decided behavior from architecture.md §3, expressed as config:
     `CiliumBGPPeeringPolicy` is deprecated and **not used** (at the
     ≥1.20 floor it may be removed outright) — peering with the UDM
     (AS 65000) over both families, advertising `lan` VIPs as
-    /32 + /128. The UDM side is physical's device-files provider; the
+    /32 + /128. The UDM side is physical's declaration of the site's
+    BGP configuration on the controller (physical/gateway.md §1.3); the
     session only establishes once both stacks are up — acceptable,
     nothing LAN-facing exists before apps deploy. As declared
     (`components/cilium/bgp.py`): the cluster configuration selects
@@ -509,13 +510,15 @@ All decided behavior from architecture.md §3, expressed as config:
     Secret must live in the namespace named by
     `--bgp-secrets-namespace` (kube-system by default), so its
     SealedSecret is sealed for that namespace, which the chart's values
-    state from the same convention rather than inherit — and a device
-    secret on the UDM side. While the password is absent from the
+    state from the same convention rather than inherit — and, on the
+    UDM side, a line of the site's BGP configuration, which is a secret
+    in `physical`'s state and rests in the controller's site
+    configuration. While the password is absent from the
     stack's configuration (rfc-007 §3.2), no SealedSecret is
     declared and the session is declared all the same: Cilium then
     opens it with an empty password, which the UDM refuses, so it stays
     down until the operator's sealing sitting adds the value. The UDM's
-    FRR config applies an inbound **prefix-list** (`192.168.71.0/24
+    FRR configuration applies an inbound **prefix-list** (`192.168.71.0/24
     le 32` + the ULA /64 `le 128`, deny the rest) plus a
     `maximum-prefix` cap, and on the IPv6 family the route-map that
     sets the next hop above — without the filter, a compromised worker

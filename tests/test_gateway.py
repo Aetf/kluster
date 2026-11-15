@@ -169,16 +169,19 @@ def test_the_device_keeps_the_program_the_backup_pull_runs_on_its_end(monitor: C
 
 
 def test_the_routing_configuration_carries_the_gateways_session_password_as_a_secret(monitor: Controller) -> None:
-    """The gateway hands its routing session's password to the file, and the file is secret because of it.
+    """The gateway hands its routing session's password to the site's BGP configuration, as a secret.
 
-    What the file is and how it is applied -- its path, its mode, the converger
-    its hook runs -- are `test_site_routing`'s, which declares the component on
-    its own; what is the gateway's is which password reaches it.
+    What the configuration is and how the controller is given it are
+    `test_site_routing`'s and `test_unifi_bgp`'s; what is the gateway's is
+    which password reaches it, and that it is written through the controller
+    the firewall is written through.
     """
-    config = monitor.inputs_of(f'{NAME}-routing-config')
+    config = monitor.inputs_of(f'{NAME}-routing-bgp')
 
-    assert f'password {BGP_PASSWORD}' in config['content']
-    assert 'content' in monitor.options_of(f'{NAME}-routing-config').additionalSecretOutputs
+    assert f'password {BGP_PASSWORD}' in config['config']['value']
+    assert 'config' in monitor.options_of(f'{NAME}-routing-bgp').additionalSecretOutputs
+    assert config['api_url'] == monitor.inputs_of(f'{NAME}-firewall-unifi')['apiUrl']
+    assert config['site'] == SITE
 
 
 def test_the_device_keeps_accepting_the_key_this_program_dials_with(monitor: Controller) -> None:
@@ -228,8 +231,9 @@ def test_the_health_reading_reads_every_machine_and_every_unit_the_program_deliv
     Its lists are rendered from the declaration, so a fifth machine or another
     unit delivered through the mechanism is read from the push that declares
     it. What it reads is taken from what it reports: the executable the program
-    delivers runs against a systemd on which nothing is running, and every
-    machine and unit it holds to running is then a finding.
+    delivers runs against a systemd on which nothing is running and a device
+    with no routing suite, and every machine and unit it holds to running, and
+    the peer it holds the BGP daemon to, is then a finding.
     """
     ours = f'{NAME}-'
     machines = {
@@ -271,6 +275,9 @@ def test_the_health_reading_reads_every_machine_and_every_unit_the_program_deliv
         nspawn.machine_unit(machine) for machine in machines
     }
     assert {subject for subject, title in read if title in {PLAYBOOKS.unit, PLAYBOOKS.boot_chain}} == unit_sources
+    # No routing suite answers here either, so the peer it holds the BGP daemon
+    # to is reported, and it is the session's.
+    assert {subject for subject, title in read if title == PLAYBOOKS.routing} == {str(conventions.HOMELAB_NODE_IPV4)}
 
 
 @pytest.mark.asyncio

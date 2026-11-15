@@ -485,8 +485,9 @@ name between the create and the delete, as AdGuard's rewrite list does,
 needs neither. Today: the homelab worker's disk, seed and domain; a
 forge repository's Environments, Actions variables, branch protection
 and vulnerability alerts; the B2 buckets; a Cloudflare zone, its DNSSEC
-state and its records; and the gateway's UniFi firewall groups and
-device directories.
+state and its records; the gateway's UniFi firewall groups and
+device directories; and the site's BGP configuration on the controller,
+whose create adopts an identical object and writes nothing.
 
 **An object a resource stands for on the machine running the program is
 placed under the project and stack it belongs to.** The identity a

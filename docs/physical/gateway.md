@@ -178,10 +178,9 @@ declarative/physical.md §4.
 
         The marker is not caution for its own sake. Reasoning from
         upstream has been wrong on this firmware more than once, each
-        time in a way the documentation did not hint at: `frr.service`
-        cannot reload here, the daemon's start script returns before
-        the daemons accept configuration, and `vtysh -C -f` proves a
-        file parses rather than that anything accepted it (§1.3).
+        time in a way the documentation did not hint at: the routing
+        suite ships in the image with no unit of its own, and runs only
+        as the controller's children (§1.3).
     -   **`After=` the bridge's device unit**, for the three machines
         on the container VLAN. It is ordering and nothing else: a start
         systemd queues while the bridge is coming up waits for the
@@ -498,14 +497,7 @@ that unit below is its recovery. Everything else this program needs
 off `/data` is put back from `/data` by the chain at boot, which
 converges nothing after an ordinary update and is load-bearing after a
 major-version jump or a factory reset, where the migration may not
-happen. Whether an update that carries `/etc` across puts back the
-stock copy of a file the firmware itself ships — FRR's daemon list, or
-its configuration (§1.3) — is not established. `frr-config.sh` checks
-the daemon list's switch and compares the daemon's copy with the source
-on every run, so it repairs either file whichever way that falls, and
-because its stamp names the firmware release, the first boot after an
-update parses the configuration against the new parser either way
-(§1.3).
+happen.
 
 The mechanism itself is the files below.
 
@@ -711,21 +703,6 @@ that script's alone**: a file this program wrote there would be deleted
 by the next refresh and reported as drift forever after. The program declares nothing about `dpkg.base/`
 either, which the script rewrites on every post-update boot.
 
-**Nothing orders this script against `frr-config.service`** (§1.3).
-Where a firmware update carried `/etc` across, that unit starts at boot
-beside `udm-boot.service` rather than after it, so it may parse and
-stamp the routing configuration before this script has installed
-anything. That is harmless while nothing this script installs is FRR's:
-the suite ships in the firmware, and the set and the dependencies apt
-fetches for it include none of its packages, so the parser that unit
-checks against is the one the firmware shipped, whichever runs first. A
-set that ever pulled an FRR package in would need the order declared,
-and not as any ordering between that unit and `udm-boot.service` — an
-`After=` on the one or a `Before=` drop-in on the other: `20-units.sh`
-runs inside `udm-boot.service`, starts the unit whenever it is not
-running and waits for it, so the unit's start would wait on the very
-unit that is waiting on it.
-
 **`20-units.sh` converges the unit sources** into
 `/etc/systemd/system`, enables them, and restarts the ones whose file
 changed. It never restarts `udm-boot.service`, which is the unit
@@ -904,28 +881,56 @@ first firmware update takes `rsync` with the rest of `/usr`, and the
 pull fails from then on at that transfer — the one the "UDM replaced"
 playbook of §3 restores from.
 
-### 1.3 The routing daemon: its configuration, its on-state, and what converges both
+### 1.3 The routing session: one manager, and it is the controller
 
 The BGP session the `lan` pool arrives over
-(cluster/architecture.md §3.4) is held by the device's own routing
-daemon suite, FRR, which ships in the firmware and which this program
-neither installs nor supervises. What it owns is what makes a session
-exist at all: the configuration the daemon reads, the daemon's presence
-in the firmware's list of what runs, and the daemon running at boot.
+(cluster/architecture.md §3.4) is held by the firmware's routing suite,
+FRR, which the firmware runs as the controller's own children whenever
+the site holds a BGP configuration and runs not at all while it holds
+none. This program declares that configuration.
 
-**The configuration exists twice.**
+**The BGP session has one manager, and it is the controller.** This
+program declares the site's BGP configuration as a controller object;
+it puts nothing under `/etc/frr`, starts no routing daemon and delivers
+no unit for one. A configuration edited on the console's BGP page is
+drift, which the next preview reports and the next apply writes back.
+The reason is one no firmware changes: there is one `bgpd`, one TCP 179
+and one kernel routing table, and whichever manager starts second fails
+and stays failed. With the controller as the only one, nothing can
+start a second.
 
--   **`/data/custom/frr/frr.conf`** is the declared one — a rendered
-    file naming the worker VM as a BGP peer, with the inbound
-    prefix-list and the prefix cap that keep a compromised (or
-    impersonated) peer from advertising the LAN out from under itself
-    (declarative/cluster-infra.md §2), and on the IPv6 family an
-    inbound route-map that sets the next hop of the routes the worker
-    sends (below). It carries the session's
-    authentication password, so it is a secret in state and not
-    world-readable on the device.
--   **`/etc/frr/frr.conf`** is the one the daemon opens. It is off
-    `/data`, so nothing promises it across a firmware update (§1.2).
+**The configuration is one object on the controller**, the site's
+singleton on the Network v2 API, `v2/api/site/<site>/bgp/config`, which
+the console's Settings → Routing → BGP page uploads to. Its text is
+FRR's own configuration language, rendered from the session's
+declaration (`components/gateway/routing.py`): the worker VM as the
+BGP peer, with the inbound prefix-list and the prefix cap that keep a
+compromised (or impersonated) peer from advertising the LAN out from
+under itself (declarative/cluster-infra.md §2), and on the IPv6 family
+an inbound route-map that sets the next hop of the routes the worker
+sends (below). It carries the session's authentication password, so it
+is a secret in state and in every preview. The password therefore rests
+in the controller's site configuration, and so in its autobackups and
+in their weekly copy on the homelab host (§1.6). The session's confinement is the prefix-lists and the
+cap.
+
+The object is declared through `kluster.providers.unifi_bgp`, a dynamic
+resource of this repository's own, because the pinned `filipowm/unifi`
+provider has no BGP resource. Its identity is the site; it declares
+the text, the description and the file name the console shows beside
+it, and no switch, since a declared configuration is a switched-on
+one. Its `create` reads first: it refuses, by name, a configuration
+that differs from the declared one, which is deleted in the console
+rather than adopted, and takes an identical one as created, which is
+why every replacement is delete-first; every write is read
+back; its `diff` reads the controller, so a console
+edit or the page switched off is in a preview without a refresh. A
+replacement therefore leaves the session down from the delete to the
+create; a rename of the resource carries an alias, since
+without one the create under the new name and the delete under the old
+are a replacement the option does not order. The package's docstring is the
+contract, and states what removes it; declarative/physical.md §6 holds
+the tripwire.
 
 **The IPv6 routes go through the worker's link-local.** The one session
 runs over IPv4 and carries both families, so the worker sends its IPv6
@@ -946,168 +951,55 @@ declaration depends on declares its MAC, and a next hop on a shared
 link is the neighbor's link-local, derived from that MAC**
 (homelab-host.md §2).
 
-Between them sits **`frr-config.sh`**, an executable in `bin/` run by
-**`frr-config.service`**, a `Type=oneshot` unit wanted by
-`multi-user.target` and installed like every other unit here. One run
-converges the toggle, the file and the running daemon, in that order,
-and does nothing where all three already hold on the parser its stamp
-names.
+**How the firmware runs it** — read on the device 2026-11-14, on UniFi
+OS 6.0.17 with Network 10.6.109 and the image's
+`frr 10.1.2-1+ui-1-35995+g695732fae09e`, and worth reading again after
+a firmware jump, because each is a statement about that firmware:
 
-**The toggle is a converged fact rather than a hand edit.**
-`/etc/frr/daemons` is the firmware's own file — the list of which
-daemons of the suite the supervisor starts — and it ships with the
-protocol daemon off (`bgpd=no`), which is why a device nobody has
-declared a session on holds none. A firmware update may put that file
-back as it ships, so `frr-config.sh` switches the line on at every run
-and then **asserts** it: a file reshaped until the substitution matches
-nothing would otherwise leave the executable reporting success over a
-daemon that never starts the protocol. A
-switch that had to be flipped is itself a reason to restart, so the
-toggle is checked before the file comparison that would otherwise say
-there is nothing to do.
-
-**Nothing enables the daemon; the unit that runs `frr-config.sh`
-wants it.**
-`frr-config.service` carries `Wants=frr.service` and
-`After=frr.service`, and `20-units.sh` enables `frr-config.service` at
-every boot — so what starts the daemon is a line in a file this program
-already delivers, converges and retires, rather than a mutation of
-`/etc` that a boot script would have to re-assert and a retirement
-would have to undo. Two things follow. **`systemctl is-enabled frr`
-stays `disabled` forever and is not a check**; what answers the
-question is `systemctl is-active frr`, and
-`systemctl list-dependencies --reverse frr.service` for the edge
-itself. And the ordering is deliberately *after* the daemon: a
-unit ordered before it could not restart it synchronously, because
-the daemon's start job would wait on `frr-config.service` and that unit
-on the restart. The unit carries no `ConditionPathExists`, either — a
-failed condition still pulls in and orders `Wants=` dependencies, so it
-would gate nothing that matters while implying that it does, and the
-executable already exits successfully when this program declares no
-configuration.
-
-**The executable restarts the daemon, because this firmware cannot
-reload it.**
-`frrinit.sh reload` needs `frr-reload.py`, which the image does not
-ship and which the distribution's packaging cannot supply at a version
-matching the firmware's FRR — so a `reload || restart` pair would fail
-its first half on every single run and only ever execute the fallback.
-A restart is cheap here for the reason it is expensive elsewhere: the
-daemon holds no session besides this one, so the cost is the seconds
-the supervisor takes to bring the daemons back, on the runs where the
-configuration or the toggle actually changed. Nothing is silenced,
-because a step that cannot make the file take effect has failed.
-
-**A candidate configuration is parsed before anything is installed.**
-`vtysh -C -f` parses a file against the command tree the installed
-daemons have, with none of them running. It is there because a
-successful `frr.service` proves less than it looks: starting the unit
-starts only the supervisor, which returns, and the configuration is
-pushed into the daemons afterward by the supervisor itself — whose
-failure fails nothing. The installed file and its stamp therefore prove
-*installed*, not *accepted*, and the pre-check is what turns a parser
-that no longer likes one of these lines into a converge-time failure
-instead of a peer that never establishes — on every run that installs
-the file, and the first run on a new firmware release, or over a
-replaced parser, is always one (below).
-
-**What says the daemon already holds it is a stamp, not the installed
-file.** The write happens before the restart is attempted, so a run
-that failed at the restart leaves two identical copies behind — and a
-rerun deciding on those alone would exit successfully having told the
-daemon nothing, leaving the session on the old configuration under an
-apply that reported success. The stamp is written beside
-`/etc/frr/frr.conf` after the restart returns, so what is skipped is
-work whose *effect* has landed. It is one line: the source's checksum,
-then the parser that checked it — the firmware release from
-`/usr/lib/version`, and the checksum of the `vtysh` binary. The parser
-is there because the stamp is off `/data`, and nothing promises that an
-update takes it away: an update that left the stamp, the daemon's copy
-and the toggle in place would otherwise skip the parse on a parser that
-has never read the file. So a stamp naming another release or another
-binary, or neither, is stale, and the run that finds it parses and
-restarts again. The two halves cover different arrivals. The release
-covers a new firmware, which is how the suite — a package of the
-image — ordinarily changes, command matcher and all. The binary covers
-a suite replaced outside the image under the same release, since the
-command definitions a file is parsed against are compiled into `vtysh`.
-A replacement that changed neither is the one parser change the stamp
-does not see. The suite's own version is not enough: this firmware's
-`vtysh` takes no `--version`, and its `--help` reports the upstream
-version, which a vendor rebuild leaves unchanged. A release the
-executable cannot read, or reads empty, fails the run before anything
-is touched.
-
-**The daemon's copy is installed `frr:frr` 0640**, which is the daemon
-suite's own convention on this device and what an operator writing the
-configuration out from a running daemon expects to overwrite. It is not
-load-bearing: the supervisor keeps root, and the reader it runs to push
-the file into the daemons takes a root-owned file fine.
-
-**The same executable is the configuration file's post-apply hook**, so
-the boot path and the push path run the one program and the boot path
-cannot rot unnoticed — the property §1.1 states for the machines,
-applied here. It is a unit-plus-executable rather than a script in the
-boot chain because installing a configuration file manipulates nothing
-of systemd's own, which is what §1.2's rule turns on.
-
-**A configuration this program stops declaring is not a configuration
-taken away.** The executable does nothing when the source is absent:
-the daemon is the device's own, running on what it has, and a file this
-program stops declaring is no reason to leave the router with none — or
-to switch the protocol back off underneath it.
-
-**The controller's own BGP feature is never configured while this
-program owns the daemon**, and a BGP object on the controller is drift
-like any other undeclared object (§4.2). The controller drives BGP by
-spawning the same binaries as its own child processes from a blob it
-writes itself; it reads and writes nothing under `/etc/frr` and it
-neither starts nor enables `frr.service`, so neither manager destroys
-the other's files. What they cannot do is coexist: there is one
-`bgpd`, one TCP 179 and one kernel routing table, and whichever starts
-second fails and stays failed. The cost of ever configuring that page
-is therefore no session rather than the wrong one, and the cure is this
-rule rather than a mechanism.
-
-**What the daemon does to the rest of the box** — measured on the
-device 2026-09-02, on UniFi OS 5.1.31 with Network 10.6.101 and FRR
-10.1.2, and worth re-reading after a firmware jump because it is a
-statement about that firmware:
-
+-   **The image ships the suite and no unit for it.** `bgpd`, `zebra`,
+    `watchfrr` and `mgmtd` are in `/usr/sbin` and `vtysh` in
+    `/usr/bin`; there is no `frr*` unit in the image's read-only lower
+    layer (`/mnt/.rofs`) or on the device.
+-   **The controller is the suite's parent.** With a configuration on
+    the site, `ubios-udapi-server` runs `zebra`, `mgmtd` and `bgpd`,
+    each in a control group of its own, and no `watchfrr`. With none,
+    nothing of the suite runs and nothing listens on 179. Deleting the
+    object stops the suite within seconds and leaves no route behind.
+-   **The controller writes nothing under `/etc/frr`.** The image's own
+    files there — `daemons`, `frr.conf`,
+    `support_bundle_commands.conf` and `vtysh.conf`, whose originals
+    are under `/mnt/.rofs/etc/frr/` — keep their content and their
+    times through an upload and a delete.
+-   **The text reaches the daemon whole.** The API key reads
+    `frr_bgpd_config` back whole, and `vtysh -c 'show
+    running-config'` holds both address families, both prefix-lists,
+    the cap in each family, and the IPv6 route-map with the line that
+    applies it.
+-   **A controller change that is not about BGP leaves the session
+    alone.** A provisioning pass forced on the gateway leaves `bgpd`
+    on the same process. What an update of the configuration itself
+    does to a running session is not read.
 -   **The startup sweep removes nothing.** The kernel-facing daemon
     deletes, at start, routes carrying the protocol ids it considers
     its own: {11, 42, 186–198}. Every route the device holds carries an
-    id from {2, 3, 9, 16, 200} — kernel, boot, DHCP, router
-    advertisement, and the controller's own policy id — so the two sets
-    are disjoint. Two name collisions between the controller's
-    vocabulary and FRR's are cosmetic, because the decision is by
-    number.
--   **What it adds is `proto bgp` in the main table and nothing else.**
-    The declared file has no interface stanza, no redistribution and no
-    static routes; the firmware's build compiles the static-route daemon
-    out entirely, which is why `cannot start staticd` appears in the
-    journal at every start and is expected noise rather than a fault.
--   **The overlay's routes (§2.2) are `proto static`, id 4**, outside
-    the sweep set. The daemon replaces only entries carrying its own
-    ids, so the two route sources do not interfere.
--   **The two youngest lines of the declared file date from 2018 and
+    id from {2, 3, 9, 16, 200} — kernel, boot, router advertisement,
+    DHCP, and the controller's own policy id
+    (`rt_protos.d/ubios-udapi-server.conf`) — so the two sets are
+    disjoint, and FRR's own `pbr` id, 195, is not in use. The decision
+    is by number, so a name the controller's vocabulary and FRR's
+    share is cosmetic.
+-   **The two youngest lines of the declared text date from 2018 and
     2020**, and they are the ones a firmware jump puts at risk first:
     `frr defaults traditional`, the configuration-profile mechanism
     upstream took in October 2018, and `no bgp ebgp-requires-policy`,
     the knob added in February 2019 and needed here since FRR 7.4 in
     July 2020 made an inbound and an outbound policy a precondition for
     an external session to install anything. The rest is Quagga-era
-    syntax, and nothing in the file is deprecated in 10.1.
+    syntax, and nothing in the text is deprecated in 10.1.
 
-**What the first push settles** is the one thing reading the device
-cannot: no controller provisioning pass has yet happened while this
-daemon runs. Everything measured says the two managers ignore each
-other; the proof is that the same `up` provisions the gateway for the
-firewall, and afterward `frr.service` is still active with the same
-`bgpd` process and `ip route show proto bgp` and `ip -6 route show
-proto bgp` are unchanged. A daemon
-found stopped, or those routes gone, is the single outcome that would
-reopen the controller path.
+**The configuration is read by what the daemon answers** (§1.6): the
+health reading asks `vtysh` for the declared peer, and a firmware that
+moved the suite again is what that reading notices first.
 
 ### 1.4 Authorized keys
 
@@ -1194,7 +1086,7 @@ each sits where the fact it compares against is declared:
 
 | Piece | Lives in | Runs | Compares the device against |
 | --- | --- | --- | --- |
-| `gateway-health` | this repository, rendered onto the device as `/data/custom/bin/gateway-health` | on demand, over the homelab host's SSH | what `Gateway` declares: its machines and the bridge each attaches to, the units the persistence layer delivers, the routing daemon, the offline package cache, the base the program is written for, and what `networkd` is told |
+| `gateway-health` | this repository, rendered onto the device as `/data/custom/bin/gateway-health` | on demand, over the homelab host's SSH | what `Gateway` declares: its machines and the bridge each attaches to, the units the persistence layer delivers, the BGP daemon's hold on the declared peer, the offline package cache, the base the program is written for, and what `networkd` is told |
 | `check-gateway` | homelab-ops, behind a yadm timer on the homelab host | daily | `gateway-health`'s verdict, the proxy's certificates as a LAN host sees them, and how fresh the copies of the backups are; it mails each finding with its playbook |
 | `gateway-backup-pull` | homelab-ops, behind a yadm timer on the homelab host | weekly | nothing: it copies the controller's autobackups into `~/.config/gw-backups`, and the resolvers' configuration until [sources-of-truth.md](../sources-of-truth.md) R2 flips |
 
@@ -1216,7 +1108,15 @@ Otherwise, it prints one line per finding and exits 1:
 
     <subject>: <state> — playbook: physical/gateway.md §3, "<title>"
 
-The title is a bullet of §3, spelled as it is there. What it reads:
+The title is a bullet of §3, spelled as it is there.
+
+**A daemon the firmware starts on the controller's behalf is read by
+what it answers, never by a unit's state.** No unit of the device's
+says anything about such a daemon: the routing suite has none, and the
+controller is its parent (§1.3). So the reading asks the daemon itself,
+and a unit's state is read only for a unit this program delivers.
+
+What it reads:
 
 1.  **Every declared machine runs**: `systemd-nspawn@<name>.service`
     is active for caddy, both resolvers and the overlay member. The list
@@ -1225,20 +1125,25 @@ The title is a bullet of §3, spelled as it is there. What it reads:
     those settings files (§3), and a list read off them would be empty
     in the case the reading exists for.
 2.  **Every unit the persistence layer delivers is enabled and
-    active**: `udm-boot.service`, the bridge watchdog,
-    `frr-config.service` and `authorized-keys.service`. Each
+    active**: `udm-boot.service`, the bridge watchdog and
+    `authorized-keys.service`. Each
     `Type=oneshot` unit among them sets `RemainAfterExit`, so a run that succeeded leaves it
     active and one that failed leaves it failed. `udm-boot.service` not
     active is the boot chain's last run having failed: a failing
     on_boot script, the offline install among them, marks it failed
     (§1.2). That finding names a playbook of its own.
-3.  **The routing daemon runs**: `frr.service` is active. Its boot edge
-    is the one fact about the boot path that a push cannot show
-    ([gateway-cutover.md](gateway-cutover.md) §2), so a daily reading
-    catches the first boot it fails on. Whether it is enabled is not
-    read, since nothing enables it (§1.3), and the BGP session's state
-    is not read either: it stays `Active` or `Connect` until the worker
-    peers.
+3.  **The BGP daemon holds the declared peer**:
+    `vtysh -c 'show bgp neighbors <peer> json'` answers, and names the
+    session's neighbor at the cluster's AS (`conventions.CLUSTER_ASN`)
+    as its remote AS. A `vtysh` missing from the device, a suite that
+    does not answer (`Exiting: failed to connect to any daemons.`,
+    which is the answer while the site holds no configuration), a peer
+    the daemon does not hold, a peer whose answer names no remote AS,
+    and a peer at another AS are each one finding. This is what proves the configuration *accepted*, which
+    nothing before it in the chain does: the controller takes the text
+    and answers success, and only the daemon says whether it holds the
+    session. The session's state is not read: it stays down, `Idle`
+    on the recorded answer, until the worker peers.
 4.  **The overlay member is online**: `zerotier-cli info` reports
     `ONLINE`, or `TUNNELED` for a member that reaches its roots only
     over ZeroTier's TCP relay, which is reachable all the same. Either
@@ -1521,8 +1426,7 @@ an address belonging to some member. That member forwards because
 forwarding is configured on the device, not because the controller
 made it a router — ZeroTier has no concept of one. So the UDM is told
 two separate things by two separate mechanisms: the route table here,
-and its own routing and forwarding configuration as files on the box
-(§1). The rest of the mechanism follows from that, and is worth
+and its own forwarding configuration on the box (§1). The rest of the mechanism follows from that, and is worth
 stating because the intuitive answers are wrong:
 
 -   **Routes reach every member, not the ones that need them.** The
@@ -3122,15 +3026,24 @@ command runs on the device unless the entry says otherwise.
     every unit it holds a source for; a source that is gone is drift
     the next `physical` preview reports, and an apply writes it back. A
     unit that runs an executable fails when the executable does, and its
-    journal holds the executable's own words (`frr-config.service`:
-    §1.3).
--   **The routing daemon not running** — trigger: `frr.service` is not
-    active. `journalctl -u frr.service` says why. A run of quick starts
-    trips its start limit, which `systemctl reset-failed frr` clears;
-    then `systemctl restart frr-config.service` checks the configuration
-    and starts the daemon behind it (§1.3). A configuration the parser
-    refuses fails `frr-config.service` instead, which is the previous
-    entry.
+    journal holds the executable's own words.
+-   **The routing daemon not holding the declared peer** — trigger:
+    `gateway-health` reports the session's neighbor absent from the BGP
+    daemon's answer, held at another remote AS, or no answer at all.
+    The suite runs while the site holds its BGP configuration switched
+    on, and stops when it holds none (§1.3), so the first reading is a
+    `physical` preview: the configuration's `diff` reads the controller,
+    and one deleted, switched off or edited on the console's BGP page
+    is a planned update, whose apply writes the declared configuration
+    back and starts the suite as an upload does. A neighbor at another
+    AS is a configuration the declaration does not render, and reads
+    the same way. A preview that plans nothing while the daemon still
+    does not answer is a controller holding the declared configuration
+    and not running the suite for it, or a firmware that moved the
+    suite, which a missing `vtysh` says outright: §1.3's readings of how
+    the firmware runs it — `pgrep -a bgpd` with its parent and control
+    group, and `vtysh -c 'show running-config'` — say what moved, and
+    the declaration follows them.
 -   **The offline cache would not carry an offline boot** — trigger:
     `10-packages.sh --check` fails, and its reasons are the finding.
     `/data/on_boot.d/10-packages.sh --refresh`, with apt reachable,
@@ -3249,9 +3162,10 @@ complete set and the zone-matrix target state.
 
 The complete set — every controller-side object and rule the design
 calls for, all declared in the `physical` stack, via the bridged
-filipowm/unifi provider and, for each pair's order, a dynamic resource
-of this repository's own (auth discipline: dedicated local admin + API
-key, throttled retries — declarative/physical.md §4).
+filipowm/unifi provider and, for each pair's order and for the site's
+BGP configuration, a dynamic resource of this repository's own (auth
+discipline: dedicated local admin + API key, throttled retries —
+declarative/physical.md §4).
 
 **Two address populations, two control planes.** The distinction runs
 through every rule below, and the two are policed by different
@@ -3318,6 +3232,15 @@ Aetf/kluster-ops#709), and the bridged resource sends its declared list
 alone, so it fails on the census's own edits. The package's docstring
 states what removes it, and declarative/physical.md §6 holds the
 tripwire.
+
+**The site's BGP configuration is a census object**, the one the
+session to the worker is (§1.3): `kluster.providers.unifi_bgp`'s
+resource, declared by `SiteRouting`. A configuration the site holds
+that differs from the declared one is refused by name rather than
+adopted, and deleted in the console, while an identical one is taken as
+created; an edit to the declared one on the
+console's BGP page is drift, which a preview reports without a refresh
+and an apply writes back.
 
 **A policy names a subnet through an address group, and a single
 host as a literal.** A zone

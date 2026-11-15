@@ -159,7 +159,7 @@ runbook, from the gateway window to a verified, empty cluster.
 2.  `physical` up: 3× A1 (A1 capacity confirmed at creation), worker VM
     (created as the Talos image followed by the room day 1's health
     gate needs, then grown on the host to its ~60 GB bootstrap size
-    once that run has passed, physical/homelab-host.md §1), NLB, UDM FRR and container services, B2. The gateway's share of this is
+    once that run has passed, physical/homelab-host.md §1), NLB, the UDM's BGP configuration and container services, B2. The gateway's share of this is
     **three applies, not one, and operator-local by construction** — CI
     reaches the site over ZeroTier and the gateway is not on ZeroTier
     yet. Set `gatewayBootstrapHost` to a LAN address for the UDM and

@@ -117,6 +117,14 @@
     answering, and only then does the run with no targets write the
     routes that name it ([physical/gateway.md](../physical/gateway.md)
     §2.5).
+*   **Updated:** 2026-11-14 — the routing configuration of §5.1's tree,
+    one `DeviceFile` "the daemon's own, applied by itself", which §6.1
+    places on the device beside the route table, is no device file in
+    what is built. UniFi OS 6.0 ships the routing suite with no unit of
+    its own and runs it as the controller's children, so the session is
+    declared as the site's BGP configuration on the controller, through
+    `kluster.providers.unifi_bgp` (kluster-ops#736). The design is
+    [physical/gateway.md](../physical/gateway.md) §1.3.
 *   **Created:** 2026-08-28
 *   **Authority:** the style rules (`docs/style/`) are what this document
     obeys; where they are silent, a rule proposed here is marked **new rule**.

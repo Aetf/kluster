@@ -19,8 +19,8 @@ system only delivers it:
 -   the **BGP session password**, the one row here no console makes: it is a
     shared secret both ends of the gateway's routing session are configured
     with, either end accepts any string, and the operator draws it. The
-    `physical` stack writes it into the routing daemon's configuration on the
-    device (`components/gateway/routing.py`), and the cluster's half is the
+    `physical` stack writes it into the site's BGP configuration on the
+    gateway's controller (`components/gateway/routing.py`), and the cluster's half is the
     same value sealed to the cluster (`sealing.py`), which `k8s-base`
     declares (declarative/cluster-infra.md §2).
 
@@ -68,7 +68,7 @@ whose public half is not the one the `dns` stack publishes.
 **Which stack takes a row is not an argument.** The credential authenticates
 against one thing, and the stack that talks to that thing is the only consumer
 there is: `physical` drives the UDM's Network API and the overlay's Central
-account and writes the routing daemon's configuration onto the device, `dns`
+account and writes the site's BGP configuration through that API, `dns`
 writes the split-horizon rewrites on the AdGuard pair (declarative/dns.md §3),
 and `github` declares the forge.
 
@@ -449,8 +449,8 @@ DEVICES: dict[str, Device] = {
                 'No console makes this one. An MD5 session password is a shared\n'
                 '  secret both ends of the gateway↔worker BGP session are configured\n'
                 '  with, and either end accepts any string: draw one -- `openssl rand\n'
-                '  -base64 24` -- and hand it in. The stack writes it into the routing\n'
-                "  daemon's configuration on the device (physical/gateway.md §1.3);\n"
+                "  -base64 24` -- and hand it in. The stack writes it into the site's BGP\n"
+                "  configuration on the gateway's controller (physical/gateway.md §1.3);\n"
                 "  the worker's half is Cilium's BGPv2 `authSecretRef`, this same\n"
                 '  value sealed to the cluster into `k8s-base` -- by this command once\n'
                 '  the cluster exists, and by `seal` for a value recorded before it\n'

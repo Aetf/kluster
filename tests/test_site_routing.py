@@ -1,247 +1,39 @@
 """The gateway's routing configuration, asserted against Pulumi's mock provider.
 
-Nothing here contacts a device. What is exercised is what a diff cannot show a
-reviewer: what the rendered configuration says about a peer that misbehaves,
-which piece of the persistence layer each part of the component arrives
-through, and what the converger does at boot, after a push, and after the
-configuration is undeclared.
-
-**The converger is also run**: the script the component registers, under `sh`,
-against a temporary tree laid out as the device's, with a `systemctl` and a
-`vtysh` that record what they were asked to do, because the properties that
-matter most about it -- that a step which failed is retried, that the daemon is
-switched on again after a firmware update put the stock daemon list back, and
-that the first run on a new firmware parses the file again -- are properties of
-the sequence rather than of any line the file contains.
+Nothing here contacts a controller. What is exercised is what a diff cannot
+show a reviewer: what the rendered configuration says about a peer that
+misbehaves, and that the component hands the session's password to the site's
+BGP configuration as a secret. What the configuration's resource does with the
+controller is `test_unifi_bgp`'s.
 """
 
 from __future__ import annotations
 
-import errno
-import os
 import re
-import stat
-import subprocess
-from dataclasses import dataclass
 from ipaddress import IPv6Address
-from pathlib import Path, PurePosixPath
-from typing import final
 
-import device_shell
-import process_sessions
-import psutil
 import pytest
 import pytest_asyncio
-from device_places import DEVICE_DIRECTORY
-from fake_systemd import FakeSystemd
 from mock_monitor import Recorder, declaring, run_with
 
 from kluster import conventions
-from kluster.components.gateway import persistence, routing
-from kluster.components.gateway.persistence import DevicePersistence
+from kluster.components.gateway import routing
 from kluster.components.gateway.routing import RoutingSession, SiteRouting
-from kluster.providers.device_files.provider import Connection
 
-MECHANISM = 'mechanism'
 NAME = 'routing'
-HOST = str(conventions.overlay.UDM)
-HOST_KEY = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIexample'
+API_URL = 'https://gateway.invalid'
+SITE = 'default'
 BGP_PASSWORD = 'a-session-password'
 #: A link-local next hop, and not the convention's: what is asserted is that
 #: the file routes through the one the session carries.
 LINK_LOCAL = IPv6Address('fe80::5054:ff:fe12:3456')
-PACKAGES = ('systemd-container',)
 
-#: The daemon list as the firmware ships it and as a firmware update may put it
-#: back: the protocol daemon switched off, which is why a device nobody has
-#: declared a session on holds none.
-STOCK_DAEMON_LIST = 'zebra=yes\nbgpd=no\nospfd=no\n'
+#: The site's BGP configuration, as the dynamic provider's token names it.
+BGP_CONFIGURATION = 'pulumi-python:dynamic/unifi_bgp:BgpConfiguration'
 
-#: Two firmware releases, as the image's release file carries them.
-RELEASE = 'UDMPROSE.al324.v5.1.33.44ce47b.260909.0025\n'
-NEXT_RELEASE = 'UDMPROSE.al324.v5.1.40.0123abc.261101.0010\n'
-
-#: How long one command this suite runs -- a converge, a checksum -- may take
-#: before the case fails naming it: a stop-loss, which nothing asserts on.
-#: A converge takes tens of milliseconds, so this is hundreds of times one,
-#: and it sits well below the suite's per-case bound (`timeout` in
-#: `pyproject.toml`), so a stalled run fails by name with the rest of its case
-#: still inside that bound.
-COMMAND_TIMEOUT = 10
-
-
-@final
-@dataclass(frozen=True)
-class _Device:
-    """One temporary stand-in for the device the converger runs on."""
-
-    #: The converger the component registers, and the five files it works
-    #: between, each where the device holds it under the temporary tree.
-    script: Path
-    source: Path
-    live: Path
-    stamp: Path
-    firmware: Path
-    daemons: Path
-    #: The `systemctl` the script reaches, shipping the daemon's unit as the
-    #: firmware does, whose process reads the daemon's copy when it starts; a
-    #: daemon that will not come back is a unit whose start fails there.
-    systemd: FakeSystemd
-    #: Where the parser's stand-in records what it was asked to check, and the
-    #: flag that makes it reject the file.
-    checks: Path
-    rejection: Path
-    #: What `PATH` must hold for that stand-in to be the one found.
-    tools: Path
-
-
-@final
-@dataclass(frozen=True)
-class _Run:
-    """What one run did: its status, what it asked of systemd, what it parsed."""
-
-    status: int
-    commands: list[str]
-    checks: list[str]
-    #: Whether the stamp existed when the run ended, which is the record that
-    #: the daemon was restarted onto what was installed.
-    stamped: bool
-
-
-def _at(root: Path, path: str) -> Path:
-    """`path` on the device, as it sits in the temporary tree under `root`."""
-    return root / path.lstrip('/')
-
-
-def _device(tmp_path: Path, monitor: Recorder, *, configuration: str, daemons: str = STOCK_DAEMON_LIST) -> _Device:
-    """The converger the component registers, under a temporary tree laid out as the device's.
-
-    The script is the content registered for the converger's executable, with
-    every device path it acts on moved under the tree: the configuration's
-    source, at the path its resource was registered with, and the four files
-    the device holds of its own — the daemon's copy, the stamp beside it, the
-    firmware release and the daemon list. Each is asserted present as a whole
-    path before it is moved, so a converger that names another place for any
-    of them fails here rather than running against the device's own. The one
-    other edit is the install's ownership: the daemon suite's user is not one
-    an unprivileged runner can install as, so its owner and group become the
-    runner's own, asserted present the same way.
-
-    What the source holds is the case's own `configuration`: the parser's
-    stand-in reads none of it, and what the component renders into it is
-    asserted from its registration by the cases above.
-    """
-    root = tmp_path / 'device'
-    source = str(monitor.inputs_of(f'{NAME}-config')['path'])
-    on_device = (
-        source,
-        routing.FRR_LIVE_CONFIG,
-        routing.FRR_APPLIED,
-        persistence.FIRMWARE_RELEASE,
-        routing.FRR_DAEMON_LIST,
-    )
-    device = _Device(
-        script=tmp_path / routing.CONVERGER,
-        source=_at(root, source),
-        live=_at(root, routing.FRR_LIVE_CONFIG),
-        stamp=_at(root, routing.FRR_APPLIED),
-        firmware=_at(root, persistence.FIRMWARE_RELEASE),
-        daemons=_at(root, routing.FRR_DAEMON_LIST),
-        systemd=FakeSystemd(tmp_path / 'systemd'),
-        checks=tmp_path / 'checks',
-        rejection=tmp_path / 'rejects',
-        tools=tmp_path / 'tools',
-    )
-    for directory in {device.source.parent, device.live.parent, device.firmware.parent, device.daemons.parent}:
-        directory.mkdir(parents=True, exist_ok=True)
-    device.tools.mkdir()
-    _ = device.source.write_text(configuration)
-    _ = device.firmware.write_text(RELEASE)
-    _ = device.daemons.write_text(daemons)
-    device.systemd.ship(routing.FRR_SERVICE, reads=(device.live,))
-
-    vtysh = device.tools / routing.FRR_PARSER
-    # Records which file it was pointed at, and rejects while the flag file
-    # exists — which is the parser that will not take one of these lines.
-    _ = vtysh.write_text(f'#!/bin/sh\necho "$*" >>{device.checks}\n[ -e {device.rejection} ] && exit 1\nexit 0\n')
-    vtysh.chmod(0o755)
-
-    script = str(monitor.inputs_of(f'{NAME}-bin-{routing.CONVERGER}')['content'])
-    # One pass, longest path first: the stamp's path begins with the daemon's
-    # copy's, so moving them one at a time would move the stamp's twice.
-    paths = re.compile('|'.join(re.escape(path) for path in sorted(on_device, key=len, reverse=True)))
-    missing = set(on_device) - {found.group() for found in paths.finditer(script)}
-    assert not missing, f'the converger does not act on {sorted(missing)}'
-    script = paths.sub(lambda found: str(_at(root, found.group())), script)
-    ownership = f'-o {routing.FRR_OWNER} -g {routing.FRR_GROUP} '
-    assert ownership in script, 'the converger does not install the daemon suite as its owner'
-    script = script.replace(ownership, f'-o {os.getuid()} -g {os.getgid()} ')
-    _ = device.script.write_text(script)
-    return device
-
-
-def _converge(device: _Device, *, daemon_answers: bool = True, syntax_accepted: bool = True) -> _Run:
-    """Run the converger once, and read back what it did.
-
-    The run leads a POSIX session of its own and is bounded by
-    `COMMAND_TIMEOUT`: a converger still running then raises `TimeoutExpired`
-    naming it, and every process it started is gone when this returns or
-    raises.
-    """
-    device.systemd.failing(routing.FRR_SERVICE, not daemon_answers)
-    if syntax_accepted:
-        device.rejection.unlink(missing_ok=True)
-    else:
-        _ = device.rejection.write_text('')
-    _ = device.systemd.take_calls()
-    device.checks.unlink(missing_ok=True)
-
-    completed = process_sessions.run(
-        device_shell.argv(routing.CONVERGER, device.script),
-        env={'PATH': f'{device.systemd.tools}:{device.tools}:/usr/bin:/bin'},
-        timeout=COMMAND_TIMEOUT,
-    )
-
-    def _recorded(record: Path) -> list[str]:
-        lines = record.read_text().split('\n') if record.exists() else []
-        return [line for line in lines if line]
-
-    return _Run(
-        status=completed.returncode,
-        commands=device.systemd.take_calls(),
-        checks=_recorded(device.checks),
-        stamped=device.stamp.exists(),
-    )
-
-
-def _checksum(path: Path) -> str:
-    """What `cksum` prints for a file read on its standard input, as the converger reads the source."""
-    with path.open('rb') as content:
-        completed = process_sessions.run(['cksum'], stdin=content, timeout=COMMAND_TIMEOUT, text=True, check=True)
-    return completed.stdout.rstrip('\n')
-
-
-def _release(fifo: Path) -> None:
-    """Open `fifo` for writing once: a process blocked opening it goes on, and reads EOF."""
-    try:
-        written = os.open(fifo, os.O_WRONLY | os.O_NONBLOCK)
-    except OSError as error:
-        if error.errno == errno.ENXIO:  # nobody is blocked opening it
-            return
-        raise
-    os.close(written)
-
-
-def _in_session(session: int) -> list[int]:
-    """Every process on the host whose POSIX session is `session`."""
-    found: list[int] = []
-    for pid in psutil.pids():
-        try:
-            if os.getsid(pid) == session:
-                found.append(pid)
-        except ProcessLookupError:
-            continue
-    return found
+#: How a secret arrives on the wire: Pulumi's special-signature key, carrying
+#: the signature that means "secret", beside the value itself.
+SECRET = {'4dabf18193072939515e22adb298388d': '1b47061264138c4ac30d75fd1eb44270'}
 
 
 @pytest_asyncio.fixture(scope='module', loop_scope='module', autouse=True)
@@ -253,13 +45,11 @@ async def monitor() -> Recorder:
 @pytest_asyncio.fixture(scope='module', loop_scope='module', autouse=True)
 async def site(monitor: Recorder) -> SiteRouting:
     """The component declared once, the way `Gateway` declares it."""
-    connection = Connection(host=HOST, host_key=HOST_KEY, username=conventions.gateway.SSH_USER)
     async with declaring():
-        mechanism = DevicePersistence(MECHANISM, connection=connection, packages=PACKAGES)
         declared = SiteRouting(
             NAME,
-            connection=connection,
-            mechanism=mechanism,
+            api_url=API_URL,
+            site=SITE,
             session=RoutingSession(
                 neighbor=conventions.HOMELAB_NODE_IPV4, neighbor_link_local=LINK_LOCAL, password=BGP_PASSWORD
             ),
@@ -369,457 +159,23 @@ def test_a_session_whose_next_hop_is_not_link_local_is_refused(address: str) -> 
 
 
 ##
-## What the device holds
+## What the controller holds
 ##
 
 
-def test_only_the_declared_configuration_is_promised_to_survive_a_firmware_update(monitor: Recorder) -> None:
-    """Which is the whole reason there are two of them, and a converger between.
-
-    The source lands under the custom root, in a directory declared through the
-    layer below rather than assumed; what the daemon reads is off `/data`,
-    where nothing promises it across an update, so it is written by the
-    converger and never declared here.
-    """
-    config = monitor.inputs_of(f'{NAME}-config')
-    directory = monitor.one(f'{NAME}-skeleton-{routing.FRR_DIRECTORY}')
-
-    assert PurePosixPath(config['path']).parent == PurePosixPath(directory.inputs['path'])
-    assert not PurePosixPath(routing.FRR_LIVE_CONFIG).is_relative_to(conventions.gateway.CUSTOM_ROOT)
-    assert directory.typ == DEVICE_DIRECTORY
-
-
-def test_the_session_password_is_in_the_file_and_the_file_is_a_secret(monitor: Recorder) -> None:
-    """A configuration nobody may read in a preview, and nobody else may read on the box.
+def test_the_site_holds_the_rendered_configuration_as_a_secret(monitor: Recorder) -> None:
+    """The text the controller is given is the rendered file, password and all, and it never prints.
 
     Holding the peer's address is not enough to become the peer *because* the
-    password is in this file, which is the same reason it is neither rendered
-    into a diff nor left world-readable where it lands.
+    password is in this text, which is the same reason it is rendered into no
+    diff.
     """
-    config = monitor.inputs_of(f'{NAME}-config')
-
-    assert f'password {BGP_PASSWORD}' in config['content']
-    assert 'content' in monitor.options_of(f'{NAME}-config').additionalSecretOutputs
-    assert int(config['mode'], 8) & 0o007 == 0, 'the file grants nothing to others'
-
-
-def test_the_converger_is_a_unit_and_an_executable_rather_than_a_boot_chain_script(monitor: Recorder) -> None:
-    """Installing a configuration file manipulates nothing of systemd's own.
-
-    So the local rule puts it on the unit side: a journal, a failure visible in
-    `systemctl status`, and a run that can be repeated outside boot — none of
-    which a script in the numeric chain gets.
-    """
-    executable = monitor.inputs_of(f'{NAME}-bin-{routing.CONVERGER}')
-    unit = monitor.inputs_of(f'{NAME}-unit-{routing.CONVERGER_UNIT}')
-
-    assert 'WantedBy=multi-user.target' in unit['content']
-    assert 'Type=oneshot' in unit['content']
-    # The unit converger starts what it finds inactive, and a oneshot without
-    # this looks inactive the moment it succeeds.
-    assert 'RemainAfterExit=yes' in unit['content']
-    assert f'ExecStart={executable["path"]}' in unit['content']
-
-    on_boot = [name for name in monitor.names_declared if name.startswith(f'{NAME}-on-boot-')]
-    assert on_boot == [], 'the component put nothing in the boot chain'
-
-
-def test_the_boot_path_and_the_push_path_are_one_converger(monitor: Recorder) -> None:
-    """The file's hook is the executable the unit runs, not a command beside it.
-
-    A separate apply command would be a second way of doing the same thing, and
-    the one that only runs after a firmware update is the one that would rot
-    unnoticed.
-    """
-    hook = monitor.inputs_of(f'{NAME}-config')['hook']
-    unit = monitor.inputs_of(f'{NAME}-unit-{routing.CONVERGER_UNIT}')['content']
-    executable = monitor.inputs_of(f'{NAME}-bin-{routing.CONVERGER}')['path']
-
-    assert executable in hook
-    assert f'ExecStart={executable}' in unit
-
-
-@pytest.mark.asyncio
-async def test_the_configuration_waits_for_the_executable_that_applies_it(monitor: Recorder, site: SiteRouting) -> None:
-    """A hook that runs a program the device does not have fails its own write.
-
-    So the file that carries the hook is declared after the file that is the
-    hook, and after the directory it lands in — neither of which the engine
-    could infer from the content.
-    """
-    depends = monitor.depends_on(f'{NAME}-config')
-
-    assert str(await site.converger.urn.future()) in depends
-    assert str(await site.directory.urn.future()) in depends
-
-
-def test_the_unit_starts_the_daemon_rather_than_anything_enabling_it(monitor: Recorder) -> None:
-    """The daemon ships disabled, and this edge is the whole of what starts it.
-
-    An enable would be a mutation of `/etc` that a boot script would have to
-    re-assert and a retirement would have to undo; the edge is a line in a file
-    this program already delivers and retires. It is ordered *after* the daemon
-    because a converger ordered before it could not restart it synchronously.
-    And it carries no condition on the configuration's presence: a failed
-    condition still pulls in and orders `Wants=`, so it would gate nothing
-    while implying that it does.
-    """
-    unit = monitor.inputs_of(f'{NAME}-unit-{routing.CONVERGER_UNIT}')['content']
-
-    assert f'Wants={routing.FRR_SERVICE}' in unit
-    assert f'After={routing.FRR_SERVICE}' in unit
-    assert f'Before={routing.FRR_SERVICE}' not in unit
-    assert '\nCondition' not in unit, 'a condition here would gate nothing while implying that it does'
-
-
-@pytest.mark.asyncio
-async def test_the_unit_waits_for_the_configuration_it_is_about_to_start_a_daemon_on(
-    monitor: Recorder, site: SiteRouting
-) -> None:
-    """So a first push lands the file and the toggle before the daemon is started.
-
-    The unit is what pulls the daemon in, and the unit converger starts it the
-    moment its source lands. Started before the configuration exists, the
-    daemon comes up with the protocol switched off and is restarted a moment
-    later — correct, and a restart nobody needed.
-    """
-    depends = monitor.depends_on(f'{NAME}-unit-{routing.CONVERGER_UNIT}')
-
-    assert str(await site.config.urn.future()) in depends
-    assert str(await site.converger.urn.future()) in depends
-
-
-##
-## What the converger does
-##
-
-
-def test_the_converger_restarts_the_daemon_because_this_firmware_cannot_reload_it() -> None:
-    """The reload verb needs a helper script the image does not ship.
-
-    So the reload half of a `reload || restart` pair would fail on every single
-    run and only the fallback would ever execute. A restart costs what a reload
-    would have saved only where the daemon holds other sessions, and on this
-    device it holds none. Nothing is silenced: a converger that cannot make the
-    file take effect has failed, and the hook's non-zero exit fails the apply
-    that ran it.
-    """
-    script = routing.converger_script()
-
-    assert 'systemctl reload' not in script
-    assert '|| true' not in script
-
-
-def test_the_daemons_copy_is_installed_with_the_ownership_the_daemon_suite_uses() -> None:
-    """Which is convention rather than a requirement, and cheap to match.
-
-    The supervisor that pushes the file into the daemons keeps root, so a
-    root-owned file would be read fine; what the ownership buys is that an
-    operator writing the configuration out from a running daemon overwrites
-    this file rather than failing on it.
-    """
-    assert routing.FRR_OWNER == routing.FRR_GROUP == 'frr', "the FRR suite's own account"
-
-
-def test_a_run_that_finds_the_daemon_switched_on_and_holding_the_configuration_does_nothing(
-    monitor: Recorder, tmp_path: Path
-) -> None:
-    """The converger runs at every boot and after every push of the file.
-
-    A restart the daemon did not need drops the session for no reason, so a run
-    that finds its own stamp, naming the release it is running on, beside a
-    live copy that matches, with the toggle already switched on, leaves the
-    daemon alone.
-    """
-    device = _device(tmp_path, monitor, configuration='router bgp 65000\n')
-
-    first = _converge(device)
-    second = _converge(device)
-
-    assert first.commands == [f'restart {routing.FRR_SERVICE}']
-    assert second.commands == []
-    assert second.checks == [], 'nothing to install is nothing to parse'
-    assert device.live.read_text() == device.source.read_text()
-    assert stat.S_IMODE(device.live.stat().st_mode) == int(monitor.inputs_of(f'{NAME}-config')['mode'], 8)
-    assert f'{routing.BGP_DAEMON}=yes' in device.daemons.read_text()
-
-
-def test_a_daemons_copy_that_no_longer_matches_is_put_back_though_the_stamp_does(
-    monitor: Recorder, tmp_path: Path
-) -> None:
-    """The stamp records what the daemon was restarted onto, not what it will read next.
-
-    The daemon's copy is off the custom root and anyone on the device can
-    rewrite it — an operator writing the running configuration out from the
-    daemon does exactly that. The source has not moved, so the stamp still
-    matches it, and a converger that trusted the stamp alone would leave the
-    daemon to load somebody else's file at its next start.
-    """
-    device = _device(tmp_path, monitor, configuration='router bgp 65000\n')
-    _ = _converge(device)
-
-    _ = device.live.write_text('router bgp 65000\n neighbor 192.0.2.1 remote-as 65001\n')
-    repaired = _converge(device)
-    restarted_on = device.systemd.started_on(routing.FRR_SERVICE)
-
-    assert repaired.status == 0
-    assert repaired.commands == [f'restart {routing.FRR_SERVICE}']
-    assert device.live.read_text() == device.source.read_text()
-    assert routing.FRR_SERVICE in device.systemd.active
-    assert restarted_on is not None
-    assert restarted_on.reads == {str(device.live): device.source.read_text()}, (
-        'the daemon is restarted onto the copy that was put back, not the one it replaced'
+    (name,) = monitor.by_name(BGP_CONFIGURATION)
+    inputs = monitor.inputs_of(name)
+    rendered = routing.frr_config(
+        neighbor=conventions.HOMELAB_NODE_IPV4, neighbor_link_local=LINK_LOCAL, password=BGP_PASSWORD
     )
 
-
-def test_a_daemon_list_a_firmware_update_restored_is_switched_on_again(monitor: Recorder, tmp_path: Path) -> None:
-    """The list is the firmware's own file, so the toggle is a converged fact.
-
-    A firmware update may put the stock list back, and so may anything that
-    rewrites the firmware's file without changing the release — which leaves
-    the configuration, the stamp and the release as they were, so the run that
-    repairs it is one whose comparisons say there is nothing to do. The toggle
-    is therefore checked before them, and a switch that had to be flipped is
-    itself a reason to restart.
-    """
-    device = _device(tmp_path, monitor, configuration='router bgp 65000\n')
-    _ = _converge(device)
-
-    _ = device.daemons.write_text(STOCK_DAEMON_LIST)
-    repaired = _converge(device)
-
-    assert repaired.status == 0
-    assert repaired.commands == [f'restart {routing.FRR_SERVICE}']
-    assert f'{routing.BGP_DAEMON}=yes' in device.daemons.read_text()
-
-
-def test_a_daemon_list_carrying_neither_toggle_line_fails_the_run(monitor: Recorder, tmp_path: Path) -> None:
-    """A file reshaped past what this program understands must not pass silently.
-
-    The substitution matches nothing there, so a converger that only edited
-    would install the configuration, restart, and report success over a daemon
-    that never starts the protocol. Asserting the line afterwards is what turns
-    that into a failed apply an operator sees.
-    """
-    device = _device(tmp_path, monitor, configuration='router bgp 65000\n', daemons='zebra=yes\n')
-
-    run = _converge(device)
-
-    assert run.status != 0
-    assert run.commands == [], 'nothing is restarted onto a daemon list this program cannot read'
-    assert not run.stamped
-
-
-def test_a_configuration_the_parser_rejects_is_never_installed_and_is_retried(
-    monitor: Recorder, tmp_path: Path
-) -> None:
-    """The supervisor pushes the file into the daemons after the unit returns.
-
-    Its rejection of a line fails nothing, so an installed file and a stamp
-    prove installed rather than accepted. Parsing the candidate first is what
-    turns a firmware update whose parser no longer likes one of these lines
-    into a failed converge instead of a peer that never establishes — and
-    because the failure lands before the write, the retry is a full attempt.
-    """
-    device = _device(tmp_path, monitor, configuration='router bgp 65000\n')
-
-    rejected = _converge(device, syntax_accepted=False)
-    nothing_installed = not device.live.exists()
-    retried = _converge(device)
-
-    assert rejected.status != 0
-    assert rejected.checks == [f'-C -f {device.source}'], 'the candidate is parsed, not the installed copy'
-    assert rejected.commands == [], 'nothing is restarted onto a file the parser refused'
-    assert nothing_installed, 'the parse comes before the write, so a refusal leaves the daemon on what it had'
-    assert not rejected.stamped
-    assert retried.status == 0
-    assert retried.commands == [f'restart {routing.FRR_SERVICE}']
-    assert retried.stamped
-
-
-def test_a_firmware_update_that_kept_every_file_parses_and_restarts_again(monitor: Recorder, tmp_path: Path) -> None:
-    """The stamp vouches for a parse, and a parse vouches only for its parser.
-
-    Every file here is off `/data`, and nothing promises that an update takes
-    them away: one that kept the daemon's copy, the stamp and the switched-on
-    list would otherwise find all three agreeing and skip the parse on a parser
-    nobody has run the file through — and a line it rejects would surface as a
-    peer that never establishes. The release in the stamp is what makes the new
-    firmware's first run a full one.
-    """
-    device = _device(tmp_path, monitor, configuration='router bgp 65000\n')
-    _ = _converge(device)
-
-    _ = device.firmware.write_text(NEXT_RELEASE)
-    updated = _converge(device)
-    settled = _converge(device)
-
-    assert updated.status == 0
-    assert updated.checks == [f'-C -f {device.source}'], 'the new parser reads the file before anything else happens'
-    assert updated.commands == [f'restart {routing.FRR_SERVICE}']
-    assert (settled.checks, settled.commands) == ([], []), 'the new release is recorded, so the next run is quiet'
-
-
-def test_a_firmware_release_the_converger_cannot_read_fails_the_run_before_it_touches_anything(
-    monitor: Recorder, tmp_path: Path
-) -> None:
-    """Without the release the stamp cannot say which parser it means.
-
-    Deciding without it would mean either restarting on every run or trusting
-    a stamp that might name a parser the device no longer has; failing the run
-    is the outcome an operator sees.
-    """
-    device = _device(tmp_path, monitor, configuration='router bgp 65000\n')
-    device.firmware.unlink()
-
-    run = _converge(device)
-
-    assert run.status != 0
-    assert (run.checks, run.commands) == ([], [])
-    assert not device.live.exists()
-    assert not run.stamped
-    assert device.daemons.read_text() == STOCK_DAEMON_LIST, 'the daemon list is left as the firmware shipped it'
-
-
-def test_a_parser_replaced_under_the_same_release_parses_and_restarts_again(monitor: Recorder, tmp_path: Path) -> None:
-    """The release is how a new parser ordinarily arrives, not the only way.
-
-    A suite installed outside the image replaces the parser's binary and
-    leaves the release as it was, so the stamp carries the binary's checksum
-    too: a run that finds a different binary from the one the stamp names
-    parses before it trusts anything else.
-    """
-    device = _device(tmp_path, monitor, configuration='router bgp 65000\n')
-    _ = _converge(device)
-
-    vtysh = device.tools / routing.FRR_PARSER
-    _ = vtysh.write_text(vtysh.read_text() + '# a rebuilt parser\n')
-    replaced = _converge(device)
-    settled = _converge(device)
-
-    assert replaced.status == 0
-    assert replaced.checks == [f'-C -f {device.source}']
-    assert replaced.commands == [f'restart {routing.FRR_SERVICE}']
-    assert (settled.checks, settled.commands) == ([], [])
-
-
-def test_a_firmware_release_file_that_names_nothing_fails_the_run(monitor: Recorder, tmp_path: Path) -> None:
-    """An empty release would stamp every firmware alike.
-
-    A stamp whose release is empty matches the next empty read on any
-    firmware, which is the silent skip the release exists to prevent; so an
-    empty read fails the run as an unreadable one does, before anything is
-    touched.
-    """
-    device = _device(tmp_path, monitor, configuration='router bgp 65000\n')
-    _ = device.firmware.write_text('')
-
-    run = _converge(device)
-
-    assert run.status != 0
-    assert (run.checks, run.commands) == ([], [])
-    assert not device.live.exists()
-    assert not run.stamped
-    assert device.daemons.read_text() == STOCK_DAEMON_LIST
-
-
-def test_a_stamp_written_before_it_named_the_release_is_stale(monitor: Recorder, tmp_path: Path) -> None:
-    """The converger that deploys this format finds the old one on a device that ran it.
-
-    The old stamp was the source's checksum alone. Read as current it would
-    let the first run skip the parse on whatever firmware the device has now,
-    so it must compare unequal: that run parses and restarts once, and the run
-    after it is quiet again.
-    """
-    device = _device(tmp_path, monitor, configuration='router bgp 65000\n')
-    _ = _converge(device)
-    _ = device.stamp.write_text(f'{_checksum(device.source)}\n')
-
-    upgraded = _converge(device)
-    settled = _converge(device)
-
-    assert upgraded.status == 0
-    assert upgraded.checks == [f'-C -f {device.source}']
-    assert upgraded.commands == [f'restart {routing.FRR_SERVICE}']
-    assert (settled.checks, settled.commands) == ([], [])
-
-
-def test_a_restart_that_failed_is_retried_by_the_next_run(monitor: Recorder, tmp_path: Path) -> None:
-    """The installed file cannot say whether the daemon came back onto it.
-
-    The write succeeds before the restart is attempted, so a run that fails at
-    the restart leaves two identical copies behind. Deciding on those alone,
-    the retry — the one the operator makes with the daemon healthy — would exit
-    successfully having told the daemon nothing, and the session would stay on
-    the old configuration under a green apply.
-    """
-    device = _device(tmp_path, monitor, configuration='router bgp 65000\n')
-
-    failed = _converge(device, daemon_answers=False)
-    retried = _converge(device)
-
-    assert failed.status != 0, 'a converger that could not make the file take effect must fail its apply'
-    assert failed.commands == [f'restart {routing.FRR_SERVICE}']
-    assert not failed.stamped, 'nothing may record an effect that did not happen'
-    assert retried.commands == [f'restart {routing.FRR_SERVICE}']
-    assert retried.status == 0
-    assert retried.stamped
-
-
-def test_undeclaring_the_configuration_does_not_take_the_daemon_away(monitor: Recorder, tmp_path: Path) -> None:
-    """The hook runs after the delete too, and what it must not do then is act.
-
-    The daemon is the device's own and it is running on the configuration it
-    has; this program ceasing to declare one is not a reason to leave the
-    router with none, nor to switch the protocol off again.
-    """
-    device = _device(tmp_path, monitor, configuration='router bgp 65000\n')
-    _ = _converge(device)
-    device.source.unlink()
-
-    undeclared = _converge(device)
-
-    assert undeclared.status == 0
-    assert undeclared.commands == []
-    assert device.live.read_text() == 'router bgp 65000\n'
-    assert f'{routing.BGP_DAEMON}=yes' in device.daemons.read_text()
-    assert routing.FRR_LIVE_CONFIG not in routing.converger_hook()
-
-
-def test_a_converger_that_stalls_fails_naming_itself_and_leaves_nothing_running(
-    monitor: Recorder, tmp_path: Path
-) -> None:
-    """A run that never ends fails the case by name, and takes what it started with it.
-
-    The parser's stand-in here writes its own `/proc` status line and then
-    blocks opening a FIFO nobody writes, as a parser hung on its input would.
-    A converger killed alone at its bound would leave that parser blocked for
-    good; the run's POSIX session is what takes it, so the converger fails as a
-    `TimeoutExpired` naming it, below the case bound, and nothing is left in the
-    session the parser reported.
-    """
-    device = _device(tmp_path, monitor, configuration='router bgp 65000\n')
-    fifo = tmp_path / 'never-written'
-    os.mkfifo(fifo)
-    status = tmp_path / 'parser-status'
-    parser = device.tools / routing.FRR_PARSER
-    _ = parser.write_text(f'#!/bin/sh\nread -r line </proc/$$/stat\necho "$line" >{status}\n: <{fifo}\n')
-
-    try:
-        with pytest.raises(subprocess.TimeoutExpired) as expired:
-            _ = _converge(device)
-
-        assert status.exists(), 'the run stalled before it reached the parser'
-        line = status.read_text()
-        pid = int(line.split(' ', 1)[0])
-        # Past the parenthesized command name, the fields from the state on:
-        # the session is proc(5)'s sixth field.
-        session = int(line.rsplit(')', 1)[1].split()[3])
-        assert expired.value.cmd == device_shell.argv(routing.CONVERGER, device.script)
-        assert expired.value.timeout == COMMAND_TIMEOUT
-        assert _in_session(session) == []
-        (note,) = expired.value.__notes__
-        assert f'POSIX session {session} of ' in note, 'the parser was in the run it stalled'
-        assert f'{pid} /bin/sh {parser} ' in note, 'the stall names the process it was waiting on'
-    finally:
-        _release(fifo)
+    assert inputs['config'] == SECRET | {'value': rendered}
+    assert 'config' in monitor.options_of(name).additionalSecretOutputs
+    assert (inputs['api_url'], inputs['site']) == (API_URL, SITE)

@@ -98,43 +98,22 @@ not moved.
     three files gw-config pushed are overwritten by the first push. They
     are removed by hand in §4 anyway, because between the stop and the
     push they are the only thing that would still describe a machine.
--   **The routing configuration is installed, the protocol daemon
-    switched on, and the daemon started.** `/etc/frr/frr.conf` on the
-    device today is FRR's stock file — one `log syslog informational`
-    line — with the daemon inactive and `bgpd=no` in `/etc/frr/daemons`,
-    so the push drops no session: this is the site's first BGP
-    configuration, not a replacement for one (gateway.md §1.3). The
-    toggle and the file are converged by the one executable, which
-    switches `bgpd=no` to `bgpd=yes` and then asserts the result — so a
-    run that reaches the restart has the protocol daemon on, or has
-    already failed. Three further consequences for the window. It
-    **restarts** the daemon rather than reloading it — the reload verb
-    needs a helper this firmware does not ship — and a restart against
-    an inactive daemon is a start. **Started is not enabled, and is not
-    meant to become enabled**: nothing enables `frr.service`, so
-    `systemctl is-enabled frr` answers `disabled` here and on every
-    healthy day after, and is not a check of anything. What starts the
-    daemon at each boot is the `Wants=frr.service` edge in
-    `frr-config.service`, which `20-units.sh` enables at every boot; the
-    executable's stamp lives beside the installed file in `/etc` and
-    names the firmware release. A reboot on the same release finds file
-    and stamp equal and exits having done nothing, with the daemon up
-    regardless because the edge started it. The first boot on a new
-    release parses and restarts once (gateway.md §1.3). And **no session
-    comes up until the worker VM exists** to peer with: the declared
-    peer is dialed and nothing answers, which is the expected state
-    rather than a fault.
+-   **The routing configuration is the site's BGP configuration, and
+    the push creates it.** The site holds none before the push, so the
+    push drops no session: this is the site's first BGP configuration,
+    not a replacement for one (gateway.md §1.3). The firmware starts the
+    routing suite as the controller's children once the configuration
+    is on the site, and nothing on the device is written for it. **No
+    session comes up until the worker VM exists** to peer with: the
+    declared peer is held and nothing answers, which is the expected
+    state rather than a fault.
 
-    **The edge itself is proven only after a reboot**, which the push
-    cannot show and which nothing here schedules — the device takes one
-    on its own whenever an unattended firmware pass lands. So §5's
-    routing block is run a second time once the soak has taken a
-    reboot: `active` then is the edge working, `inactive` then is the
-    edge failed. That is the one reading a healthy device cannot give,
-    and the only thing about the boot path the push itself cannot show.
-    The edge alone is read on a boot whose `frr-config.sh` did nothing:
-    `journalctl -b -u frr-config.service` shows no `frr-config: checking`
-    line. The first boot after a firmware pass is not such a boot.
+    **That the suite comes back after a reboot is read only after
+    one**, which the push cannot show and which nothing here schedules
+    — the device takes one on its own whenever an unattended firmware
+    pass lands. So §5's routing block is run a second time once the
+    soak has taken a reboot: the daemon holding the peer then is the
+    controller starting the suite at boot.
 
 ## 3. Before the window opens
 
@@ -1112,7 +1091,7 @@ physical up \
 ```
 
 It delivers the boot chain, the unit sources, the executables, the
-routing configuration, the authorized key, and for each machine its
+authorized key, and for each machine its
 settings file, its root filesystem, its mounted configuration and
 secrets, its initial state where it has one, and the digest marker
 naming the pin its tree came from. Installing the initial states is a
@@ -1361,110 +1340,36 @@ object with no file behind it and goes at the next boot, or to
     for §8.3. Nothing may read an export between step 3 and step 5:
     `credentials derived sync` and each `StackReference` reader wait,
     and nothing in this section reads an export at all.
--   **The routing daemon runs this program's configuration.** The
-    installed file is the smaller half of that; the daemon is the rest:
+-   **The routing suite holds this program's configuration.** The site
+    holds it (`physical`'s preview reads it, and plans nothing), and the
+    suite runs it as the controller's children:
 
     ```sh
-    systemctl is-active frr                            # active
-    systemctl list-dependencies --reverse frr.service  # frr-config.service
-    grep -x 'bgpd=yes' /etc/frr/daemons                # bgpd=yes
-    # frr:frr 640 -- as the stock file already is, so this guards the
-    # mode rather than proving the push:
-    stat -c '%U:%G %a' /etc/frr/frr.conf
-    # the stamp names the source, the release and the parser binary:
-    test "$(cat /etc/frr/frr.conf.kluster-applied)" = \
-        "$(cksum </data/custom/frr/frr.conf) $(cat /usr/lib/version) $(cksum <"$(command -v vtysh)")" \
-        && echo current                                 # current
-    cmp /data/custom/frr/frr.conf /etc/frr/frr.conf     # silent
-    vtysh -c 'show daemons'                             # lists bgpd
-    # "Active" or "Connect" until the worker peers, "Established" after:
+    pgrep -a bgpd                                       # one bgpd
+    ps -o comm= -p "$(ps -o ppid= -p "$(pgrep -x bgpd)")"  # ubios-udapi-ser
+    cat /proc/"$(pgrep -x bgpd)"/cgroup                 # 0::/bgpd
+    # both address families, both prefix-lists, the cap in each family,
+    # and the IPv6 route-map with the line that applies it:
+    vtysh -c 'show running-config'
+    # "Idle" until the worker peers, "Established" after:
     vtysh -c 'show bgp neighbors 192.168.70.10 json' | jq '.[].bgpState'
+    /data/custom/bin/gateway-health                     # silent
     ```
 
-    **`systemctl is-enabled frr` is not on that list and never will
-    be.** Nothing enables the daemon's unit, so it answers `disabled` on
-    a perfectly healthy device; the reverse dependency above is what
-    replaces it, because the edge that starts the daemon at every boot
-    is a `Wants=` line in `frr-config.service`, and that unit naming
-    itself there *is* the edge (§2, gateway.md §1.3).
-
-    **Before the worker VM exists the peer state is `Active` or
-    `Connect`** — the daemon holding our configuration and dialing a
-    peer that is not there yet. Once the worker peers it is
-    `Established`, `ip route show proto bgp` lists the pool's IPv4 host
-    routes, and `ip -6 route show proto bgp` its IPv6 ones, each `via`
-    the worker's link-local on the cluster VLAN's bridge
+    `gateway-health` is the reading that proves the configuration
+    *accepted*: the daemon answers for the declared peer at the
+    cluster's AS (gateway.md §1.6). **Before the worker VM exists the
+    peer state is `Idle`** — the daemon holding the configuration with
+    nobody to peer with. Once the worker peers it is `Established`,
+    `ip route show proto bgp` lists the pool's IPv4 host routes, and
+    `ip -6 route show proto bgp` its IPv6 ones, each `via` the worker's
+    link-local on the cluster VLAN's bridge
     (`conventions.HOMELAB_NODE_LINK_LOCAL`). A route through a
-    link-local is installed with nothing yet answering there, so
-    the IPv6 reading goes one step further: `ping -6 -c1
+    link-local is installed with nothing yet answering there, so the
+    IPv6 reading goes one step further: `ping -6 -c1
     <link-local>%<bridge>` answers, and `ip -6 neigh show <link-local>`
     then names the MAC the worker is declared with
-    (`conventions.HOMELAB_NODE_MAC`). `cannot start staticd: daemon binary not installed` in the
-    journal at every start is expected noise: this firmware's build
-    compiles that daemon out, and the set that runs is `watchfrr`,
-    `zebra`, `mgmtd` and `bgpd`.
-
-    **What a green run does not prove.** The stamp and the file
-    comparison prove the file is installed and `frr.service` came up.
-    They do not prove the daemons read it: on this firmware the start
-    script brings `watchfrr` up and returns, and the configuration is
-    pushed into the daemons afterward by `watchfrr`, whose failure fails
-    nothing here. The executable's `vtysh -C -f` pre-check narrows the
-    gap — a line this firmware's parser rejects fails the converge
-    before anything is installed — but it proves *parsed*, not
-    *accepted*. A line can parse and still be refused by the daemon,
-    which surfaces only at that later push. The peer state is what
-    closes the gap, and is why it is on the list.
-
-    **A retry loop trips the daemon's start limit**, which is three
-    starts in three minutes: a first push plus two quick retries fails
-    with `start request repeated too quickly`, and the converge stops
-    there with the stamp unwritten. `systemctl reset-failed frr` clears
-    it, and is what to run before trying again rather than reading the
-    red as a fault of the configuration.
--   **Whether a controller pass disturbs the daemon** is the one thing
-    about the two managers that reading the device could not settle
-    (gateway.md §1.3), and the window opens the answer rather than
-    closing it. Read the end state, and write the values down:
-
-    ```sh
-    systemctl is-active frr                            # active
-    pgrep -x bgpd                                      # record the pid
-    cat /proc/"$(pgrep -x bgpd)"/cgroup                # frr.service
-    systemctl show -p NRestarts frr                    # record; expect 0
-    ip route show proto bgp                            # record
-    ip -6 route show proto bgp                         # record
-    ```
-
-    **This reading is the *before*, not the answer.** The push does
-    provision the gateway for the firewall, but the controller applies
-    asynchronously and the daemon's restart happens in the same `up`,
-    so neither the streamed order nor these values witness which came
-    first — and a pass that killed the daemon would be hidden by the
-    restart that followed it, or by the supervisor respawning `bgpd`
-    within seconds. One process under `frr.service` is consistent with
-    a daemon nothing touched *and* with one that has been killed and
-    replaced.
-
-    **The *after* is the ceremony's step 3** (gateway.md §2.5), the
-    first controller-side change that happens with this daemon already
-    up and the window closed: it declares the inbound pinhole. Re-read
-    the block there. The same process id, `NRestarts=0`, still active
-    and the route reading unchanged — empty on both sides until the
-    worker peers, which is still the check — is what settles it. A
-    changed process id, a raised restart count, a `bgpd` in a control
-    group other than `frr.service`'s — that one is the controller's own
-    — or a `proto bgp` route gone is the single outcome that reopens
-    who owns the routing daemon on this device, and it is recorded the
-    same way: exactly what was seen, because that is what the question
-    would be re-decided on. Nothing is lost either way while no session
-    exists, which is what makes this the cheap moment to find out.
-
-    A reboot between the two readings resets both — the process id and
-    the restart count belong to that boot. If one falls in between, and
-    the soak's first one is meant to (§2), take the *before* again
-    after it: the comparison is across the controller pass, not across
-    a boot.
+    (`conventions.HOMELAB_NODE_MAC`).
 -   **The daily check starts, last**, on the homelab host as the user
     that owns it, once every reading above has been taken. It holds the
     device to the cache repair's pass and to the issuance, among the
@@ -1900,26 +1805,15 @@ rollback and the state edit is not a race.
 **What the rollback leaves behind, and why it is inert.** The device is
 serving again with all of it in place:
 
--   `frr-config.service` and `authorized-keys.service`, enabled, with
-    their executables under `bin/`, and `machine-rollback` beside them —
-    the retiring push writes one file into `bin/` and takes nothing out
-    of it. The keys one is append-only. The routing one is not idle: it
-    wants `frr.service`, so it starts the daemon again at every boot,
-    and its executable holds the toggle and the installed configuration
-    where they are.
--   **`frr.service`, running** — `watchfrr`, `zebra`, `mgmtd` and
-    `bgpd`, and no `staticd`, which this firmware's build compiles out.
-    The push started it and nothing in §6 stops it. Going back to what
-    the device ran before the window is therefore two commands rather
-    than one: `systemctl disable --now frr-config.service` takes the
-    boot edge away, and `systemctl stop frr` stops the daemon. `bgpd=yes`
-    stays in `/etc/frr/daemons` — one line in a file a firmware update
-    may put back as it ships, and inert with the daemon stopped.
--   `/etc/frr/frr.conf` on the declared content, with its stamp beside
-    it. The stock file is not restored, and nothing routes differently
-    for it: the peer it declares is the worker VM, which does not exist,
-    so the daemon dials an address that never answers and learns no
-    route (§2).
+-   `authorized-keys.service`, enabled, with its executable under
+    `bin/`, and `machine-rollback` beside it — the retiring push writes
+    one file into `bin/` and takes nothing out of it. The keys one is
+    append-only.
+-   **The site's BGP configuration, and the routing suite it runs.**
+    The rollback takes nothing off the controller, so the suite keeps
+    running and dials the worker VM, which does not exist, and learns no
+    route (§2). Going back to a site with no session is deleting the
+    configuration on the console's BGP page, which stops the suite.
 -   **One drop-in per machine**, at
     `/etc/systemd/system/systemd-nspawn@<name>.service.d/10-kluster.conf`
     — four of them, carrying `Restart=always` with its five-second
@@ -1943,7 +1837,6 @@ serving again with all of it in place:
     done
     systemctl daemon-reload
     ```
--   `/data/custom/frr`, one directory holding one configuration file.
 -   `machines-new/`, which is where the overlay member's minted identity
     now lives, with the network file the daemon keeps beside it —
     `machines-new/zerotier/state`. **A retry of the window
@@ -1979,6 +1872,110 @@ own repository, and they are what ends §6.
 left of them, the rest of `/data/caddy`, `/data/custom/nspawn/`, and
 `/data/on_boot.d/50-authorized-keys.sh`, whose work is now a unit and an
 executable (gateway.md §1.4).
+
+**A device that ran `frr-config.sh` has its `/etc/frr` put back by
+hand, once, before the first apply that declares the site's BGP
+configuration** (gateway.md §1.3). That apply's deletes take what
+`frr-config.sh` was delivered as — its unit, its executable, its source
+under `/data/custom/frr` — and nothing under `/etc`, so three things are left
+that no resource owns: `/etc/frr/frr.conf`, which holds the session
+password; `bgpd=yes` in `/etc/frr/daemons`; and the stamp
+`/etc/frr/frr.conf.kluster-applied`. They come back from the image's
+own copies, which are what every device of this model runs the suite
+on, so no second configuration and no copy of the password stays in
+`/etc`; the controller writes nothing there (gateway.md §1.3), and
+`gateway-health` silent after the apply is the reading that the suite
+runs on them. The restore comes before the apply so that the suite's
+first start, at the apply's create, is on the image's own `/etc/frr`.
+In a LAN session on the device, in the sitting of that apply:
+
+```sh
+cp -p /mnt/.rofs/etc/frr/frr.conf /mnt/.rofs/etc/frr/daemons /etc/frr/
+rm -f /etc/frr/frr.conf.kluster-applied
+systemctl reset-failed frr-config.service
+cmp /mnt/.rofs/etc/frr/frr.conf /etc/frr/frr.conf    # silent
+cmp /mnt/.rofs/etc/frr/daemons /etc/frr/daemons      # silent
+```
+
+Before the apply, on the device, record its policy rules, which the
+apply must leave as they are:
+
+```sh
+ip -4 rule show > ~/rules.before
+```
+
+**The apply** is one targeted run from the operator's workstation, with
+`physical()` as in the header: the create of the configuration, the
+update of the health executable, and the four resources the retirement deletes,
+listed in the order the run takes them. A resource the program no
+longer declares is deleted under `--target` only when it is named, and
+the four depend on one another,
+so all four are named; the health executable is named so that the
+device stops reading the retired unit. The preview and the apply take
+the same targets, so the list is written once; the preview plans one
+create, one update and four deletes, and nothing else:
+
+```sh
+RETIRE=(
+    -t 'urn:pulumi:physical::kluster-py::kluster:gateway:Gateway$kluster:gateway:SiteRouting$pulumi-python:dynamic/unifi_bgp:BgpConfiguration::kluster-routing-bgp'
+    -t 'urn:pulumi:physical::kluster-py::kluster:gateway:Gateway$pulumi-python:dynamic/device_files:DeviceFile::kluster-bin-gateway-health'
+    -t 'urn:pulumi:physical::kluster-py::kluster:gateway:Gateway$kluster:gateway:SiteRouting$pulumi-python:dynamic/device_files:DeviceFile::kluster-routing-unit-frr-config.service'
+    -t 'urn:pulumi:physical::kluster-py::kluster:gateway:Gateway$kluster:gateway:SiteRouting$pulumi-python:dynamic/device_files:DeviceFile::kluster-routing-config'
+    -t 'urn:pulumi:physical::kluster-py::kluster:gateway:Gateway$kluster:gateway:SiteRouting$pulumi-python:dynamic/device_files:DeviceFile::kluster-routing-bin-frr-config.sh'
+    -t 'urn:pulumi:physical::kluster-py::kluster:gateway:Gateway$kluster:gateway:SiteRouting$pulumi-python:dynamic/device_files:DeviceDirectory::kluster-routing-skeleton-frr'
+)
+physical preview "${RETIRE[@]}"
+physical up "${RETIRE[@]}"
+```
+
+**It stops**, and nothing is deleted in the console, on either of two
+readings. A `ConfigurationNotStored` that the rerun refuses is a
+configuration the controller stores other than as sent, which is the
+provider's to fix (`kluster.providers.unifi_bgp`). A policy rule that
+moved (`ip -4 rule show | diff ~/rules.before -` prints anything) is the
+failure of `systemd-networkd` in gateway.md §1.2, and its playbook, "The firmware's
+policy rules exposed to removal" in gateway.md §3, comes first.
+
+**After the apply**, the controller holds the configuration, switched
+on, and the controller runs the suite. From the workstation, with
+`ADDR` the address the stack reaches the controller at, a reading that
+prints the object's length and not its text:
+
+```sh
+curl -sk -H "X-API-KEY: $(physical config get unifiApiKey)" \
+    "https://$ADDR/proxy/network/v2/api/site/default/bgp/config" |
+    jq '[.[] | {_id, enabled, uploaded_file_name, length: (.frr_bgpd_config | length)}]'
+# one object, enabled true, kluster-frr.conf
+```
+
+and on the device:
+
+```sh
+for d in bgpd zebra mgmtd; do
+    p=$(pgrep -x "$d") && echo "$d $(ps -o comm= -p "$(ps -o ppid= -p "$p")")"
+done                                                 # each: ubios-udapi-ser
+systemctl list-unit-files 'frr*'                     # 0 unit files listed
+diff -r /mnt/.rofs/etc/frr /etc/frr                  # silent
+/data/custom/bin/gateway-health | grep -E 'frr-config|routing daemon'   # silent
+```
+
+Until the apply's delete of `frr-config.service` lands, the unit's
+source is still in the unit store and the unit is inactive, so any run
+of `20-units.sh` starts it: a boot, or the hook of a unit or drop-in the
+same apply writes, since creates and updates run before deletes.
+`frr-config.sh` then finds its source and no stamp, and installs the
+configuration and the toggle again before it fails. So the restore's
+readings are taken again after the apply, with the stamp's absence
+beside them, and the restore is repeated if any of them speaks:
+
+```sh
+cmp /mnt/.rofs/etc/frr/frr.conf /etc/frr/frr.conf    # silent
+cmp /mnt/.rofs/etc/frr/daemons /etc/frr/daemons      # silent
+test ! -e /etc/frr/frr.conf.kluster-applied && echo absent   # absent
+```
+
+`/data/custom/frr` and `/data/custom/bin/frr-config.sh` are gone by
+then, and `gateway-health` is silent once the suite holds the peer (§5).
 
 **gw-config (yadm) — the whole repository retires.** What it holds and
 what holds it now:

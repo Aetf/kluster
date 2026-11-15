@@ -8,8 +8,10 @@ with the release a case sets. `machinectl`, which names a running machine's
 leader, `nsenter`, which runs `zerotier-cli info` in the overlay member's
 leader's mount namespace and `ip -o link show host0` in a bridged machine's
 leader's network namespace, the package script, whose `--check` the reading
-relays, and `ip`, which lists the policy rules and the device's links, are
-stand-ins that answer what a case sets and record what they were asked.
+relays, `ip`, which lists the policy rules and the device's links, and
+`vtysh`, which answers for the routing session's peer with what the BGP daemon
+was recorded answering, are stand-ins that answer what a case sets and record
+what they were asked.
 `networkctl` and `systemd-analyze` are the stand-in systemd's own: the links it
 reports are the ones a case set, and the configuration it assembles is the
 files under the stand-in's tree. The base is read under that tree too: its
@@ -23,9 +25,10 @@ monitor; here the program is rendered from the same declarations directly.
 
 from __future__ import annotations
 
+import json
 import os
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -37,7 +40,25 @@ from gateway_services import caddy, pin
 
 from kluster import conventions
 from kluster.components import gateway
-from kluster.components.gateway import container, nspawn, persistence, routing
+from kluster.components.gateway import container, nspawn, persistence
+
+#: What the BGP daemon answers `vtysh -c 'show bgp neighbors <peer> json'` with for
+#: the session's peer, as the gateway answered it with the controller's
+#: configuration applied and the worker not yet peering: the session `Idle`.
+NEIGHBOR = (Path(__file__).parent / 'data' / 'frr-neighbor-idle.json').read_text()
+
+#: The peer the recorded answer is for, which is the session's.
+PEER = conventions.HOMELAB_NODE_IPV4
+
+#: What `vtysh` prints, on stderr, and its exit status, where no daemon of the
+#: suite runs: as the gateway answered with no BGP configuration on the site.
+NO_SUITE = 'Exiting: failed to connect to any daemons.'
+
+#: What the BGP daemon answers for a neighbor it does not hold. Not read off
+#: the gateway: FRR's own answer, `bgp_show_neighbor` in `bgpd/bgp_vty.c` of
+#: FRR 10.1, the release the firmware ships, which adds `bgpNoSuchNeighbor`
+#: to the answer when no peer matches.
+NO_SUCH_NEIGHBOR = '{\n  "bgpNoSuchNeighbor":true\n}\n'
 
 #: The playbook section every finding points into.
 PLAYBOOK_DOC = Path(__file__).parent.parent / 'docs' / 'physical' / 'gateway.md'
@@ -151,6 +172,11 @@ class _Device:
     nsenter_calls: Path
     check_calls: Path
     ip_calls: Path
+    #: What `vtysh` answers on stdout, and, where present, the file that makes it
+    #: fail instead: its stderr, and its exit status beside it in `<file>.status`.
+    neighbor: Path
+    vtysh_fails: Path
+    vtysh_calls: Path
 
 
 def _stub(path: Path, body: str) -> None:
@@ -249,6 +275,9 @@ def _device(tmp_path: Path, *, legacy: tuple[conventions.gateway.LegacyVhost, ..
         nsenter_calls=logs / 'nsenter',
         check_calls=logs / 'packages',
         ip_calls=logs / 'ip',
+        neighbor=root / 'neighbor',
+        vtysh_fails=root / 'vtysh-fails',
+        vtysh_calls=logs / 'vtysh',
     )
     # `machinectl` as systemd 247 answers for a machine whose init is not
     # systemd: `show` names the leader of a running machine and knows no other,
@@ -331,6 +360,20 @@ def _device(tmp_path: Path, *, legacy: tuple[conventions.gateway.LegacyVhost, ..
         '*) echo "stand-in ip: modeled for -<family> rule show and -o link show only, not $*" >&2; exit 1 ;;\n'
         'esac\n',
     )
+    # `vtysh -c 'show bgp neighbors <peer> json'`, which prints what the case
+    # set, or fails with what it set; nothing else is modeled.
+    _stub(
+        tools / gateway.VTYSH,
+        f'echo "$*" >>{device.vtysh_calls}\n'
+        f'case "$*" in\n'
+        f'"-c show bgp neighbors {PEER} json")\n'
+        f'    if [ -e {device.vtysh_fails} ]; then cat {device.vtysh_fails} >&2; exit "$(cat {device.vtysh_fails}.status)"; fi\n'
+        f'    cat {device.neighbor}\n'
+        f'    exit "$(cat {device.neighbor}.status 2>/dev/null || echo 0)" ;;\n'
+        '*) echo "stand-in vtysh: modeled for -c \'show bgp neighbors <peer> json\' only, not $*" >&2; exit 1 ;;\n'
+        'esac\n',
+    )
+    _ = device.neighbor.write_text(NEIGHBOR)
     _write_ports(device)
     for family in gateway.POLICY_RULE_FAMILIES:
         _ = (device.rules / family).write_text(RULES)
@@ -354,7 +397,12 @@ def _device(tmp_path: Path, *, legacy: tuple[conventions.gateway.LegacyVhost, ..
     proxy = caddy() if legacy is None else caddy(legacy)
     _ = device.program.write_text(
         gateway.health_program(
-            caddy=proxy, resolvers=RESOLVERS, overlay_daemon=OVERLAY, packages_script=str(packages), root=str(root)
+            caddy=proxy,
+            resolvers=RESOLVERS,
+            overlay_daemon=OVERLAY,
+            peer=PEER,
+            packages_script=str(packages),
+            root=str(root),
         )
     )
     device.program.chmod(0o755)
@@ -368,8 +416,6 @@ def _device(tmp_path: Path, *, legacy: tuple[conventions.gateway.LegacyVhost, ..
     systemd.ship('systemd-nspawn@.service')
     for unit in MACHINE_UNITS:
         systemd.activate(unit)
-    systemd.ship(routing.FRR_SERVICE)
-    systemd.activate(routing.FRR_SERVICE)
     # networkd as the firmware runs it, told what the runtime declares, and
     # managing none of the device's links.
     systemd.ship(persistence.NETWORKD_UNIT)
@@ -424,7 +470,7 @@ def _fail_the_boot_chain(device: _Device) -> None:
 
 def _disable_a_unit(device: _Device) -> None:
     _ = process_sessions.run(
-        [os.path.join(device.systemd.tools, 'systemctl'), '--quiet', 'disable', routing.CONVERGER_UNIT],
+        [os.path.join(device.systemd.tools, 'systemctl'), '--quiet', 'disable', nspawn.WATCHDOG_UNIT],
         timeout=30,
         check=True,
     )
@@ -434,8 +480,32 @@ def _stop_a_unit(device: _Device) -> None:
     device.systemd.stop(gateway.access.CONVERGER_UNIT)
 
 
-def _stop_the_routing_daemon(device: _Device) -> None:
-    device.systemd.stop(routing.FRR_SERVICE)
+def _answering(neighbor: Mapping[str, object]) -> str:
+    """An answer of the BGP daemon's, printed as `vtysh` prints one: two-space indents, no space after a colon."""
+    return json.dumps(neighbor, indent=2, separators=(',', ':')) + '\n'
+
+
+def _recorded() -> dict[str, dict[str, object]]:
+    return json.loads(NEIGHBOR)
+
+
+def _remove_vtysh(device: _Device) -> None:
+    (device.tools / gateway.VTYSH).unlink()
+
+
+def _stop_the_suite(device: _Device) -> None:
+    _ = device.vtysh_fails.write_text(f'{NO_SUITE}\n')
+    _ = Path(f'{device.vtysh_fails}.status').write_text('1')
+
+
+def _drop_the_neighbor(device: _Device) -> None:
+    _ = device.neighbor.write_text(NO_SUCH_NEIGHBOR)
+
+
+def _peer_at_another_as(device: _Device) -> None:
+    recorded = _recorded()
+    recorded[str(PEER)]['remoteAs'] = conventions.CLUSTER_ASN + 1
+    _ = device.neighbor.write_text(_answering(recorded))
 
 
 #: A bridged machine whose name is too long for its port to carry it whole, and one whose is not.
@@ -504,9 +574,12 @@ def _turn_an_option_back_on_in_a_later_drop_in(device: _Device) -> None:
         (_detach_a_port, SHORTENED, gateway.PLAYBOOKS.port),
         (_move_a_port_to_another_bridge, WHOLE, gateway.PLAYBOOKS.port),
         (_fail_the_boot_chain, persistence.UDM_BOOT_UNIT, gateway.PLAYBOOKS.boot_chain),
-        (_disable_a_unit, routing.CONVERGER_UNIT, gateway.PLAYBOOKS.unit),
+        (_disable_a_unit, nspawn.WATCHDOG_UNIT, gateway.PLAYBOOKS.unit),
         (_stop_a_unit, gateway.access.CONVERGER_UNIT, gateway.PLAYBOOKS.unit),
-        (_stop_the_routing_daemon, routing.FRR_SERVICE, gateway.PLAYBOOKS.routing),
+        (_remove_vtysh, str(PEER), gateway.PLAYBOOKS.routing),
+        (_stop_the_suite, str(PEER), gateway.PLAYBOOKS.routing),
+        (_drop_the_neighbor, str(PEER), gateway.PLAYBOOKS.routing),
+        (_peer_at_another_as, str(PEER), gateway.PLAYBOOKS.routing),
         (_take_the_member_offline, conventions.gateway.OVERLAY.name, gateway.PLAYBOOKS.overlay),
         (_leave_a_member_uncached, f'{persistence.PACKAGES_SCRIPT} --check', gateway.PLAYBOOKS.packages),
         (_move_the_debian_release, '/etc/debian_version', gateway.PLAYBOOKS.base),
@@ -523,7 +596,10 @@ def _turn_an_option_back_on_in_a_later_drop_in(device: _Device) -> None:
         'boot-chain',
         'unit-disabled',
         'unit-inactive',
-        'routing-daemon',
+        'no-vtysh',
+        'no-suite',
+        'no-neighbor',
+        'another-as',
         'member-offline',
         'cache',
         'debian-release',
@@ -830,6 +906,89 @@ def test_with_no_networkd_configuration_on_disk_every_guarded_option_is_a_findin
     assert {finding['title'] for finding in findings} == {gateway.PLAYBOOKS.networkd}
 
 
+@pytest.mark.parametrize('state', ['Idle', 'Connect', 'Active', 'Established'])
+def test_the_sessions_state_is_not_read(tmp_path: Path, state: str) -> None:
+    """The daemon holding the declared peer is the reading; the session is down until the worker peers.
+
+    `Idle` is the recorded answer itself.
+    """
+    device = _device(tmp_path)
+    recorded = _recorded()
+    recorded[str(PEER)]['bgpState'] = state
+    _ = device.neighbor.write_text(_answering(recorded))
+
+    reading = _read(device)
+
+    assert (reading.status, reading.lines) == (0, [])
+
+
+def test_a_remote_as_inside_another_object_is_not_the_peers(tmp_path: Path) -> None:
+    """The peer's remote AS is its own object's key, whatever an object nested ahead of it says.
+
+    The recorded answer holds nested objects of its own; one ahead of the key,
+    naming another AS, is not what the peer is held at, either way round.
+    """
+    device = _device(tmp_path)
+    recorded = _recorded()
+    peer = recorded[str(PEER)]
+    recorded[str(PEER)] = {'nested': {'remoteAs': conventions.CLUSTER_ASN + 1}, **peer}
+    _ = device.neighbor.write_text(_answering(recorded))
+    assert _read(device).lines == []
+
+    recorded[str(PEER)] = {
+        'nested': {'remoteAs': conventions.CLUSTER_ASN},
+        **peer,
+        'remoteAs': conventions.CLUSTER_ASN + 1,
+    }
+    _ = device.neighbor.write_text(_answering(recorded))
+    (finding,) = _findings(_read(device))
+    assert finding['state'] == f'neighbor at remote AS {conventions.CLUSTER_ASN + 1}, not {conventions.CLUSTER_ASN}'
+
+
+def test_a_peer_with_no_remote_as_is_a_finding(tmp_path: Path) -> None:
+    device = _device(tmp_path)
+    recorded = _recorded()
+    del recorded[str(PEER)]['remoteAs']
+    _ = device.neighbor.write_text(_answering(recorded))
+
+    (finding,) = _findings(_read(device))
+
+    assert (finding['subject'], finding['title']) == (str(PEER), gateway.PLAYBOOKS.routing)
+
+
+def test_a_neighbor_held_for_another_peer_is_not_the_declared_one(tmp_path: Path) -> None:
+    """An answer naming a peer is an answer about that peer."""
+    device = _device(tmp_path)
+    _ = device.neighbor.write_text(_answering({'192.0.2.99': _recorded()[str(PEER)]}))
+
+    (finding,) = _findings(_read(device))
+
+    assert finding['state'] == 'the BGP daemon holds no such neighbor'
+
+
+def test_a_suite_that_is_not_running_is_reported_with_what_vtysh_said(tmp_path: Path) -> None:
+    """The answer the gateway gives with no BGP configuration on the site, which the cure starts from."""
+    device = _device(tmp_path)
+    _stop_the_suite(device)
+
+    (finding,) = _findings(_read(device))
+
+    assert finding['state'] == f'{gateway.VTYSH} answered {NO_SUITE} (exit 1)'
+
+
+@pytest.mark.parametrize('status', [0, 1])
+def test_a_neighbor_the_daemon_does_not_hold_is_one_finding_whatever_vtysh_exits(tmp_path: Path, status: int) -> None:
+    """Whether `vtysh` exits non-zero on that answer was not read on the gateway, so neither is assumed."""
+    device = _device(tmp_path)
+    _drop_the_neighbor(device)
+    _ = Path(f'{device.neighbor}.status').write_text(str(status))
+
+    reading = _read(device)
+
+    (finding,) = _findings(reading)
+    assert (reading.status, finding['subject'], finding['title']) == (1, str(PEER), gateway.PLAYBOOKS.routing)
+
+
 def _site_blocks(caddyfile: str) -> set[str]:
     """The zone of each site block in a `Caddyfile`: each block is one wildcard certificate."""
     return set(re.findall(r'^\*\.(\S+) \{$', caddyfile, re.MULTILINE))
@@ -891,6 +1050,8 @@ def _healthy(_: _Device) -> None:
         _lose_the_main_rule,
         _let_networkd_manage_a_port,
         _turn_an_option_back_on_in_a_later_drop_in,
+        _stop_the_suite,
+        _peer_at_another_as,
     ],
 )
 def test_the_reading_writes_nothing(tmp_path: Path, deviation: Callable[[_Device], None]) -> None:
@@ -901,7 +1062,8 @@ def test_the_reading_writes_nothing(tmp_path: Path, deviation: Callable[[_Device
     `zerotier-cli info`, run in its leader's mount namespace, and a bridged
     machine only to show its `host0`, in its leader's network namespace.
     networkd is asked only to list its links and to assemble its configuration,
-    and the kernel only to list its rules and its links.
+    the kernel only to list its rules and its links, and the BGP daemon only to
+    show the session's peer.
     """
     device = _device(tmp_path)
     deviation(device)
@@ -920,6 +1082,7 @@ def test_the_reading_writes_nothing(tmp_path: Path, deviation: Callable[[_Device
     assert {call.split(' ', 1)[1] for call in device.ip_calls.read_text().splitlines()} == {'rule show', 'link show'}
     assert {call.split()[0] for call in device.systemd.take_calls(NETWORKCTL)} == {'list'}
     assert {call.split()[-2] for call in device.systemd.take_calls(SYSTEMD_ANALYZE)} == {'cat-config'}
+    assert set(device.vtysh_calls.read_text().splitlines()) == {f'-c show bgp neighbors {PEER} json'}
     assert (_tree(device.root), device.systemd.enabled, device.systemd.active) == before
 
 

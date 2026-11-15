@@ -26,9 +26,10 @@ Four things are declared here, and each answers a different question
     it arrives as a parameter, from `conventions.overlay.MANAGED_ROUTES`. A
     route is `{target, via}` on the network and nothing more: `via` names a
     member, and that member forwards only because forwarding is configured on
-    the device itself. That is why the gateway's routing configuration is
-    `SiteRouting`'s file on the box and only the route table is here — two
-    systems being told two different things (gateway.md §2.2). The table is
+    the device itself. That is why the gateway's own routing — its
+    forwarding, and `SiteRouting`'s BGP configuration on its controller — is
+    the gateway component's, and only the route table is here: two systems
+    being told two different things (gateway.md §2.2). The table is
     written as declared, `via` where the census has one and absent where it
     has none: the home subnets go via the gateway's own member, the one
     machine that was already routing them, and the overlay's own subnet goes
