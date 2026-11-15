@@ -13,7 +13,8 @@ The same section pins what the jobs run besides the runner: every action from
 outside this repository by commit, and ZeroTier, which the composite action
 installs from its apt repository, by release and by signing key. And every
 job that joins the overlay is held to the wait its identity calls for: a
-`physical` join waits for the gateway's shell, a `dns` join for nothing.
+`physical` join waits for every shell it dials, a `dns` join for the first
+resolver API to answer.
 
 And the merge chain applies in the order that section gives it: `up-k8s-base`
 and `up-apps` follow `up-dns`, each on a gate of its own, whatever `up-dns`
@@ -387,12 +388,17 @@ MATRIX_FLAG = re.compile(r'^matrix\.([\w-]+)$')
 
 @dataclass(frozen=True)
 class Join:
-    """One way a job can join the overlay: where, in which Environment, what it routes, and what it waits for."""
+    """One way a job can join the overlay: where, in which Environment, what it routes, and what it waits for.
+
+    `wait_for` holds the targets every one of which has to answer, and
+    `wait_for_any` the targets the first answer among which ends their wait.
+    """
 
     where: str
     environment: str
     routes: str
     wait_for: str
+    wait_for_any: str
 
 
 def _matrix_rows(job: dict[str, object], where: str) -> list[dict[str, object]] | None:
@@ -466,6 +472,7 @@ def _joins() -> list[Join]:
                     _resolved(environment, row, where),
                     _resolved(inputs.get('routes'), row, where),
                     _resolved(inputs.get('wait_for'), row, where),
+                    _resolved(inputs.get('wait_for_any'), row, where),
                 )
                 for row in rows
             )
@@ -484,16 +491,17 @@ def _routes(text: str) -> set[tuple[IPv4Network, IPv4Address]]:
     return routes
 
 
-def test_a_physical_join_waits_for_the_gateways_shell_and_a_dns_join_routes_to_and_waits_for_the_resolvers() -> None:
+def test_a_physical_join_waits_for_every_shell_it_dials_and_a_dns_join_routes_to_and_waits_for_the_resolvers() -> None:
     """Which identity a job joins with decides what its join routes and waits on.
 
     The identity is the Environment's secret, so the Environment decides it
-    (`slots.ZEROTIER_PHYSICAL`, `slots.ZEROTIER_DNS`). A `physical` run's first
-    dial is the device-files push's single connect to the gateway's shell, and
-    the flow rules can drop a fresh member's first packets (physical/gateway.md
-    §2.3), so its join waits for that shell; the readiness line it prints is
-    where §2.4 there reads items 4 and 7. It dials members only, and installs
-    no route.
+    (`slots.ZEROTIER_PHYSICAL`, `slots.ZEROTIER_DNS`). A `physical` run dials
+    two members over the overlay: the gateway's shell, which the device-files
+    push connects to, and the homelab host's, which the libvirt provider
+    connects to. The flow rules can drop a fresh member's first packets to
+    each peer (physical/gateway.md §2.3), so its join waits for both shells,
+    every one of them; the gateway's readiness line is where §2.4 there reads
+    items 4 and 7. It dials members only, and installs no route.
 
     A `dns` run dials the resolvers' APIs at their container-VLAN addresses,
     which the network carries no route to: a route only one run needs is that
@@ -501,9 +509,9 @@ def test_a_physical_join_waits_for_the_gateways_shell_and_a_dns_join_routes_to_a
     resolver the census lists, via the gateway, and nothing wider -- a route
     the census lacks would be one the flow rules drop anyway, and a resolver
     left out one the run cannot reach -- and waits for those same APIs, any
-    one answering. Held against the resolver census, the API port and the
-    gateway's overlay address, which the workflows spell as text no import
-    reaches.
+    one answering. Held against the resolver census, the API port, and the
+    gateway's and the homelab host's overlay addresses, which the workflows
+    spell as text no import reaches.
     """
     joins = _joins()
     physical = [join for join in joins if join.environment in slots.ZEROTIER_PHYSICAL]
@@ -514,15 +522,18 @@ def test_a_physical_join_waits_for_the_gateways_shell_and_a_dns_join_routes_to_a
     assert dns, 'no job joins with the dns identity'
     # An Environment holding neither identity has nothing to join with.
     assert [join for join in joins if join not in physical + dns] == []
-    gateway_shell = f'{conventions.overlay.UDM}:{SSH_PORT}'
-    assert [join for join in physical if join.wait_for != gateway_shell] == []
+    homelab = conventions.overlay.member(conventions.overlay.MEMBER_HOMELAB).address
+    shells = {f'{conventions.overlay.UDM}:{SSH_PORT}', f'{homelab}:{SSH_PORT}'}
+    assert [join.where for join in physical if set(join.wait_for.split()) != shells] == []
+    assert [join.where for join in physical if join.wait_for_any.strip()] == []
     assert [join for join in physical if join.routes.strip()] == []
 
     resolvers = [resolver.address for resolver in conventions.gateway.RESOLVERS]
     routes = {(IPv4Network(f'{address}/32'), conventions.overlay.UDM) for address in resolvers}
     apis = {f'{address}:{conventions.gateway.ADGUARD_API_PORT}' for address in resolvers}
     assert [join.where for join in dns if _routes(join.routes) != routes] == []
-    assert [join.where for join in dns if set(join.wait_for.split()) != apis] == []
+    assert [join.where for join in dns if set(join.wait_for_any.split()) != apis] == []
+    assert [join.where for join in dns if join.wait_for.strip()] == []
 
 
 #: A token of a job condition, by kind: a string literal, an operator or

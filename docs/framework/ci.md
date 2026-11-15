@@ -122,8 +122,9 @@ one deadline. The route grants nothing the flow rules do not: they
 admit `ci-dns` to exactly those two addresses on the API port, and
 whatever else the runner dials through the route is dropped at the
 first hop. `test_workflow_shape` holds every `dns` join's routes and
-targets against the resolver census, and every `physical` join to the
-gateway's shell with no route.
+targets against the resolver census, and every `physical` join, with no
+route, to both shells it dials: the gateway's and the homelab host's,
+each of which has to answer before the join returns.
 
 Residual on
 record (audit M6): the AdGuard credential is full-admin (AdGuard has

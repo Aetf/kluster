@@ -2424,15 +2424,20 @@ succeeds or fails in its `Refresh and compare` step with §8.2's
 tells the two kinds of red apart: a `dns` job red at its join failed to
 install its identity, its routes or its path to the resolvers, and one
 red at `Refresh and compare` with that diff alone did not. The `physical` job proves its join
-twice. Its join step is called with `wait_for: 10.144.1.1:22`, so it
-returns only once the device's shell answers over the overlay, printing
-`10.144.1.1:22 reachable after N attempts, S s`, and its preview then
-dials the device. That line is where gateway.md §2.4 reads items 4 and
-7 on a hosted runner: item 4 passes when it prints, the first-packet
-drop having recovered within the wait, and S is item 7's join latency,
-the seconds the wait took from `zerotier-cli join` returning to the
-connect that answered. Every later `physical` job prints the same
-line. The `dns` job
+twice. Its join step is called with
+`wait_for: 10.144.1.1:22 10.144.180.10:22`, the device's shell and the
+homelab host's, so it returns only once both answer over the overlay,
+printing `10.144.1.1:22 reachable after N attempts, S s` and
+`10.144.180.10:22 reachable after N attempts, S s`, and its preview then
+dials both. The first of those lines is where gateway.md §2.4 reads
+items 4 and 7 on a hosted runner: item 4 passes when it prints, the
+first-packet drop having recovered within the wait, and S is item 7's
+join latency, the seconds the wait took from `zerotier-cli join`
+returning to the connect that answered. Every later `physical` job
+prints the same lines. A `physical` join red at `Wait for the target`
+names each shell that never answered: the gateway's, a path to the
+device that never formed; the homelab host's alone, a path to that
+second peer that never formed while the device's did. The `dns` job
 proves its own path. Its join installs a host route to each resolver
 through the gateway, once the member holds its overlay address,
 printing `10.0.5.3/32 via 10.144.1.1 installed` and the same for

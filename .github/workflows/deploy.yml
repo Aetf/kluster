@@ -60,11 +60,13 @@ jobs:
         with:
           network_id: ${{ secrets.ZEROTIER_NETWORK_ID }}
           identity: ${{ secrets.ZEROTIER_IDENTITY }}
-          # The gateway's shell, which the device-files push dials: the join
-          # waits for it rather than racing the run's first packets, and its
-          # readiness line is where physical/gateway.md §2.4 reads items 4
-          # and 7. An unreachable gateway fails the job at this step.
-          wait_for: '10.144.1.1:22'
+          # The gateway's shell, which the device-files push dials, and the
+          # homelab host's, which the libvirt provider dials: the join waits
+          # for both rather than racing the run's first packets to either,
+          # and the gateway's readiness line is where physical/gateway.md
+          # §2.4 reads items 4 and 7. Either one unreachable fails the job at
+          # this step, naming it.
+          wait_for: '10.144.1.1:22 10.144.180.10:22'
       - uses: ./.github/actions/state-backend
         timeout-minutes: 5
         with:
@@ -118,8 +120,8 @@ jobs:
         with:
           network_id: ${{ secrets.ZEROTIER_NETWORK_ID }}
           identity: ${{ secrets.ZEROTIER_IDENTITY }}
-          # The gateway's shell, as in `plan-physical`.
-          wait_for: '10.144.1.1:22'
+          # The gateway's shell and the homelab host's, as in `plan-physical`.
+          wait_for: '10.144.1.1:22 10.144.180.10:22'
       - uses: ./.github/actions/state-backend
         timeout-minutes: 5
         with:
@@ -183,7 +185,7 @@ jobs:
           routes: |
             10.0.5.3/32 via 10.144.1.1
             10.0.5.4/32 via 10.144.1.1
-          wait_for: '10.0.5.3:80 10.0.5.4:80'
+          wait_for_any: '10.0.5.3:80 10.0.5.4:80'
       - uses: ./.github/actions/state-backend
         timeout-minutes: 5
         with:

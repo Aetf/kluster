@@ -20,6 +20,7 @@ import os
 import re
 import shutil
 import socket
+import subprocess
 import time
 from collections.abc import Generator
 from contextlib import contextmanager
@@ -159,14 +160,15 @@ def _refusing() -> Generator[str]:
         yield f'127.0.0.1:{bound.getsockname()[1]}'
 
 
-def _run(
-    tmp_path: Path, step: str, env: dict[str, str], *, started: int | None, bin_files: dict[str, str] | None = None
-) -> Waited:
-    """Run a step the way the runner does, with `sudo` replaced by a fake that records its arguments.
+def _environment(
+    tmp_path: Path, step: str, env: dict[str, str], *, started: int | None, bin_files: dict[str, str] | None
+) -> tuple[list[str], dict[str, str], Path]:
+    """The command and environment that run a step the way the runner does, and the log its `sudo` writes.
 
-    `started=None` is the empty `DEADLINE` an unrun clock step leaves behind;
-    otherwise the deadline is `started` plus the clock step's own seconds.
-    `bin_files` are further stand-ins put on `PATH`, by name and script.
+    `sudo` is replaced by a fake that records its arguments. `started=None` is
+    the empty `DEADLINE` an unrun clock step leaves behind; otherwise the
+    deadline is `started` plus the clock step's own seconds. `bin_files` are
+    further stand-ins put on `PATH`, by name and script.
     """
     if shutil.which('bash') is None:
         pytest.fail('bash is not on PATH, which the step runs on')
@@ -179,23 +181,40 @@ def _run(
         fake.chmod(0o755)
 
     declared, script = _step(step)
-    done = process_sessions.run(
+    return (
         ['bash', '--noprofile', '--norc', '-eo', 'pipefail', '-c', script],
-        env={
+        {
             **declared,
             **env,
             'DEADLINE': '' if started is None else str(started + _deadline()),
             'PATH': f'{bin_dir}{os.pathsep}{os.environ["PATH"]}',
         },
-        text=True,
-        timeout=30,
+        log,
     )
-    return Waited(done.returncode, done.stdout, log.read_text().splitlines() if log.exists() else [])
 
 
-def _wait(tmp_path: Path, *targets: str, started: int | None) -> Waited:
-    """Run the wait step over `targets`."""
-    return _run(tmp_path, 'Wait for the target', {'TARGETS': ' '.join(targets)}, started=started)
+def _sudo(log: Path) -> list[str]:
+    """Every command the fake `sudo` was handed, in order."""
+    return log.read_text().splitlines() if log.exists() else []
+
+
+def _run(
+    tmp_path: Path, step: str, env: dict[str, str], *, started: int | None, bin_files: dict[str, str] | None = None
+) -> Waited:
+    """Run a step to its end, as `_environment` describes."""
+    argv, environment, log = _environment(tmp_path, step, env, started=started, bin_files=bin_files)
+    done = process_sessions.run(argv, env=environment, text=True, timeout=30)
+    return Waited(done.returncode, done.stdout, _sudo(log))
+
+
+def _targets(every: tuple[str, ...], any_of: tuple[str, ...]) -> dict[str, str]:
+    """The wait step's two inputs, both set, so that neither is left as the expression the step declares."""
+    return {'TARGETS': ' '.join(every), 'ANY_TARGETS': ' '.join(any_of)}
+
+
+def _wait(tmp_path: Path, *every: str, any_of: tuple[str, ...] = (), started: int | None) -> Waited:
+    """Run the wait step over `every`, each of which has to answer, and `any_of`, one of which has to."""
+    return _run(tmp_path, 'Wait for the target', _targets(every, any_of), started=started)
 
 
 def test_a_target_that_answers_is_reported_with_its_attempts_and_seconds(tmp_path: Path) -> None:
@@ -207,39 +226,97 @@ def test_a_target_that_answers_is_reported_with_its_attempts_and_seconds(tmp_pat
     assert re.fullmatch(rf'{re.escape(target)} reachable after 1 attempts, \d+ s\n', waited.stdout), waited.stdout
 
 
-def test_the_first_of_several_targets_to_answer_ends_the_wait(tmp_path: Path) -> None:
+def test_the_wait_passes_only_once_the_last_target_has_answered(tmp_path: Path) -> None:
+    """A `physical` run dials the gateway and the homelab host, and the join returns only once both answer.
+
+    The second target refuses through the first round and listens from the
+    second on. The stand-in for `sleep` holds the step between the rounds
+    until the case has made it listen, so the round it answers in is set by
+    the case rather than by a clock. A wait that ended on the first target to
+    answer, or tried only the first, returns before it ever sleeps; one that
+    stopped trying a target once it had answered is what reports each line
+    once. The first target's line is the one §8.3 reads, and it still prints.
+    """
+    held = '#!/bin/sh\necho "sleep $*" >&2\nread -r _ || true\n'
+    with (
+        _listening() as first,
+        socket.socket(socket.AF_INET, socket.SOCK_STREAM) as late,
+    ):
+        late.bind(('127.0.0.1', 0))
+        last = f'127.0.0.1:{late.getsockname()[1]}'
+        argv, environment, log = _environment(
+            tmp_path,
+            'Wait for the target',
+            _targets((first, last), ()),
+            started=int(time.time()),
+            bin_files={'sleep': held},
+        )
+        with process_sessions.started(
+            argv, env=environment, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+        ) as command:
+            assert command.stderr is not None
+            # The step's first sleep: the first round is over, and the last
+            # target refused in it.
+            between = command.stderr.readline()
+            assert between.startswith('sleep '), f'the step never slept between rounds: {between!r}'
+            late.listen()
+            stdout, _ = command.communicate('\n', timeout=30)
+            status = command.returncode
+
+    assert status == 0, stdout
+    assert re.fullmatch(
+        rf'{re.escape(first)} reachable after 1 attempts, \d+ s\n{re.escape(last)} reachable after 2 attempts, \d+ s\n',
+        stdout,
+    ), stdout
+    assert _sudo(log) == []
+
+
+def test_the_first_of_several_any_targets_to_answer_ends_the_wait(tmp_path: Path) -> None:
     """A caller names equivalent services, the two resolvers, so one that refuses does not fail the join.
 
     The refusing target is listed first, so a wait that tried only the first,
     or required every one, fails here.
     """
     with _refusing() as refused, _listening() as answering:
-        waited = _wait(tmp_path, refused, answering, started=int(time.time()))
+        waited = _wait(tmp_path, any_of=(refused, answering), started=int(time.time()))
 
     assert waited.status == 0
     assert re.fullmatch(rf'{re.escape(answering)} reachable after 1 attempts, \d+ s\n', waited.stdout), waited.stdout
 
 
-def test_targets_written_one_per_line_are_all_tried(tmp_path: Path) -> None:
-    """A caller that writes `wait_for` as a block, one target per line, as it writes `routes`, loses none of them.
+@pytest.mark.parametrize('variable', ['TARGETS', 'ANY_TARGETS'])
+def test_targets_written_one_per_line_are_all_read(tmp_path: Path, variable: str) -> None:
+    """A caller that writes either input as a block, one target per line, as it writes `routes`, loses none of them.
 
-    The refusing target is on the first line and the answering one on the
-    second, so a wait that read only the first line waits out its deadline
-    on a target that never answers.
+    For `wait_for`, two answering targets on two lines are both reported, so a
+    wait that read only the first line reports one. For `wait_for_any`, the
+    refusing target is on the first line and the answering one on the
+    second, so a wait that read only the first line waits out its deadline on
+    a target that never answers.
     """
-    with _refusing() as refused, _listening() as answering:
-        waited = _run(
-            tmp_path, 'Wait for the target', {'TARGETS': f'{refused}\n{answering}\n'}, started=int(time.time())
-        )
+    with _refusing() as refused, _listening() as answering, _listening() as second:
+        lines = f'{answering}\n{second}\n' if variable == 'TARGETS' else f'{refused}\n{answering}\n'
+        waited = _run(tmp_path, 'Wait for the target', {**_targets((), ()), variable: lines}, started=int(time.time()))
 
+    expected = [answering, second] if variable == 'TARGETS' else [answering]
     assert waited.status == 0
-    assert re.fullmatch(rf'{re.escape(answering)} reachable after 1 attempts, \d+ s\n', waited.stdout), waited.stdout
+    assert re.fullmatch(
+        ''.join(rf'{re.escape(target)} reachable after 1 attempts, \d+ s\n' for target in expected), waited.stdout
+    ), waited.stdout
 
 
-def test_a_spent_deadline_ends_the_wait_in_an_error_naming_the_targets_and_the_seconds(tmp_path: Path) -> None:
+@pytest.mark.parametrize('variable', ['TARGETS', 'ANY_TARGETS'])
+def test_a_spent_deadline_ends_the_wait_in_an_error_naming_the_targets_and_the_seconds(
+    tmp_path: Path, variable: str
+) -> None:
     """The install having used the whole budget, the wait tries once and fails rather than starting over."""
     with _refusing() as first, _refusing() as second:
-        waited = _wait(tmp_path, first, second, started=int(time.time()) - _deadline())
+        waited = _run(
+            tmp_path,
+            'Wait for the target',
+            {**_targets((), ()), variable: f'{first} {second}'},
+            started=int(time.time()) - _deadline(),
+        )
 
     assert waited.status == 1
     # The annotation has to carry every target, the attempts and the seconds
@@ -250,6 +327,23 @@ def test_a_spent_deadline_ends_the_wait_in_an_error_naming_the_targets_and_the_s
     assert re.search(r'\b1 attempts\b', line), line
     assert re.search(r'\b\d+ s\b', line), line
     assert waited.sudo == ['zerotier-cli listnetworks']
+
+
+def test_the_error_names_the_target_that_never_answered_and_not_the_one_that_did(tmp_path: Path) -> None:
+    """Under `physical`'s two shells, the error is what tells a gateway with no path from a homelab host with none.
+
+    The answering target is listed first and reported as it answers; the
+    error that follows names the refusing one alone.
+    """
+    with _listening() as answering, _refusing() as refused:
+        waited = _wait(tmp_path, answering, refused, started=int(time.time()) - _deadline())
+
+    assert waited.status == 1
+    lines = waited.stdout.splitlines()
+    assert re.fullmatch(rf'{re.escape(answering)} reachable after 1 attempts, \d+ s', lines[0]), waited.stdout
+    (line,) = (line for line in lines if line.startswith('::error::'))
+    assert re.search(rf'{re.escape(refused)}\b', line), line
+    assert answering not in line, line
 
 
 def test_a_wait_with_no_deadline_refuses_by_name_instead_of_blaming_the_target(tmp_path: Path) -> None:
