@@ -7,7 +7,7 @@ beside their apps** (the co-location principle). There is no in-cluster
 DNS controller (architecture.md §6.4); the standalone DNSControl repo
 ([Aetf/dns](https://github.com/Aetf/dns)) is absorbed and retired.
 
-> **Status**: designed 2026-08-22, after a survey of the live
+> **Status**: designed 2026-08-22, after a survey of Aetf/dns's
 > dnsconfig.js (6 zones; roughly half the records are not
 > cluster-related). Declared since 2026-08-25:
 > `src/kluster/components/dns/` holds the record model and the block
@@ -18,17 +18,16 @@ DNS controller (architecture.md §6.4); the standalone DNSControl repo
 > again, the latter over the custom provider in
 > `src/kluster/providers/adguard_rewrites/`). The route rows themselves
 > are a convention, `src/kluster/conventions/routes.py`, because `apps`
-> and `dns` both read them (README.md §2). **The retiring DNSControl
-> program is authoritative until cutover**: the zones exist at
-> Cloudflare and their state is imported rather than applied, so this
-> stack's first `up` is a cutover step and is not to be run while that
-> program still owns the zones, or the two write over each other. Every
-> change here is judged by a preview until that day. This is the zones'
-> instance of the interim rule in
-> [sources-of-truth.md](../sources-of-truth.md): a change to the zones
-> lands in Aetf/dns first and here second, in the same sitting. That
-> document's row R1 holds the readings, what a change in Aetf/dns takes,
-> and the cutover's steps, in the order its note N1 records.
+> and `dns` both read them (README.md §2). **This stack writes the
+> zones**, from its first `up` on, the zones' cutover
+> (physical/gateway-cutover.md §8.2). Their state came in by import and
+> the cutover's `up` applied it, deleting each record the import took
+> that the declaration leaves out. Aetf/dns, the DNSControl program it
+> replaces, is retired and archived. Row R1 of
+> [sources-of-truth.md](../sources-of-truth.md) holds the readings and
+> how a change is applied until the deploy chain applies it on merge,
+> and its note N1 holds the records the cutover deleted and the
+> emergency way back.
 
 ## 1. Why a fourth stack
 
@@ -711,8 +710,8 @@ site's forward and pinhole for a `SiteForward` port likewise
 Per-app cutover falls out of the anchor design: an app's records point
 at `archvps.hosts` until the app is cut, then its component declares
 the same names against `kluster.hosts`, and its `legacy.py` block is
-deleted (below). DNSControl holds no entry by then: it retires at the
-zones' cutover, before any application migrates.
+deleted (below). DNSControl holds no entry by then: Aetf/dns retired
+at the zones' cutover, before any application migrates.
 
 **An application moves in two pull requests, its land and its cut**
 (cluster/migration.md §0 rule 1). Verification has to run against what
@@ -756,5 +755,5 @@ fifth member of the block. The served pair repoints to `kluster.hosts`
 when the site behind it moves; the parked pair's records go with the
 machine instead (§2). None may still reference `archvps.hosts` when the
 VPS retires (migration.md Wave F checks this). The DNSControl repo
-retires with a pointer commit at the zones' cutover (the old-tracker
-rule, migration.md §0; sources-of-truth.md, row R1).
+retired with a pointer commit at the zones' cutover and is archived
+(the old-tracker rule, migration.md §0; sources-of-truth.md, row R1).

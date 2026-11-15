@@ -44,18 +44,18 @@ Column 5 names issues in the ops repository, where the drift is tracked.
 
 | Row | Domain | (1) Live source of truth today | (2) Stack · apply state | (3) Tracker until the flip · what "take" means | (4) Flip → retirement | (5) Known drift |
 |---|---|---|---|---|---|---|
-| R1 | `dns` · the Cloudflare zones: base records, mail with DKIM, the `*.zt` block, `legacy.py`'s application records, anchors, CAA, DNSSEC | DNSControl: Aetf/dns `dnsconfig.js`, whose `push.yml` is active and last applied on 2026-10-29, the two deletes in jiahui.id of `47ab103` (`kluster-ops#702`; G5). Before that it applied on 2026-10-04, when its preview reported no correction on any zone at `e865032` (C1). The ruling that keeps it authoritative is `kluster-ops#177` | `dns` · **imported, never applied.** Its only update is a `resource-import` that succeeded on 2026-08-26, run locally (B2). It holds 139 resources (B1): 123 `DnsRecord`, 6 `Zone`, 6 `ManagedZone`, 2 `ZoneDnssec` (B3). The repository-against-live preview cannot run before `physical` is applied (note N1), and its refresh, run on 2026-10-08 after the state was rebound to the stack's own Cloudflare provider (`kluster-ops#511`), finds `dkim-k8s` in both mail zones behind live, which matches `DKIM_K8S` | Aetf/dns: edit `dnsconfig.js` and merge to `master`, and the merge applies (`push.yml`, no gate). Here: the same edit to `components/dns/`, same sitting, unapplied; the DKIM key change (Aetf/kluster#441) is the shape | `kluster-ops#75`'s `dns` first up, in the order of note N1, which names the records it deletes and the ruling that retires each → `kluster-ops#7` (the pointer commit, then the archive) | `kluster-ops#510`; `kluster-ops#478` |
+| R1 | `dns` · the Cloudflare zones: base records, mail with DKIM, the `*.zt` block, `legacy.py`'s application records, anchors, CAA, DNSSEC | the `dns` stack, applied by the operator as column 3 gives it. Aetf/dns is archived and declares nothing: its pointer commit `fe7cc03` removed `dnsconfig.js` and every workflow, and it holds no secret (G5; note N1) | `dns` · **applied locally.** Its first `up` ran on 2026-11-15 from the operator's checkout (physical/gateway-cutover.md §8.2) and reported 57 created, 67 updated and 55 deleted, the deletes being the records note N1 lists, the set B6 printed before it. A second `up`, from `main` once Aetf/kluster#708 declared a TXT over 255 characters and an SRV's priority as Cloudflare reads them back, followed it. On 2026-11-15 the stack against the zones, the first reading of physical/gateway-cutover.md §8.2, reports nothing but the `status` of the `ZoneDnssec` in each zone it signed first, peifeng.phd, ucw.phd, jiahui.id and jiahui.love, read back as `pending` against the declared `active` | none: flipped. A change is a pull request to `components/dns/` or the conventions it reads. Until physical/gateway-cutover.md §8.3 enables `deploy.yml`, the operator applies it once merged, from a checkout, with `mise x -- pulumi up --stack dns`; from then the merge applies it (§3) | flipped by `kluster-ops#75`'s `dns` first `up` (physical/gateway-cutover.md §8.2) → `kluster-ops#7`: Aetf/dns's pointer commit and its archive, and the revocation at Cloudflare of the token its workflow held (note N1) | the `pending` DNSSEC status of column 2, which physical/gateway-cutover.md §8.4 clears zone by zone (`kluster-ops#75`) |
 | R2 | `dns` · the split-horizon answers on alice and bob | alice, by hand. adguardhome-sync, a homelab user unit that is running (H2), copies alice to bob. Both instances answer from `$dnsrewrite` user rules, 18 each, with the rewrite list the stack writes empty and switched off (U3) | `dns` · declares none: B3 lists no rewrite among the stack's types. Its first rows are Aetf/kluster#454, open and held | alice's UI, which the sync carries to bob, and the weekly backup pull, `gateway-backup-pull`, records in yadm's `~/.config/gw-backups` (physical/gateway.md §1.6). Here: every rule the instances answer from, declared in the `user_rules` list of each instance, a list one resource per instance owns whole (`kluster-ops#507`, way (b)), same sitting, unapplied. The `lan.ucw.phd` rules are declared too until their application migrates (rule 4), since the first apply of that list removes every rule it does not declare | Aetf/kluster#454, which declares the user-rules list, merged and applied after R1's flip; adguardhome-sync stopped before it (note N2) → its unit's removal (`kluster-ops#79`); the pull's AdGuard transfer, which keeps column 3's record until the flip (rule 4), is removed in the change that applies #454 | `kluster-ops#507`; `kluster-ops#482`; `kluster-ops#223`; `kluster-ops#143` |
 | R3 | `physical` · the cloud fleet in compartment `kluster-physical` (network, nodes, load balancer, addresses, volumes, guardrails) and the Talos day-1 chain | the `physical` stack, for what its runs have created; nothing else declares the rest | `physical` · **created by step 5's first run** (physical/gateway-cutover.md §5), from 2026-11-14, as far as that run has reached: a resource it has not reached is absent, with nothing standing in for it. On 2026-11-14 it stopped short of the instances and the Talos configuration, on the image (`kluster-ops#729`). The console read of OCI (O1) was not taken | none | `physical`'s step 5 in `kluster-ops#75`: its first run, which leaves out the overlay's network and members (physical/gateway-cutover.md §5) → none | none known |
 | R4 | `physical` · the homelab's libvirt objects: the pool on the `nodatacow` subvolume, and the worker's volume, seed and domain | the `physical` stack, for what its runs have created. The host preparation under them is aconfmgr's, and applied (physical/homelab-host.md, status) | as R3. On 2026-11-14 the run created the pool and the worker's volume and stopped short of the worker's domain; beside them the host holds the domain `haos` and the pool `images` (H3) | none for these. The host preparation stays aconfmgr's for good, and a pool defined there would fail the first apply (physical/homelab-host.md §4) | the same run as R3, then the host-side `truncate` and `virsh blockresize` (physical/homelab-host.md §1) → none | none known |
 | R5 | `physical` · the gateway's device state: boot chain, units, `nspawn` settings and machines, `caddy`, AdGuard's initial state, authorized keys, device secrets, root filesystems. The ZeroTier machine is new | gw-config, yadm's `~/.config/gw-config`, pushed by hand with `deploy.sh`; root filesystems pushed by homelab-containers. Its dry run passes against the device (U1), which runs `adguard-alice`, `adguard-bob` and `caddy` under an active `udm-boot` (U2) | as R3 | gw-config: edit, `./deploy.sh`, the restart it prints, `yadm commit`. Here: the same change in `components/gateway/` or `conventions.gateway`, same sitting, unapplied | the window of physical/gateway-cutover.md, after which gw-config is frozen (note N3) → physical/gateway-cutover.md §7 after the soak; `kluster-ops#79` | `kluster-ops#508`: the live `Caddyfile` carries the Bilibili steering (U4), which nothing here declares |
 | R6 | `physical` · the controller census of declarative/physical.md §4: the cluster VLAN's network, its zone, every custom policy on a pair the census orders, whatever traffic it is about, and their order, the v6 pinhole, the v4 peer-port forward, static host entries, the site's BGP configuration | the `physical` stack: the window's targeted run applied the cluster VLAN's network, its zone, the address groups and the policies and orders of the census's pairs on 2026-11-05 (`kluster-ops#75`), and the retirement's targeted run applied the site's BGP configuration on 2026-11-14 (physical/gateway-cutover.md §7, `kluster-ops#736`). The pinhole waits for `workerGua` and the forward for Wave D, and the peer port's WAN side stays the legacy qbittorrent's until then (physical/gateway.md §4.2) | `physical` · **applied by the window's targeted run**, 2026-11-05 (`kluster-ops#75`), which read the census's policies ranked ahead of the predefined ones on Internal → External; the site's BGP configuration **applied by the retirement's targeted run**, 2026-11-14 (`kluster-ops#736`), after which the controller held one configuration, switched on. The console read (U5) was not taken | none: a custom policy on a pair the census orders is a census row, and one found in the console is drift (physical/gateway.md §4.2). What the census leaves to the console, the pairs it does not order, stays there for good, recovered from the UniFi autobackup (physical/gateway-cutover.md §7) | flipped by the window's targeted run; the pinhole at physical/gateway.md §2.5's step 3; the forward in Wave D (`qbittorrentOnWorker`, migration.md §2) → none | none known |
-| R7 | `physical` · ZeroTier Central: routes, flow rules, managed DNS, members | Central, hand-kept in its console (physical/gateway.md §2.1). It holds the route `10.144.0.0/16`, default rules and no managed DNS (Z2). Its RFC 4193 and 6PLANE addressing is on: the homelab member's overlay interface carries one address of each, derived from the network id (H4, 2026-10-24), and Z2's `v6` reads the setting itself, not yet taken. Its members match `conventions.overlay.ROSTER`, which also lists `ci-dns` and `ci-physical`, not yet created, and `udm`, whose member the ceremony's step 2 creates (Z3, Z4). Beside them, every kluster-code preview and deploy job authorizes a member of its own at Central with a Central token, outside the roster, and deletes it when the job ends, so Z3 lists one only while a job runs. Those members draw their addresses from the IPv4 assignment pools, which Z2 reads and no reading here records | as R3; the network enters state in the window's targeted run. The managed DNS of `kluster-ops#69`'s first slice is merged and not live (Z2) | none. "Take" is the Central change plus the same change to `conventions.overlay` (`ROSTER`, `MANAGED_ROUTES`), same sitting: the converge deletes a route the census lacks, and admits no member the roster lacks (physical/gateway.md §2.1–2.3) | the window's targeted run adopts the network at Central's values. Once the gateway's entry has landed, a run targeting its member alone creates it and the device is read answering at its overlay address; and once that run and the rest of the stack's first run have passed, the run with no targets converges the network, its default route via the gateway included (physical/gateway.md §2.2, §2.5). The converge turns RFC 4193 and 6PLANE off, so every member loses its two derived IPv6 addresses: the single-family overlay of physical/gateway.md §2.2 is the arrangement (rule 4). The converge also replaces Central's assignment pools with every overlay host address but the roster's and the gateway's (physical/gateway.md §2.1), and admits and removes none of kluster-code's self-authorized CI members: they keep joining outside the roster, the arrangement retired by the step of `kluster-ops#79` that disables kluster-code's workflows or archives the repository and deletes its `ZEROTIER_CENTRAL_TOKEN` at Central (rule 4; threat-model.md §2.10) → hand edits stop | `kluster-ops#510`: the roster is right, and Aetf/dns's `*.zt` block is stale against it (Z3–Z5) |
+| R7 | `physical` · ZeroTier Central: routes, flow rules, managed DNS, members | Central, hand-kept in its console (physical/gateway.md §2.1). It holds the route `10.144.0.0/16`, default rules and no managed DNS (Z2). Its RFC 4193 and 6PLANE addressing is on: the homelab member's overlay interface carries one address of each, derived from the network id (H4, 2026-10-24), and Z2's `v6` reads the setting itself, not yet taken. Its members match `conventions.overlay.ROSTER`, which also lists `ci-dns` and `ci-physical`, not yet created, and `udm`, whose member the ceremony's step 2 creates (Z3, Z4). Beside them, every kluster-code preview and deploy job authorizes a member of its own at Central with a Central token, outside the roster, and deletes it when the job ends, so Z3 lists one only while a job runs. Those members draw their addresses from the IPv4 assignment pools, which Z2 reads and no reading here records | as R3; the network enters state in the window's targeted run. The managed DNS of `kluster-ops#69`'s first slice is merged and not live (Z2) | none. "Take" is the Central change plus the same change to `conventions.overlay` (`ROSTER`, `MANAGED_ROUTES`), same sitting: the converge deletes a route the census lacks, and admits no member the roster lacks (physical/gateway.md §2.1–2.3) | the window's targeted run adopts the network at Central's values. Once the gateway's entry has landed, a run targeting its member alone creates it and the device is read answering at its overlay address; and once that run and the rest of the stack's first run have passed, the run with no targets converges the network, its default route via the gateway included (physical/gateway.md §2.2, §2.5). The converge turns RFC 4193 and 6PLANE off, so every member loses its two derived IPv6 addresses: the single-family overlay of physical/gateway.md §2.2 is the arrangement (rule 4). The converge also replaces Central's assignment pools with every overlay host address but the roster's and the gateway's (physical/gateway.md §2.1), and admits and removes none of kluster-code's self-authorized CI members: they keep joining outside the roster, the arrangement retired by the step of `kluster-ops#79` that disables kluster-code's workflows or archives the repository and deletes its `ZEROTIER_CENTRAL_TOKEN` at Central (rule 4; threat-model.md §2.10) → hand edits stop | none known |
 | R8 | `physical` · the B2 bucket `aetf-kluster-backup` and its keys | the `physical` stack | as R3: the bucket and its keys are among what step 5's first run created on 2026-11-14. The console read of B2 (O2) was not taken | none | the same run as R3, after `credentials derived b2-management mint` (credentials.md) → none | none known |
 | R9 | `state-backend` · the appliance: compartment `kluster` (network, subnet, reserved address, image, image bucket, instance), the B2 dump bucket and dump key | the `state-backend` stack (physical/state-backend.md, status). Its box, `state-backend-vm`, created on 2026-10-09T08:50:57Z, replaced the one the appliance's earlier script built in the live drill of rfc-006 §14 slice 6, and what that script had made beside it was deleted by hand (`kluster-ops#462`, steps 0–8). Aetf/kluster#414 removed the write path from that script | `state-backend` · **applied locally**, its checkpoint committed (framework/pulumi.md §3.3): the one on `main` holds 18 resources, written 2026-10-09T13:23:56-07:00 by CLI v3.267.0, after the drill's last `up` (B4, read on 2026-10-09). No backend holds it, by design | none: flipped | flipped by that drill → slice 7 removes the adoption | none known. `kluster-ops#484`, on the dump key's id, is ruled (a) |
 | R10 | `github` · repositories, Environments, gates, protection, labels, variables | the `github` stack. Apps, installations, secret values and account roots are console state by design (framework/github.md §4) | `github` · **applied locally**, as framework/github.md §1 has it. 18 resources (B1). The last `update` succeeded on 2026-10-01; earlier ones ran on 2026-09-25 and 2026-09-18, after a `resource-import` on 2026-09-05, and on 2026-09-25 and 2026-10-01 a failed update came minutes before the one that succeeded (B2). Its plan finds every resource the same (G1) | none: flipped | flipped → none | none known. No schedule runs G1 (framework/github.md §1) |
 | R11 | `k8s-base` · everything cluster-scoped in the new cluster | none: its cluster does not exist. The legacy counterpart is kluster-code's `BaseCluster`, in the legacy cluster, which the ambient `kubectl` context reaches (K3) | `k8s-base` · **no history**: 0 resources, initialized on 2026-10-01 and never updated (B1, B2) | none. What crosses from the legacy cluster is its sealing key, imported by hand at the first ported manifest (rfc-007 §6.3) | its first `up` in M2 (`kluster-ops#77`), after the copy of the cluster credential (operations.md §2.5) → the legacy base retires with kluster-code (`kluster-ops#79`) | none known |
-| R12 | `apps` · each application: namespace, workload, storage, routes, public records | per application, the legacy cluster, written by kluster-code's `dev` stack, where the merge applies. Its last `update` succeeded on 2026-10-04 from CI, at the head of kluster-code's `main` (K1, K2), and its deploy workflow is succeeding (G6). The applications' public records are R1's | `apps` · **no history**: 0 resources, initialized on 2026-10-01 and never updated (B1, B2) | kluster-code: edit, merge. Here: nothing until the application migrates, except its records, which follow R1: DNSControl until R1 flips, `legacy.py` after | per application, its wave's land and cut (migration.md §0 rule 1, §2): the land wires its component with its public rows held, and the cut deletes its `legacy.py` block and releases the rows (declarative/dns.md §6, note N4) → its kluster-code component removed after verification; `kluster-ops#79` | none known |
+| R12 | `apps` · each application: namespace, workload, storage, routes, public records | per application, the legacy cluster, written by kluster-code's `dev` stack, where the merge applies. Its last `update` succeeded on 2026-10-04 from CI, at the head of kluster-code's `main` (K1, K2), and its deploy workflow is succeeding (G6). The applications' public records are R1's | `apps` · **no history**: 0 resources, initialized on 2026-10-01 and never updated (B1, B2) | kluster-code: edit, merge. Here: nothing until the application migrates, except its records, which follow R1 and are declared in `legacy.py` | per application, its wave's land and cut (migration.md §0 rule 1, §2): the land wires its component with its public rows held, and the cut deletes its `legacy.py` block and releases the rows (declarative/dns.md §6, note N4) → its kluster-code component removed after verification; `kluster-ops#79` | none known |
 | R13 | `apps` · the host services that move into the cluster: qbittorrent-nox and seedwatch (Wave D); thread-dashboard stays a service of the host (migration.md §2) | the homelab host: `qbittorrent-nox@aetf` (aconfmgr), and the `seedwatch` user unit (yadm), both running (H2) | `apps` · declares none of them | aconfmgr or yadm: edit, then `sudo aconfmgr apply`, or `systemctl --user daemon-reload` and a restart, then commit | the wave's land and cut (migration.md §2) → the removal commits in yadm and aconfmgr (migration.md §0 rule 3, §4); `kluster-ops#79` | none known |
 
 **No stack owns, now or later:** the homelab host itself under yadm and
@@ -67,36 +67,30 @@ which is running (H2) and whose Postgres stops last, in Wave F
 outside their censuses, the controller's holding whole every pair it
 orders, so nothing custom on such a pair is console state.
 
-**N1. R1's flip.** `kluster-ops#75` runs the `dns` first up from the
-operator's checkout, and `kluster-ops#7` retires Aetf/dns with a
-pointer commit. **Aetf/dns takes no push from 2026-10-08 on** (operator
-ruling, `kluster-ops#505`): a push to its `master` runs DNSControl over
-the zones, and DNSControl removes what its file does not declare, so
-one landing between the `up` and the retirement would undo the `up`.
-`push.yml` stays enabled as a workflow and is not run. The one push
-since the ruling is the operator's own, `47ab103` on 2026-10-29
-(`kluster-ops#702`).
+**N1. R1's flip.** The `dns` first `up` (`kluster-ops#75`), run from
+the operator's checkout on 2026-11-15 as physical/gateway-cutover.md
+§8.2 gives it, is the zones' cutover: from it on, the `dns` stack is
+what writes every zone. Aetf/dns is retired. Its pointer commit,
+`fe7cc03`, removed `dnsconfig.js`, `creds.json`, `spfcache.json` and
+every workflow and left a README pointing here; its
+`CLOUDFLARE_API_TOKEN` secret is deleted, and the repository is
+archived (G5). The token that secret held is revoked at Cloudflare, so the way back needs a token minted for it (`kluster-ops#7`).
 
-The preview is reconciled line by line, as
-`kluster-ops#75` asks: no replace or delete from the type move
-(`kluster-ops#478`), the expected deletes below, and the first `up`'s
-own changes, which are CAA and DNSSEC on the zones that lack them, and
-the anchors. The co-host zone's check is negative: its create list holds
-no `*.zt` name and no `archvps.hosts`. CAA is live on
-`unlimited-code.works` alone, and the parents hold DS for
-`unlimited-code.works` and `unlimitedcodeworks.xyz` alone (C2). That
-preview cannot run before `physical` is applied: the program refuses
-until `physical` publishes the anchors' addresses (declarative/dns.md
-§2).
+**DNSControl's last declaration is the emergency way back**:
+`dnsconfig.js` at `47ab103`, the parent of `fe7cc03`. Reading C1
+previews what it would change in the live zones, and
+physical/gateway-cutover.md §8.2, under "The way back is forward",
+gives how it is applied, which starts with lifting Aetf/dns's archive,
+and what it costs.
 
-**The first `up`'s expected deletes are the `DnsRecord`s in the `dns`
-state that the program does not declare.** The import took the live
-records, so the state holds what DNSControl published, and what of that
-the declaration leaves out, and Cloudflare still holds, is deleted there
-by the first `up` that completes. Each falls in one of the classes
-below, and each class has its ruling. Today's members are C1's live
-set, Aetf/dns at `e865032`, less the declaration, listed by zone and
-label:
+**The first `up` deleted the `DnsRecord`s in the `dns` state that the
+program does not declare.** The import took the live records, so the
+state held what DNSControl published, and what of that the declaration
+leaves out the first `up` deleted at Cloudflare, but for the last class
+below, which Cloudflare no longer held. Each falls in one of these
+classes, and each class has its ruling. The members are C1's live set
+of 2026-10-04, Aetf/dns at `e865032`, less the declaration, listed by
+zone and label:
 
 -   **Every record of a parked zone but its apex and `www`**, the copies
     DNSControl published there: rfc-003 §5.3 and §5.4. In each of
@@ -117,28 +111,24 @@ label:
     `conventions.overlay.ROSTER` entry**: the overlay block publishes one
     name per roster member and nothing else (`kluster-ops#510`, ruled on
     2026-10-08). In `unlimited-code.works`: `Aetf-Laptop.zt`.
--   **A record Aetf/dns removed after `e865032`, already gone live**,
-    in the same sitting as the declaration, as column 3 of R1 lands a
-    change: its push deleted it. In `jiahui.id`: the apex `A` and the
-    `www` `A`, which addressed a Google Site that no longer exists
-    (Aetf/dns `47ab103`, `kluster-ops#702`). No `up` deletes one: the
-    pinned provider's delete reports Cloudflare's not-found answer as a
-    failure, and only its read drops a record Cloudflare no longer holds
-    from state. A refresh of the two, run before B6
-    (physical/gateway-cutover.md §8.2), takes them out of state, and
-    neither B6 nor the preview prints them after it.
+-   **A record Aetf/dns removed after `e865032`**, which its own push
+    had already deleted from Cloudflare. In `jiahui.id`: the apex `A`
+    and the `www` `A`, which addressed a Google Site that no longer
+    exists (Aetf/dns `47ab103`, `kluster-ops#702`). No `up` deletes one:
+    the pinned provider's delete reports Cloudflare's not-found answer
+    as a failure, and only its read drops a record Cloudflare no longer
+    holds from state. The refresh of the two that physical/gateway-cutover.md
+    §8.2 runs before B6 takes them out of state, so neither B6 nor the
+    `up` prints them.
 
 **The website co-host, `unlimitedcodeworks.xyz`, has none**
 (`kluster-ops#202`): the overlay block and the legacy anchor rfc-003
-§5.3 keeps out of it were never live there, so its state holds neither.
+§5.3 keeps out of it were never live there, so its state held neither.
 
-The list is what the deletes are read against; B6 is what confirms it.
-Run before the `up`, B6 prints every record in the state that the
-declaration lacks. Its lines and the preview's `-` rows are the same
-set, and each belongs to a class above. A line B6 prints that fits no
-class, or a member listed here that B6 does not print, is a finding to
-settle before the `up`, not an expected delete, but for the members
-of the class already gone live once that refresh has run.
+B6, taken before the `up` and after that refresh, printed every record
+above but the ones already gone live, and the `up`'s deletes were the
+same set. From then on, a line it prints is a record in state that the
+program no longer declares, which the next `up` deletes.
 
 **N2. adguardhome-sync may stop at any time** (operator ruling,
 `kluster-ops#505`). It carries more than the rules written by hand, which
@@ -178,20 +168,19 @@ by stack, on something other than the merge:
 -   **Every stack:** `deploy.yml` is disabled (operator ruling,
     2026-10-17), so a merge starts no deploy at all until
     physical/gateway-cutover.md §8.3 enables it as the step that arms
-    CI. That is the lock; the missing identity below is what stands
-    behind it. Read it with
+    CI, once that step's drift reading has passed; `kluster-ops#761`
+    and `kluster-ops#762` stand in the reading's way. That is the lock.
+    Read it with
     `gh api repos/Aetf/kluster/actions/workflows/deploy.yml --jq .state`,
     which answers `disabled_manually` until then.
--   **`dns`:** the chain stops at `plan-physical`, because no
-    Environment holds a ZeroTier identity: G3 finds none in `dns`,
-    `physical` or `physical-plan`, and the last `deploy.yml` run failed
-    there and skipped every `up` job (G4). `kluster-ops#75` runs the
-    identity sync only after the `dns` first up, and that is an ordering
-    in a checklist: once the sync delivers the identities, every merge
-    applies `dns`, and the `dns` Environment has no protection rule
-    (G2). No reviewer is added (operator ruling, `kluster-ops#505`):
-    the bring-up runs the identity sync and the `dns` first up in one
-    sitting, so no merge lands between them.
+-   **`dns`:** nothing, since it has flipped (R1). Until the chain is
+    enabled the operator applies it from a checkout; from then every
+    merge applies it. Behind the lock nothing else stops the chain
+    there: physical/gateway-cutover.md §8.3's sync has put a ZeroTier
+    identity in each of the `dns`, `physical` and `physical-plan`
+    Environments (G3), without which the chain stops at
+    `plan-physical`, and the `dns` Environment has no protection rule
+    (G2). No reviewer is added (operator ruling, `kluster-ops#505`).
 -   **`physical`:** the required reviewer on the `physical` Environment
     (G2; framework/ci.md §3). From the window's preparation on, the
     committed `gatewayBootstrapHost` also fails CI's `physical` jobs
@@ -284,7 +273,7 @@ A="$(mise x uv -- uv run python -c 'from kluster.lib.state_backend import settin
 openssl s_client -starttls postgres -connect "$A" </dev/null 2>/dev/null | openssl x509 -noout -fingerprint -sha256
 mise x uv -- uv run python -c 'import yaml; print(yaml.safe_load(open("Pulumi.state-backend.yaml"))["config"]["kluster-py:serverCertificate"])' | openssl x509 -noout -fingerprint -sha256
 
-# B6 the dns records in state that the program does not declare: the first up's deletes (note N1)
+# B6 the dns records in state that the program does not declare: the next up's deletes (note N1)
 pq stack export --stack dns | mise x uv -- uv run python -c 'import json, sys; from kluster.conventions import ALL_ZONES; from kluster.components.dns import LEGACY, base, zone_records; b = (*base.blocks(anchors=base.AnchorAddresses("", "", "")), *LEGACY); d = {f"{z}-{r.resource_key}" for z in ALL_ZONES for r in zone_records(z, b)}; s = [(r["urn"].rsplit("::", 1)[1], r.get("inputs", {})) for r in json.load(sys.stdin)["deployment"]["resources"] if r["type"] == "cloudflare:index/dnsRecord:DnsRecord"]; print(*sorted("\t".join((n, i.get("name", "?"), i.get("type", "?"))) for n, i in s if n not in d), sep="\n")'
 ```
 
@@ -377,20 +366,20 @@ pq stack export --stack dns | mise x uv -- uv run python -c 'import json, sys; f
     name and type the state's inputs hold, or `?` where they hold none.
     It errs loudly rather than quietly: were `ManagedZone`'s naming to
     move without B6, every record in state would print. It was not among
-    the readings of 2026-10-04: it is taken before the `dns` first up
+    the readings of 2026-10-04; it was taken before the `dns` first up
     (note N1).
 
 #### C — Cloudflare through DNSControl
 
 ```sh
-# C0 the token, and the binary the Aetf/dns push workflow runs
+# C0 the token, DNSControl's last declaration, and the binary the Aetf/dns push workflow ran
 h="$(sha256sum Pulumi.dns.yaml)"; T="$(mise x -- pulumi config get cloudflareApiToken --stack dns)"; [ "$h" = "$(sha256sum Pulumi.dns.yaml)" ] && echo "stack file unchanged"
 D=~/.cache/ops505-dnscontrol; mkdir -p "$D"
-[ -d "$D/dns" ] || git clone --quiet https://github.com/Aetf/dns "$D/dns"; git -C "$D/dns" pull --quiet --ff-only
+[ -d "$D/dns" ] || git clone --quiet https://github.com/Aetf/dns "$D/dns"; git -C "$D/dns" fetch --quiet && git -C "$D/dns" checkout --quiet --detach 47ab103
 curl -sSLo "$D/dnscontrol" https://github.com/StackExchange/dnscontrol/releases/download/v3.31.4/dnscontrol-Linux
 echo "054d236531df2674c9286279596f88f02c1cf7b1448dc5f643f1a1dbe705fe8d  $D/dnscontrol" | sha256sum -c - && chmod +x "$D/dnscontrol"
 
-# C1 DNSControl against the live zones
+# C1 DNSControl's last declaration against the live zones: what the way back would change
 (cd "$D/dns" && CLOUDFLARE_API_TOKEN="$T" "$D/dnscontrol" preview --expect-no-changes); echo "exit=$?"
 
 # C2 CAA at each authoritative server, DS at each parent
@@ -406,14 +395,19 @@ done
     stack passphrase, which `mise` supplies here. `config get` reads one
     secret and rewrites the stack file only when the secrets manager's
     state changes (`pkg/cmd/pulumi/config/config.go`, `getConfig`),
-    which the surrounding checksum would show. The release and its digest
-    are the ones `koenrh/dnscontrol-action@v3` installs for the Aetf/dns
-    push workflow.
+    which the surrounding checksum would show. `47ab103` is the commit
+    before Aetf/dns's pointer commit, the last that holds `dnsconfig.js`
+    (note N1). The release and its digest are the ones
+    `koenrh/dnscontrol-action@v3` installed for the Aetf/dns push
+    workflow.
 -   **C1:** in that release both of `preview`'s writes, the zone create
     and each correction, run only under `push`
     (`commands/previewPush.go`). `--expect-no-changes` makes any
     correction a non-zero exit, and `--notify` stays off. It writes one
-    local file, `spfcache.updated.json`, in the clone.
+    local file, `spfcache.updated.json`, in the clone. On 2026-10-04, at
+    `e865032`, it reported no correction on any zone. Since the `dns`
+    first `up`, its corrections are what the way back of note N1 would
+    apply.
 -   **C2** is DNS queries, through `drill`.
 
 #### X — the DKIM key, in all three places
@@ -496,7 +490,7 @@ for e in dns physical physical-plan; do printf '%s: ' "$e"; gh api "repos/Aetf/k
 # G4
 R="$(gh run list --repo Aetf/kluster --workflow deploy.yml --limit 1 --json databaseId --jq '.[0].databaseId')"; gh run view "$R" --repo Aetf/kluster --json jobs --jq '.jobs[] | "\(.name)\t\(.conclusion)"'
 # G5
-gh api repos/Aetf/dns/actions/workflows/push.yml --jq .state; gh run list --repo Aetf/dns --workflow push.yml --limit 3
+gh api repos/Aetf/dns --jq .archived; gh api repos/Aetf/dns/commits/master --jq '.sha[0:12] + " " + (.commit.message | split("\n")[0])'; gh api repos/Aetf/dns/actions/secrets --jq '[.secrets[].name] | join(" ")'
 # G6
 gh run list --repo Aetf/kluster-code --workflow pulumi-deploy.yml --limit 3
 ```
@@ -510,9 +504,9 @@ gh run list --repo Aetf/kluster-code --workflow pulumi-deploy.yml --limit 3
     passphrase, which the driver acquires.
 -   **G2–G6** are GET requests (`gh api` sends one unless given a field) and
     `gh run` reads.
--   **G3** lists secret names, never values. A `ZEROTIER_IDENTITY` on
-    `dns` and on `physical-plan` means the next push to `main` applies
-    `dns` once `deploy.yml` is enabled (§3).
+-   **G3**, and **G5**'s last command, list secret names, never values.
+    A `ZEROTIER_IDENTITY` on `dns` and on `physical-plan` means the next
+    push to `main` applies `dns` once `deploy.yml` is enabled (§3).
 
 #### H — the homelab host
 
@@ -556,8 +550,6 @@ curl -sS -H "Authorization: bearer $ZT" "https://my.zerotier.com/api/network/$N"
 curl -sS -H "Authorization: bearer $ZT" "https://my.zerotier.com/api/network/$N/member" | jq -r '.[] | [.name, .nodeId, .config.authorized, (.config.ipAssignments // [] | join(","))] | @tsv' | sort
 # Z4
 mise x uv -- uv run python -c 'from kluster.conventions import overlay; [print(m.name, getattr(m, "node_id", None) or "-", m.address, sep="\t") for m in overlay.ROSTER]' | sort
-# Z5
-gh api -H 'Accept: application/vnd.github.raw' repos/Aetf/dns/contents/dnsconfig.js | sed -n '/var ZT_HOSTS/,/];/p'
 ```
 
 -   **Z1** is the homelab member's own view, through a list verb.
@@ -566,8 +558,7 @@ gh api -H 'Accept: application/vnd.github.raw' repos/Aetf/dns/contents/dnsconfig
     guarded the way C0 is.
 -   **Z2 and Z3** are GET requests, on the paths and with the header that
     `zerotier/go-ztcentral`, the client under the provider, uses.
--   Z3 against Z4 and Z5 says which of the roster and DNSControl's
-    `*.zt` block Central agrees with.
+-   Z3 against Z4 says whether Central agrees with the roster.
 
 #### O — OCI and B2, in their consoles
 
