@@ -178,6 +178,7 @@ class Playbooks:
     """
 
     machine: str = 'A declared machine not running'
+    port: str = "A machine's port off its bridge"
     boot_chain: str = "The boot chain's last run failed"
     unit: str = 'A delivered unit disabled or failed'
     routing: str = 'The routing daemon not running'
@@ -197,6 +198,8 @@ class _HealthParams:
 
     cluster: str
     machine_units: tuple[str, ...]
+    #: Each machine on a bridge as three words: its unit, its name, and its bridge.
+    bridged_machines: tuple[str, ...]
     overlay_unit: str
     overlay_machine: str
     zerotier_cli: str
@@ -234,7 +237,9 @@ def health_program(
 
     The machines are the declarations `Gateway` builds its containers from,
     the units are `DELIVERED_UNITS`, and the routing daemon is the one the
-    routing converger starts. The offline cache is judged by `10-packages.sh
+    routing converger starts. Each machine whose declaration names a bridge is
+    read for its port having that bridge as its master; one in the host's
+    network namespace has no port and is not read. The offline cache is judged by `10-packages.sh
     --check` itself, so the rule for a cache that would carry an offline boot is
     the mechanism's alone. `packages_script` defaults to where the boot chain
     holds that script, and is a parameter so the executable can be run against
@@ -265,6 +270,11 @@ def health_program(
         _HealthParams(
             cluster=conventions.CLUSTER_NAME,
             machine_units=tuple(shlex.quote(machine.unit_name) for machine in machines),
+            bridged_machines=tuple(
+                ' '.join(shlex.quote(word) for word in (machine.unit_name, machine.service.name, machine.bridge))
+                for machine in machines
+                if machine.bridge is not None
+            ),
             overlay_unit=shlex.quote(overlay_daemon.unit_name),
             overlay_machine=shlex.quote(overlay_daemon.service.name),
             zerotier_cli=shlex.quote(ZEROTIER_CLI),
