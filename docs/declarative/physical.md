@@ -565,13 +565,18 @@ them for day-2 once v0.12 is stable *and* has reached the Pulumi bridge.
     declaration states no disk size: the provider refuses `size` beside
     `source` and takes the volume's capacity from the source file's
     length. That file is the image followed by the room Talos boots into
-    (`components/talos/image.py`, `HOMELAB_DISK_ROOM`), which makes every
+    (`components/talos/image.py`, `HOMELAB_DISK_ROOM`), sized so that
+    EPHEMERAL clears the floor of day 1's health gate: the run that
+    creates the worker passes its gate on the disk as created, and the
+    provider, which uploads every byte of the file, zeros included,
+    writes no more on the host than that run needs. That makes every
     size the disk has after its creation — the bootstrap one included —
     the host-side `truncate` + `virsh blockresize` of
     homelab-host.md §1. Both `size` and `source` are then ignored on
     that resource, because a libvirt volume has no update path at all
     and any field that diverged — a file the host has grown, an image a
-    Talos self-upgrade has replaced — would otherwise propose
+    Talos self-upgrade has replaced, a room the program has resized —
+    would otherwise propose
     destroying the worker's disk. The volume's name is stated, so it is
     deleted before it is replaced: creating a volume, the provider
     adopts an existing volume of the same name and uploads into it, so a

@@ -36,12 +36,20 @@ a file it is — the shape makes that rational:
     any host snapshot/send scope.
 -   **Raw, not qcow2**: with CoW disabled, qcow2's allocation layer
     buys nothing but indirection. The file is created as the Talos
-    image followed by the room Talos needs to create STATE and EPHEMERAL
-    at first boot (`components/talos/image.py`, `HOMELAB_DISK_ROOM`) —
-    the volume is created *from* that file (declarative/physical.md §3) —
-    so every size the disk has after that is `truncate` on the file + `virsh blockresize`, the ~60 GB
-    bootstrap size as much as the 100+ GB end state reached
-    interleaved with reclamation (migration.md §0.4). Talos grows its
+    image followed by the room Talos creates STATE and EPHEMERAL in at
+    first boot (`components/talos/image.py`, `HOMELAB_DISK_ROOM`) — the
+    volume is created *from* that file (declarative/physical.md §3).
+    The room is sized so that EPHEMERAL clears the floor of day 1's
+    health gate, so the `physical up` that creates the worker passes its
+    gate on the disk as created. The room stops there because the
+    provider uploads every byte of the file, zeros included, and libvirt
+    writes each of them on the host, whereas a `truncate` on the host
+    lengthens the file and writes nothing. So every size the disk has
+    after its creation is `truncate` on the file + `virsh blockresize`,
+    the ~60 GB bootstrap size as much as the 100+ GB end state reached
+    interleaved with reclamation (migration.md §0.4); the bootstrap
+    growth follows the first run rather than standing between it and its
+    gate. Talos grows its
     EPHEMERAL partition into the new space on its own, but only at
     boot: a volume grows on its way to being mounted, and Talos does
     not take up a mounted one again. So every growth of the file is

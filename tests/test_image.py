@@ -419,35 +419,74 @@ def test_the_cache_is_somewhere_both_a_workstation_and_a_runner_have() -> None:
 MIB = 1 << 20
 GIB = 1 << 30
 
-#: What Talos v1.13 creates past a disk image's last partition at first boot,
-#: and the least it makes of each: STATE at its size, EPHEMERAL at no less than
-#: its minimum (siderolabs/talos v1.13.0,
-#: `pkg/machinery/imager/quirks/partitions.go`, `StateSize` and
-#: `EphemeralMinSize`). A disk image carries neither from v1.8 on
-#: (`cmd/installer/pkg/install/install.go`, `SkipDataPartitions`).
+#: What Talos creates past a disk image's last partition at first boot is STATE
+#: at its fixed size and EPHEMERAL in the rest; a disk image carries neither
+#: from v1.8 on (siderolabs/talos v1.13.0, `cmd/installer/pkg/install/install.go`,
+#: `SkipDataPartitions`). The sizes below are read off the pinned release,
+#: siderolabs/talos v1.13.9, rather than off the program, so that each case
+#: holds the program's room against Talos and not against itself:
+#:
+#: -   `pkg/machinery/imager/quirks/partitions.go`: STATE is 100 MiB, META
+#:     1 MiB, and the UKI EFI partition the EFI, BIOS and boot sizes together,
+#:     100 + 1 + 2000 MiB, the boot size being the one `quirks.New("")` gives
+#:     (`quirks.go`, `PartitionSizes`).
+#: -   `pkg/minimal/limits.go`: the minimal disk, `DiskSize`, is 6 GiB.
+#: -   `pkg/cluster/check/nodes.go`, `AllNodesDiskSizes`: the health check
+#:     refuses an EPHEMERAL smaller than the minimal disk less the other three
+#:     partitions and 10 MiB of GPT overhead, alignment included.
 TALOS_STATE_SIZE = 100 * MIB
-TALOS_EPHEMERAL_MIN_SIZE = 2 * GIB
+TALOS_META_SIZE = 1 * MIB
+TALOS_UKI_EFI_SIZE = (100 + 1 + 2000) * MIB
+TALOS_MINIMAL_DISK_SIZE = 6 * GIB
+TALOS_GPT_OVERHEAD = 10 * MIB
+TALOS_EPHEMERAL_FLOOR = TALOS_MINIMAL_DISK_SIZE - (
+    TALOS_UKI_EFI_SIZE + TALOS_STATE_SIZE + TALOS_META_SIZE + TALOS_GPT_OVERHEAD
+)
 
 
-@pytest.mark.asyncio
-async def test_the_worker_disk_has_room_for_what_talos_creates_at_first_boot(
-    factory: Factory, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    # The libvirt volume takes the length of the file it is created from as its
-    # capacity, so the file the worker's declaration makes is the disk the
-    # worker first boots on. The kubelet runs from EPHEMERAL, and the health
-    # gate of the first apply waits on the kubelet, so a disk without room for
-    # EPHEMERAL fails that apply rather than a later one.
+async def created_worker_disk(factory: Factory, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """The file the worker's declaration has the provider create, from an artifact that is `PAYLOAD`."""
     _ = await build_worker().path.future()
     declared = factory.inputs_of(f'{WORKER}-nocloud')
     _ = serve(monkeypatch, lzma.compress(PAYLOAD))
     disk = tmp_path / 'worker.raw'
-
     _ = talos_factory.FactoryImageProvider().create(declared | {'path': str(disk)})
+    return disk
 
-    assert disk.stat().st_size - len(PAYLOAD) >= TALOS_STATE_SIZE + TALOS_EPHEMERAL_MIN_SIZE
+
+@pytest.mark.asyncio
+async def test_the_workers_first_ephemeral_clears_the_health_gates_floor(
+    factory: Factory, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The libvirt volume takes the length of the file it is created from as its
+    # capacity, so the file the worker's declaration makes is the disk the
+    # worker first boots on. The run that creates the worker also runs day 1's
+    # health gate, so an EPHEMERAL under the gate's floor fails that run, on a
+    # node that booted and whose kubelet runs.
+    disk = await created_worker_disk(factory, tmp_path, monkeypatch)
+
+    room = disk.stat().st_size - len(PAYLOAD)
+    # EPHEMERAL is what the room holds once STATE and the GPT overhead the
+    # check allows for are taken out of it.
+    assert room - TALOS_STATE_SIZE - TALOS_GPT_OVERHEAD >= TALOS_EPHEMERAL_FLOOR
     with disk.open('rb') as written:
         assert written.read(len(PAYLOAD)) == PAYLOAD
+
+
+@pytest.mark.asyncio
+async def test_the_room_takes_no_blocks_on_the_machine_running_the_program(
+    factory: Factory, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The room is gigabytes of zeros past the artifact. Grown by length rather
+    # than written, it reads back as zeros and allocates nothing, so the file
+    # takes the artifact's blocks and no more, whatever the room.
+    disk = await created_worker_disk(factory, tmp_path, monkeypatch)
+    status = disk.stat()
+
+    assert status.st_size > len(PAYLOAD) + MIB, 'the room is there to be read'
+    # `st_blocks` counts 512-byte units on every POSIX file system. A file
+    # system block or two past the artifact is rounding; a megabyte is not.
+    assert status.st_blocks * 512 < len(PAYLOAD) + MIB
 
 
 # -- fetching and decompressing ----------------------------------------------
