@@ -746,7 +746,8 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     half built**: the producer posts the alert, and the ops repo's
     dispatch handler that would turn it into a push and an issue does
     not exist, so a diff is a failed workflow run and nothing more.
-    The workflow has also never run, because the ops repo's
+    The workflow also runs only when started by hand, as
+    physical/gateway-cutover.md §8.3 starts it, because the ops repo's
     `drift-trigger.yml`, which would trigger it, is not written
     (`kluster-ops#57`).
     `--refresh` is load-bearing for the second source: a plain
@@ -1219,23 +1220,27 @@ branch + git-sync).
 ## 5. Red before the installation exists
 
 The pipeline above is complete; the installation it drives is not.
-`physical` holds no resources and has never been updated, and
-`k8s-base` and `apps` exist and have never been updated either —
-`k8s-base` declares Cilium and its operators, `apps` nothing beyond
-its providers. Of the
-stacks this repository declares, only `dns` (whose resources were
-imported rather than created) and `github` have resources behind them. The checks that
-reach past the repository therefore fail, on `main` and on every pull
-request that touches code, and that red is a property of the phase
-rather than a fault to report. What follows is how to tell it apart
-from a real one. The milestones named below are the ops repository's
-roadmap phases (dispatch.md §4); the `M1`/`M2` of
+`dns` and `physical` are applied: `dns` has written every zone since
+its first `up` (sources-of-truth.md, row R1), and `physical` has held
+what its runs created since physical/gateway-cutover.md §5 and
+publishes its outputs. `github` and `state-backend` have resources
+behind them too, as operator stacks that no job runs
+(framework/pulumi.md §3.3). `k8s-base` and `apps` exist and have never
+been updated — `k8s-base` declares Cilium and its operators, `apps`
+nothing beyond its providers — so the checks that reach those two fail,
+on `main` and on every pull request that touches code, and that red is
+a property of the phase rather than a fault to report. What follows is
+how to tell it apart from a real one. The milestones named below are
+the ops repository's roadmap phases (dispatch.md §4); the `M1`/`M2` of
 cluster/security-audit.md are audit findings and unrelated.
 
-`drift` is left out of the job lists below. Its matrix names all four
-stacks and every entry would fail, for whichever of the two reasons
-below applies to its stack, but as of 2026-09-25 the workflow has
-never run at all (§3), so nothing about it here is an observation.
+`drift` runs only when started by hand (§3). Its `k8s-base` and `apps`
+entries fail for the reason below. Its `dns` entry fails in its
+*Refresh and compare* step, with the `status` of a `ZoneDnssec` read
+back as `pending` against the declared `active` as its only diff, until
+physical/gateway-cutover.md §8.4 has run for every zone, and
+physical/gateway-cutover.md §8.3 says how that red is told from one at
+the join.
 
 **A merge is gated on `checks` and `changes`, and on nothing else.**
 `main` requires exactly those two contexts on an up-to-date branch,
@@ -1243,49 +1248,13 @@ with `enforce_admins` on and no reviewer requirement (§3); `preview`,
 `noop-automerge`'s `prove`, `deploy` and `drift` are unrequired, so a
 pull request whose `checks` and `changes` are green is mergeable while
 the rest of the matrix is red. That much is standing and does not
-retire. What is phase-bound is the reading: today a red one of those
-says something about the installation and nothing about the change, so
-it is not a review finding. Once the stacks exist, a red `preview` on
-a code change is exactly a review finding again. Each of the three
-findings below names the condition that deletes it, and the section
-goes with the last of them.
-
-**No Environment holds a `ZEROTIER_IDENTITY`, so every job that joins
-the overlay fails.** The `dns`, `physical` and `physical-plan`
-Environments carry `ZEROTIER_NETWORK_ID` and not the identity beside
-it, because the identity is generated in the `physical` stack's state
-and `credentials derived sync` (§3) can only copy it out once that
-stack has been applied. The join fails in the *Install the member
-identity* step of the ZeroTier action, where `zerotier-idtool` is
-handed an empty secret:
-
-```
-Identity argument invalid or file unreadable: /var/lib/zerotier-one/identity.secret
-```
-
-Only `preview.yml` gives that action a name of its own, *Join
-ZeroTier*. In `deploy`, `noop-automerge` and `drift` it is unnamed, and
-the log shows `Run ./.github/actions/zerotier` with the same sub-step
-inside it. The jobs are `preview (dns)`, `prove (dns)` and `deploy`'s
-`plan-physical`. `plan-physical` is the head of the merge chain, so a
-push to `main` fails there and skips all four `up` jobs — which is
-also why `notify-failure`, the Home Assistant alert of §3, runs on
-every merge. On a pull request the two `dns` jobs share the `zt-dns`
-concurrency group (§2), and one of the pair is routinely canceled
-before it runs a single step rather than reaching the failing one. A
-`preview (dns)` that is canceled with no steps at all was superseded
-by the lock; it is not a separate problem. **Retires with the M1 first
-`physical` up, at its identity sync**: the identity is minted by the
-targeted apply inside the cutover window, whose targets take the
-overlay's identities because the network's adoption depends on them
-(physical/gateway.md §2.5 step 1), and the member that authorizes it is
-created by step 5's last run, the run with no targets, after the
-ceremony's step 2 (physical/gateway-cutover.md §5). The
-`credentials derived sync` that fills the row runs after ceremony step
-4 and the device's half of the overlay's verification
-(physical/gateway.md §2.4.2), because that is where the join it hands
-CI becomes load-bearing (physical/gateway-cutover.md §8.3). These jobs
-then join like any other.
+retire. What is phase-bound is the reading of the `k8s-base` and `apps`
+entries: today a red one says something about the installation and
+nothing about the change, so it is not a review finding. A red
+`preview` of `dns` or `physical` on a code change is a review finding,
+as every red `preview` is once the stacks exist. Each finding below
+names the condition that deletes it, and the section goes with the last
+of them.
 
 **`k8s-base` and `apps` preview red until they hold a kubeconfig they
 can open.** Both stacks exist, with their stack files committed, and
@@ -1304,7 +1273,11 @@ program's traceback ends in
 kluster.lib.k8s.UnusableKubeconfig: this stack's configuration holds no 'kubeconfig', so no Kubernetes provider is opened; `credentials derived sync --only kubeconfig` copies it in from the physical stack's state once physical has been applied
 ```
 
-Every pull request that touches code runs both entries. `prove` is
+A push to `main` meets it at `deploy`'s `up-k8s-base`, which runs once
+`physical`'s jobs have passed and fails there; `up-apps`, which needs it
+to succeed, is skipped, and `notify-failure`, the Home Assistant alert
+of §3, runs on every merge. Every pull request that touches code runs
+both entries. `prove` is
 `fail-fast: true`, so an entry that fails first can cancel the other
 two: which names are reported failed and which canceled varies
 between runs and carries no information. A pull request that touches
@@ -1326,7 +1299,7 @@ which the first milestone's `physical` `up` does not make; from then on
 the preview reaches the cluster through the balancer's 6443 (§2), as
 rfc-007 §3.3 lists.
 
-**Neither of those is a secret-availability problem, and the tell is
+**That is not a secret-availability problem, and the tell is
 which step fails, and then what the message names.** All five
 Environments hold the four `PULUMI_BACKEND_*` secrets and the
 passphrase, and the `state-backend` action checks the four before
@@ -1353,8 +1326,8 @@ raises it has loaded its own stack out of the appliance, so the box
 answered.
 
 **The message is the test.** `no stack named` is never expected:
-every stack the matrices name exists in the backend, `dns` holding the
-records imported into it, so `no stack named 'k8s-base'`, or naming
+every stack the matrices name exists in the backend, so
+`no stack named 'k8s-base'`, or naming
 any other of them, means `pulumi` was pointed at a backend that is not
 the appliance, or that the state is gone, and is a regression on
 either reading. A bundle that resolves but cannot reach
@@ -1378,8 +1351,10 @@ blank passphrase is the line directly above `IDENTITY:`. Those two
 look identical and mean opposite things: the passphrase is the
 snapshot artifact, while `IDENTITY` is
 `${{ secrets.ZEROTIER_IDENTITY }}` interpolated by the workflow at
-that moment, so blank there is the genuine absence this section opened
-with. **Retires with the two paragraphs above**, since a green matrix
+that moment, so it reads `***` where the Environment holds the identity
+and blank there is a genuine absence, the state the way back of
+physical/gateway-cutover.md §8.3 leaves. **Retires with the `k8s-base`
+and `apps` finding above**, since a green matrix
 leaves nothing to misread — but the parts of it that are not phase
 state should survive the deletion beside the credential partition they
 belong to in §3: the `state-backend` action rejects an incomplete

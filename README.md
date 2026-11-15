@@ -152,12 +152,16 @@ mutual TLS, declared by the `state-backend` stack, and serving from that stack's
 own box since the replacement of 2026-10-09
 (`docs/rfc/rfc-006-state-backend-stack.md` §14, slice 6; the record is
 `kluster-ops#462`)
-— and the `dns` stack, which declares this installation's Cloudflare zones
-and records and holds them imported, not yet applied: DNSControl stays
-authoritative until the zones' cutover
-([docs/sources-of-truth.md](docs/sources-of-truth.md)). The CI workflow set and renovate are
-wired for this repository, and the `images` workflow builds and publishes the
-self-built container images in `docker/` to ghcr, multi-arch on native runners.
+— the `dns` stack, which declares this installation's Cloudflare zones
+and records and has written them since the zones' cutover of 2026-11-15
+([docs/sources-of-truth.md](docs/sources-of-truth.md), row R1), and the
+`physical` stack, which declares the machines and networks the cluster
+runs on and has applied them since 2026-11-14
+([docs/physical/gateway-cutover.md](docs/physical/gateway-cutover.md) §5).
+The CI workflow set and renovate are wired for this repository, a merge
+to `main` runs the deploy chain, and the `images` workflow builds and
+publishes the self-built container images in `docker/` to ghcr,
+multi-arch on native runners.
 
 What is *not* built announces itself rather than being listed here: an
 unimplemented stack raises from its entrypoint, a seed the register names
