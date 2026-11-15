@@ -774,12 +774,18 @@ class SiteFirewall(Component, pulumi_type='kluster:gateway:SiteFirewall'):
         # separately from everything else on the internal side. Its membership
         # is stated from the network below rather than here — the controller
         # accepts the association from either end and two ends managing it
-        # fight over it.
+        # fight over it. It holds the association from either end as well, so
+        # a refresh reads the network back into the zone's `networks`, which
+        # the provider plans as an empty list wherever it is left unset and
+        # sends whole on every write of the zone. `ignore_changes` is what
+        # keeps the single owner single: the zone's diff leaves the list
+        # alone, and an update the zone does take sends the list its state
+        # holds, which is the membership once a refresh has read it.
         self.zone = unifi.FirewallZone(
             f'{name}-zone',
             name=conventions.gateway.UNIFI_ZONE_CLUSTER,
             site=site,
-            opts=child,
+            opts=self.child_opts(ignore_changes=['networks']),
         )
         zones: dict[Zone, pulumi.Input[str]] = {
             Zone.INTERNAL: unifi.get_firewall_zone_output(name=ZONE_INTERNAL, site=site, opts=invoke).id,
