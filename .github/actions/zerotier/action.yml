@@ -21,8 +21,15 @@ inputs:
     default: ''
   wait_for:
     description: >
-      host:port targets, separated by spaces or newlines, to wait for before
-      returning: the first one that answers ends the wait
+      host:port targets the run dials, separated by spaces or newlines, to
+      wait for before returning: the wait ends once every one has answered
+    required: false
+    default: ''
+  wait_for_any:
+    description: >
+      host:port targets that stand in for one another, separated by spaces or
+      newlines, to wait for before returning: the first one that answers
+      satisfies them all
     required: false
     default: ''
 
@@ -191,16 +198,21 @@ runs:
 
     # The flow rules drop a run's first packets until the peer's certificate
     # of ownership has arrived (`chr ipauth`, physical/gateway.md §2.3), and a
-    # fresh runner needs a moment to find a path, so readiness is asserted
-    # against the actual dependency rather than assumed. The first target to
-    # answer ends the wait, so a caller that reaches several equivalent
+    # fresh runner needs a moment to find a path to each peer it dials, so
+    # readiness is asserted against the actual dependencies rather than
+    # assumed. Each `wait_for` target is a dependency of its own, and the wait
+    # ends only once every one has answered: a run that dials two members
+    # learns here, and not at its own first dial, that one of them has no path
+    # yet. The `wait_for_any` targets are one dependency together, met by the
+    # first of them to answer, so a caller that reaches several equivalent
     # services -- the two resolvers -- fails here only when none of them
     # does, and one that is down fails only what depends on it.
     - name: Wait for the target
-      if: inputs.wait_for != ''
+      if: inputs.wait_for != '' || inputs.wait_for_any != ''
       shell: bash
       env:
         TARGETS: ${{ inputs.wait_for }}
+        ANY_TARGETS: ${{ inputs.wait_for_any }}
         DEADLINE: ${{ steps.clock.outputs.deadline }}
       run: |
         set -euo pipefail
@@ -212,29 +224,43 @@ runs:
           exit 1
         fi
         # Every line, not the first: a caller may write the targets one
-        # per line, as it writes `routes`.
-        read -r -d '' -a targets <<<"$TARGETS" || true
+        # per line, as it writes `routes`. Each entry of `pending` is one
+        # dependency still unmet, as the targets any one of which meets it.
+        read -r -d '' -a every <<<"$TARGETS" || true
+        read -r -d '' -a any <<<"$ANY_TARGETS" || true
+        pending=("${every[@]}")
+        if [ "${#any[@]}" -gt 0 ]; then pending+=("${any[*]}"); fi
         waiting=$(date +%s)
         attempts=0
         while :; do
           attempts=$((attempts + 1))
-          for target in "${targets[@]}"; do
-            left=$((DEADLINE - $(date +%s)))
-            if timeout "$((left < 1 ? 1 : left < 3 ? left : 3))" \
-              bash -c "cat < /dev/null > /dev/tcp/${target/:/\/}" 2>/dev/null; then
-              # Read by physical/gateway-cutover.md §8.3, which takes gateway.md
-              # §2.4's item 4 off its leading `<host> reachable after N
-              # attempts` and item 7 off its trailing `S s`, the seconds from
-              # `zerotier-cli join` returning to this connect.
-              echo "${target} reachable after ${attempts} attempts, $(($(date +%s) - waiting)) s"
-              exit 0
-            fi
+          unmet=()
+          for dependency in "${pending[@]}"; do
+            read -r -a alternatives <<<"$dependency"
+            met=''
+            for target in "${alternatives[@]}"; do
+              left=$((DEADLINE - $(date +%s)))
+              if timeout "$((left < 1 ? 1 : left < 3 ? left : 3))" \
+                bash -c "cat < /dev/null > /dev/tcp/${target/:/\/}" 2>/dev/null; then
+                # Read by physical/gateway-cutover.md §8.3, which takes gateway.md
+                # §2.4's item 4 off the gateway's leading `<host> reachable after
+                # N attempts` and item 7 off its trailing `S s`, the seconds from
+                # `zerotier-cli join` returning to this connect. N counts the
+                # rounds this target was tried in.
+                echo "${target} reachable after ${attempts} attempts, $(($(date +%s) - waiting)) s"
+                met=1
+                break
+              fi
+            done
+            if [ -z "$met" ]; then unmet+=("$dependency"); fi
           done
+          if [ "${#unmet[@]}" -eq 0 ]; then exit 0; fi
+          pending=("${unmet[@]}")
           if [ $((attempts % 10)) -eq 0 ]; then timeout 5 sudo zerotier-cli peers || true; fi
           left=$((DEADLINE - $(date +%s)))
           if [ "$left" -le 0 ]; then break; fi
           sleep "$((left < 3 ? left : 3))"
         done
-        echo "::error::${TARGETS} unreachable over ZeroTier after ${attempts} attempts, $(($(date +%s) - waiting)) s; the join's deadline has passed"
+        echo "::error::${pending[*]} unreachable over ZeroTier after ${attempts} attempts, $(($(date +%s) - waiting)) s; the join's deadline has passed"
         timeout 5 sudo zerotier-cli listnetworks || true
         exit 1

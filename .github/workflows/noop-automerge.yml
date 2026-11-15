@@ -400,7 +400,7 @@ jobs:
           routes: |
             10.0.5.3/32 via 10.144.1.1
             10.0.5.4/32 via 10.144.1.1
-          wait_for: '10.0.5.3:80 10.0.5.4:80'
+          wait_for_any: '10.0.5.3:80 10.0.5.4:80'
       - uses: ./.github/actions/state-backend
         with:
           url: ${{ secrets.PULUMI_BACKEND_URL }}

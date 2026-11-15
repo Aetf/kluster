@@ -1772,9 +1772,10 @@ do, and each is read in one or more of three places:
 -   **The identity sync's own reading**, the drift run of
     [gateway-cutover.md](gateway-cutover.md) §8.3: items 4 and 7 on the
     path they describe, a hosted runner joining the real network. They
-    are read off the readiness line of the ZeroTier action, which every
-    job that joins with the `physical` identity waits on: its `wait_for`
-    is the gateway's shell, `10.144.1.1:22`. They are availability rather
+    are read off the ZeroTier action's readiness line for the gateway,
+    in every job that joins with the `physical` identity: its `wait_for`
+    names the gateway's shell, `10.144.1.1:22`, beside the homelab host's,
+    and the wait ends once both have answered. They are availability rather
     than confinement, so the sync may carry them: the deploy chain stays
     disabled until that reading passes.
 
@@ -1833,10 +1834,10 @@ Where each is read:
 | 1 | every leg of both identities, with the negative half: each reaches nothing the other's legs name | §2.4.2: the doors at the overlay address, and the resolvers over the run's own route; gateway-cutover.md §8.3: `ci-physical`'s legs, with its real identity |
 | 2 | whole | — |
 | 3 | whole | none of its own; §2.4.2's resolver reading implies it |
-| 4 | a CI stand-in's first dial after its first join, against a gateway stand-in running the device's binary | gateway-cutover.md §8.3: the readiness line of the `physical` join |
+| 4 | a CI stand-in's first dial after its first join, against a gateway stand-in running the device's binary | gateway-cutover.md §8.3: the gateway's readiness line of the `physical` join |
 | 5 | whole | — |
 | 6 | whole | — |
-| 7 | none: a stand-in measures its own NAT, not a hosted runner's path to the device's un-NATed socket (§2.6) | gateway-cutover.md §8.3: the readiness line's seconds. Not a gate (§2.6) |
+| 7 | none: a stand-in measures its own NAT, not a hosted runner's path to the device's un-NATed socket (§2.6) | gateway-cutover.md §8.3: the seconds on the gateway's readiness line. Not a gate (§2.6) |
 | 8 | the first part's ownership half, and the third part with its control | §2.4.2: the first part's controller door, and the second part, read on the device |
 | 9 | whole, with its control | — |
 
@@ -2776,7 +2777,7 @@ Two things that are *not* part of the cycle:
     back ([gateway-cutover.md](gateway-cutover.md) §8.3). Its reading is
     the drift check, the first run on the join it has just made
     load-bearing, and the place §2.4 items 4 and 7 are read, on the
-    readiness line of the `physical` join.
+    gateway's readiness line of the `physical` join.
 
 There are no ordering edges between the three places the ceremony
 reaches — ZeroTier Central, the device, and this program's dial to it: the
@@ -2819,8 +2820,8 @@ Facts that shape it (decided 2026-08-24):
     should form on first contact, and traffic flows (slowly, via ZeroTier
     relays) even before it does. Seconds-class is the expectation, not
     a measurement: §2.4 item 7 is what measures it, as the seconds on
-    the readiness line of every job that joins with the `physical`
-    identity, which waits for the gateway's shell. If it stays minutes
+    the gateway's readiness line in every job that joins with the
+    `physical` identity, which waits for the gateway's shell. If it stays minutes
     it is a per-job fixed cost, not a correctness problem.
 
 ### 2.7 Managed DNS: the tunnel's resolver

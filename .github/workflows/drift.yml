@@ -42,10 +42,12 @@ jobs:
           - stack: physical
             environment: physical-plan
             zerotier: true
-            # The join waits for the gateway's shell, as deploy.yml's
-            # `physical` joins do, and installs no route of its own.
+            # The join waits for the gateway's shell and the homelab host's,
+            # as deploy.yml's `physical` joins do, and installs no route of
+            # its own.
             routes: ''
-            wait_for: '10.144.1.1:22'
+            wait_for: '10.144.1.1:22 10.144.180.10:22'
+            wait_for_any: ''
             lock: zt-physical
             # The libvirt provider reads two files by path that the program
             # writes before it builds the provider, and a refresh builds
@@ -63,7 +65,8 @@ jobs:
             routes: |
               10.0.5.3/32 via 10.144.1.1
               10.0.5.4/32 via 10.144.1.1
-            wait_for: '10.0.5.3:80 10.0.5.4:80'
+            wait_for: ''
+            wait_for_any: '10.0.5.3:80 10.0.5.4:80'
             lock: zt-dns
           - stack: k8s-base
             environment: k8s-base
@@ -104,6 +107,7 @@ jobs:
           identity: ${{ secrets.ZEROTIER_IDENTITY }}
           routes: ${{ matrix.routes }}
           wait_for: ${{ matrix.wait_for }}
+          wait_for_any: ${{ matrix.wait_for_any }}
       - uses: ./.github/actions/state-backend
         timeout-minutes: 5
         with:
