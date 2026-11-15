@@ -824,6 +824,39 @@ Pulumi-managed via the bridged zerotier provider (architecture.md
 §5.3); only if that bridge proves unusable do those settings fall
 back to hand-kept manual preconditions.
 
+**A control plane waits for the bootstrap for 30 minutes of each boot,
+and reboots itself 70 minutes into it.** Talos v1.13.9 has no setting for
+either figure. Until some node has been bootstrapped, a control plane's
+etcd tries to join in its pre-start for `EtcdJoinTimeout`, 30 minutes
+([`etcd.go` L327–333](https://github.com/siderolabs/talos/blob/v1.13.9/internal/app/machined/pkg/system/services/etcd.go#L327-L333)),
+and once that runs out the service is `Failed` for the rest of the boot:
+no controller starts etcd again, the machine API refuses to start or
+restart it, and a configuration apply starts no service. The boot
+sequence waits for every service to come up for `BootTimeout`, 70
+minutes
+([`v1alpha1_sequencer_tasks.go` L483](https://github.com/siderolabs/talos/blob/v1.13.9/internal/app/machined/pkg/runtime/v1alpha1/v1alpha1_sequencer_tasks.go#L483);
+both constants in
+[`constants.go` L914–926](https://github.com/siderolabs/talos/blob/v1.13.9/pkg/machinery/constants/constants.go#L914-L926)),
+and when that wait fails machined reboots the node
+([`main.go` L101–148](https://github.com/siderolabs/talos/blob/v1.13.9/internal/app/machined/main.go#L101-L148)),
+whose next boot opens a new window. So a bootstrap that comes late — a
+run that fails between creating the instances and bootstrapping the
+first, or a capacity retry in between — costs at most about 40 minutes
+and a boot: a control plane still in its window joins as soon as it
+finds the first member, and one that is `Failed` joins after its next
+boot, with nobody acting. The run that made the late bootstrap fails at
+its health gate, and the repair is the same run again once the control
+planes have booted again. The reading is `talosctl -n <node> service
+etcd`: state `Failed`, its events naming `failed to build initial etcd
+cluster`. Where a talosconfig is at hand, `talosctl -n <node> reboot`
+cuts the wait short, and `talosctl -n <node> etcd status` then lists
+the member; a first run that failed has exported none, and waiting is
+the whole repair. **Nothing sets the kernel argument `panic=0`**,
+neither the image schematic nor a machine configuration: under it
+machined sleeps where it would reboot
+([`main.go` L115–120](https://github.com/siderolabs/talos/blob/v1.13.9/internal/app/machined/main.go#L115-L120)),
+and a `Failed` etcd stays `Failed` until someone reboots the node.
+
 Bootstrap-time verifications, the gate itself (several items exercise
 Cilium and therefore run only after `k8s-base` is up — the gate's place
 in the sequence is

@@ -1671,7 +1671,9 @@ After confirming, a Talos
 resource that times out with the x509 error naming the balancer's
 address is reported with its full message, and the next run is the
 same command on a fresh go. Any other failure is reported, not
-retried. The run passes by step 5's own condition: the same command,
+retried. A health gate that fails on etcd after a bootstrap that came
+late is reported too, and its reading and when the same command runs
+again are declarative/physical.md §6. The run passes by step 5's own condition: the same command,
 run again, reports no changes.
 
 **Then the homelab host refuses the home routes**, once, by hand, as
