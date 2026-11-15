@@ -113,24 +113,41 @@ def volume_on_the_dedicated_vip_node() -> str:
     return names[0]
 
 
+def plain_control_plane() -> str:
+    """The name of a cloud node that holds no dedicated VIP, which a plain control plane is rendered as."""
+    plain = [node for node in conventions.CLOUD_NODES if node != conventions.DEDICATED_VIP_NODE]
+    assert plain, 'every cloud node holds the dedicated VIP'
+    return plain[0]
+
+
 #: Every node shape the component renders, with the inputs the physical stack
-#: gives it. A plain control plane is a cloud node with nothing of its own;
-#: the dedicated-VIP control plane carries the secondary private IP the cloud
-#: assigns in the VCN, and, in the day-1 rendering it is applied, the volume
-#: that follows the VIP as well;
+#: gives it, each under the name of a node the fleet renders it for, which is
+#: the node's hostname. A plain control plane is a cloud node with nothing of
+#: its own; the dedicated-VIP control plane carries the secondary private IP
+#: the cloud assigns in the VCN, and, in the day-1 rendering it is applied,
+#: the volume that follows the VIP as well;
 #: the homelab worker states its own address and takes BGP from its gateway.
 SHAPES: dict[str, Shape] = {
-    'control-plane': Shape('controlplane', image.CLOUD_PLATFORM),
-    'dedicated-vip': Shape('controlplane', image.CLOUD_PLATFORM, {'secondary_address': str(conventions.VCN_CIDR[42])}),
+    'control-plane': Shape('controlplane', image.CLOUD_PLATFORM, {'hostname': plain_control_plane()}),
+    'dedicated-vip': Shape(
+        'controlplane',
+        image.CLOUD_PLATFORM,
+        {'hostname': conventions.DEDICATED_VIP_NODE, 'secondary_address': str(conventions.VCN_CIDR[42])},
+    ),
     'dedicated-vip-volume': Shape(
         'controlplane',
         image.CLOUD_PLATFORM,
-        {'secondary_address': str(conventions.VCN_CIDR[42]), 'volume': volume_on_the_dedicated_vip_node()},
+        {
+            'hostname': conventions.DEDICATED_VIP_NODE,
+            'secondary_address': str(conventions.VCN_CIDR[42]),
+            'volume': volume_on_the_dedicated_vip_node(),
+        },
     ),
     'homelab-worker': Shape(
         'worker',
         image.HOMELAB_PLATFORM,
         {
+            'hostname': conventions.HOMELAB_NODE,
             'static_address': talos.STATIC_ADDRESSES[conventions.HOMELAB_NODE],
             'bgp_peer': f'{conventions.CLUSTER_VLAN.require_gateway()}/32',
         },

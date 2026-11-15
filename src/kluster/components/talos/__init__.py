@@ -38,9 +38,10 @@ A patch is either a strategic merge into the `v1alpha1` document or a
 document of its own kind, which the provider's patch loader appends to the
 configuration beside `v1alpha1`. Whatever the pinned Talos release has moved
 out of `v1alpha1` is stated in its own document: at v1.13 that is every field
-of `machine.network`, so KubeSpan and the node's link addressing travel as
-network documents (`KubeSpanConfig`, `LinkAliasConfig`, `LinkConfig`,
-`DHCPv4Config`) the way the ingress firewall always has
+of `machine.network`, so KubeSpan, the node's hostname and its link
+addressing travel as network documents (`KubeSpanConfig`, `HostnameConfig`,
+`LinkAliasConfig`, `LinkConfig`, `DHCPv4Config`) the way the ingress
+firewall always has
 (`NetworkDefaultActionConfig`, `NetworkRuleConfig`). A node volume
 travels as a `UserVolumeConfig`, the document v1.13 names in place of the
 deprecated partitions of `machine.disks`, and so does the directory
@@ -372,6 +373,37 @@ def kubespan_document() -> dict[str, Any]:
     configures KubeSpan.
     """
     return {'apiVersion': 'v1alpha1', 'kind': 'KubeSpanConfig', 'enabled': True, 'mtu': conventions.KUBESPAN_MTU}
+
+
+def hostname_document(hostname: str) -> dict[str, Any]:
+    """Name the machine `hostname`, whatever its platform or Talos itself would call it.
+
+    The hostname is the name etcd knows a control plane's member by and the
+    name the kubelet registers the node under, so it is the declaration's
+    (`TalosCluster` passes the node's own name) rather than whatever the
+    machine is handed. A static hostname outranks every other source Talos
+    reads one from: the hostname OCI's VCN gives a cloud instance, which
+    carries a suffix when the label is still held — by the predecessor of a
+    replacement created before it is deleted — the nocloud seed's
+    `local-hostname`, and the name Talos generates. So a replacement takes its
+    predecessor's name, and while both run they are two nodes of one name; a
+    control plane joining etcd with an empty data directory first removes any
+    member carrying its own hostname, which is why the order of a control
+    plane's replacement is a decision of its own (Aetf/kluster-ops#742).
+
+    `auto` is stated `off` because the configuration the provider generates
+    for v1.13 already carries a `HostnameConfig` with `auto: stable`; a patch
+    of the same kind merges into it, and the document refuses `hostname`
+    beside any `auto` but `off`. It is a document of its own because v1.13
+    deprecates `machine.network.hostname` for it.
+
+    A changed hostname needs no reboot: whether an apply can go in without
+    one is decided on the `v1alpha1` document alone (`CanApplyImmediate`),
+    and this document is not part of it. The kubelet restarts under the new
+    name, which registers a second Node object beside the old one; etcd
+    takes the new name when it next starts.
+    """
+    return {'apiVersion': 'v1alpha1', 'kind': 'HostnameConfig', 'auto': 'off', 'hostname': hostname}
 
 
 def control_plane_patch(*, cert_sans: Sequence[str], secretbox_secret: str | None = None) -> dict[str, Any]:
@@ -713,6 +745,7 @@ def patches(
     *,
     installer: str,
     role: Role = 'controlplane',
+    hostname: str | None = None,
     cert_sans: Sequence[str] = (),
     secretbox_secret: str | None = None,
     static_address: StaticAddress | None = None,
@@ -726,6 +759,10 @@ def patches(
     has no default, because the default the provider fills in is the stock
     installer, which would drop the node's extensions on the upgrade that
     took it.
+
+    `hostname` is the name the node takes (`hostname_document`). The
+    program's own call, `TalosCluster`, passes every node's; a list rendered
+    without one leaves the node to whatever name Talos generates.
 
     `cert_sans` are a control plane's certificate SANs (`control_plane_patch`);
     a worker renders none.
@@ -745,6 +782,8 @@ def patches(
         kubespan_document(),
         local_path_volume_document(),
     ]
+    if hostname is not None:
+        documents.append(hostname_document(hostname))
     if volume is not None:
         documents.append(node_volume_label_patch(volume))
     if role == 'controlplane':
@@ -807,9 +846,11 @@ class TalosCluster(Component, pulumi_type='kluster:talos:TalosCluster'):
         selector finds a node's data disk as the one disk that is not the
         boot disk, so it cannot tell two data disks apart.
 
-    A node named in `STATIC_ADDRESSES` also boots with its own address, its
-    subnet's prefix and a default route, rather than with whatever a DHCP
-    server offers it.
+    A node's name in the rolls is also its hostname (`hostname_document`), in
+    the configuration it boots with and in every one applied to it. A node
+    named in `STATIC_ADDRESSES` also boots with its own address, its subnet's
+    prefix and a default route, rather than with whatever a DHCP server
+    offers it.
     """
 
     def __init__(
@@ -945,6 +986,8 @@ class TalosCluster(Component, pulumi_type='kluster:talos:TalosCluster'):
         return patches(
             installer=str(await resolve(self._installers[node])),
             role=role,
+            # The node's name in the declaration is its hostname.
+            hostname=node,
             cert_sans=[str(await resolve(self.management_address))],
             secretbox_secret=await self._secretbox_secret() if role == 'controlplane' else None,
             static_address=STATIC_ADDRESSES.get(node),
