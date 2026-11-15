@@ -347,6 +347,26 @@ configuration, for the same reason the gateway's is: whoever could
 replace it could already replace the credential it guards, and a pin a
 preview redacts is a pin nobody reviews.
 
+**A refresh of this stack runs the program first.** A refresh builds
+each provider from the provider's inputs in state, before the program
+runs, so on its own it dials with whatever is at the two paths: nothing
+on a continuous-integration runner or in any fresh checkout, and on a
+workstation the files of its last run, which stop being the configured
+identity once that rotates and the pinned host key once the pin moves.
+`--run-program` puts the program first. `pulumi refresh --help` gives it
+as "Run the program to determine up-to-date state for providers to
+refresh resources", and `preview` and `up` take the same flag beside
+`--refresh`, where "this only applies if --refresh is set". The program
+writes both files before it builds the provider, and the refresh then
+dials with the provider the program built. So every refresh of
+`physical` carries the flag, wherever it runs: today the drift check's
+(`.github/workflows/drift.yml`), the re-attachment of a node volume
+(declarative/physical.md §6), and the repairs of framework/ci.md §3.2
+and §3.3 when the stack they name is `physical`. No other stack builds a
+provider that reads a file by path — each is built from values its
+inputs in state carry whole — so no other stack's refresh needs the
+program.
+
 **Both paths go into the URI relative to the checkout root.** The URI
 is a provider input and therefore lives in state, so an absolute path
 would put one machine's layout into a value every other machine then

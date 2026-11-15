@@ -757,7 +757,13 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     writes nothing: the refreshed state is compared and discarded, so
     the same diff fails every weekly run until it is reconciled
     (§3.2). This closes the "hand edits never surface" gap that
-    deleting the post-merge preview left open.
+    deleting the post-merge preview left open. On `physical` the
+    preview also takes `--run-program`, and on that stack alone: a
+    refresh builds each provider from its inputs in state before the
+    program runs, and the libvirt provider reads by path two working
+    files that only the program writes, which a fresh runner lacks
+    (physical/homelab-host.md §6). Every other stack's providers are
+    built from values their inputs in state carry whole.
 -   **§3.2 A drift alert.** The matrix entry that failed names the
     stack. Its log ends either in `--expect-no-changes` refusing the
     changes the refreshed preview found — a diff — or in an error
@@ -771,8 +777,10 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     `mise x -- pulumi up --refresh --stack <stack>` from the checkout
     that holds `.credentials/` (the workstation form README.md gives
     for a preview, which for `physical` names that stack's own
-    passphrase). `deploy.yml`'s plain `up` does not do the second:
-    the drift run's refresh is a preview's and writes nothing, so
+    passphrase), with `--run-program` as well for `physical`, for the
+    reason the drift run takes it. `deploy.yml`'s plain `up` does not
+    do the second: the drift run's refresh is a preview's and writes
+    nothing, so
     state still holds what the last deploy wrote, and only the device
     resources, whose `diff` reads the device (architecture.md §5.2),
     are put back without it.
@@ -814,8 +822,10 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
         of pending operation except a create; for each create, look the
         resource up in its provider.
         -   **The create never happened**: `mise x -- pulumi refresh
-            --stack <stack> --clear-pending-creates` drops it. Run from
-            a terminal, the refresh first asks about each pending
+            --stack <stack> --clear-pending-creates` drops it, with
+            `--run-program` as well for `physical`, for the reason the
+            drift run takes it. Run from a terminal, the refresh first
+            asks about each pending
             create, and `clear` is the same answer; `--clear-pending-creates`
             clears every one the prompt leaves.
         -   **The create happened, and the resource's type starts with
