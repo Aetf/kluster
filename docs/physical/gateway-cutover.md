@@ -1906,24 +1906,50 @@ ip -4 rule show > ~/rules.before
 
 **The apply** is one targeted run from the operator's workstation, with
 `physical()` as in the header: the create of the configuration, the
-update of the health executable, and the four resources the retirement deletes,
-listed in the order the run takes them. A resource the program no
-longer declares is deleted under `--target` only when it is named, and
-the four depend on one another,
-so all four are named; the health executable is named so that the
-device stops reading the retired unit. The preview and the apply take
-the same targets, so the list is written once; the preview plans one
-create, one update and four deletes, and nothing else:
+update of the health executable, the four resources the retirement
+deletes, and every resource whose dependencies in the state name one
+of those four. A resource the program no longer declares is deleted
+under `--target` only when it is named, and the four depend on one
+another, so all four are named; the health executable is named so that
+the device stops reading the retired unit.
+
+**The engine deletes a named resource only when nothing outside the
+targets still depends on it in the state**, and the state holds each
+resource's dependencies as the program declared them when it last wrote
+that resource. The overlay daemon's machine waits on the routing
+component, and a dependency on a component reaches the engine as one on
+each resource under it, so the machine's files and image name the
+retired four. Left out of the targets, they keep naming them, and the
+run plans no delete at all. Targeted, each is written with the
+dependencies the program declares now, and has no change of its own
+to plan. They are read off the state rather than written out, because
+the state that earlier runs wrote is the one place they are spelled:
+nothing the program declares now names a retired resource, and a list
+copied from one state goes stale with any change to what waits on the
+routing component. `stack export` reads the state and writes nothing.
+
+The preview and the apply take the same targets, so the list is built
+once; the preview plans one create, one update and four deletes, and
+nothing else:
 
 ```sh
+RETIRED=(
+    'urn:pulumi:physical::kluster-py::kluster:gateway:Gateway$kluster:gateway:SiteRouting$pulumi-python:dynamic/device_files:DeviceFile::kluster-routing-unit-frr-config.service'
+    'urn:pulumi:physical::kluster-py::kluster:gateway:Gateway$kluster:gateway:SiteRouting$pulumi-python:dynamic/device_files:DeviceFile::kluster-routing-config'
+    'urn:pulumi:physical::kluster-py::kluster:gateway:Gateway$kluster:gateway:SiteRouting$pulumi-python:dynamic/device_files:DeviceFile::kluster-routing-bin-frr-config.sh'
+    'urn:pulumi:physical::kluster-py::kluster:gateway:Gateway$kluster:gateway:SiteRouting$pulumi-python:dynamic/device_files:DeviceDirectory::kluster-routing-skeleton-frr'
+)
+DEPENDENTS=($(physical stack export | mise x -- jq -r --args '.deployment.resources[]
+    | select(.urn | IN($ARGS.positional[]) | not)
+    | select([.parent, .deletedWith, .dependencies[]?, .propertyDependencies[]?[]]
+        | any(.[]; IN($ARGS.positional[])))
+    | .urn' "${RETIRED[@]}"))
 RETIRE=(
     -t 'urn:pulumi:physical::kluster-py::kluster:gateway:Gateway$kluster:gateway:SiteRouting$pulumi-python:dynamic/unifi_bgp:BgpConfiguration::kluster-routing-bgp'
     -t 'urn:pulumi:physical::kluster-py::kluster:gateway:Gateway$pulumi-python:dynamic/device_files:DeviceFile::kluster-bin-gateway-health'
-    -t 'urn:pulumi:physical::kluster-py::kluster:gateway:Gateway$kluster:gateway:SiteRouting$pulumi-python:dynamic/device_files:DeviceFile::kluster-routing-unit-frr-config.service'
-    -t 'urn:pulumi:physical::kluster-py::kluster:gateway:Gateway$kluster:gateway:SiteRouting$pulumi-python:dynamic/device_files:DeviceFile::kluster-routing-config'
-    -t 'urn:pulumi:physical::kluster-py::kluster:gateway:Gateway$kluster:gateway:SiteRouting$pulumi-python:dynamic/device_files:DeviceFile::kluster-routing-bin-frr-config.sh'
-    -t 'urn:pulumi:physical::kluster-py::kluster:gateway:Gateway$kluster:gateway:SiteRouting$pulumi-python:dynamic/device_files:DeviceDirectory::kluster-routing-skeleton-frr'
 )
+for urn in "${RETIRED[@]}" "${DEPENDENTS[@]}"; do RETIRE+=(-t "$urn"); done
+printf '%s\n' "${DEPENDENTS[@]}"    # the overlay daemon's machine: its files and its image
 physical preview "${RETIRE[@]}"
 physical up "${RETIRE[@]}"
 ```
@@ -1952,8 +1978,12 @@ and on the device:
 
 ```sh
 for d in bgpd zebra mgmtd; do
-    p=$(pgrep -x "$d") && echo "$d $(ps -o comm= -p "$(ps -o ppid= -p "$p")")"
-done                                                 # each: ubios-udapi-ser
+    pids=$(pgrep -x "$d") || { echo "$d not running"; continue; }
+    for p in $pids; do
+        pp=$(sed -n 's/^PPid:[[:space:]]*//p' "/proc/$p/status")
+        echo "$d $(sed -n 's/^Name:[[:space:]]*//p' "/proc/$pp/status")"
+    done
+done                                                 # every line: ubios-udapi-ser
 systemctl list-unit-files 'frr*'                     # 0 unit files listed
 diff -r /mnt/.rofs/etc/frr /etc/frr                  # silent
 /data/custom/bin/gateway-health | grep -E 'frr-config|routing daemon'   # silent
