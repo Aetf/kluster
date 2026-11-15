@@ -3080,8 +3080,10 @@ def test_the_dkim_key_every_mail_zone_publishes_is_the_one_conventions_holds() -
             for record in zone_records(zone, dns_base.blocks(anchors=anchors))
             if record.label == 'k8s._domainkey'
         ]
-        # Quoted as every TXT record is, so the API keeps it one character-string.
-        assert published == [f'"{conventions.DKIM_K8S}"'], zone
+        # Every TXT string is quoted, and a value over 255 characters is stored
+        # and read back as several character-strings, which join to the value.
+        joined = [''.join(re.findall(r'"([^"]*)"', str(content))) for content in published]
+        assert joined == [conventions.DKIM_K8S], zone
     tags = {
         name.strip(): value.strip()
         for name, _, value in (tag.partition('=') for tag in conventions.DKIM_K8S.split(';'))

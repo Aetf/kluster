@@ -35,6 +35,7 @@ __all__ = (
     'PROXIABLE',
     'TTL_AUTO',
     'TTL_HOUR',
+    'TXT_STRING',
     'Block',
     'Record',
     'a',
@@ -53,6 +54,10 @@ __all__ = (
 #: a node rebuild moves.
 TTL_AUTO = 1
 TTL_HOUR = 3600
+
+#: The longest character-string a TXT record holds; `txt` splits a longer
+#: value into strings of this length.
+TXT_STRING = 255
 
 #: The record types Cloudflare's proxy can front: "Only records used for IP
 #: address resolution -- A, AAAA, and CNAME records -- can be proxied"
@@ -126,9 +131,20 @@ def cname(label: str, target: str, *, unproxied: str = '', ttl: int = TTL_AUTO, 
 
 
 def txt(label: str, value: str, *, ttl: int = TTL_AUTO, key: str = '', comment: str = '') -> Record:
-    # Quoted, because an unquoted SPF or DKIM string is split on its spaces by
-    # the API and comes back as several character-strings.
-    return Record(label=label, type='TXT', content=f'"{value}"', ttl=ttl, key=key, comment=comment)
+    # The content is the form Cloudflare stores and reads back, so a refresh
+    # finds what the program declares. A TXT record's data is a sequence of
+    # character-strings of at most 255 octets (RFC 1035 §3.3.14), and Cloudflare
+    # holds a longer value as consecutive strings of 255 characters, each
+    # quoted, joined by one space: `"first part" "second part"`
+    # (developers.cloudflare.com/dns/faq/, "Why does my TXT record show a double
+    # quote in the middle of the value?"). Declared as one string instead, such
+    # a value differs from the read-back on every refresh. A reader of SPF or
+    # DKIM concatenates the strings, so either form publishes the same value.
+    # Every string is quoted, because an unquoted SPF or DKIM value is split on
+    # its spaces by the API instead.
+    strings = (value[start : start + TXT_STRING] for start in range(0, max(len(value), 1), TXT_STRING))
+    content = ' '.join(f'"{string}"' for string in strings)
+    return Record(label=label, type='TXT', content=content, ttl=ttl, key=key, comment=comment)
 
 
 def mx(label: str, target: str, priority: int, *, ttl: int = TTL_AUTO, comment: str = '') -> Record:
@@ -146,9 +162,16 @@ def mx(label: str, target: str, priority: int, *, ttl: int = TTL_AUTO, comment: 
 
 
 def srv(label: str, *, priority: int, weight: int, port: int, target: str, comment: str = '') -> Record:
+    # The priority goes at the top level as well as in `data`: Cloudflare reads
+    # an SRV record's priority back in both places (the SRV example response in
+    # developers.cloudflare.com/dns/manage-dns-records/reference/dns-record-types/),
+    # and the provider's top-level `priority` is "Required for MX, SRV and URI
+    # records". Declared in `data` alone, the top-level field differs from the
+    # read-back on every refresh.
     return Record(
         label=label,
         type='SRV',
+        priority=priority,
         data={'priority': priority, 'weight': weight, 'port': port, 'target': target},
         comment=comment,
     )

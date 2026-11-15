@@ -2226,6 +2226,28 @@ urn() { mise x -- pulumi stack --stack dns --show-urns | sed -n "s/.*URN: \(.*::
 mise x -- pulumi refresh --stack dns --target "$(urn 'jiahui\.id-@-a')" --target "$(urn 'jiahui\.id-www-a')"
 ```
 
+**Then B6, and the records it prints lose `protect`.** The import set
+`protect` on every resource it adopted, so a preview that plans the
+expected deletes fails at each of them with `cannot be deleted because
+it is protected`. B6 (sources-of-truth.md §4) is taken with its output
+in `.claude/b6.tsv`, and the protection comes off the records it prints
+and no others, by URN:
+
+```sh
+mise x -- pulumi stack --stack dns --show-urns \
+  | sed -n 's|.*URN: \(.*\$cloudflare:index/dnsRecord:DnsRecord::.*\)$|\1|p' \
+  | awk 'NR == FNR {split($0, f, "\t"); b6[f[1]]; next} {n = split($0, u, "::")} u[n] in b6' .claude/b6.tsv - > .claude/b6.urns
+wc -l < .claude/b6.tsv; wc -l < .claude/b6.urns
+xargs mise x -- pulumi state unprotect --stack dns --yes < .claude/b6.urns
+```
+
+The two counts are equal, one URN for each line of B6, before the
+unprotect runs. A resource the program still declares keeps its
+imported `protect` until the `up`, which sets the `protect` the program
+declares: a `Zone` stays protected, since `ManagedZone` declares it so,
+and a record or a `ZoneDnssec` loses it, which the plan, the preview's
+and the `up`'s alike, shows as 🔓 on its row.
+
 Then the preview:
 
 ```sh
@@ -2252,10 +2274,10 @@ counted, because the counts move with every census change:
     the preview: every `-` row is a line of B6 and fits a class of N1,
     and every line of B6 is a `-` row.
 -   **No `Zone`, `ManagedZone` or `ZoneDnssec` is deleted.** A `Zone` is
-    protected, so a run that tries fails there. A `ZoneDnssec` is not,
-    and its delete turns DNSSEC off: on a zone whose parent holds a DS,
-    that fails the zone for every validating resolver (declarative/dns.md
-    §1.3). A `-` on one stops the run.
+    protected, so a run that tries fails there. A `ZoneDnssec` is not
+    declared protected, and its delete turns DNSSEC off: on a zone whose
+    parent holds a DS, that fails the zone for every validating resolver
+    (declarative/dns.md §1.3). A `-` on one stops the run.
 -   **The co-host has no delete, and its check is negative**, as N1
     states it: unlimitedcodeworks.xyz's create list holds no `*.zt`
     name and no `archvps.hosts` (rfc-003 §5.3), and no `-` row names
