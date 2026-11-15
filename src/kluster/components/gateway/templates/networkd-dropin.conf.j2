@@ -1,0 +1,20 @@
+# Managed by the {{ cluster }} physical stack. Local edits are overwritten.
+#
+# systemd-networkd, which the firmware enables, removes every route, next hop
+# and routing policy rule it did not create from a link it configures, unless
+# told otherwise; the firmware's policy routing is made of exactly such rules,
+# and the gateway cannot route its own packets without them. This program gives
+# networkd no link ({{ machines_network }}), and this drop-in is the
+# guard for a link networkd comes to manage for any other reason: with these
+# off, networkd does not enumerate foreign objects at all.
+#
+# A workaround of the firmware's, held to one declaration: it goes when the
+# firmware sets this itself or stops running networkd (physical/gateway.md §1.2).
+# networkd reads it only when it starts, which is why it is delivered by a
+# restart. A systemd older than the one an option was added in logs the option
+# as unknown and ignores it.
+
+[{{ section }}]
+{%- for option, value in settings %}
+{{ option }}={{ value }}
+{%- endfor %}

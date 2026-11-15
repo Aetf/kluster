@@ -637,7 +637,10 @@ the **ZeroTier member container**, host-networking + `/dev/net/tun` +
 `/data`-persisted identity, architecture.md §5.3), the recovery script
 in `on_boot.d` that re-establishes all of it after a firmware update
 and decides which services a deployment restarts (physical/gateway.md
-§1.1), caddy, AdGuard static configs, secrets. What a dynamic provider
+§1.1), the `systemd-networkd` configuration that holds the machines'
+ports out of `networkd`'s hands and turns its foreign management off
+(physical/gateway.md §1.2), caddy, AdGuard static configs, secrets.
+What a dynamic provider
 is mechanically — the pickle in each resource's state, the credential
 read in `configure`, the two properties `check` injects to make a
 rotation visible, and the traps that come with all three — is

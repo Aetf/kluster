@@ -17,11 +17,18 @@ owns it:
     which it saves, with the firmware's release, on the boot after an update. Which packages is data
     (`packages=`); everything else about how they are installed is mechanism
     and stays in the template.
+-   **`05-networkd.sh`**, which delivers systemd-networkd's configuration
+    from its sources under the custom root into the two directories networkd
+    reads, and restarts networkd once when any of it changed. It runs first,
+    because each later script can create a link networkd would act on, or
+    restart networkd on its own.
 -   **`20-units.sh`**, which converges the unit sources under the custom root
     into `/etc/systemd/system`, enables them, and restarts the ones whose file
     changed. It converges their drop-in directories too, where a statement lives
     that belongs to one unit rather than to the file it is written in.
--   **The skeleton of the custom root** — `bin/`, `dpkg/`, `units/`.
+-   **The skeleton of the custom root** — `bin/`, `dpkg/`, `units/`, and the
+    two source directories of networkd's configuration, `network/` and
+    `networkd.conf.d/`.
 
 **The layers above reach the mechanism through methods here, and the resource
 they get back is theirs.** Each call is one device resource at a path this
@@ -79,6 +86,15 @@ created by the delivery of the first drop-in in it and removed by the delete of
 the last (`dropin_hook`), and nothing about it is ever compared against the
 device.
 
+**networkd's configuration is delivered and never judged here.** `05-networkd.sh`
+copies what it is given and knows nothing of what the files say; what they
+must say is the nspawn runtime's (`nspawn`), and whether the device holds it
+is `gateway-health`'s reading. Both live directories are shared with the
+firmware, so the script only adds to them, and a file is retired from the
+other side, by `networkd_hook`, which removes the live copy and leaves
+networkd running: a delete can only loosen, and a restart is the one act
+that can cost the firmware its policy routing (physical/gateway.md §1.2).
+
 **New device automation is a unit plus an executable unless it manipulates
 systemd's own configuration**, in which case it is an on_boot script; the rule
 and its reasons are physical/gateway.md §1.2. What that automation cannot state
@@ -113,6 +129,13 @@ __all__ = (
     'FILE_MODE',
     'FIRMWARE_RELEASE',
     'LIVE_UNIT_DIR',
+    'NETWORK',
+    'NETWORKD_CONF',
+    'NETWORKD_CONF_D',
+    'NETWORKD_DIRECTORIES',
+    'NETWORKD_NETWORK',
+    'NETWORKD_SCRIPT',
+    'NETWORKD_UNIT',
     'PACKAGES_SCRIPT',
     'SCRIPT_MODE',
     'SKELETON',
@@ -123,6 +146,7 @@ __all__ = (
     'UNIT_SOURCE_DIR',
     'UNIT_SUFFIX',
     'DevicePersistence',
+    'NetworkdDirectory',
     'NoPackages',
     'ParentNotAComponent',
     'dropin_dir',
@@ -131,6 +155,9 @@ __all__ = (
     'executable_hook',
     'executable_path',
     'live_dropin_dir',
+    'networkd_hook',
+    'networkd_script',
+    'networkd_source',
     'on_boot_hook',
     'on_boot_path',
     'packages_script',
@@ -150,8 +177,10 @@ TEMPLATE_PACKAGE = 'kluster.components.gateway'
 # Where the mechanism lives on the device
 # ---------------------------------------------------------------------------
 
-#: The custom root's skeleton: executables, the offline deb cache, and the unit
-#: sources `20-units.sh` converges. Every other directory under the custom root
+#: The custom root's skeleton: executables, the offline deb cache, the unit
+#: sources `20-units.sh` converges, and the sources of networkd's configuration
+#: `05-networkd.sh` delivers, one directory for each directory networkd reads
+#: (`NETWORKD_DIRECTORIES`). Every other directory under the custom root
 #: belongs to a layer above and arrives through `skeleton_dir`, except the
 #: `dpkg.*` siblings `10-packages.sh` writes itself — the directory apt
 #: downloads the set into, the two halves of the cache's swap, and
@@ -162,9 +191,9 @@ TEMPLATE_PACKAGE = 'kluster.components.gateway'
 #: it by fails here instead of on the device. The names are what index
 #: `DevicePersistence.skeleton`, which is how a file declares that it waits on
 #: the directory it lands in.
-SKELETON = ('bin', 'dpkg', 'units')
-BIN, DPKG, UNITS = SKELETON
-BIN_DIR, DPKG_DIR, UNIT_SOURCE_DIR = (f'{conventions.gateway.CUSTOM_ROOT}/{name}' for name in SKELETON)
+SKELETON = ('bin', 'dpkg', 'units', 'network', 'networkd.conf.d')
+BIN, DPKG, UNITS, NETWORK, NETWORKD_CONF_D = SKELETON
+BIN_DIR, DPKG_DIR, UNIT_SOURCE_DIR = (f'{conventions.gateway.CUSTOM_ROOT}/{name}' for name in (BIN, DPKG, UNITS))
 
 #: Where `10-packages.sh` keeps the firmware base: the dpkg database the running
 #: firmware shipped, saved as `status` in it — beside `release`, a copy of
@@ -190,12 +219,51 @@ FIRMWARE_RELEASE = '/usr/lib/version'
 #: and therefore nothing a firmware update promises to keep.
 LIVE_UNIT_DIR = '/etc/systemd/system'
 
-#: The three files this layer is. The numbers are the boot order: packages
-#: first, because everything after them may need what they install; the unit
-#: store next, because a converger that installs units cannot be one.
+#: The files this layer is. The numbers are the boot order: networkd's
+#: configuration first, because it needs nothing the chain installs and every
+#: later script can restart networkd (a package upgrade) or create a link it
+#: would act on (`40-machines.sh`); packages next, because everything after
+#: them may need what they install; the unit store next, because a converger
+#: that installs units cannot be one.
+NETWORKD_SCRIPT = '05-networkd.sh'
 PACKAGES_SCRIPT = '10-packages.sh'
 UNITS_SCRIPT = '20-units.sh'
 UDM_BOOT_UNIT = 'udm-boot.service'
+
+#: The firmware's own network daemon, which `05-networkd.sh` restarts and
+#: nothing here installs, enables or stops (physical/gateway.md §1.2).
+NETWORKD_UNIT = 'systemd-networkd.service'
+
+
+@final
+@dataclass(frozen=True)
+class NetworkdDirectory:
+    """One directory systemd-networkd reads its configuration from, and where its sources sit.
+
+    Both of networkd's directories under `/etc` are shared with the firmware,
+    so a source is delivered beside whatever else is there and nothing is
+    removed for want of a source (physical/gateway.md §1.2).
+    """
+
+    #: The skeleton directory under the custom root the sources sit in.
+    source: str
+    #: The directory networkd reads, off `/data`.
+    live: str
+    #: The file suffixes networkd reads in it: a file of any other suffix
+    #: would land there and be read by nothing.
+    suffixes: tuple[str, ...]
+
+
+#: networkd's two directories: its `.network` and `.netdev` files, and the
+#: drop-ins on `networkd.conf`, which the daemon reads only when it starts.
+#: The paths and suffixes are systemd's (systemd.network(5),
+#: networkd.conf(5)); the order is the order `05-networkd.sh` copies in, and
+#: either order is safe, because one restart follows every copy.
+NETWORKD_DIRECTORIES = (
+    NetworkdDirectory(source=NETWORKD_CONF_D, live='/etc/systemd/networkd.conf.d', suffixes=('.conf',)),
+    NetworkdDirectory(source=NETWORK, live='/etc/systemd/network', suffixes=('.network', '.netdev')),
+)
+NETWORKD_CONF, NETWORKD_NETWORK = NETWORKD_DIRECTORIES
 
 #: The unit kind `20-units.sh` converges, which is the one glob it walks. A
 #: source of any other kind would land on the device and be installed by
@@ -250,6 +318,11 @@ def live_dropin_dir(unit: str) -> str:
 def skeleton_path(name: str) -> str:
     """One directory of the custom root, by its name under that root."""
     return f'{conventions.gateway.CUSTOM_ROOT}/{name}'
+
+
+def networkd_source(directory: NetworkdDirectory, name: str) -> str:
+    """Where one of networkd's files sits, before `05-networkd.sh` delivers it."""
+    return f'{skeleton_path(directory.source)}/{name}'
 
 
 def on_boot_hook(name: str) -> str:
@@ -318,6 +391,21 @@ def dropin_hook(unit: str, name: str) -> str:
     )
 
 
+def networkd_hook(directory: NetworkdDirectory, name: str) -> str:
+    """Deliver one of networkd's files, or take it back out of the directory networkd reads.
+
+    The write branch is `05-networkd.sh`, which restarts networkd when the
+    file changed. The delete branch removes the live copy and restarts
+    nothing: a delete can only loosen what networkd is told, loosening is
+    never urgent, and the file takes effect at networkd's next start like any
+    other. A restart is the one act that can cost the firmware its policy
+    routing (physical/gateway.md §1.2), so no delete performs one.
+    """
+    source = shlex.quote(networkd_source(directory, name))
+    live = shlex.quote(f'{directory.live}/{name}')
+    return f'if [ -e {source} ]; then {on_boot_hook(NETWORKD_SCRIPT)}; else rm -f {live}; fi'
+
+
 # ---------------------------------------------------------------------------
 # Rendering
 # ---------------------------------------------------------------------------
@@ -352,6 +440,61 @@ class _UnitsParams:
     unit_suffix: str
     dropin_dir_suffix: str
     dropin_suffix: str
+
+
+@final
+@dataclass(frozen=True)
+class _NetworkdDelivery:
+    """One directory `05-networkd.sh.j2` delivers into, every value already quoted for the shell."""
+
+    source: str
+    live: str
+    suffixes: tuple[str, ...]
+
+
+@final
+@dataclass(frozen=True)
+class _NetworkdParams:
+    """What `05-networkd.sh.j2` reads: the directories it delivers between, and the daemon it restarts."""
+
+    cluster: str
+    directories: tuple[_NetworkdDelivery, ...]
+    unit: str
+
+
+def networkd_script() -> str:
+    """The boot-chain script that delivers networkd's configuration and restarts networkd onto it.
+
+    Every source in each of `NETWORKD_DIRECTORIES` is copied into the live
+    directory when the copy there differs, and once every copy is done, a
+    networkd that is running is restarted once if any of them changed and
+    none failed. A copy that failed means no restart and a non-zero exit: a
+    restart onto part of the delivery is the act this script exists to keep
+    from happening. A
+    restart rather than a reload, because `networkctl reload` reads the
+    `.network` files again and `networkd.conf` only at start. A networkd that
+    is not running reads the files when it next starts, so it is left alone.
+
+    It only adds: both live directories are shared with the firmware, so a
+    file with no source is somebody else's (`networkd_hook` retires this
+    program's own).
+    """
+    return templates.render(
+        TEMPLATE_PACKAGE,
+        f'templates/{NETWORKD_SCRIPT}.j2',
+        _NetworkdParams(
+            cluster=conventions.CLUSTER_NAME,
+            directories=tuple(
+                _NetworkdDelivery(
+                    source=shlex.quote(skeleton_path(directory.source)),
+                    live=shlex.quote(directory.live),
+                    suffixes=tuple(shlex.quote(suffix) for suffix in directory.suffixes),
+                )
+                for directory in NETWORKD_DIRECTORIES
+            ),
+            unit=shlex.quote(NETWORKD_UNIT),
+        ),
+    )
 
 
 def packages_script(
@@ -496,8 +639,10 @@ class DevicePersistence(Component, pulumi_type='kluster:gateway:DevicePersistenc
 
         # The unit converger comes first because every unit delivered through
         # this layer runs it as its hook, and a hook that runs a script the
-        # device has not been given fails its own apply.
+        # device has not been given fails its own apply; networkd's converger
+        # is the same to networkd's files.
         self.units: DeviceFile = self.on_boot_script(UNITS_SCRIPT, units_script(), opts=self.child_opts())
+        self.networkd: DeviceFile = self.on_boot_script(NETWORKD_SCRIPT, networkd_script(), opts=self.child_opts())
         self.packages: DeviceFile = self.on_boot_script(
             PACKAGES_SCRIPT, packages_script(packages), opts=self.child_opts()
         )
@@ -636,6 +781,45 @@ class DevicePersistence(Component, pulumi_type='kluster:gateway:DevicePersistenc
             hook=dropin_hook(unit, name),
             opts=opts,
             after=(self.units, self.skeleton[UNITS]),
+        )
+
+    def networkd_file(
+        self, directory: NetworkdDirectory, name: str, content: pulumi.Input[str], *, opts: pulumi.ResourceOptions
+    ) -> DeviceFile:
+        """One file of systemd-networkd's configuration, delivered into the directory networkd reads.
+
+        `directory` is one of `NETWORKD_DIRECTORIES`. The source lands under
+        the custom root, where a firmware update leaves it, and the hook is
+        `05-networkd.sh`: copied into place, and networkd restarted onto it if
+        it changed. The delete of this resource takes the live copy away and
+        restarts nothing (`networkd_hook`).
+
+        The suffix is held to what networkd reads in that directory, and to
+        what the converger therefore walks: a file of another suffix would land
+        on the device and be read by nobody.
+
+        It waits on the converger and on the directory it lands in, for the
+        reasons `unit` does.
+        """
+        if directory not in NETWORKD_DIRECTORIES:
+            raise ValueError(
+                f'{directory!r} is not a directory {NETWORKD_SCRIPT} delivers into, so a file there would land on '
+                f'the device and be read by nothing'
+            )
+        if not name.endswith(directory.suffixes):
+            raise ValueError(
+                f'{name!r} is not one of {", ".join(directory.suffixes)}, the files networkd reads in '
+                f'{directory.live}: it would land on the device and be read by nothing'
+            )
+        return self._declare(
+            'networkd',
+            f'{directory.source}/{name}',
+            path=networkd_source(directory, name),
+            content=content,
+            mode=FILE_MODE,
+            hook=networkd_hook(directory, name),
+            opts=opts,
+            after=(self.networkd, self.skeleton[directory.source]),
         )
 
     def skeleton_dir(self, name: str, *, opts: pulumi.ResourceOptions) -> DeviceDirectory:

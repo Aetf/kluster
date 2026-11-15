@@ -1,0 +1,75 @@
+#!/bin/bash
+# Managed by the {{ cluster }} physical stack. Local edits are overwritten.
+#
+# Deliver systemd-networkd's configuration from its sources under /data into
+# the directories networkd reads, and restart networkd once if any of it
+# changed. The firmware enables networkd; this program neither installs, enables
+# nor stops it, and constrains it only by the files this script delivers
+# (physical/gateway.md §1.2). What the files say is not this script's business:
+# it copies, and gateway-health reads what networkd is left with.
+#
+# First in the chain. It needs nothing the chain installs, and every later
+# script can create a link networkd would act on (40-machines.sh starts the
+# machines, whose host-side ports are such links) or restart networkd itself (a
+# package upgrade). After a firmware update that did not carry /etc across,
+# networkd starts under its defaults with no link to act on, since no machine
+# runs yet, and this script is what puts both files back and restarts it before
+# the first port exists.
+#
+# Both live directories are shared with the firmware, so this script only adds:
+# a live file with no source is somebody else's, and a file this program stops
+# declaring is removed by the delete that stopped declaring it, which restarts
+# nothing.
+
+set -u
+
+changed=0
+status=0
+
+# deliver <source directory> <live directory> <suffix>...
+#
+# Each regular file of the source directory with one of the suffixes is copied
+# to the live directory when the copy there differs. The live name is this
+# program's own, so whatever is wearing it that is not a regular file is taken
+# away rather than read through: `cmp` on a named pipe waits for a writer that
+# is not coming, and `cp` would write through a link to wherever it pointed.
+deliver() {
+    src=$1
+    live=$2
+    shift 2
+    [ -d "$src" ] || return 0
+    for suffix; do
+        for f in "$src"/*"$suffix"; do
+            [ -f "$f" ] || continue
+            installed=$live/$(basename "$f")
+            if [ -L "$installed" ] || { [ -e "$installed" ] && [ ! -f "$installed" ]; }; then
+                rm -rf "$installed"
+            fi
+            cmp -s "$f" "$installed" && continue
+            echo "networkd: installing $installed"
+            if mkdir -p "$live" && cp "$f" "$installed"; then
+                changed=1
+            else
+                status=1
+            fi
+        done
+    done
+}
+{% for directory in directories %}
+deliver {{ directory.source }} {{ directory.live }}{% for suffix in directory.suffixes %} {{ suffix }}{% endfor %}
+{%- endfor %}
+
+# One restart after every copy, so networkd never starts on half of what this
+# run delivers: a copy that failed means no restart at all, and the run exits
+# non-zero, so the push that ran it fails and gateway-health names what the
+# live directories lack. A restart onto a partial delivery could start networkd
+# managing the machines' ports with foreign management still on. A restart
+# rather than `networkctl reload`, which reads the .network files again but not
+# networkd.conf and its drop-ins: the daemon reads those only when it starts. A
+# networkd that is not running reads them when it next does, and is left alone.
+if [ "$changed" -eq 1 ] && [ "$status" -eq 0 ] && systemctl is-active --quiet {{ unit }}; then
+    echo "networkd: restarting {{ unit }} onto what changed"
+    systemctl try-restart {{ unit }} || status=1
+fi
+
+exit "$status"

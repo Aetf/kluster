@@ -481,10 +481,11 @@ by hand. It occupies two roots:
     unit this repository carries, which runs every file in that
     directory in numeric order.
 -   **`/data/custom`**, which is this program's: `bin/` for
-    executables, `units/` for unit-file sources, `dpkg/` for the
-    offline package cache and `dpkg.base/` for the firmware base it is
-    resolved against, plus whatever directory a layer of the gateway
-    asks for.
+    executables, `units/` for unit-file sources, `network/` and
+    `networkd.conf.d/` for the sources of `systemd-networkd`'s
+    configuration, `dpkg/` for the offline package cache and
+    `dpkg.base/` for the firmware base it is resolved against, plus
+    whatever directory a layer of the gateway asks for.
 
 **Only `/data` is promised across a firmware update.** An update
 wipes `/usr` and `/var` — every apt-installed package and the dpkg
@@ -506,7 +507,7 @@ because its stamp names the firmware release, the first boot after an
 update parses the configuration against the new parser either way
 (§1.3).
 
-Three files are the mechanism itself.
+The mechanism itself is the files below.
 
 **`udm-boot.service` is carried verbatim from upstream**, with the
 commit it is pinned at in its own header, and it is delivered as a
@@ -514,6 +515,33 @@ commit it is pinned at in its own header, and it is delivered as a
 wiped `/etc` recoverable by hand: the file the device needs is already
 on the device, and copying it into place restores the chain that
 restores everything else.
+
+**`05-networkd.sh` delivers `systemd-networkd`'s configuration**, and
+runs first in the chain. Each source under `/data/custom/network` and
+`/data/custom/networkd.conf.d` whose live copy differs is copied into
+`/etc/systemd/network` or `/etc/systemd/networkd.conf.d`, and once every
+copy is done, a `networkd` that is running is restarted once
+(`systemctl try-restart`) if anything changed. **A copy that fails means
+no restart at all**: the script exits 1, the push that ran it fails, and
+`gateway-health` names what the live directories lack, since a restart
+onto part of the delivery could have `networkd` manage the machines'
+ports with foreign management still on. A restart rather than
+`networkctl reload`, because the reload reads the `.network` files
+again and `networkd.conf` with its drop-ins only at start. A `networkd`
+that is not running reads the files when it next starts, and is left
+alone. The script knows nothing of what the files say: it delivers, and
+`gateway-health` reads what `networkd` is left with (§1.6). It runs
+first because it needs nothing the chain installs, and every later
+script can restart `networkd` (a package upgrade) or create a link
+`networkd` would act on (`40-machines.sh` starts the machines, whose host-side ports are such
+links). So on a device whose update did not carry `/etc` across,
+`networkd` starts under its defaults with no link to act on, and this
+script puts both files back and restarts it before the first port
+exists. A file this program stops declaring is removed by the delete of
+its resource, which takes the live copy away and **never restarts
+`networkd`**: a delete can only loosen what `networkd` is told,
+loosening is never urgent, and a restart is the one act on this device that can cost
+the firmware its policy routing (below).
 
 **`10-packages.sh` reinstalls what a firmware update wiped**, in one
 transaction, because packages version-locked to one another cannot be
@@ -715,7 +743,7 @@ the unit as it stands.
 
 **A script here mirrors deletions only inside a directory that is
 wholly this program's; a directory it shares, it only adds to.** That
-one rule decides all three of them. `/etc/systemd/system` is shared
+one rule decides each of them. `/etc/systemd/system` is shared
 with the firmware, so a live unit file with no source is left where it
 is, and a unit is retired from the other side instead — deleting the
 resource that declared it removes the source and, in the same session,
@@ -729,6 +757,9 @@ belonging to no declared machine is removed. A `<unit>.d` directory
 this program has a source for is its own the same way, so a live
 drop-in with no source goes — while a `<unit>.d` it has no source for
 belongs to whoever made it and is not entered at all.
+`/etc/systemd/network` and `/etc/systemd/networkd.conf.d` are shared
+with the firmware, so `05-networkd.sh` only adds to them, and a file is
+retired by the delete of its resource, as a unit is.
 
 Mirroring is what makes a removal survive a device this program did
 not push it to: a recovery boot after a firmware update runs these
@@ -737,7 +768,8 @@ delete the firmware's files.
 
 **The layers above reach the mechanism through it, not around it.** A
 component that needs a script in the boot chain, an executable, a unit,
-a drop-in on one, or a directory asks the persistence layer for one and
+a drop-in on one, a file of `networkd`'s configuration, or a directory
+asks the persistence layer for one and
 gets back a resource of its own: where the file goes, what mode it takes
 and what runs once it lands are the mechanism's decisions, while the
 file itself belongs to the component that needs it and goes away when
@@ -778,11 +810,12 @@ traversal nothing here can see.
 
 **New device automation is a systemd unit plus an executable in
 `bin/`**, unless the operation manipulates systemd's own configuration
-— installing its packages, its units, its nspawn files, its machines —
-in which case it is a script in the boot chain. A unit gets its own
+— installing its packages, its units, its nspawn files, its machines,
+`networkd`'s configuration — in which case it is a script in the boot
+chain. A unit gets its own
 journal, its own failure in `systemctl status`, a restart policy, and
 it can be run again outside boot; what it cannot get is a place before
-the unit store exists, which is what the two scripts above need and
+the unit store exists, which is what the scripts above need and
 what the numeric order of `on_boot.d` expresses. **An executable that
 something runs on demand — a push's hook, an operator, the homelab host
 over SSH — is an executable alone**, with no unit: it runs nothing on
@@ -797,13 +830,70 @@ boot-chain scripts, for the `machines/` directory they work in, for the
 `machine-rollback` executable a failed push reaches for, for the bridge
 watchdog as a unit and an executable pair, and — once per machine, as
 that machine is declared — for the drop-in its instance of the template
-unit carries. It also states the
+unit carries. It asks for `networkd`'s two files as well (below), and
+every machine's files wait on them, so no port exists before `networkd`
+has been told of it. It also states the
 packages the machines need, which is how `systemd-container`, the
 name-service module that resolves a started machine, and the two
 programs the device pulls and unpacks its own root filesystems with
 reach `10-packages.sh` without that script naming a package of its own.
 The machines themselves are the workloads on it, and they own nothing
 of the framework.
+
+**A service the firmware enables stays enabled; this program constrains
+it by adding configuration, and gives it none of this program's
+links.** `systemd-networkd` is the instance. The firmware enables it,
+and under its defaults (`ManageForeignRoutingPolicyRules=`,
+`ManageForeignRoutes=` and `ManageForeignNextHops=`, each on) `networkd`
+removes every routing policy rule, route and next hop it did not create
+whenever it configures a link, rules of protocol `kernel` excepted
+(networkd.conf(5)). The firmware's policy routing is made of
+such rules, `lookup main` among them, and without them the gateway's
+own packets get no route and every VLAN goes silent. `networkd` runs
+that removal only from the configuration of a link a `.network` file
+matched, so a `networkd` that manages no link removes nothing. The links this program puts within its reach are the
+machines' host-side `vb-*` ports, which systemd's own
+`80-container-vb.network` matches, and the firmware detaches and
+re-attaches them on every controller apply, after which `networkd`
+configures each one it manages again. The runtime therefore declares two
+files:
+
+-   **`10-kluster-machines.network`**, in `/etc/systemd/network`, which
+    matches what the stock file matches (`Kind=veth`, `Name=vb-*`) and
+    marks it `Unmanaged=yes`. systemd.network(5) describes `Unmanaged=`
+    as the way to keep matching files from interfering with an interface
+    another program fully controls, and these ports are such interfaces:
+    `systemd-nspawn` brings each up and sets its master, and the bridge
+    watchdog restores a master the port lost. The name sorts ahead of
+    the stock file, and `.network` files from every directory are sorted
+    together, the first match applying. It matches what this program's
+    machines create and nothing else, so no `.network` the firmware ships
+    is overridden. This file takes away the event that removes the rules.
+-   **`10-kluster.conf`**, in `/etc/systemd/networkd.conf.d`, which
+    turns those three options off, so a link `networkd` comes to manage
+    for any other reason still costs the firmware nothing: with them
+    off, `networkd` does not enumerate foreign objects at all. A systemd
+    older than 256 logs `ManageForeignNextHops=` as unknown and ignores
+    it. **This drop-in is a workaround of the firmware's, cut as a
+    separable layer**: its boundary is one declaration in the runtime
+    (`nspawn.FOREIGN_MANAGEMENT`, rendered into the file and into the
+    reading) and one file on the device; it goes when the firmware sets
+    these itself or stops running `networkd`, by deleting that
+    declaration, and the `.network`, the delivery and the other readings
+    stay; the reading of §1.6 that holds every option to its declared
+    value, and the boot-chain case in `tests/test_nspawn_runtime.py`
+    that runs the chain on a device whose `/etc` was wiped, are its
+    tripwires.
+
+The drop-in lands before the `.network` on a push, so the restart the
+`.network` file's delivery causes is already under foreign management
+off. **No mask, and no restorer.** Masking `systemd-networkd` would take
+away a service the firmware chose to enable, which is a change to the
+firmware beyond what the design needs, and a reading that finds no
+consumer on one release cannot say what a later one intends. A
+device-side unit that put the rules back would make this program a
+second owner of the firmware's rule set, and nothing on the device
+watches it (§1.6).
 
 **One package in the set is for a consumer off the device**: `rsync`,
 which the homelab host's backup pull runs on this end of its session to
@@ -1104,7 +1194,7 @@ each sits where the fact it compares against is declared:
 
 | Piece | Lives in | Runs | Compares the device against |
 | --- | --- | --- | --- |
-| `gateway-health` | this repository, rendered onto the device as `/data/custom/bin/gateway-health` | on demand, over the homelab host's SSH | what `Gateway` declares: its machines, the units the persistence layer delivers, the routing daemon, the offline package cache, and the base the program is written for |
+| `gateway-health` | this repository, rendered onto the device as `/data/custom/bin/gateway-health` | on demand, over the homelab host's SSH | what `Gateway` declares: its machines, the units the persistence layer delivers, the routing daemon, the offline package cache, the base the program is written for, and what `networkd` is told |
 | `check-gateway` | homelab-ops, behind a yadm timer on the homelab host | daily | `gateway-health`'s verdict, the proxy's certificates as a LAN host sees them, and how fresh the copies of the backups are; it mails each finding with its playbook |
 | `gateway-backup-pull` | homelab-ops, behind a yadm timer on the homelab host | weekly | nothing: it copies the controller's autobackups into `~/.config/gw-backups`, and the resolvers' configuration until [sources-of-truth.md](../sources-of-truth.md) R2 flips |
 
@@ -1179,6 +1269,39 @@ The title is a bullet of §3, spelled as it is there. What it reads:
     The firmware's own release is not compared, nor a point release:
     one that keeps the base moves nothing these facts decide, and a
     finding on every vendor update would be noise.
+7.  **`networkd` can remove none of the firmware's policy rules** (§1.2),
+    read three ways, each finding naming one playbook:
+    -   *the consequence*: `ip -4 rule show` holds a rule that looks up
+        `main`. With that rule gone the gateway cannot route its own
+        replies, so neither the SSH run nor its mail can be counted on
+        while it is gone; this reading is for an operator at the
+        device's shell after a controller apply, which the playbook
+        prescribes. The IPv6 rules join the reading
+        (`POLICY_RULE_FAMILIES`) once a reading of the healthy device
+        shows such a rule there too;
+    -   *the trigger*: `networkctl list` shows no link whose setup state
+        is other than `unmanaged`. A finding names each managed link.
+        It is skipped while `networkd` is not active, since a stopped
+        daemon manages no link;
+    -   *the guard*: every option the declared drop-in sets reads as
+        declared in `systemd-analyze cat-config systemd/networkd.conf`,
+        the main file and the drop-ins in the order `networkd` applies
+        them. Within `[Network]` the last assignment that parses wins,
+        every spelling of yes and no that systemd accepts read as the one
+        it means; an assignment that does not parse, an empty one
+        included, is ignored, and the earlier value stands, as
+        `networkd`'s own parser does. So a later-sorted file that turns
+        an option back on is a finding naming the option, and an option
+        no assignment sets is one too, being at its default. The options are rendered from
+        the declaration that renders the drop-in, so the file and the
+        reading cannot part. This is the configuration on disk: nothing
+        reports what the running daemon loaded, which is why
+        `05-networkd.sh` restarts `networkd` on every change.
+
+    The trigger and the guard report the armed state, before any harm,
+    and those are what the daily run is for. From outside the site, an
+    unreachable gateway fails `plan-physical` at every merge and at the
+    weekly drift run (§3).
 
 `gateway-health --certificates` reads nothing, and prints one line per
 certificate the declared proxy obtains: the proxy's address and one
@@ -2972,6 +3095,42 @@ command runs on the device unless the entry says otherwise.
     -   **Then the declaration moves**: `DEVICE_BASE` in
         `kluster.components.gateway` takes what the device reads, and
         the `physical` push that delivers it clears the finding.
+-   **The firmware's policy rules exposed to removal** — trigger:
+    `gateway-health` reports `ip -4 rule` holding no rule that looks up
+    `main`, a link `networkd` manages, or an option of the declared
+    drop-in not reading as declared (§1.6). It is also the reading to
+    take at the device's shell after a controller apply, since a gateway
+    whose rules are gone cannot send the daily mail. **One rule holds
+    throughout: `networkd` is not restarted while a link is managed and
+    the guard does not read clean**, because that restart runs the
+    removal at once. Read `networkctl list` and
+    `systemd-analyze cat-config systemd/networkd.conf` first; the
+    finding says which applies:
+    -   **An option not as declared**: the `# <path>` line above the
+        assignment names the file that sets it. The declared drop-in
+        missing is put back, with a restart under it, by
+        `/data/on_boot.d/05-networkd.sh`. A later-sorted file is the
+        firmware's or one placed by hand, and is not this program's to
+        remove: one the firmware ships is a change of the firmware's
+        intent, which the workaround's removal condition in §1.2 is
+        read against.
+    -   **A managed link**: `networkctl status <link>` names the
+        `.network` file applied to it. A `vb-*` port that the declared
+        `.network` should have matched is the file missing from
+        `/etc/systemd/network`, or an earlier-sorted file matching
+        first; with the guard reading clean,
+        `/data/on_boot.d/05-networkd.sh` puts the file back and restarts
+        `networkd` onto it. Any other link is the firmware's or one
+        configured by hand, and with the guard clean costs the firmware
+        nothing.
+    -   **No rule looks up `main`**: the gateway routes none of its own
+        packets, so the device answers only at its console. The rule set
+        is the firmware's, and this program writes none of it. Once the
+        other two readings are clean, a reboot has the firmware build it
+        again. With those two clean, both files are in `/etc` when
+        `networkd` first starts; on a boot that did not carry `/etc`
+        across, no machine is enabled until the chain has put them back
+        (§1.2).
 -   **The check did not run** — trigger: `check-gateway`'s session to
     the device failed, `gateway-health` is missing, or it exited non-zero
     with no output. A device that does not answer is "ZeroTier container
@@ -2997,6 +3156,96 @@ command runs on the device unless the entry says otherwise.
     boot chain's entry above. No recent autobackup on the device at all
     is the controller's schedule, a console setting. Then
     `systemctl --user start gateway-backup.service` takes a copy.
+
+### 3.1 Landing `networkd`'s configuration under a hand-placed guard
+
+A device that carries a foreign-management drop-in placed by hand,
+under a rule watchdog started by hand, takes `05-networkd.sh` and
+`networkd`'s two files (§1.2) by two **targeted workstation runs** and
+then the gated CI `up` for what remains. Targeted, because a controller
+write is itself the event that reconfigures the machines' ports, and
+because `main` may carry other `physical` changes for this device that
+are not to land in the same run. It needs the operator's go and someone
+at a shell on the device. `physical` is the function defined at the top
+of [gateway-cutover.md](gateway-cutover.md). **This section is a
+procedure run once, on the one device that carries such a guard, and it
+is deleted once that device has passed step 7**. A deletion of
+gateway-cutover.md while this section stands moves the function's
+definition here. **The way back** is that
+nothing below removes the hand-placed drop-in or the watchdog until
+step 6: until then every step only adds, and undoing a declared file is
+deleting both its source under `/data/custom` and its live copy, since
+either run of `05-networkd.sh`, at boot or as a hook, copies a source
+back.
+**One rule holds throughout: `networkd` is never restarted while no
+foreign-management drop-in is on disk.**
+
+1.  **Baseline, before the merge.** On the device: the hand-placed
+    drop-in exists, and the watchdog runs; `systemctl --version` reads
+    256 or later; save `ip -4 rule show` and `ip -6 rule show`;
+    `networkctl list` shows the `vb-*` ports managed and every other
+    link `unmanaged`; note each port's state and master
+    (`ip -br link show master <bridge>`). From the workstation:
+    `physical preview --diff` on `main`, saved. *Stop* if the drop-in
+    is missing, if any other link is managed, or if the release is
+    below 256. Whether the `ip -6` output holds a rule that looks up
+    `main` decides whether the IPv6 rules join the reading of §1.6. A
+    kernel-default `32766: from all lookup main` in the saved
+    `ip -4 rule show` survives `networkd`, so it would leave the
+    reading's consequence half unable to fire; such a rule is reported
+    with the baseline.
+2.  **Merge.** `plan-physical` reports a diff and `up-physical` waits at
+    its gate. It is not approved yet.
+3.  **Read the plan.** `physical preview --diff` shows the baseline
+    and, beside it, creates for the two skeleton directories,
+    `05-networkd.sh` and `networkd`'s two files, and an update of
+    `gateway-health`. *Stop* on anything else.
+4.  **Run one: the directories, `05-networkd.sh` and the drop-in.**
+    `networkd` restarts once, under both drop-ins, which agree.
+
+        physical up \
+            --target 'urn:pulumi:physical::kluster-py::kluster:gateway:Gateway$kluster:gateway:DevicePersistence$pulumi-python:dynamic/device_files:DeviceDirectory::kluster-persistence-skeleton-network' \
+            --target 'urn:pulumi:physical::kluster-py::kluster:gateway:Gateway$kluster:gateway:DevicePersistence$pulumi-python:dynamic/device_files:DeviceDirectory::kluster-persistence-skeleton-networkd.conf.d' \
+            --target 'urn:pulumi:physical::kluster-py::kluster:gateway:Gateway$kluster:gateway:DevicePersistence$pulumi-python:dynamic/device_files:DeviceFile::kluster-persistence-on-boot-05-networkd.sh' \
+            --target 'urn:pulumi:physical::kluster-py::kluster:gateway:Gateway$kluster:gateway:NspawnRuntime$pulumi-python:dynamic/device_files:DeviceFile::kluster-nspawn-networkd-networkd.conf.d/10-kluster.conf'
+
+    Readings: `/etc/systemd/networkd.conf.d/10-kluster.conf` exists;
+    the rule output equals the saved one; the `vb-*` ports are still
+    managed; a LAN client resolves through AdGuard. *Stop* if the rules
+    differ.
+5.  **Run two: the `.network` file.** `networkd` restarts again.
+
+        physical up \
+            --target 'urn:pulumi:physical::kluster-py::kluster:gateway:Gateway$kluster:gateway:NspawnRuntime$pulumi-python:dynamic/device_files:DeviceFile::kluster-nspawn-networkd-network/10-kluster-machines.network'
+
+    Readings: `networkctl list` shows the `vb-*` ports `unmanaged` and
+    no link managed; each port is up, with the master noted in step 1;
+    DNS and the proxy answer; the rules are unchanged. *Stop* if a port
+    is down or without its master. The way back for this step is `rm`
+    of both `/etc/systemd/network/10-kluster-machines.network` and its
+    source, `/data/custom/network/10-kluster-machines.network`, and then
+    `networkctl reload` on the device, which removes nothing while a
+    drop-in is in place. The declaration is then out of step with the
+    device until the next run settles it, which the next preview shows
+    as drift on that file.
+6.  **Proof, then retirement.** With `ip monitor rule` open in a second
+    shell, repeat a controller re-apply, which detaches and re-attaches
+    the ports. A `Deleted` line is a failure and a stop, whatever the
+    watchdog restores. Then move the hand-placed drop-in aside, out of
+    `/etc/systemd/networkd.conf.d`, run
+    `systemctl restart systemd-networkd` with the monitor still open
+    and the watchdog still running, and read the rules again. A
+    `Deleted` line here is a stop too: put the file back, restart
+    `networkd` under it, and leave the watchdog running. Only once the
+    rules read as saved and no line was deleted, stop the watchdog.
+7.  **The remainder.** If the baseline held nothing else, approve the
+    gate; CI's `up` applies the `gateway-health` update and the chain
+    proceeds. If it held more, apply `gateway-health` by a third
+    targeted run, on
+    `urn:pulumi:physical::kluster-py::kluster:gateway:Gateway$pulumi-python:dynamic/device_files:DeviceFile::kluster-bin-gateway-health`,
+    and leave the gate unapproved for those changes. Run
+    `/data/custom/bin/gateway-health` on the device: no line names
+    "The firmware's policy rules exposed to removal".
 
 ## 4. Firewall target state
 
