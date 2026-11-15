@@ -1194,7 +1194,7 @@ each sits where the fact it compares against is declared:
 
 | Piece | Lives in | Runs | Compares the device against |
 | --- | --- | --- | --- |
-| `gateway-health` | this repository, rendered onto the device as `/data/custom/bin/gateway-health` | on demand, over the homelab host's SSH | what `Gateway` declares: its machines, the units the persistence layer delivers, the routing daemon, the offline package cache, the base the program is written for, and what `networkd` is told |
+| `gateway-health` | this repository, rendered onto the device as `/data/custom/bin/gateway-health` | on demand, over the homelab host's SSH | what `Gateway` declares: its machines and the bridge each attaches to, the units the persistence layer delivers, the routing daemon, the offline package cache, the base the program is written for, and what `networkd` is told |
 | `check-gateway` | homelab-ops, behind a yadm timer on the homelab host | daily | `gateway-health`'s verdict, the proxy's certificates as a LAN host sees them, and how fresh the copies of the backups are; it mails each finding with its playbook |
 | `gateway-backup-pull` | homelab-ops, behind a yadm timer on the homelab host | weekly | nothing: it copies the controller's autobackups into `~/.config/gw-backups`, and the resolvers' configuration until [sources-of-truth.md](../sources-of-truth.md) R2 flips |
 
@@ -1302,6 +1302,31 @@ The title is a bullet of §3, spelled as it is there. What it reads:
     and those are what the daily run is for. From outside the site, an
     unreachable gateway fails `plan-physical` at every merge and at the
     weekly drift run (§3).
+8.  **Every machine on a bridge is attached to it**: the host end of the
+    pair nspawn made for the machine, its port, has the bridge the
+    machine's settings name as its master. The list is the
+    declaration's machines that name a bridge, today caddy and the
+    resolvers; the overlay member shares the host's network and has no
+    port. A port without that master is the state §1 says systemd has no
+    view of, the machine and the bridge's device unit both active while
+    the container talks to nothing. The bridge watchdog restores such a
+    port, so a finding that a second run repeats is one it did not
+    restore; the two readings that do not repeat are in the playbook.
+    The port is found from
+    the machine's own end of the pair, `host0`, whose peer index
+    `ip -o link show` prints in the network namespace of the machine's
+    leader, and that index is then looked up among the device's links:
+
+        leader=$(machinectl show --property=Leader --value <name>)
+        nsenter --target "$leader" --net -- ip -o link show host0
+
+    It is not found by name. nspawn names the port `vb-` and the
+    machine's name, and where that is longer than the 15 characters an
+    interface name holds, it keeps the front and puts a hash of the
+    whole name at the end (systemd.net-naming-scheme(7), `v245`):
+    `vb-adguard-alice` is one such name. The finding quotes the name the
+    device gives the port. A machine that is not running is reading 1's
+    finding, and its port is not read.
 
 `gateway-health --certificates` reads nothing, and prints one line per
 certificate the declared proxy obtains: the proxy's address and one
@@ -3046,6 +3071,29 @@ command runs on the device unless the entry says otherwise.
     `/data/on_boot.d/30-nspawn-units.sh` and then
     `/data/on_boot.d/40-machines.sh` by hand (§1.1). The overlay member down is also "ZeroTier container
     down on the UDM" above, for what it takes with it.
+-   **A machine's port off its bridge** — trigger: `gateway-health`
+    reports a running machine whose port has no master, or a master
+    other than the bridge its settings name; the finding quotes the
+    port by the name the device gives it (§1.6). Run
+    `/data/custom/bin/gateway-health` again first: two readings report
+    a device that has nothing to repair, and a second run does not
+    repeat either. One is a run that lands between a controller apply
+    detaching the port and the watchdog restoring it. The other is a
+    machine that stops between its unit reading active and `machinectl`
+    naming its leader, which the finding reports as `machinectl` naming
+    no leader. A finding that does repeat is a port the watchdog did not
+    restore, since it restores a master a port lost while the bridge
+    stands (§1). `journalctl -u
+    nspawn-bridge-watchdog` says whether it saw the port: each restore
+    it made is a `FIX: Re-attaching` line naming the port. A watchdog
+    that is not active is also "A delivered unit disabled or failed"
+    below. `ip -br link show master <bridge>` lists the ports the
+    bridge holds, and `ip link set dev <port> master <bridge>`, the
+    command the watchdog runs, attaches the port the finding names. A
+    bridge that is itself gone, where `ip link show <bridge>` fails, is
+    the failure §1 says nothing here answers: the watchdog skips it, and
+    the port is attached once the controller has brought the bridge
+    back.
 -   **The boot chain's last run failed** — trigger: `udm-boot.service`
     is not active. Every script of the chain runs whatever an earlier
     one exits with (§1.2), so `journalctl -b -u udm-boot.service` names
@@ -3230,7 +3278,20 @@ foreign-management drop-in is on disk.**
 6.  **Proof, then retirement.** With `ip monitor rule` open in a second
     shell, repeat a controller re-apply, which detaches and re-attaches
     the ports. A `Deleted` line is a failure and a stop, whatever the
-    watchdog restores. Then move the hand-placed drop-in aside, out of
+    watchdog restores. Before anything is moved, read the ports: this is
+    the first controller apply with no `networkd` configuration behind
+    them, where the stock file brought each one up on every apply. Each
+    `vb-*` port is up and has the master noted in step 1
+    (`ip -br link show master <bridge>`), and
+    `journalctl -u nspawn-bridge-watchdog` over the re-apply says which
+    of the two put it back: a `FIX: Re-attaching` line naming the port
+    is the watchdog, and no line for it is the firmware. *Stop* on a
+    port that is down or without its master. The way back starts with
+    the command the watchdog runs, `ip link set dev <port> master
+    <bridge>`, by hand for each port without its master, which puts the
+    machine back on the network; then step 5's way back, which hands the
+    ports back to the stock file under the drop-in and keeps them there.
+    Then move the hand-placed drop-in aside, out of
     `/etc/systemd/networkd.conf.d`, run
     `systemctl restart systemd-networkd` with the monitor still open
     and the watchdog still running, and read the rules again. A
@@ -3244,7 +3305,8 @@ foreign-management drop-in is on disk.**
     `urn:pulumi:physical::kluster-py::kluster:gateway:Gateway$pulumi-python:dynamic/device_files:DeviceFile::kluster-bin-gateway-health`,
     and leave the gate unapproved for those changes. Run
     `/data/custom/bin/gateway-health` on the device: no line names
-    "The firmware's policy rules exposed to removal".
+    "The firmware's policy rules exposed to removal" or "A machine's
+    port off its bridge".
 
 ## 4. Firewall target state
 

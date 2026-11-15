@@ -4,15 +4,16 @@ The executable is rendered from the declarations the stack program builds the
 gateway out of, and run as the homelab host runs it: no argument for the
 reading, `--certificates` for the list a LAN probe works from. Its systemd is
 `tests/fake_systemd.py`, behind a `systemctl` that answers `--version` itself
-with the release a case sets. `machinectl`, which names the overlay member's
-leader, `nsenter`, which runs `zerotier-cli info` in that leader's mount
-namespace, the package script, whose `--check` the reading relays, and `ip`,
-which lists the policy rules, are stand-ins that answer what a case sets and
-record what they were asked. `networkctl` and `systemd-analyze` are the
-stand-in systemd's own: the links it reports are the ones a case set, and the
-configuration it assembles is the files under the stand-in's tree. The base is
-read under that tree too: its `/etc/debian_version` and its `/bin/sh` are
-files there.
+with the release a case sets. `machinectl`, which names a running machine's
+leader, `nsenter`, which runs `zerotier-cli info` in the overlay member's
+leader's mount namespace and `ip -o link show host0` in a bridged machine's
+leader's network namespace, the package script, whose `--check` the reading
+relays, and `ip`, which lists the policy rules and the device's links, are
+stand-ins that answer what a case sets and record what they were asked.
+`networkctl` and `systemd-analyze` are the stand-in systemd's own: the links it
+reports are the ones a case set, and the configuration it assembles is the
+files under the stand-in's tree. The base is read under that tree too: its
+`/etc/debian_version` and its `/bin/sh` are files there.
 
 What it reads it reads against the declaration, so the wiring of the
 declaration into the program -- which machines, which units -- is
@@ -54,8 +55,12 @@ RESOLVERS = tuple(
     container.ResolverService(service=resolver, pin=pin(resolver.name)) for resolver in conventions.gateway.RESOLVERS
 )
 OVERLAY = container.OverlayDaemon(service=conventions.gateway.OVERLAY, pin=pin(conventions.gateway.OVERLAY.name))
-#: The process id the stand-in `machinectl` gives a running machine's leader.
-LEADER = '4242'
+#: The process id the stand-in `machinectl` gives each running machine's leader.
+LEADERS = {
+    declaration.service.name: str(4242 + offset) for offset, declaration in enumerate((caddy(), *RESOLVERS, OVERLAY))
+}
+#: The machines on a bridge, as the declaration names them, and the bridge each attaches to.
+BRIDGED = {declaration.service.name: declaration.bridge for declaration in (caddy(), *RESOLVERS)}
 
 #: Where under the device the stand-in systemd keeps its own records.
 SYSTEMD = 'systemd'
@@ -72,6 +77,33 @@ RULES_WITHOUT_MAIN = '0:\tfrom all lookup local\n'
 
 #: A port one of the machines attaches with, as nspawn names it.
 PORT = 'vb-caddy'
+
+#: The longest name a network interface may have (IFNAMSIZ less its terminator).
+IFNAME_MAX = 15
+
+
+def port_name(machine: str) -> str:
+    """The host end of a bridged machine's pair, named the way nspawn names it.
+
+    `vb-` and the machine's name, and where that is longer than an interface
+    name may be, shortened with a hash of the whole in its last characters
+    (systemd.net-naming-scheme(7), `v245`). The hash here is a fixed stand-in:
+    the reading never derives the name, so its exact value is nobody's to match.
+    """
+    name = f'vb-{machine}'
+    return name if len(name) <= IFNAME_MAX else f'{name[: IFNAME_MAX - 4]}a1b2'
+
+
+@dataclass
+class _Port:
+    """The host end of a bridged machine's pair: its link index on the device, its name, and its master."""
+
+    index: int
+    name: str
+    master: str | None
+    #: Whether the device lists the port among its links; the machine's `host0` names it either way.
+    listed: bool = True
+
 
 #: The address family the reading reads the rules of first.
 FAMILY = gateway.POLICY_RULE_FAMILIES[0]
@@ -103,6 +135,18 @@ class _Device:
     rules: Path
     #: The directories networkd's configuration is assembled from, most specific first.
     etc_networkd: Path
+    #: The host end of each bridged machine's pair, by machine name.
+    ports: dict[str, _Port]
+    #: What `ip -o link show` prints on the device.
+    links: Path
+    #: Present, `ip -o link show` on the device fails with what it holds.
+    links_fail: Path
+    #: What `ip -o link show host0` prints in each leader's network namespace, one file per leader, and
+    #: beside each a `<leader>.warn` it writes to stderr first, where a case sets one.
+    netns: Path
+    #: Machines the stand-in `machinectl` no longer knows, though their units still read active: a
+    #: machine that stopped between the two questions, one file per machine.
+    gone: Path
     machinectl_calls: Path
     nsenter_calls: Path
     check_calls: Path
@@ -128,6 +172,38 @@ def _link_bin_sh(root: Path, target: str) -> None:
     link.symlink_to(os.path.relpath(shell, link.parent))
 
 
+def _write_ports(device: _Device) -> None:
+    """The device's links and each bridged machine's end of its pair, as `ip -o link show` prints them.
+
+    The device's own links come first, the firmware's bridges among them; each
+    port follows with its master, if it has one, and each machine's `host0`
+    names its port's index as its peer.
+    """
+    lines = [
+        '1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue state UNKNOWN mode DEFAULT group default qlen 1000'
+        '\\    link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00',
+        *(
+            f'{index}: {bridge}: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc noqueue state UP mode DEFAULT '
+            f'group default qlen 1000\\    link/ether 02:00:00:00:00:0{index} brd ff:ff:ff:ff:ff:ff'
+            for index, bridge in enumerate(sorted({'br0', *BRIDGED.values()}), start=2)
+        ),
+    ]
+    for machine, port in device.ports.items():
+        master = '' if port.master is None else f'master {port.master} '
+        if port.listed:
+            lines.append(
+                f'{port.index}: {port.name}@if2: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc noqueue {master}'
+                f'state UP mode DEFAULT group default qlen 1000\\    link/ether 02:00:00:00:01:{port.index:02x} '
+                'brd ff:ff:ff:ff:ff:ff link-netnsid 0'
+            )
+        _ = (device.netns / LEADERS[machine]).write_text(
+            f'2: host0@if{port.index}: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc noqueue state UP mode '
+            'DEFAULT group default qlen 1000\\    link/ether 02:00:00:00:02:00 brd ff:ff:ff:ff:ff:ff '
+            'link-netnsid 0\n'
+        )
+    _ = device.links.write_text(''.join(f'{line}\n' for line in lines))
+
+
 def _device(tmp_path: Path, *, legacy: tuple[conventions.gateway.LegacyVhost, ...] | None = None) -> _Device:
     """A device every declared machine and unit is healthy on, on the declared base, before a case breaks one thing."""
     root = tmp_path.resolve() / 'device'
@@ -135,7 +211,18 @@ def _device(tmp_path: Path, *, legacy: tuple[conventions.gateway.LegacyVhost, ..
     tools = tmp_path / 'tools'
     live = root / 'etc-systemd-system'
     etc_networkd = root / 'etc' / 'systemd' / 'networkd.conf.d'
-    for directory in (root, logs, tools, live, root / 'etc', root / 'bin', root / 'rules', etc_networkd):
+    for directory in (
+        root,
+        logs,
+        tools,
+        live,
+        root / 'etc',
+        root / 'bin',
+        root / 'rules',
+        root / 'netns',
+        root / 'gone',
+        etc_networkd,
+    ):
         directory.mkdir(parents=True)
     systemd = FakeSystemd(
         root / SYSTEMD, unit_path=(live,), config_path=(root / 'etc', root / 'run', root / 'usr' / 'lib')
@@ -150,6 +237,14 @@ def _device(tmp_path: Path, *, legacy: tuple[conventions.gateway.LegacyVhost, ..
         systemd_release=root / 'systemd-release',
         rules=root / 'rules',
         etc_networkd=etc_networkd,
+        ports={
+            machine: _Port(index=10 + offset, name=port_name(machine), master=bridge)
+            for offset, (machine, bridge) in enumerate(BRIDGED.items())
+        },
+        links=root / 'links',
+        links_fail=root / 'links-fail',
+        netns=root / 'netns',
+        gone=root / 'gone',
         machinectl_calls=logs / 'machinectl',
         nsenter_calls=logs / 'nsenter',
         check_calls=logs / 'packages',
@@ -172,34 +267,51 @@ def _device(tmp_path: Path, *, legacy: tuple[conventions.gateway.LegacyVhost, ..
         '    *) if [ -z "$verb" ]; then verb=$argument; elif [ -z "$machine" ]; then machine=$argument; fi ;;\n'
         '    esac\n'
         'done\n'
-        'running() { systemctl is-active --quiet "systemd-nspawn@$machine.service"; }\n'
+        f'running() {{ [ ! -e {root / "gone"}/"$machine" ] && systemctl is-active --quiet "systemd-nspawn@$machine.service"; }}\n'
         'case $verb in\n'
         'show)\n'
         '    if [ "$property" != Leader ] || [ -z "$value" ]; then\n'
         '        echo "stand-in machinectl: show is modeled for --property=Leader --value only" >&2; exit 1\n'
         '    fi\n'
         '    running || { echo "Could not get path to machine: No machine \'$machine\' known" >&2; exit 1; }\n'
-        f'    echo {LEADER} ;;\n'
+        '    case $machine in\n'
+        + ''.join(f'    {machine}) echo {leader} ;;\n' for machine, leader in LEADERS.items())
+        + '    esac ;;\n'
         'shell)\n'
         '    running || { echo "Failed to get shell PTY: No machine \'$machine\' known" >&2; exit 1; }\n'
         '    echo "Failed to get shell PTY: There is no system bus in container $machine." >&2; exit 1 ;;\n'
         '*) echo "stand-in machinectl: the verb $verb is not modeled" >&2; exit 1 ;;\n'
         'esac\n',
     )
-    # `nsenter --target <pid> --mount -- <command>`, into the one process the
-    # stand-in `machinectl` names: there the overlay image's client answers its
-    # `info` with what the case set, and nothing else is modeled.
+    # `nsenter --target <pid> --mount -- <command>`, into the overlay member's
+    # leader: there the overlay image's client answers its `info` with what the
+    # case set. `nsenter --target <pid> --net -- ip -o link show host0`, into
+    # any leader: the `host0` its network namespace holds, which one in the
+    # host's namespace holds none of, as `ip` says of a device it does not
+    # have. Nothing else is modeled.
+    overlay_leader = LEADERS[OVERLAY.service.name]
     _stub(
         Path(systemd.tools) / 'nsenter',
         f'echo "$*" >>{device.nsenter_calls}\n'
-        f'if [ "$1 $2 $3 $4" != "--target {LEADER} --mount --" ]; then\n'
-        '    echo "stand-in nsenter: modeled for --target <leader> --mount -- <command> only, not $*" >&2; exit 1\n'
-        'fi\n'
-        'shift 4\n'
-        f'if [ "$*" != "{gateway.ZEROTIER_CLI} info" ]; then\n'
-        '    echo "stand-in nsenter: the machine runs no command but the client\'s info, not $*" >&2; exit 1\n'
-        'fi\n'
-        f'cat {device.member}\n',
+        'target=$2\n'
+        'case "$1 $3 $4" in\n'
+        '"--target --mount --")\n'
+        '    shift 4\n'
+        f'    if [ "$target" != {overlay_leader} ] || [ "$*" != "{gateway.ZEROTIER_CLI} info" ]; then\n'
+        '        echo "stand-in nsenter: only the overlay member runs a command, its client\'s info, not $*" >&2\n'
+        '        exit 1\n'
+        '    fi\n'
+        f'    cat {device.member} ;;\n'
+        '"--target --net --")\n'
+        '    shift 4\n'
+        '    if [ "$*" != "ip -o link show host0" ]; then\n'
+        '        echo "stand-in nsenter: a network namespace is asked for its host0 only, not $*" >&2; exit 1\n'
+        '    fi\n'
+        f'    [ -e {device.netns}/"$target" ] || {{ echo \'Device "host0" does not exist.\' >&2; exit 1; }}\n'
+        f'    [ ! -e {device.netns}/"$target".warn ] || cat {device.netns}/"$target".warn >&2\n'
+        f'    cat {device.netns}/"$target" ;;\n'
+        '*) echo "stand-in nsenter: modeled for --target <leader> --mount|--net -- <command> only, not $*" >&2; exit 1 ;;\n'
+        'esac\n',
     )
     packages = root / persistence.PACKAGES_SCRIPT
     _stub(
@@ -208,15 +320,18 @@ def _device(tmp_path: Path, *, legacy: tuple[conventions.gateway.LegacyVhost, ..
     )
     _ = device.member.write_text(ONLINE)
     # `ip -<family> rule show`, which prints the rules a case set for that
-    # family; nothing else is modeled.
+    # family, and `ip -o link show`, which prints the device's links; nothing
+    # else is modeled.
     _stub(
         tools / 'ip',
         f'echo "$*" >>{device.ip_calls}\n'
         'case "$*" in\n'
         f'-?" rule show") cat {device.rules}/"${{1#-}}" ;;\n'
-        '*) echo "stand-in ip: modeled for -<family> rule show only, not $*" >&2; exit 1 ;;\n'
+        f'"-o link show") [ ! -e {device.links_fail} ] || {{ cat {device.links_fail} >&2; exit 1; }}; cat {device.links} ;;\n'
+        '*) echo "stand-in ip: modeled for -<family> rule show and -o link show only, not $*" >&2; exit 1 ;;\n'
         'esac\n',
     )
+    _write_ports(device)
     for family in gateway.POLICY_RULE_FAMILIES:
         _ = (device.rules / family).write_text(RULES)
     # `systemctl --version` as Debian's systemd answers it, the release first;
@@ -323,6 +438,21 @@ def _stop_the_routing_daemon(device: _Device) -> None:
     device.systemd.stop(routing.FRR_SERVICE)
 
 
+#: A bridged machine whose name is too long for its port to carry it whole, and one whose is not.
+SHORTENED = next(machine for machine in BRIDGED if port_name(machine) != f'vb-{machine}')
+WHOLE = next(machine for machine in BRIDGED if port_name(machine) == f'vb-{machine}')
+
+
+def _detach_a_port(device: _Device) -> None:
+    device.ports[SHORTENED].master = None
+    _write_ports(device)
+
+
+def _move_a_port_to_another_bridge(device: _Device) -> None:
+    device.ports[WHOLE].master = 'br0'
+    _write_ports(device)
+
+
 def _take_the_member_offline(device: _Device) -> None:
     _ = device.member.write_text(OFFLINE)
 
@@ -371,6 +501,8 @@ def _turn_an_option_back_on_in_a_later_drop_in(device: _Device) -> None:
     ('deviation', 'subject', 'playbook'),
     [
         (_stop_a_machine, RESOLVERS[-1].unit_name, gateway.PLAYBOOKS.machine),
+        (_detach_a_port, SHORTENED, gateway.PLAYBOOKS.port),
+        (_move_a_port_to_another_bridge, WHOLE, gateway.PLAYBOOKS.port),
         (_fail_the_boot_chain, persistence.UDM_BOOT_UNIT, gateway.PLAYBOOKS.boot_chain),
         (_disable_a_unit, routing.CONVERGER_UNIT, gateway.PLAYBOOKS.unit),
         (_stop_a_unit, gateway.access.CONVERGER_UNIT, gateway.PLAYBOOKS.unit),
@@ -386,6 +518,8 @@ def _turn_an_option_back_on_in_a_later_drop_in(device: _Device) -> None:
     ],
     ids=[
         'machine',
+        'port-detached',
+        'port-elsewhere',
         'boot-chain',
         'unit-disabled',
         'unit-inactive',
@@ -437,6 +571,98 @@ def test_a_member_offline_is_reported_with_what_its_client_said(tmp_path: Path) 
     (finding,) = _findings(_read(device))
 
     assert finding['state'] == f'zerotier-cli info: {OFFLINE}'
+
+
+@pytest.mark.parametrize(
+    ('deviation', 'machine', 'master'),
+    [(_detach_a_port, SHORTENED, None), (_move_a_port_to_another_bridge, WHOLE, 'br0')],
+    ids=['detached', 'elsewhere'],
+)
+def test_a_port_off_its_bridge_is_reported_by_the_name_the_device_gives_it(
+    tmp_path: Path, deviation: Callable[[_Device], None], machine: str, master: str | None
+) -> None:
+    """The finding names the machine, and quotes the port as the device names it, which is not always `vb-<machine>`.
+
+    nspawn shortens a port name longer than an interface name may be, so the
+    reading finds the port from the machine's own end of the pair; the operator
+    then reaches it by the name the finding quotes. Beside it are the bridge
+    the declaration names and the master the device reports, where it reports
+    one.
+    """
+    device = _device(tmp_path)
+    deviation(device)
+
+    (finding,) = _findings(_read(device))
+
+    assert finding['subject'] == machine
+    assert device.ports[machine].name in finding['state']
+    assert BRIDGED[machine] in finding['state']
+    assert master is None or master in finding['state']
+
+
+def test_a_port_the_reading_cannot_find_is_a_finding(tmp_path: Path) -> None:
+    """A running machine whose end of the pair names no port is reported, not passed over as attached.
+
+    The finding carries what `ip` said in the machine's namespace, which is
+    where the operator starts.
+    """
+    device = _device(tmp_path)
+    (device.netns / LEADERS[WHOLE]).unlink()
+
+    (finding,) = _findings(_read(device))
+
+    assert (finding['subject'], finding['title']) == (WHOLE, gateway.PLAYBOOKS.port)
+    assert 'Device "host0" does not exist.' in finding['state']
+
+
+def test_what_a_namespace_writes_to_stderr_is_not_read_as_its_answer(tmp_path: Path) -> None:
+    """A warning ahead of the `host0` line leaves the line the answer, so a healthy port stays silent."""
+    device = _device(tmp_path)
+    _ = (device.netns / f'{LEADERS[WHOLE]}.warn').write_text("nsenter: a warning of the tool's own\n")
+
+    reading = _read(device)
+
+    assert (reading.status, reading.lines) == (0, [])
+
+
+def test_a_machine_that_stops_between_the_two_questions_is_one_finding(tmp_path: Path) -> None:
+    """Its unit still read active, and machined no longer knows it: one finding, carrying machined's refusal."""
+    device = _device(tmp_path)
+    _ = (device.gone / WHOLE).write_text('')
+
+    (finding,) = _findings(_read(device))
+
+    assert (finding['subject'], finding['title']) == (WHOLE, gateway.PLAYBOOKS.port)
+    assert f"No machine '{WHOLE}' known" in finding['state']
+
+
+def test_a_port_the_device_does_not_list_is_a_finding(tmp_path: Path) -> None:
+    """A `host0` that names a link the device does not hold is reported, not passed over as attached."""
+    device = _device(tmp_path)
+    device.ports[WHOLE].listed = False
+    _write_ports(device)
+
+    (finding,) = _findings(_read(device))
+
+    assert (finding['subject'], finding['title']) == (WHOLE, gateway.PLAYBOOKS.port)
+    assert str(device.ports[WHOLE].index) in finding['state']
+
+
+def test_a_device_whose_links_cannot_be_listed_reports_every_bridged_machine(tmp_path: Path) -> None:
+    """With no list of the device's links, no port can be read as attached, so each machine on a bridge is a finding.
+
+    Each carries what `ip` said, which separates a listing that failed from a
+    port the listing did not hold.
+    """
+    device = _device(tmp_path)
+    refusal = 'Cannot send link request: Operation not permitted'
+    _ = device.links_fail.write_text(f'{refusal}\n')
+
+    findings = _findings(_read(device))
+
+    assert {finding['subject'] for finding in findings} == set(BRIDGED)
+    assert {finding['title'] for finding in findings} == {gateway.PLAYBOOKS.port}
+    assert all(refusal in finding['state'] for finding in findings)
 
 
 def test_the_cache_finding_carries_the_reasons_the_package_script_gave(tmp_path: Path) -> None:
@@ -658,6 +884,7 @@ def _healthy(_: _Device) -> None:
     [
         _healthy,
         _stop_a_machine,
+        _detach_a_port,
         _fail_the_boot_chain,
         _take_the_member_offline,
         _leave_a_member_uncached,
@@ -670,10 +897,11 @@ def test_the_reading_writes_nothing(tmp_path: Path, deviation: Callable[[_Device
     """Healthy or not, a reading asks and changes nothing: no systemctl verb that acts, no file touched.
 
     The package script is asked only for `--check`, the mode that writes
-    nothing (its own suite holds that), and the overlay member only for
-    `zerotier-cli info`, run in its leader's mount namespace. networkd is asked
-    only to list its links and to assemble its configuration, and the kernel
-    only to list its rules.
+    nothing (its own suite holds that), the overlay member only for
+    `zerotier-cli info`, run in its leader's mount namespace, and a bridged
+    machine only to show its `host0`, in its leader's network namespace.
+    networkd is asked only to list its links and to assemble its configuration,
+    and the kernel only to list its rules and its links.
     """
     device = _device(tmp_path)
     deviation(device)
@@ -684,11 +912,12 @@ def test_the_reading_writes_nothing(tmp_path: Path, deviation: Callable[[_Device
 
     assert {call.split()[0] for call in device.systemd.take_calls()} <= {'is-active', 'is-enabled'}
     assert device.check_calls.read_text().splitlines() == ['--check']
-    # Every deviation here leaves the overlay member's machine running, so the
-    # member is read on each of them: one machine looked up, one read verb run.
-    assert [call.split()[0] for call in device.machinectl_calls.read_text().splitlines()] == ['show']
-    assert [call.split()[-1] for call in device.nsenter_calls.read_text().splitlines()] == ['info']
-    assert {call.split(' ', 1)[1] for call in device.ip_calls.read_text().splitlines()} == {'rule show'}
+    assert {call.split()[0] for call in device.machinectl_calls.read_text().splitlines()} == {'show'}
+    assert {call.split(' -- ', 1)[1] for call in device.nsenter_calls.read_text().splitlines()} == {
+        f'{gateway.ZEROTIER_CLI} info',
+        'ip -o link show host0',
+    }
+    assert {call.split(' ', 1)[1] for call in device.ip_calls.read_text().splitlines()} == {'rule show', 'link show'}
     assert {call.split()[0] for call in device.systemd.take_calls(NETWORKCTL)} == {'list'}
     assert {call.split()[-2] for call in device.systemd.take_calls(SYSTEMD_ANALYZE)} == {'cat-config'}
     assert (_tree(device.root), device.systemd.enabled, device.systemd.active) == before
