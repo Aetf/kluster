@@ -31,6 +31,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any, cast
 from urllib.parse import parse_qs, urlsplit
 
+import pinned_tools
 import process_sessions
 import pulumi
 import pytest
@@ -67,6 +68,7 @@ from kluster.components.backup import BackupBucket, etcd_scope
 from kluster.components.cloud.guardrails import Guardrails
 from kluster.components.gateway import Gateway, nspawn, persistence
 from kluster.components.gateway.container import CaddyService, Container
+from kluster.components.gateway.routing import SiteRouting
 from kluster.components.gateway.unifi import SiteFirewall
 from kluster.components.homelab.rebuild import ImageMissing
 from kluster.components.overlay import Overlay, flow_rules
@@ -1324,6 +1326,104 @@ def test_each_component_the_runbook_excludes_is_excluded_whole_and_alone(ran: Ru
         subtree = {top} | {urn for urn in registrations if below(urn, top)}
         selected = {urn for urn in registrations if _selects(pattern, engine[urn])}
         assert selected == subtree, pattern
+
+
+#: What stands in for `physical` and `mise` when a case runs the retirement's
+#: block (physical/gateway-cutover.md §7): `stack export` prints the state the
+#: case built, `preview` and `up` each record their arguments instead of
+#: running, and `mise x --` runs the pinned tool it is handed.
+RETIREMENT_STAND_IN = """\
+physical() {
+    case "$1" in
+        stack) cat "$STATE" ;;
+        preview) shift; printf '%s\\n' "$@" > "$PREVIEWED" ;;
+        up) shift; printf '%s\\n' "$@" > "$APPLIED" ;;
+        *) return 99 ;;
+    esac
+}
+mise() {
+    [ "$1" = x ] && [ "$2" = -- ] || return 99
+    shift 2
+    "$@"
+}
+"""
+
+
+def test_the_retirements_run_targets_every_resource_whose_state_dependencies_name_a_retired_one(
+    ran: Run, tmp_path: Path
+) -> None:
+    """The retirement's block, run over a state the program wrote, targets each dependent of the four it deletes.
+
+    The engine deletes a resource named under `--target` only when nothing
+    outside the targets still depends on it in the state, so the run that
+    retires the routing files targets every resource whose state names one
+    of them, and the block reads those off the state. The state is built
+    from the run as the program wrote it before the retirement: the files
+    the runbook retires sit under `SiteRouting`, the program declares none
+    of them now, and a dependency on a component reaches the engine as one
+    on each resource under it (the SDK expands it), so a resource that
+    names `SiteRouting`'s configuration today named the retired files as
+    well when they were its children. The block's preview and `up` have to
+    name the same targets, or the preview proves the wrong command.
+    """
+    pinned_tools.require('jq')
+    registrations = ran.recorded.registrations
+    engine = engine_urns(registrations)
+    (block,) = [
+        block for block in re.findall(r'```sh\n(.*?)```', RUNBOOK.read_text(), re.DOTALL) if 'RETIRED=(' in block
+    ]
+    listed = re.search(r'^RETIRED=\((.*?)^\)', block, re.MULTILINE | re.DOTALL)
+    assert listed is not None, block
+    retired = re.findall(r"'([^']*)'", listed[1])
+    assert retired, block
+
+    (routing,) = [urn for urn, request in registrations.items() if request.type == SiteRouting.__pulumi_type__]
+    below_routing = {urn for urn, request in registrations.items() if request.parent == routing}
+    assert below_routing, 'SiteRouting declares no resource'
+    for urn in retired:
+        assert urn not in engine.values(), f'the program still declares {urn}'
+        assert urn.rsplit('::', 1)[0].rsplit('$', 1)[0] == engine[routing].rsplit('::', 1)[0], urn
+
+    def named(urns: Any) -> list[str]:
+        return sorted(engine[urn] for urn in urns if urn)
+
+    waiting = {urn for urn, request in registrations.items() if below_routing & set(request.dependencies)}
+    state: list[dict[str, Any]] = [
+        {
+            'urn': engine[urn],
+            'type': request.type,
+            'parent': engine.get(request.parent),
+            'deletedWith': engine.get(request.deletedWith),
+            'dependencies': named(request.dependencies) + (retired if urn in waiting else []),
+            'propertyDependencies': {key: named(value.urns) for key, value in request.propertyDependencies.items()},
+        }
+        for urn, request in registrations.items()
+    ]
+    state += [
+        {'urn': urn, 'type': urn.split('::')[2].rsplit('$', 1)[1], 'parent': engine[routing], 'dependencies': retired}
+        for urn in retired
+    ]
+    dependents = {
+        resource['urn']
+        for resource in state
+        if resource['urn'] not in retired and set(resource['dependencies']) & set(retired)
+    }
+    assert dependents, 'nothing in the run waits on SiteRouting, so the state names no dependent'
+
+    files = {name: tmp_path / name for name in ('state', 'previewed', 'applied')}
+    _ = files['state'].write_text(json.dumps({'deployment': {'resources': state}}))
+    locations = f"STATE='{files['state']}' PREVIEWED='{files['previewed']}' APPLIED='{files['applied']}'\n"
+    _ = process_sessions.run(['bash', '-c', locations + RETIREMENT_STAND_IN + block], timeout=60, check=True)
+    previewed = files['previewed'].read_text().splitlines()
+    applied = files['applied'].read_text().splitlines()
+    assert previewed == applied
+    flags = list(zip(applied[::2], applied[1::2], strict=True))
+    assert {flag for flag, _ in flags} == {'-t'}, applied
+    targets = [value for _, value in flags]
+    assert len(targets) == len(set(targets)), targets
+    declared = set(targets) - set(retired) - dependents
+    assert declared <= set(engine.values()), sorted(declared - set(engine.values()))
+    assert set(retired) | dependents <= set(targets)
 
 
 def listener_ports(setup: Installation) -> set[int]:
