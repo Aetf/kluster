@@ -162,7 +162,7 @@ class LocalPathProvisioner(Component, pulumi_type='kluster:local_path:LocalPathP
             ],
             opts=behind,
         )
-        _ = k8s.rbac.v1.RoleBinding(
+        role_binding = k8s.rbac.v1.RoleBinding(
             name,
             metadata=named,
             role_ref=k8s.rbac.v1.RoleRefArgs(
@@ -192,7 +192,7 @@ class LocalPathProvisioner(Component, pulumi_type='kluster:local_path:LocalPathP
             ],
             opts=behind,
         )
-        _ = k8s.rbac.v1.ClusterRoleBinding(
+        cluster_role_binding = k8s.rbac.v1.ClusterRoleBinding(
             name,
             metadata=k8s.meta.v1.ObjectMetaArgs(name=PROVISIONER_NAME),
             role_ref=k8s.rbac.v1.RoleRefArgs(
@@ -245,6 +245,9 @@ class LocalPathProvisioner(Component, pulumi_type='kluster:local_path:LocalPathP
             opts=behind,
         )
 
+        # Behind both bindings as well as the account and ConfigMap it names:
+        # the provisioner needs its permissions from its first API call, which
+        # the API server refuses until the bindings exist.
         self.deployment = k8s.apps.v1.Deployment(
             name,
             metadata=named,
@@ -259,7 +262,7 @@ class LocalPathProvisioner(Component, pulumi_type='kluster:local_path:LocalPathP
                     ),
                 ),
             ),
-            opts=behind,
+            opts=self.child_opts(depends_on=[*after, role_binding, cluster_role_binding]),
         )
 
         self.register_outputs({})
