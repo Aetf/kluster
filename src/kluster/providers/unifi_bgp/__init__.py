@@ -47,11 +47,11 @@ declared text taken out of it, since a parser's complaint quotes the line it
 refused. The text is a secret on the resource, in its inputs and in its
 outputs alike.
 
-**The credential is the controller's API key**, read in `configure`, under the
-key `API_KEY_CONFIG` names. Where the session goes and whether it verifies the
-controller's certificate are declared inputs, since a provider decides neither
-(framework/pulumi.md §5.2). `check` stamps `session` and `provider_version`
-through `kluster.providers.configured`.
+**The session is the one every provider here opens with the controller**
+(`kluster.providers.unifi_session`): the API key out of stack configuration,
+the address and the certificate posture as declared inputs, and the stamps
+`check` adds. Nothing is retried: a re-run is safe, `create` taking an
+identical object as created.
 
 **The only update that sends nothing is a stamp's, or an address's.** A moved
 stamp or a moved address changes nothing about the configuration, so an update
@@ -82,11 +82,18 @@ from typing import Annotated, Any, cast, final
 import pulumi
 import pulumi.dynamic as dynamic
 import requests
-import urllib3
-from urllib3.exceptions import InsecureRequestWarning
 
 from kluster.lib.secret import Secret
-from kluster.providers.configured import STAMPS, ConfiguredProvider, declared_change, has_unknowns
+from kluster.providers.configured import STAMPS, declared_change, has_unknowns
+from kluster.providers.unifi_session import (
+    API_KEY_CONFIG,
+    TIMEOUT,
+    ControllerProvider,
+    ControllerRefused,
+    answered,
+    site_url,
+    withheld,
+)
 
 __all__ = (
     'API_KEY_CONFIG',
@@ -103,18 +110,6 @@ __all__ = (
     'ForeignConfiguration',
     'WriteRefused',
 )
-
-#: Long enough for a controller under load, short enough that an unreachable
-#: gateway fails the resource instead of hanging the stack. Nothing is retried:
-#: a re-run is safe, `create` taking an identical object as created.
-TIMEOUT = 15
-
-#: The stack-configuration key the controller's API key is read from
-#: (`configured`).
-API_KEY_CONFIG = 'unifiApiKey'
-
-#: The header the controller reads an API key from.
-API_KEY_HEADER = 'X-API-KEY'
 
 #: What identifies a configuration, and therefore what replaces one: the site.
 IDENTITY = ('site',)
@@ -160,8 +155,8 @@ _REDACTED = '[declared]'
 _SHORTEST = 4
 
 
-class WriteRefused(RuntimeError):
-    """The controller refused a write, with its own reason, the declared text taken out of it."""
+class WriteRefused(ControllerRefused):
+    """The controller refused a request, with its own reason, the declared text taken out of it."""
 
 
 class ForeignConfiguration(RuntimeError):
@@ -172,13 +167,8 @@ class ConfigurationNotStored(RuntimeError):
     """The controller holds something other than what was just written."""
 
 
-def _base(props: Mapping[str, Any]) -> str:
-    """The controller, without the trailing slash a caller may write."""
-    return str(props['api_url']).rstrip('/')
-
-
 def _url(props: Mapping[str, Any]) -> str:
-    return f'{_base(props)}/proxy/network/v2/api/site/{props["site"]}/bgp/config'
+    return site_url(props, 'bgp/config')
 
 
 def _object(props: Mapping[str, Any]) -> dict[str, Any]:
@@ -231,18 +221,12 @@ def _reason(response: requests.Response, text: str) -> str:
         fields = [f'{key} {refusal[key]!s}' for key in _REASON_FIELDS if key in refusal]
         if fields:
             return _scrubbed('; '.join(fields), text)
-    return f'{len(response.text)} characters, not relayed'
+    return withheld(response)
 
 
 def _answered(response: requests.Response, what: str, text: str) -> requests.Response:
-    """A success, or the failure named with the controller's own reason.
-
-    Anything but a 2xx fails, redirects included: a redirect is not followed,
-    since it would carry the key's header to wherever it points.
-    """
-    if not 200 <= response.status_code < 300:
-        raise WriteRefused(f'{what} answered {response.status_code}: {_reason(response, text)}')
-    return response
+    """A success, or `WriteRefused` with the controller's reason, `text` taken out of it."""
+    return answered(response, what, reason=lambda refusal: _reason(refusal, text), refused=WriteRefused)
 
 
 def _held(response: requests.Response, what: str) -> dict[str, Any] | None:
@@ -254,19 +238,8 @@ def _held(response: requests.Response, what: str) -> dict[str, Any] | None:
 
 
 @final
-class BgpConfigurationProvider(ConfiguredProvider):
+class BgpConfigurationProvider(ControllerProvider):
     """The site's BGP configuration, through the controller's v2 API."""
-
-    api_key: str
-
-    def _read_credential(self, config: dynamic.Config) -> None:
-        self.api_key = str(config.require(API_KEY_CONFIG))
-
-    def _credential(self) -> str:
-        return self.api_key
-
-    def _endpoint(self, props: Mapping[str, Any]) -> str:
-        return _base(props)
 
     def _version(self) -> str:
         return VERSION
@@ -336,16 +309,6 @@ class BgpConfigurationProvider(ConfiguredProvider):
         left = self._read(session, props)
         if left is not None:
             raise ConfigurationNotStored(f'site {props["site"]} still holds {_named(left)} after its DELETE')
-
-    def _opened(self, props: Mapping[str, Any]) -> requests.Session:
-        session = requests.Session()
-        session.headers[API_KEY_HEADER] = self.api_key
-        session.verify = not props['allow_insecure']
-        if props['allow_insecure']:
-            # The posture is the caller's, stated once where it is declared; a
-            # warning per request would stand above every plan.
-            urllib3.disable_warnings(InsecureRequestWarning)
-        return session
 
     def _read(self, session: requests.Session, props: Mapping[str, Any]) -> dict[str, Any] | None:
         url = _url(props)
