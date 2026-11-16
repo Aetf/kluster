@@ -44,7 +44,8 @@ the node, §2), each cloud node's GUA (`node_guas` — with the
 private IPv4s, `vip1_private` and the NLB's two addresses, the
 `internet` pool's members, which `k8s-base` and `apps` read; rfc-007
 §4.4), the worker's GUA (`worker_gua`, derived on every run from the
-site's delegated prefix the run reads off the gateway, §4, and so
+cluster network's /64 of the site's delegated prefix, which the run
+reads off the gateway, §4, and so
 always present — the worker's own pool in `k8s-base` and a
 `SiteForward` port's Service in `apps` read it; rfc-008 §4.1), both
 of the NLB's public addresses (IPv4 and IPv6 — the cluster anchor in
@@ -742,10 +743,11 @@ which the ISP decides and moves, and which the controller does not report.
 update, and writes nothing anywhere; it uses the transport's read verb
 alone, and the same pinned key and client credential as every device
 resource. `Gateway` declares it once, through
-`components/gateway/prefix.py`, and derives from it each declared
-network's /64 at the network's prefix id and the worker's GUA, which
-the census's pinhole names and the stack exports as `worker_gua`
-(physical/gateway.md §4.2).
+`components/gateway/prefix.py`, which gives the prefix and the /64
+the lease names for each declared network's bridge, the firmware's
+assignment. From the cluster network's /64 it derives the worker's
+GUA, which the census's pinhole names and the stack exports as
+`worker_gua` (physical/gateway.md §4.2).
 
 A root filesystem is a tree rather than bytes in state, so
 `DeviceArtifact`'s surface is `root` — the directory the tree is
@@ -772,7 +774,8 @@ resources of this repository's own, **all in this stack** — the co-location ex
 resources follow the gateway's credential tier, so the `apps` CI
 environment never holds a controller credential; app components keep
 a pointer (workloads.md §4). The census: the **cluster VLAN network
-object** (id 7, `192.168.70.0/24`, prefix id 7 on the delegated prefix,
+object** (id 7, `192.168.70.0/24`, on the delegated prefix at the /64
+the gateway allocates it, with no prefix id declared,
 physical/gateway.md §1) and the **firewall zone of its
 own** it is placed in — the isolation the shared server LAN could not
 offer (physical/gateway.md §4.2) — the **site's BGP configuration**,

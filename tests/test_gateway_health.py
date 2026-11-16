@@ -44,7 +44,7 @@ from gateway_services import caddy, pin
 from kluster import conventions
 from kluster.components import gateway
 from kluster.components.gateway import container, nspawn, persistence
-from kluster.components.gateway.prefix import WAN_INTERFACE
+from kluster.components.gateway.prefix import WAN_INTERFACE, network_subnets
 from kluster.providers import pd_lease
 
 #: What the BGP daemon answers `vtysh -c 'show bgp neighbors <peer> json'` with for
@@ -108,15 +108,14 @@ PORT = 'vb-caddy'
 IFNAME_MAX = 15
 
 #: The lease the read last reported: the gateway's, recorded with its prefix
-#: rewritten under the documentation prefix, while the cluster network held id 3.
+#: rewritten under the documentation prefix.
 RECORDED_LEASE = (Path(__file__).parent / 'data' / 'pd.leases').read_text()
-HELD_PREFIX = pd_lease.parse(RECORDED_LEASE, WAN_INTERFACE).prefix
 
-#: Each declared network's bridge, and the /64 the declaration derives for it
-#: from that prefix at the network's id.
-DELEGATED = {
-    bridge: gateway.declared_subnet(HELD_PREFIX, network) for network, bridge in gateway.NETWORK_BRIDGES.items()
-}
+#: Each declared network's bridge, and the /64 that read gave it.
+DELEGATED = network_subnets(
+    {bridge: str(subnet) for bridge, subnet in pd_lease.parse(RECORDED_LEASE, WAN_INTERFACE).subnets.items()},
+    gateway.NETWORK_BRIDGES,
+)
 
 #: The cluster network's bridge.
 BRIDGE = gateway.NETWORK_BRIDGES[conventions.CLUSTER_VLAN]
@@ -133,7 +132,7 @@ def _renumbered(lease: str, subnets: Mapping[str, IPv6Network]) -> str:
     return ''.join(f'{line}\n' for line in lines)
 
 
-#: The lease once every declared network holds its declared /64.
+#: The lease while every declared network holds the /64 the read gave it.
 LEASE = _renumbered(RECORDED_LEASE, DELEGATED)
 
 
@@ -634,21 +633,21 @@ def _turn_an_option_back_on_in_a_later_drop_in(device: _Device) -> None:
     _ = (device.etc_networkd / later).write_text(f'[{nspawn.NETWORKD_SECTION}]\n{GUARDED}=yes\n')
 
 
-#: The /64 the cluster network held when the lease was recorded, at id 3: the
-#: one a bridge keeps when the firmware does not honor the declared id.
-RECORDED_SUBNET = pd_lease.parse(RECORDED_LEASE, WAN_INTERFACE).subnets[BRIDGE]
+#: A /64 of the read prefix that is not the one the read gave the cluster
+#: network's bridge: where the firmware puts the bridge when it numbers the
+#: bridges anew under the same prefix.
+RENUMBERED_SUBNET = IPv6Network('2001:db8:83:1714::/64')
 
 
-def _leave_the_bridge_on_its_old_subnet(device: _Device) -> None:
-    """The declared id written and not honored: the bridge and its lease line still at the recorded /64."""
-    _ = (device.addresses / BRIDGE).write_text(_holding(BRIDGE, RECORDED_SUBNET))
-    _ = device.leases.write_text(RECORDED_LEASE)
+def _renumber_the_bridge(device: _Device) -> None:
+    """The firmware numbered the bridge anew since the last run: the bridge and its lease line on another /64."""
+    _ = (device.addresses / BRIDGE).write_text(_holding(BRIDGE, RENUMBERED_SUBNET))
+    _ = device.leases.write_text(_renumbered(LEASE, {BRIDGE: RENUMBERED_SUBNET}))
 
 
 def _rotate_the_prefix(device: _Device) -> None:
     """The ISP moved the prefix since the last run: every bridge and every lease line on the new one."""
-    moved = conventions.delegated_subnet(IPv6Network('2001:db8:84:20::/60'), conventions.CLUSTER_VLAN.prefix_id)
-    _ = (device.addresses / BRIDGE).write_text(_holding(BRIDGE, moved))
+    _ = (device.addresses / BRIDGE).write_text(_holding(BRIDGE, IPv6Network('2001:db8:84:23::/64')))
     _ = device.leases.write_text(LEASE.replace('2001:db8:83:171', '2001:db8:84:2'))
 
 
@@ -665,7 +664,7 @@ def _drop_the_bridges_lease_line(device: _Device) -> None:
 
 
 def _name_another_subnet_in_the_lease(device: _Device) -> None:
-    _ = device.leases.write_text(_renumbered(LEASE, {BRIDGE: RECORDED_SUBNET}))
+    _ = device.leases.write_text(_renumbered(LEASE, {BRIDGE: RENUMBERED_SUBNET}))
 
 
 def _misshape_the_bridges_lease_line(device: _Device) -> None:
@@ -697,7 +696,7 @@ def _misshape_the_bridges_lease_line(device: _Device) -> None:
         (_lose_the_main_rule, f'ip -{FAMILY} rule', gateway.PLAYBOOKS.networkd),
         (_let_networkd_manage_a_port, PORT, gateway.PLAYBOOKS.networkd),
         (_turn_an_option_back_on_in_a_later_drop_in, GUARDED, gateway.PLAYBOOKS.networkd),
-        (_leave_the_bridge_on_its_old_subnet, BRIDGE, gateway.PLAYBOOKS.prefix),
+        (_renumber_the_bridge, BRIDGE, gateway.PLAYBOOKS.prefix),
         (_rotate_the_prefix, BRIDGE, gateway.PLAYBOOKS.prefix),
         (_take_the_bridge_away, BRIDGE, gateway.PLAYBOOKS.prefix),
         (_remove_the_lease, BRIDGE, gateway.PLAYBOOKS.lease),
@@ -724,7 +723,7 @@ def _misshape_the_bridges_lease_line(device: _Device) -> None:
         'no-main-rule',
         'managed-link',
         'option-on',
-        'id-not-honored',
+        'bridge-renumbered',
         'prefix-rotated',
         'no-bridge',
         'no-lease',
@@ -1175,7 +1174,7 @@ def _healthy(_: _Device) -> None:
         _turn_an_option_back_on_in_a_later_drop_in,
         _stop_the_suite,
         _peer_at_another_as,
-        _leave_the_bridge_on_its_old_subnet,
+        _renumber_the_bridge,
         _name_another_subnet_in_the_lease,
     ],
 )
@@ -1215,20 +1214,20 @@ def test_the_reading_writes_nothing(tmp_path: Path, deviation: Callable[[_Device
     assert (_tree(device.root), device.systemd.enabled, device.systemd.active) == before
 
 
-def test_a_bridge_off_its_declared_subnet_is_reported_with_what_it_holds(tmp_path: Path) -> None:
-    """The finding quotes the bridge's own addresses beside the declared one, which is what tells the two causes apart.
+def test_a_bridge_off_its_read_subnet_is_reported_with_what_it_holds(tmp_path: Path) -> None:
+    """The finding quotes the bridge's own addresses beside the one the run read, which tells the two causes apart.
 
-    Its playbook reads the lease next: the old prefix at another id is an id
-    the firmware did not honor, a new prefix is a rotation.
+    Its playbook reads the lease next: the old prefix at another /64 is the
+    firmware numbering the bridge anew, a new prefix is a rotation.
     """
     device = _device(tmp_path)
-    _leave_the_bridge_on_its_old_subnet(device)
+    _renumber_the_bridge(device)
     declared = DELEGATED[BRIDGE]
 
     (finding,) = _findings(_read(device))
 
     assert finding['state'] == (
-        f'holds {gateway.gateway_address(RECORDED_SUBNET)}/64 fd1a:665f:8bcb:70::1/64, '
+        f'holds {gateway.gateway_address(RENUMBERED_SUBNET)}/64 fd1a:665f:8bcb:70::1/64, '
         f'not {gateway.gateway_address(declared)}/{declared.prefixlen}'
     )
 

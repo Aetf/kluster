@@ -794,15 +794,18 @@ class SiteFirewall(Component, pulumi_type='kluster:gateway:SiteFirewall'):
         # server offering leases beside that is a second opinion nothing
         # needs. IPv6 is a delegated prefix with router advertisements on,
         # because the design's worker GUA is a SLAAC address formed from what
-        # this network advertises; the /64 it advertises is the prefix id it
-        # declares, its VLAN id (physical/gateway.md §1), written in the hex
-        # the controller stores it in. Every write turns the controller's
-        # automatic ids off, since the pinned provider sends that flag false
-        # whatever is declared, so an id left undeclared would be the
-        # firmware's choice. The multicast reflector is the site's setting,
-        # on for every network, and the controller derives this field from it, so
-        # the declaration states what it holds: `False` here would be ignored and
-        # planned again on every run.
+        # this network advertises. Which /64 of the prefix it advertises is
+        # the firmware's to assign, and the run reads it off the device
+        # (`Gateway.worker_gua`). The multicast reflector is the site's
+        # setting, on for every network, and the controller derives this field
+        # from it, so the declaration states what it holds: `False` here would
+        # be ignored and planned again on every run.
+        #
+        # No prefix id, `ipv6_pd_prefixid`, is declared: UniFi OS 6.0.17 does
+        # not carry it to the device. The network configuration the device
+        # applies, `/data/udapi-config/udapi-net-cfg.json`, holds no prefix-id
+        # field for any bridge, and the gateway allocates each bridge's /64
+        # itself (physical/gateway.md §1).
         self.network = unifi.Network(
             f'{name}-network',
             name=conventions.gateway.UNIFI_NETWORK_CLUSTER,
@@ -813,7 +816,6 @@ class SiteFirewall(Component, pulumi_type='kluster:gateway:SiteFirewall'):
             dhcp_v6_enabled=False,
             ipv6_interface_type='pd',
             ipv6_pd_interface='wan',
-            ipv6_pd_prefixid=format(conventions.CLUSTER_VLAN.prefix_id, 'x'),
             ipv6_pd_start=DELEGATED_RANGE[0],
             ipv6_pd_stop=DELEGATED_RANGE[1],
             ipv6_ra_enable=True,

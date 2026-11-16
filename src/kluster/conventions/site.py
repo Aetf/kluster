@@ -8,10 +8,11 @@ link-local, or a host's ULA on its network's /64 — from the MAC it is formed
 from (`eui64_address`).
 
 The site's global addresses are the other half. The ISP delegates a prefix
-to the gateway and moves it when it likes, so nothing here holds one: the
-`physical` program reads it off the device on every run. What this module
-holds is each network's prefix id, the /64 of that prefix the network takes,
-and `delegated_subnet` joins the two.
+to the gateway and moves it when it likes, and the firmware numbers each
+network's /64 of it itself, so nothing here holds either: the `physical`
+program reads both off the device on every run. What this module holds is
+the arithmetic for a /64 this repository numbers under that prefix itself, one
+no controller network holds: `delegated_subnet`, and its inverse `subnet_id`.
 """
 
 from __future__ import annotations
@@ -93,12 +94,10 @@ def eui64_link_local(mac: str) -> IPv6Address:
 def delegated_subnet(prefix: IPv6Network, subnet_id: int) -> IPv6Network:
     """The /64 at `subnet_id` under a delegated prefix: the id is the bits between the prefix and the /64.
 
-    A network that takes its IPv6 from the delegated prefix holds the /64 its
-    prefix id names, so the id is a decision and the prefix an observation:
-    `2001:db8:83:1710::/60` at id 7 is `2001:db8:83:1717::/64`. An id that does
-    not fit under the prefix's length is refused rather than wrapped into
-    another network's /64, and so is a prefix longer than the /64 it would
-    have to hold.
+    The id is a decision and the prefix an observation: `2001:db8:83:1710::/60`
+    at id `f` is `2001:db8:83:171f::/64`. An id that does not fit under the
+    prefix's length is refused rather than wrapped into a /64 outside it, and
+    so is a prefix longer than the /64 it would have to hold.
     """
     if prefix.prefixlen > _IDENTIFIER_PREFIXLEN:
         raise ValueError(f'{prefix} is longer than a /{_IDENTIFIER_PREFIXLEN}, so it holds no subnet')
@@ -132,16 +131,6 @@ class SiteNetwork:
     def v6(self) -> IPv6Network:
         """The subnet's unique-local /64, numbered by the site's addressing rule."""
         return ula_subnet(self.v4)
-
-    @property
-    def prefix_id(self) -> int:
-        """The /64 of the delegated prefix the network takes (`delegated_subnet`): its VLAN id.
-
-        The site rule makes the two one fact (physical/gateway.md §1), so the id
-        is read off the tag rather than recorded beside it, where a second
-        field would be free to disagree.
-        """
-        return self.vlan_id
 
     def require_gateway(self) -> IPv4Address:
         """The gateway's leg, or a refusal naming the network that has none declared."""

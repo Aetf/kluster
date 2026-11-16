@@ -207,7 +207,7 @@ def test_a_delegated_subnet_is_the_prefix_with_the_id_in_the_bits_above_the_64(
     ('prefix', 'subnet_id'),
     [
         pytest.param('2001:db8:83:1710::/60', 0x10, id='one-past-a-60'),
-        pytest.param('2001:db8:83:1710::/62', 7, id='a-vlan-id-past-a-62'),
+        pytest.param('2001:db8:83:1710::/62', 7, id='past-a-62'),
         pytest.param('2001:db8:83:1710::/60', -1, id='negative'),
         pytest.param('2001:db8:83:1717::/80', 0, id='a-prefix-longer-than-a-64'),
     ],
@@ -230,12 +230,10 @@ def test_the_id_of_a_subnet_outside_the_prefix_is_refused(subnet: str) -> None:
         _ = conventions.subnet_id(IPv6Network('2001:db8:83:1710::/60'), IPv6Network(subnet))
 
 
-def test_no_two_site_networks_share_a_vlan_and_so_none_shares_a_delegated_subnet() -> None:
-    """A network's prefix id is its VLAN id, so two networks on one tag would claim one /64 of the prefix."""
+def test_no_two_site_networks_share_a_vlan() -> None:
+    """Two networks on one tag would be one broadcast domain on every port that carries it."""
     tags = [network.vlan_id for network in conventions.SITE_NETWORKS]
     assert len(tags) == len(set(tags)), tags
-    ids = [network.prefix_id for network in conventions.SITE_NETWORKS]
-    assert len(ids) == len(set(ids)), ids
 
 
 def test_a_site_hosts_ula_is_the_one_its_interface_forms_from_its_mac() -> None:

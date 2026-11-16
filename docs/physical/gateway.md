@@ -36,14 +36,18 @@ declarative/physical.md §4.
     of the site's ULA prefix that repeats the third octet of its IPv4
     subnet (`ula_subnet`). The cluster VLAN advertises none: it carries
     the delegated prefix alone. **A network on the site's delegated
-    prefix takes the /64 whose prefix id is its VLAN id**, `0` for the
-    untagged LAN: the id is a decision, written to the controller as
-    the network's `ipv6_pd_prefixid`, and the prefix is the ISP's,
-    which the `physical` run reads off the device (§4.2). The cluster
-    network's id is its VLAN id, 7, declared on the network this
-    program creates. The console's three networks are not declared
-    here, and hold the ids the firmware chose for them, 0, 1 and 2. The
-    `lan` pool's 192.168.71.0/24 is no VLAN and never becomes a network
+    prefix holds the /64 the firmware assigns it**, and the prefix is
+    the ISP's: the `physical` run reads both off the device, the /64 as
+    the PD lease's line for the network's bridge (§4.2). The
+    controller's per-network `ipv6_pd_prefixid` does not reach the
+    device on UniFi OS 6.0.17. The network configuration the device
+    applies, `/data/udapi-config/udapi-net-cfg.json`, carries no
+    prefix-id field for any bridge, only the size of the /64 and the
+    WAN interface it is taken from, and the device numbers the
+    bridges' /64s itself, in order
+    ([Aetf/kluster-ops#760](https://github.com/Aetf/kluster-ops/issues/760)).
+    So no network's id is declared here, the cluster network's
+    included. The `lan` pool's 192.168.71.0/24 is no VLAN and never becomes a network
     object (§4.1); it is numbered next to the VLAN it is announced
     from, which keeps the pair legible at a glance.
 -   **nspawn container services**, one **machine** each: caddy, AdGuard
@@ -1263,8 +1267,8 @@ What it reads:
 9.  **Every declared network holds its /64 of the delegated prefix**,
     read two ways for each network this program declares on the prefix
     (`NETWORK_BRIDGES`; today the cluster network, on `br7`). The /64 is
-    rendered in: the prefix the last `physical` run read, at the
-    network's id (§1).
+    rendered in: the one the last `physical` run read for the bridge
+    (§1).
     -   *the bridge*: `ip -6 -o addr show dev <bridge> scope global`
         holds the gateway's address on that /64, its first address,
         which is where the firmware puts the gateway on every bridge
@@ -3128,9 +3132,10 @@ command runs on the device unless the entry says otherwise.
     prefix with its length, which is the condition for removing the
     lease read.
 -   **The site's delegated prefix rotated** — trigger: `gateway-health`
-    reports a bridge that does not hold the gateway's address on its
-    declared /64 (§1.6), or a `physical` plan whose diff is confined to
-    the read of the prefix and what derives from it. Read the bridge's
+    reports a bridge that does not hold the gateway's address on the
+    /64 the last run read for it (§1.6), or a `physical` plan whose
+    diff is confined to the read of the prefix and what derives from
+    it. Read the bridge's
     line in `/data/udapi-config/pd.leases`, which tells the two causes
     apart:
     -   **The lease names a new prefix**: the ISP moved it. The firmware
@@ -3141,19 +3146,15 @@ command runs on the device unless the entry says otherwise.
         chain's `up-k8s-base` and `up-apps` follow in the same run. From
         a workstation it is an `up` of `physical`, then of `k8s-base`,
         then of `apps`.
-    -   **The lease names the old prefix at another id**: the firmware
-        did not honor the network's declared id. Read the network's
-        `ipv6_pd_prefixid` in `rest/networkconf`: an id that reads as
-        declared and is not held is the firmware's to answer for, and
-        the declared ids rest on it (§1). The way back for the cluster
-        network is a declaration of the id the bridge holds, applied,
-        until the cause is known; an undeclared id is not a way back,
-        since every write through the pinned provider leaves the id to
-        the firmware.
+    -   **The lease names the old prefix at another /64**: the firmware
+        numbered the bridge anew, which is its own decision (§1). The
+        pinhole, the `worker_gua` export, the worker's pool and the peer
+        Service still name the old address, and the same deploy chain
+        moves them: the `physical` run reads the bridge's new line.
 -   **The PD lease no longer reads as declared** — trigger:
     `gateway-health` reports the lease missing, or the bridge's line
-    missing or of another shape or /64, while the bridge holds its
-    declared /64 (§1.6); or a `physical` preview refuses at the read,
+    missing or of another shape or /64, while the bridge holds the /64
+    the last run read for it (§1.6); or a `physical` preview refuses at the read,
     naming the file and the line. The read is the workaround of §4.2,
     and its parser knows one format. Compare the file with the shape
     §4.2 records and with the suite's copy of it
@@ -3337,12 +3338,12 @@ internal to UBIOS, and its format is an observation read on UniFi OS
 <preferred>`, single spaces, the lifetimes absolute expiries in
 milliseconds. The read is a workaround layer that comes out whole once
 a controller field carries the held prefix with its length
-(declarative/physical.md §6). What leaves it is the prefix and the
-/64s the site's networks hold, and from the prefix the run derives each
-declared network's /64 at its id (§1) and the worker's GUA: the
-cluster network's /64 with the EUI-64 of the worker's MAC. An id that
-does not fit under the held prefix refuses the run, naming the
-network.
+(declarative/physical.md §6). What leaves it is the prefix, the /64s
+the site's networks hold, and the /64 each declared network holds,
+which is the line for its bridge (§1). From the cluster network's /64
+the run derives the worker's GUA: that /64 with the EUI-64 of the
+worker's MAC. A lease with no line for a declared network's bridge
+refuses the run, naming the bridge and the network.
 
 **Two address populations, two control planes.** The distinction runs
 through every rule below, and the two are policed by different
@@ -3593,7 +3594,7 @@ leg itself, and the controller stores the shape with the flag off (read
     `conventions.routes.SiteForward`). Constraint on record: the
     zone-policy API matches
     literal IPs only (no prefix-relative objects), so the rule
-    names the GUA the run derives from the prefix it read (above):
+    names the GUA the run derives from the /64 it read (above):
     the address the worker forms by SLAAC on the cluster network's
     /64, the EUI-64 of its MAC. It is declared from the first apply,
     and **re-declared by the run that reads a new prefix**; until that

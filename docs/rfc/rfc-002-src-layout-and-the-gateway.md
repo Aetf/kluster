@@ -142,9 +142,9 @@
     §11's row "`workerGua` — observed off a booted machine" is no
     configuration in what is built. The `physical` run reads the site's
     delegated prefix off the gateway's PD lease and derives the worker's
-    GUA from it. §10.1's `SiteNetwork.vlan_id` is a required `int`, `0`
-    for the untagged LAN, and the network's prefix id on the delegated
-    prefix is its VLAN id. The design is
+    GUA from the /64 the lease names for the cluster network's bridge,
+    which the firmware assigns. §10.1's `SiteNetwork.vlan_id` is a
+    required `int`, `0` for the untagged LAN. The design is
     [physical/gateway.md](../physical/gateway.md) §1 and §4.2.
 *   **Created:** 2026-08-28
 *   **Authority:** the style rules (`docs/style/`) are what this document

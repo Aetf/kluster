@@ -59,7 +59,7 @@ from kluster.components.gateway.persistence import (
     DevicePersistence,
     on_boot_path,
 )
-from kluster.components.gateway.prefix import WAN_INTERFACE, held_prefix
+from kluster.components.gateway.prefix import WAN_INTERFACE, SubnetNotHeld, held_prefix
 from kluster.components.gateway.routing import RoutingSession, SiteRouting
 from kluster.components.gateway.unifi import SiteFirewall
 from kluster.lib import templates
@@ -86,12 +86,11 @@ __all__ = (
     'Gateway',
     'OverlayDaemon',
     'Playbooks',
-    'PrefixIdRefused',
     'PublicKey',
     'ResolverService',
     'Rootfs',
     'RoutingSession',
-    'declared_subnet',
+    'SubnetNotHeld',
     'gateway_address',
     'health_program',
 )
@@ -134,31 +133,11 @@ NETWORKD_CONFIG = 'systemd/networkd.conf'
 _MAIN_TABLE = 'main'
 
 #: Every network this program declares on the site's delegated prefix, and the
-#: bridge the device carries it on. Each one's /64 is the read prefix at the
-#: network's id (`declared_subnet`), and the health reading holds its bridge to
-#: that /64 (physical/gateway.md §1.6). The console's networks join once they
-#: are declared.
+#: bridge the device carries it on. Each one's /64 is the firmware's
+#: assignment, which the run reads off the device with the prefix (`prefix`),
+#: and the health reading holds its bridge to that /64 (physical/gateway.md
+#: §1.6). The console's networks join once they are declared.
 NETWORK_BRIDGES: Mapping[conventions.SiteNetwork, str] = {conventions.CLUSTER_VLAN: 'br7'}
-
-
-class PrefixIdRefused(ValueError):
-    """A declared network's prefix id does not fit under the prefix the device holds."""
-
-
-def declared_subnet(prefix: IPv6Network, network: conventions.SiteNetwork) -> IPv6Network:
-    """The /64 `network` holds on the delegated prefix: the prefix at the network's id, or a refusal naming it.
-
-    A prefix too short for an id the site declares cannot be numbered the way
-    the declaration says, so the run stops at the read, naming the network,
-    rather than declaring addresses on a /64 the gateway does not route. A
-    delegation shrunk that far renumbers the whole site anyway.
-    """
-    try:
-        return conventions.delegated_subnet(prefix, network.prefix_id)
-    except ValueError as exc:
-        raise PrefixIdRefused(
-            f'the {network.name} network declares prefix id {network.prefix_id:x}, and the device holds {prefix}: {exc}'
-        ) from None
 
 
 def gateway_address(subnet: IPv6Network) -> IPv6Address:
@@ -280,7 +259,7 @@ class _HealthParams:
     networkd_section: str
     networkd_settings: tuple[str, ...]
     #: Each network on the delegated prefix as three words: its bridge, the
-    #: gateway's address on its declared /64, and that /64.
+    #: gateway's address on the /64 the run read for it, and that /64.
     delegations: tuple[str, ...]
     pd_leases: str
     pd_wan: str
@@ -321,9 +300,9 @@ def health_program(
     drop-in and the reading cannot part.
 
     `delegated` is each bridge on the site's delegated prefix and the /64 the
-    declaration derives for it from the read prefix. The bridge is read for
-    the gateway's address on that /64 (`gateway_address`) — which is the
-    reading of a rotation, or of an id the firmware did not honor — and,
+    run read for it. The bridge is read for the gateway's address on that /64
+    (`gateway_address`) — which is the reading of a /64 that moved since that
+    run, by a rotation or by the firmware numbering the bridge anew — and,
     while it holds it, the PD lease's line for the bridge is read for the same
     /64 under `root`, which is the reading of the lease's format and part of
     the lease read's layer (`kluster.providers.pd_lease`).
@@ -449,13 +428,14 @@ class Gateway(Component, pulumi_type='kluster:gateway:Gateway'):
         (`prefix`), and three values leave the component from it:
         `delegated_prefix`, the prefix with its length; `held_subnets`, the
         /64s the site's networks hold on it; and `worker_gua`, the worker VM's
-        global IPv6 address. That address is the cluster network's /64 —
-        the read prefix at the network's id (`declared_subnet`) — with the
-        EUI-64 of the worker's MAC, which is the address the worker forms by
-        SLAAC off that network's advertisement. The firewall's pinhole names
-        it, since the zone-policy API matches literal addresses only, and the
-        stack exports it, so a prefix the ISP moved re-declares both in the
-        run that reads it.
+        global IPv6 address. That address is the cluster network's /64 — the
+        one the firmware assigned it, which the read reports for its bridge —
+        with the EUI-64 of the worker's MAC, which is the address the worker
+        forms by SLAAC off that network's advertisement. The firewall's
+        pinhole names it, since the zone-policy API matches literal addresses
+        only, and the stack exports it, so a /64 that moved re-declares both
+        in the run that reads it. A lease with no line for a declared
+        network's bridge refuses the run, naming both (`SubnetNotHeld`).
 
         `peer_on_worker` says the bulk-transfer application runs on the worker,
         and it is what declares the IPv4 forward of the application's peer
@@ -507,24 +487,16 @@ class Gateway(Component, pulumi_type='kluster:gateway:Gateway'):
         # would be a second copy of one fact, free to disagree with the first.
         api_url = f'https://{url_host(host)}'
 
-        # The prefix the ISP delegates, read over the same session on every
-        # run, and what derives from it: each declared network's /64, and the
-        # worker's address on the cluster network's.
-        held = held_prefix(f'{name}-prefix', connection=connection, opts=self.child_opts())
+        # The prefix the ISP delegates and the /64 the firmware gave each
+        # declared network on it, read over the same session on every run, and
+        # the worker's address on the cluster network's.
+        held = held_prefix(f'{name}-prefix', connection=connection, bridges=NETWORK_BRIDGES, opts=self.child_opts())
         self.prefix_read = held.read
         self.delegated_prefix: pulumi.Output[str] = held.prefix
         self.held_subnets: pulumi.Output[list[str]] = held.subnets
-        declared = held.prefix.apply(
-            lambda read: {
-                bridge: declared_subnet(IPv6Network(read), network) for network, bridge in NETWORK_BRIDGES.items()
-            }
-        )
-        self.worker_gua: pulumi.Output[str] = held.prefix.apply(
-            lambda read: str(
-                conventions.eui64_address(
-                    declared_subnet(IPv6Network(read), conventions.CLUSTER_VLAN), conventions.HOMELAB_NODE_MAC
-                )
-            )
+        cluster_bridge = NETWORK_BRIDGES[conventions.CLUSTER_VLAN]
+        self.worker_gua: pulumi.Output[str] = held.declared.apply(
+            lambda subnets: str(conventions.eui64_address(subnets[cluster_bridge], conventions.HOMELAB_NODE_MAC))
         )
 
         # The site's routing, which the controller holds, and who may open a
@@ -555,7 +527,7 @@ class Gateway(Component, pulumi_type='kluster:gateway:Gateway'):
         # member is last: a session may be riding the tunnel it carries.
         self.health: DeviceFile = self.persistence.executable(
             HEALTH_PROGRAM,
-            declared.apply(
+            held.declared.apply(
                 lambda subnets: health_program(
                     caddy=caddy,
                     resolvers=resolvers,
