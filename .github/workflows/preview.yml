@@ -126,6 +126,14 @@ jobs:
           certificate: ${{ secrets.PULUMI_BACKEND_CERT }}
           key: ${{ secrets.PULUMI_BACKEND_KEY }}
 
+      # Before the program runs, with the job's token, and that token in
+      # this step alone: deploy.yml's `plan-physical` says why
+      # (framework/ci.md §3).
+      - name: Install plugins
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: mise x -- pulumi plugin install
+
       - name: Preview
         env:
           PULUMI_CONFIG_PASSPHRASE: ${{ secrets.PULUMI_CONFIG_PASSPHRASE }}

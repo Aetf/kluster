@@ -27,12 +27,19 @@ And every refresh of `physical` that a workflow or a composite action runs
 puts the program first (physical/homelab-host.md §6), read off the `pulumi`
 commands the steps run in each matrix combination rather than off one step.
 
+And the preview behind `physical`'s approval gate is read as three outcomes,
+held by running the plan step against a stand-in preview: no changes, changes,
+and a preview that failed, which fails the job rather than reading as a diff.
+Every job that runs the program installs its plugins first, authenticated with
+the job's token, and that token reaches no step that runs the program.
+
 The workflow files are read the way the other seams read them, through the
 loaders in `workflow_files`.
 """
 
 from __future__ import annotations
 
+import os
 import re
 import shlex
 import tomllib
@@ -44,6 +51,8 @@ from pathlib import Path
 from typing import cast
 from urllib.parse import parse_qs, urlsplit
 
+import process_sessions
+import pytest
 from renovate_text import as_python_spells_it
 from workflow_files import GITHUB, github_name, mapping, read_workflow, workflow_jobs, workflows_and_actions
 
@@ -874,3 +883,176 @@ def test_every_refresh_of_physical_runs_the_program_first() -> None:
     assert physical, 'no workflow step refreshes physical'
     assert unread == [], f'refreshes whose stack is not read here: {unread}'
     assert [command for command in physical if not command.runs_the_program] == []
+
+
+#: A stand-in for `mise x -- pulumi preview …`: it logs what it was asked to
+#: run and exits with the code the case hands it.
+PREVIEW_STAND_IN = """#!/bin/sh
+printf '%s\\n' "$*" >> "$STAND_IN_LOG"
+exit "$STAND_IN_EXIT"
+"""
+#: The step's bound in a case: the stand-in exits at once, so a step still
+#: running at this bound is a hang.
+PLAN_STEP_TIMEOUT = 20
+
+
+def _plan_step() -> dict[str, object]:
+    """`deploy.yml`'s `plan-physical` step whose outputs the job reads."""
+    jobs = workflow_jobs(read_workflow(GITHUB / 'workflows' / 'deploy.yml'), 'deploy.yml')
+    job = jobs['plan-physical']
+    outputs = mapping(job.get('outputs'), 'deploy.yml plan-physical outputs:')
+    reference = re.fullmatch(r'\$\{\{\s*steps\.([\w-]+)\.outputs\.diff\s*\}\}', str(outputs.get('diff')))
+    assert reference, f'plan-physical outputs.diff is not a step output: {outputs.get("diff")!r}'
+    steps = [mapping(step, 'a plan-physical step') for step in cast('list[object]', job.get('steps'))]
+    (step,) = [step for step in steps if step.get('id') == reference.group(1)]
+    return step
+
+
+def _run_plan_step(tmp_path: Path, preview_exit: int) -> tuple[int, str, dict[str, str], list[str]]:
+    """Run the plan step with a preview that exits `preview_exit`.
+
+    Returns the step's exit, what it printed, the outputs it wrote, and the
+    commands the stand-in was asked to run.
+    """
+    step = _plan_step()
+    assert 'shell' not in step, 'the plan step names a shell, which this case does not model'
+    run = step.get('run')
+    assert isinstance(run, str)
+    bin_dir = tmp_path / 'bin'
+    bin_dir.mkdir()
+    (bin_dir / 'mise').write_text(PREVIEW_STAND_IN)
+    (bin_dir / 'mise').chmod(0o755)
+    outputs = tmp_path / 'outputs'
+    outputs.touch()
+    log = tmp_path / 'log'
+    log.touch()
+    env = {
+        'PATH': f'{bin_dir}:{os.environ["PATH"]}',
+        'HOME': str(tmp_path),
+        'GITHUB_OUTPUT': str(outputs),
+        'STAND_IN_EXIT': str(preview_exit),
+        'STAND_IN_LOG': str(log),
+    }
+    # A step that names no shell runs as `bash -e {0}` on a Linux runner.
+    done = process_sessions.run(['bash', '-e', '-c', run], cwd=tmp_path, env=env, text=True, timeout=PLAN_STEP_TIMEOUT)
+    written = dict(line.split('=', 1) for line in outputs.read_text().splitlines())
+    return done.returncode, done.stdout + done.stderr, written, log.read_text().splitlines()
+
+
+#: `--expect-no-changes`' refusal: `ExitNoChanges` in the exit-code table of
+#: the pinned CLI (`pkg/cmd/pulumi/cmd/exit_codes.go` at 3.274.1).
+CHANGES_PROPOSED = 7
+
+
+def test_a_plan_with_no_changes_skips_the_gated_apply(tmp_path: Path) -> None:
+    code, output, written, ran = _run_plan_step(tmp_path, 0)
+
+    assert code == 0, output
+    assert written == {'diff': 'false'}
+    # The step is read off what it runs: a preview of physical that refuses changes.
+    (command,) = _pulumi_commands(ran[0], 'the stand-in log')
+    assert command.subcommand == 'preview'
+    assert command.stack == conventions.STACK_NAMES.physical
+    assert '--expect-no-changes' in command.arguments
+
+
+def test_a_plan_that_proposes_changes_routes_to_the_gated_apply(tmp_path: Path) -> None:
+    code, output, written, _ = _run_plan_step(tmp_path, CHANGES_PROPOSED)
+
+    assert code == 0, output
+    assert written == {'diff': 'true'}
+
+
+@pytest.mark.parametrize('preview_exit', [1, 2, 255])
+def test_a_plan_that_failed_fails_its_job_by_name_and_proposes_nothing(tmp_path: Path, preview_exit: int) -> None:
+    """A preview that failed -- a plugin it could not install, a provider it could not reach -- is no plan.
+
+    Read as a diff, it would leave `up-physical` waiting for an approval with
+    nothing to approve, holding the deploy group (kluster-ops#778).
+    """
+    code, output, written, _ = _run_plan_step(tmp_path, preview_exit)
+
+    assert code != 0, output
+    assert written == {}
+    assert f'::error::the physical preview failed (exit {preview_exit}), so it proposed no plan to approve' in output
+
+
+#: The `pulumi` subcommands that run the program, and with it every plugin it
+#: needs.
+PROGRAM_SUBCOMMANDS = frozenset({'preview', 'up', 'update', 'refresh', 'destroy'})
+#: The job's own token, as a step spells it.
+JOB_TOKEN = re.compile(r'^\$\{\{\s*(?:github\.token|secrets\.GITHUB_TOKEN)\s*\}\}$')
+
+
+def _step_pulumi_commands(step: dict[str, object], where: str) -> list[PulumiCommand]:
+    run = step.get('run')
+    return _pulumi_commands(run, where) if isinstance(run, str) else []
+
+
+def _installs_the_projects_plugins(command: PulumiCommand) -> bool:
+    """`pulumi plugin install` with no plugin named: the set the project's packages name."""
+    arguments = [argument for argument in command.arguments if not argument.startswith('-')]
+    return arguments == ['plugin', 'install']
+
+
+def test_every_job_that_runs_the_program_installs_its_plugins_first_with_the_jobs_token() -> None:
+    """A plugin fetched in the middle of a run fails it at random; the token is the install's alone.
+
+    The talos provider's plugin is fetched through GitHub's API, which limits
+    an unauthenticated address, and a runner's address is shared
+    (framework/ci.md §3). So every job whose steps run the program installs
+    the project's plugins in a step before the first of them, with
+    `GITHUB_TOKEN` set to the job's own token, which the CLI sends. And no
+    step that runs the program, nor the job around it, carries
+    `GITHUB_TOKEN`, which the github provider takes as its credential.
+
+    A composite action's steps are not ordered against the job's here, so an
+    action that runs the program fails instead.
+    """
+    in_actions = [
+        command
+        for path in workflows_and_actions()
+        if path.parent.name != 'workflows'
+        for step in cast('list[object]', mapping(read_workflow(path).get('runs'), github_name(path)).get('steps') or [])
+        for command in _step_pulumi_commands(mapping(step, github_name(path)), github_name(path))
+        if command.subcommand in PROGRAM_SUBCOMMANDS
+    ]
+    assert in_actions == [], f'a composite action runs the program: {in_actions}'
+
+    held: list[str] = []
+    findings: list[str] = []
+    for path in workflows_and_actions():
+        if path.parent.name != 'workflows':
+            continue
+        for name, job in workflow_jobs(read_workflow(path), github_name(path)).items():
+            where = f'{github_name(path)}: {name}'
+            steps = [mapping(step, f'{where} step') for step in cast('list[object]', job.get('steps') or [])]
+            program = [
+                index
+                for index, step in enumerate(steps)
+                if any(command.subcommand in PROGRAM_SUBCOMMANDS for command in _step_pulumi_commands(step, where))
+            ]
+            if not program:
+                continue
+            held.append(where)
+            job_env = mapping(job.get('env', {}), f'{where} env:')
+            if 'GITHUB_TOKEN' in job_env:
+                findings.append(f'{where}: the job sets GITHUB_TOKEN for every step')
+            installs = [
+                index
+                for index, step in enumerate(steps[: program[0]])
+                if any(_installs_the_projects_plugins(command) for command in _step_pulumi_commands(step, where))
+            ]
+            if not installs:
+                findings.append(f'{where}: no step installs the project plugins before step {program[0]}')
+            for index in installs:
+                token = mapping(steps[index].get('env', {}), f'{where} step {index} env:').get('GITHUB_TOKEN')
+                if not (isinstance(token, str) and JOB_TOKEN.match(token)):
+                    findings.append(f"{where} step {index}: the plugin install's GITHUB_TOKEN is {token!r}")
+            for index in program:
+                if 'GITHUB_TOKEN' in mapping(steps[index].get('env', {}), f'{where} step {index} env:'):
+                    findings.append(f'{where} step {index}: runs the program with GITHUB_TOKEN set')
+
+    # A read that stopped finding the plan and the apply would pass on nothing.
+    assert {'workflows/deploy.yml: plan-physical', 'workflows/deploy.yml: up-physical'} <= set(held), held
+    assert findings == [], findings
