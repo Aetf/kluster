@@ -68,6 +68,19 @@ refuses where the package is not running from one. What the code needs that only
 kit, recover from the escrow, mint a key — stays in the script, and the
 shared code takes the result as an argument.
 
+**A filter the provider runs on the program's behalf is the program's
+code, not a script.** It lives in the layer whose rule it carries. It
+imports no Pulumi SDK, since it runs once per render of every chart,
+outside any Pulumi run. It runs as `sys.executable -I -m <module>`, the
+interpreter the program runs under, so it reaches the program's code and
+environment wherever the program runs, with nothing on `PATH`; `-I`
+keeps the provider's working directory and Python's environment
+variables out of what it imports. No one runs it by hand, so it is no
+console script: the console scripts are the commands an operator runs.
+Today's instance is the post-renderer of `helm_chart`,
+`kluster.lib.install_order`
+([declarative/cluster-infra.md](../declarative/cluster-infra.md) §1.2).
+
 **Every reusable unit of resources is a component, and the tree is the
 architecture.** A stack program (`stacks/*.py`) is wiring: it reads
 stack configuration, builds the top-level components, exports outputs —
@@ -144,7 +157,8 @@ above, and neither moves with the other.
 **Cross-component facts flow through parameters; cross-stack decisions
 flow through `conventions`.** StackReference is the exception and each
 use needs a recorded reason. Today there are three, each reading
-addresses `physical` publishes and a program declares something from:
+addresses that `physical` publishes and that a program declares
+something from:
 the `dns` stack reading the cluster anchors; `k8s-base` reading the
 addresses its `internet` pool and the worker's pool are made of
 (rfc-007 §4.4, rfc-008 §4.1); and `apps` reading the same members and

@@ -71,9 +71,10 @@ that speaks the k8s API, consumed by `apps`.
 
 ## 1. Install order
 
-The order is a real dependency chain, encoded as Pulumi
-`depends_on`/parent relationships so a single `up` converges from an
-empty cluster:
+The order is a real dependency chain, so a single `up` converges from
+an empty cluster. Between components, it is encoded by Pulumi
+`depends_on` and parent relationships; inside every chart, by the
+classes its objects fall into (§1.2):
 
 1.  **Gateway API CRDs — the experimental channel** (2026-08-24: the
     ExternalAuth HTTPRoute filter, GEP-1494, ships in experimental,
@@ -350,8 +351,67 @@ The API every component installs through, wrapped as
     Whatever is declared behind a chart is therefore declared against a
     webhook the API server can verify, and a component adds no wait of
     its own. The wait observes the configuration, not an admission call:
-    each API server's own view of it is the cluster's to converge, and a
-    create refused there fails by name and passes on the next run.
+    each API server's own view of it is the cluster's to converge. A
+    create refused because one API server has not yet observed the
+    bundle fails the run by name, and the next run, its preview
+    included, admits it, because everything the webhook needs already
+    exists: the chart's objects are created in class order (below), so
+    a run that stops anywhere leaves no webhook configuration without
+    the permissions of what fills its bundle.
+-   **A chart's objects are created in three classes.** Inside a chart
+    the provider orders nothing beyond a custom resource after its
+    definition and an object after the Namespace it is in; the objects
+    of one set are created concurrently, and a workload whose pods
+    cannot start holds an engine slot through its ten-minute await,
+    while the first failure stops every step not yet started. So
+    `helm_chart` gives every chart a Helm post-renderer,
+    `kluster.lib.install_order`, which writes the
+    `config.kubernetes.io/depends-on` annotation the provider turns
+    into dependencies between the chart's objects. Each object falls
+    into one class, by what it is and what else the render holds:
+    -   **runtime**: what runs pods, a Service that selects pods a pod
+        template of the same render makes in its namespace, and what
+        routes API calls to a Service — a webhook configuration or an
+        `APIService`;
+    -   **products**: objects of a kind a definition in the same render
+        defines, and a Service that selects pods no template of the
+        render makes, an operator's or another installation's;
+    -   **prerequisites**: everything else — definitions, accounts,
+        permissions, configuration, Secrets, and objects of a kind
+        another installation defines.
+
+    Every runtime object depends on every prerequisite, and every
+    product on every runtime object. A workload therefore starts with
+    its accounts, bindings and definitions in place, and an operator and
+    the webhook that admits its objects are up before those objects are
+    created; deleting runs the other way, products before their
+    operator. A webhook configuration sits beside its workload rather
+    than after it, because the CNPG operator writes its own bundle at
+    start and exits while either configuration is absent, and not before
+    it, because the bundle await holds the configuration until its
+    injector writes the bundle. The one ordering inside a class left to
+    the cluster is that one: the CNPG operator may start before its
+    configurations exist, exit, and be restarted by the kubelet within
+    its Deployment's await.
+
+    Objects of another installation's kinds are prerequisites because a
+    chart's workload can mount what they produce — the Intel operator
+    and the Barman Cloud plugin each mount the Secret of a `Certificate`
+    in their own chart. A Service goes with the pods it selects, because
+    the provider completes the create of such a Service only once its
+    endpoints are ready. The edges are per class, so a workload also
+    waits for prerequisites it does not read, none of which waits on
+    anything the chart runs.
+
+    The post-renderer reads the render's text and writes the annotation
+    into it, changing nothing else, so a value that the provider's YAML
+    reader and another one read differently reaches the provider as Helm
+    rendered it. A reference names an object where the provider
+    registers it: an object of a built-in kind that lives in a namespace
+    and names none is in the chart's. An object of another
+    installation's kind that names no namespace and has to be referenced
+    fails the render, naming it. The annotation stays on the live
+    object, and nothing in this cluster reads it.
 -   **CRDs.** Definitions in a chart's `crds/` directory are installed by
     default and become Pulumi's resources; `skip_crds` opts out. Helm
     never upgrades a CRD it installed that way, which is the reason

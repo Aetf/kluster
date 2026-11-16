@@ -1316,11 +1316,12 @@ rule above leaves in.
 It runs as the case above does, except where these say otherwise:
 
 -   **It fetches the Kubernetes provider plugin**, an exception to
-    fetching nothing that `tests/test_admission_wait_engine.py` (below)
-    shares. The extension is that provider's, so generating it
-    and previewing it both need the plugin, at the version the locked
-    `pulumi-kubernetes` registers, and no stand-in would exercise the
-    provider's own handling of its extension.
+    fetching nothing that `tests/test_admission_wait_engine.py` and
+    `tests/test_install_order_engine.py` (below) share. The extension is
+    that provider's, so generating it and previewing it both need the
+    plugin, at the version the locked `pulumi-kubernetes` registers, and
+    no stand-in would exercise the provider's own handling of its
+    extension.
 -   **The plugin is downloaded once per worker that runs the module's
     cases**, into a `PULUMI_HOME` of the module's own that the module
     removes when it finishes, rather than into one per case; each case
@@ -1342,6 +1343,18 @@ chart is that provider's component. The provider runs in its
 than sending it to a cluster, so the case runs an `up` with no cluster, and
 its plugin is downloaded into the case's own `PULUMI_HOME`, which the case
 removes when it finishes.
+
+`tests/test_install_order_engine.py` holds what a chart's internal order
+rests on (the same section of cluster-infra.md), on the harness it shares
+with that module, `tests/chart_engine.py`: the post-renderer `helm_chart`
+gives every chart runs under the provider from a project that is no checkout
+of this repository, and the references it writes reach the engine as
+dependencies, so in the stack's state each runtime object of the case's chart
+depends on every prerequisite, a Role rendered with no namespace among them,
+and each product on every runtime object. It also holds that the Chart
+records no inputs, so the interpreter's path in its post-renderer is never a
+diff between two checkouts. Dropping the post-renderer from the helper fails
+it.
 
 `tests/test_targeted_import_engine.py` holds the engine semantics that
 every targeted `up` of the bring-up rests on, wherever its runbook
@@ -1377,7 +1390,8 @@ are:
 
 -   the engine modules above, `tests/test_state_backend_engine.py`,
     `tests/test_homelab_engine.py`, `tests/test_extension_provider.py`,
-    `tests/test_admission_wait_engine.py` and
+    `tests/test_admission_wait_engine.py`,
+    `tests/test_install_order_engine.py` and
     `tests/test_targeted_import_engine.py`;
 -   `tests/test_device_directory_engine.py`, which holds what a device
     directory's `delete_before_replace` rests on;
