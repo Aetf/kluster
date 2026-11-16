@@ -2488,29 +2488,21 @@ the state of every zone the `dns` stack signs for the first time in
 §8.2. The DS is what validating resolvers then check every answer
 against, so **a wrong DS fails the whole zone for every validating
 resolver** until it is removed and the parent's TTL for it has run out.
-That cost sets the order:
+Who puts the DS at the parent is the zone's registrar
+(declarative/dns.md §1.3):
 
--   unlimited-code.works first, as the control: its parent already
-    holds a DS (sources-of-truth.md, reading C2), so the read below must
-    produce exactly that DS before it is trusted for any other zone;
--   then peifeng.phd and ucw.phd, the parked zones. This
-    installation serves nothing in them, but ucw.phd is also the zone under which the gateway's
-    proxy holds its `*.lan.ucw.phd` names (`conventions/dns.py`,
-    `PARKED_ZONES`), so a wrong DS there also fails the proxy's DNS-01
-    issuance for as long as it stands;
--   then jiahui.id, and only once it has passed, jiahui.love: these two
-    carry the family's site and the registrar's mail forwarding.
-
-No DS goes in for a zone whose server does not yet answer its keys.
-Every zone above except the control is registered at Namecheap.
-jiahui.id's registration names no registrar in its public record, so
-if that domain is not in the Namecheap account, its step waits for the
-registrar to be found.
+-   **jiahui.id is at Namecheap, and its DS is entered by hand**, as
+    below, only once the zone's own server answers the key it is for.
+-   **Every other zone is at Cloudflare Registrar, which submits the DS
+    itself** once Cloudflare signs the zone. Nothing is entered: the
+    readings below show that it took, and a DS that has not appeared is
+    waited for, since Cloudflare gives one to two days for it and no way
+    to control its timing.
 
 **Read the DS from the zone**, at its own server:
 
 ```sh
-z=unlimited-code.works                  # the control first, then one zone at a time
+z=<the zone>
 ns="$(drill NS "$z" | awk '/^;/ {next} $4 == "NS" {print $5; exit}')"
 drill -s DNSKEY "$z" @"$ns"
 mise x -- pulumi stack export --stack dns | jq -r --arg z "$z" '.deployment.resources[] | select(.urn | endswith("::" + $z + "-dnssec")) | .outputs.ds'
@@ -2523,8 +2515,8 @@ algorithm, digest type `2`, digest. The last command prints the DS the
 `dns` stack recorded for the zone's `ZoneDnssec`, read out of state
 without decrypting anything; the two agree, field for field, the
 digest compared without regard to case, since Cloudflare writes it in
-upper-case hexadecimal and `drill` in lower-case. On the
-control zone, both also agree with what the parent already holds:
+upper-case hexadecimal and `drill` in lower-case. Where the parent
+already holds a DS, both also agree with what it answers:
 
 ```sh
 tld=${z##*.}
@@ -2532,12 +2524,9 @@ pns="$(drill NS "$tld" | awk '/^;/ {next} $4 == "NS" {print $5; exit}')"
 drill DS "$z" @"$pns"
 ```
 
-**Enter it at Namecheap**, for every zone but the control: the
-domain's Advanced DNS page, its DNSSEC section, a new DS with the key
-tag, the algorithm, the digest type and the digest above. A domain
-whose page offers no way to add a DS stays signed and unvalidated,
-which is where it was before §8.2, and that is recorded on the bring-up
-issue rather than worked around.
+**Enter it at Namecheap**, for jiahui.id: the domain's Advanced DNS
+page, its DNSSEC section, a new DS with the key tag, the algorithm, the
+digest type and the digest above.
 
 **Check that it took**, with `tld` and `pns` set for this zone as
 above:
@@ -2548,14 +2537,14 @@ drill -D SOA "$z" @1.1.1.1              # flags: ... ad
 drill -D SOA "$z" @8.8.8.8              # flags: ... ad
 ```
 
-It passes when the parent answers the DS that was entered and both
-validating resolvers answer `NOERROR` with the `ad` flag set, and that
-is what the next zone waits for. The parent can take minutes to publish
-what Namecheap saved, and a resolver that cached the zone's earlier
-unsigned delegation sets `ad` only once that entry has expired, so a
-missing `ad` is waited out. A `SERVFAIL` is not: it is the DS not
-matching the zone's key, and the way back runs at once. Write down the
-TTL the parent's answer carries; it is how long the way back takes.
+It passes when the parent answers the DS read from the zone and both
+validating resolvers answer `NOERROR` with the `ad` flag set. The
+parent can take minutes to publish what Namecheap saved, and a resolver
+that cached the zone's earlier unsigned delegation sets `ad` only once
+that entry has expired, so a missing `ad` is waited out. A `SERVFAIL`
+is not: it is the DS not matching the zone's key, and the way back runs
+at once. Write down the TTL the parent's answer carries; it is how long
+the way back takes.
 
 Cloudflare clears the zone's `pending` status on a schedule of its own,
 usually within the hour, so its DNSSEC panel and the refreshed preview
@@ -2565,10 +2554,14 @@ are read afterward rather than gated on:
 mise x -- pulumi preview --stack dns --refresh --expect-no-changes
 ```
 
-Once every zone has passed, the panel reads active for each and the
-preview is clean.
+Once the DS has taken, the panel reads active for the zone and the
+preview carries no diff on its `ZoneDnssec`.
 
-**The way back** is the DS removed at Namecheap, as declarative/dns.md
-§1.3 gives it: the zone stays signed and goes back to unvalidated, and
-validating resolvers recover once the parent's TTL for the removed DS
-has run out.
+**The way back** is the DS removed, as declarative/dns.md §1.3 gives it
+for each registrar: by hand at Namecheap for jiahui.id, and DNSSEC
+turned off for a zone at Cloudflare Registrar. The zone stays signed
+and goes back to unvalidated, and validating resolvers recover once the
+parent's TTL for the removed DS has run out. A zone's DNSSEC turned off
+is a change under the `dns` stack, whose `ZoneDnssec` declares
+`active`, so the refreshed preview above reads it as a diff until the
+declaration follows.

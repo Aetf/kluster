@@ -221,20 +221,53 @@ is one nobody here asked for, is the issue's question.
 
 The stack signs each zone (`ZoneDnssec`, in `components/dns/zone.py`);
 what makes the signature count is the DS at the zone's parent, which is
-entered at the registrar by hand and is in no stack. A DS that matches
-the zone's key-signing key makes every answer from the zone validated;
+in no stack: the zone's registrar puts it there. A DS that matches the
+zone's key-signing key makes every answer from the zone validated;
 **a DS that matches no key fails the whole zone for every validating
 resolver**, until it is removed and the parent's TTL for it has run
 out. So the removal is the way back from any DS change, the first
 entry included, and it is also the first step of anything that stops
 signing a zone.
 
-**Removing a DS** is the record deleted in the registrar's DNSSEC
-settings for the domain; for the zones at Namecheap that is the
-domain's Advanced DNS page, its DNSSEC section. The zone stays signed
-and goes back to unvalidated. Validating resolvers recover once the
-parent's TTL for the removed record has run out, which the parent's own
-server prints beside the record:
+**Who enters and removes the DS is the registrar's question.**
+jiahui.id is registered at Namecheap, Cloudflare Registrar not offering
+`.id`, and its DS is entered and removed there by hand. Every other
+zone of `conventions.ALL_ZONES` is registered at Cloudflare Registrar,
+which manages the DS of a zone it both registers and signs:
+
+-   **Cloudflare enters the DS.** It publishes a signed zone's DS in the
+    zone itself, as `CDS` and `CDNSKEY` records, and the registrar scans
+    those at regular intervals and sends what they carry to the
+    registry. The first DS after signing is turned on takes one to two
+    days, and its timing cannot be controlled
+    ([Enable DNSSEC](https://developers.cloudflare.com/registrar/get-started/enable-dnssec/)
+    in Cloudflare's Registrar documentation;
+    [DNSSEC](https://developers.cloudflare.com/dns/dnssec/), under
+    "Roll back DNSSEC").
+-   **Turning DNSSEC off withdraws it, and does not stop the signing.**
+    A zone whose DNSSEC status is set to `disabled` goes to
+    `pending-disabled`: Cloudflare still signs it and serves its
+    `DNSKEY`, and sets its `CDS` and `CDNSKEY` to the deletion signal of
+    RFC 8078 §4, which tells the registrar to take the DS away. The zone
+    reads `disabled` once the DS is gone from the registrar
+    ([DNSSEC states](https://developers.cloudflare.com/dns/dnssec/dnssec-states/)).
+    Cloudflare's rollback steps give that disable, for a domain at
+    Cloudflare Registrar, in place of removing the DS at the registrar,
+    and keep the zone signed until the DS's TTL has run out at the
+    parent ([DNSSEC](https://developers.cloudflare.com/dns/dnssec/),
+    under "Roll back DNSSEC"). The dashboard has the switch under the
+    domain's **Configuration** in **Manage Domains**
+    ([Enable DNSSEC](https://developers.cloudflare.com/registrar/get-started/enable-dnssec/)).
+    How long the registrar takes to act on the deletion signal is not
+    established: the documentation gives no figure for it. The parent's
+    own server shows when the DS is gone, below.
+
+**Removing a DS** is, for jiahui.id, the record deleted on the domain's
+Advanced DNS page at Namecheap, its DNSSEC section, and for a zone at
+Cloudflare Registrar, DNSSEC turned off as above. Either way the zone
+stays signed and goes back to unvalidated. Validating resolvers recover
+once the parent's TTL for the removed record has run out, which the
+parent's own server prints beside the record:
 
 ```sh
 z=<the zone>
@@ -243,13 +276,27 @@ pns="$(drill NS "$tld" | awk '/^;/ {next} $4 == "NS" {print $5; exit}')"
 drill DS "$z" @"$pns"      # before: the record and its TTL; after: no DS in the answer
 ```
 
-**The order never puts signing first.** A zone whose parent holds a DS
-keeps signing until the removal's TTL has run out: turning DNSSEC off
-at Cloudflare first, which deleting the zone's `ZoneDnssec` does,
+**The order never stops signing first.** What stops it is the deletion
+of the zone's DNSSEC records, Cloudflare's `deleted` state, in which the
+zone serves no `DNSKEY` and no signature
+([DNSSEC states](https://developers.cloudflare.com/dns/dnssec/dnssec-states/)).
+A delete of the zone's `ZoneDnssec` ends there: the provider sets the
+status to `disabled` and then deletes the records
+(`internal/services/zone_dnssec/` in the Terraform provider that
+pulumi-cloudflare bridges). A zone whose parent holds a DS keeps
+signing until the removal's TTL has run out: stopping the signing first
 leaves a DS that no key matches, and that is the same outage as a wrong
-one. Entering a DS waits the other way round, for the zone's server to
-answer the key it is for. physical/gateway-cutover.md §8.4 enters the
-first DS of each zone in that order.
+one. Cloudflare refuses the deletion until the zone reads `disabled`,
+which its state table ties to the DS being gone from the registrar and
+not to the parent's TTL for it having run out; its own guidance waits
+one and a half times that TTL after the removal before deleting the
+records
+([Troubleshooting](https://developers.cloudflare.com/dns/dnssec/troubleshooting/),
+under "Delete remaining DNSKEY records after disabling DNSSEC").
+Entering a DS waits the other way round, for the zone's server to
+answer the key it is for, which at Cloudflare Registrar the scan of the
+zone's own records ensures. physical/gateway-cutover.md §8.4 enters
+jiahui.id's DS in that order, and reads the DS in place for any zone.
 
 ## 2. Naming hierarchy (formalizing the existing conventions)
 
