@@ -85,6 +85,13 @@ LAN is a machine no policy can be written about; a node on its own VLAN
 is a zone the gateway can police (gateway.md §4.2). Subnet numbering
 follows the site addressing convention recorded in gateway.md §1.
 
+The host's wired link is its onboard NIC, which the host reports as
+`enp11s0`. The host's network files match that NIC by its permanent MAC
+rather than by its name: a predictable name encodes the PCI bus number,
+which moves whenever a card is added or moved, and the MAC does not. The
+name is therefore a reading of the host as it stands, and neither the
+host's configuration nor this repository depends on it.
+
 So the host network config (aconfmgr-managed systemd-networkd) gains
 three things, in the same change-set that installs the libvirt
 resources (§4):
@@ -97,8 +104,8 @@ resources (§4):
     and the HAOS domain's own tagged VLAN over `kvmbr0` already proves
     802.1Q frames cross the unmanaged switch intact;
 -   **`kvmbr1`, a bridge over `kluster`**, which the worker's tap
-    joins. `enp7s0` itself is untouched and keeps carrying the host's
-    untagged 192.168.80.x address, so nothing moves and there is no
+    joins. The physical NIC itself is untouched and keeps carrying the
+    host's untagged 192.168.80.x address, so nothing moves and there is no
     connectivity break to schedule;
 -   a **host leg in the VLAN: 192.168.70.2 on `kvmbr1`**. This host is
     the NAS, and without a leg every NFS read by a VM one bridge away
@@ -218,8 +225,8 @@ host is not a Pulumi target; the same boundary as the NAS role). Its
 contents, so nothing is discovered mid-bootstrap:
 
 -   the `kluster` VLAN interface, the `kvmbr1` bridge over it, and the
-    host's own 192.168.70.2 leg on that bridge (§2) — `enp7s0` and its
-    untagged address are left alone;
+    host's own 192.168.70.2 leg on that bridge (§2) — the physical NIC
+    and its untagged address are left alone;
 -   the nodatacow subvolume (§1) and its `chattr +C`, and nothing
     beyond the directory: the libvirt storage pool that points at it is
     the program's, declared against that path
