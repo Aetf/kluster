@@ -311,10 +311,6 @@ def return_flag(
 class Needs(enum.Enum):
     """What a conditional row waits for before it is declared at all."""
 
-    #: The worker's global IPv6 address, which it forms by SLAAC off the
-    #: cluster VLAN and so cannot have before that network is applied and the
-    #: worker has booted on it.
-    WORKER_GUA = enum.auto()
     #: The bulk-transfer application running on the worker rather than on the
     #: legacy host, which holds the WAN port until then.
     PEER_ON_WORKER = enum.auto()
@@ -323,7 +319,8 @@ class Needs(enum.Enum):
 class Worker(enum.Enum):
     """An address a row names that the program does not hold: it arrives as an input."""
 
-    #: The worker's global IPv6 address (`Needs.WORKER_GUA`).
+    #: The worker's global IPv6 address, which derives from the site's
+    #: delegated prefix as this run reads it (`Gateway.worker_gua`).
     GUA = enum.auto()
 
 
@@ -670,11 +667,10 @@ CENSUS: tuple[Pair | Forward, ...] = (
     # into the cluster zone because the worker sits on the cluster VLAN. A
     # literal address rather than anything prefix-relative — the zone-policy
     # API matches literal addresses only, and the site's delegated prefix
-    # rotates, so this row is re-declared when it does. A stale rule degrades
-    # to outbound-only IPv6, the accepted first stage, rather than to
-    # anything unsafe; and with no address yet to name, the pair is left
-    # undeclared rather than admitting a guessed one, which is the same stage
-    # reached from the other side.
+    # rotates — so the address is the one this run derives from the prefix it
+    # reads, and the run that reads a new prefix re-declares the row. Until
+    # that run is applied the rule is stale, which degrades to outbound-only
+    # IPv6, the accepted first stage, rather than to anything unsafe.
     Pair(
         order='peer-order',
         source=Zone.EXTERNAL,
@@ -691,7 +687,6 @@ CENSUS: tuple[Pair | Forward, ...] = (
                 port=PEER.port,
             ),
         ),
-        needs=Needs.WORKER_GUA,
     ),
     # The IPv4 half of the same flow, and the only port forward on the device.
     # Nothing else is published inbound: cluster and node management arrive
@@ -728,8 +723,9 @@ class SiteFirewall(Component, pulumi_type='kluster:gateway:SiteFirewall'):
     """The cluster's network and zone, and the rows of `CENSUS` that apply.
 
     A row with `needs` is declared only once what it names is met — today the
-    pinhole's pair, on `worker_gua`, and the peer's IPv4 forward, on
-    `peer_on_worker` — and every other row unconditionally. A row's
+    peer's IPv4 forward, on `peer_on_worker` — and every other row
+    unconditionally. `worker_gua` is the address the pinhole names, which
+    derives from the delegated prefix as the run reads it. A row's
     address groups are declared because a policy present names them, once
     each, and each pair's policies are followed by the one `ZonePolicyOrder`
     that ranks them.
@@ -748,7 +744,7 @@ class SiteFirewall(Component, pulumi_type='kluster:gateway:SiteFirewall'):
         *,
         api_url: str,
         site: str,
-        worker_gua: pulumi.Input[str] | None,
+        worker_gua: pulumi.Input[str],
         peer_on_worker: bool = False,
         static_hosts: Mapping[str, IPv4Address | IPv6Address],
         opts: pulumi.ResourceOptions | None = None,
@@ -798,7 +794,12 @@ class SiteFirewall(Component, pulumi_type='kluster:gateway:SiteFirewall'):
         # server offering leases beside that is a second opinion nothing
         # needs. IPv6 is a delegated prefix with router advertisements on,
         # because the design's worker GUA is a SLAAC address formed from what
-        # this network advertises. The multicast reflector is the site's setting,
+        # this network advertises; the /64 it advertises is the prefix id it
+        # declares, its VLAN id (physical/gateway.md §1), written in the hex
+        # the controller stores it in. Every write turns the controller's
+        # automatic ids off, since the pinned provider sends that flag false
+        # whatever is declared, so an id left undeclared would be the
+        # firmware's choice. The multicast reflector is the site's setting,
         # on for every network, and the controller derives this field from it, so
         # the declaration states what it holds: `False` here would be ignored and
         # planned again on every run.
@@ -812,6 +813,7 @@ class SiteFirewall(Component, pulumi_type='kluster:gateway:SiteFirewall'):
             dhcp_v6_enabled=False,
             ipv6_interface_type='pd',
             ipv6_pd_interface='wan',
+            ipv6_pd_prefixid=format(conventions.CLUSTER_VLAN.prefix_id, 'x'),
             ipv6_pd_start=DELEGATED_RANGE[0],
             ipv6_pd_stop=DELEGATED_RANGE[1],
             ipv6_ra_enable=True,
@@ -822,10 +824,9 @@ class SiteFirewall(Component, pulumi_type='kluster:gateway:SiteFirewall'):
         )
 
         # The addresses a row may name that the program is handed rather than
-        # holds, present only once they have been handed in: a row naming one
-        # is declared only when its `needs` is met, which is the same fact.
-        handed_in: dict[Worker, pulumi.Input[str]] = {} if worker_gua is None else {Worker.GUA: worker_gua}
-        met = {Needs.WORKER_GUA: Worker.GUA in handed_in, Needs.PEER_ON_WORKER: peer_on_worker}
+        # holds.
+        handed_in: dict[Worker, pulumi.Input[str]] = {Worker.GUA: worker_gua}
+        met = {Needs.PEER_ON_WORKER: peer_on_worker}
         rows = [row for row in CENSUS if row.needs is None or met[row.needs]]
         pairs = [row for row in rows if isinstance(row, Pair)]
 

@@ -6,6 +6,12 @@ the IPv4 subnet, spelled as those same digits, so a pair that disagrees cannot
 be declared. An address an interface forms from its MAC is derived too — a
 link-local, or a host's ULA on its network's /64 — from the MAC it is formed
 from (`eui64_address`).
+
+The site's global addresses are the other half. The ISP delegates a prefix
+to the gateway and moves it when it likes, so nothing here holds one: the
+`physical` program reads it off the device on every run. What this module
+holds is each network's prefix id, the /64 of that prefix the network takes,
+and `delegated_subnet` joins the two.
 """
 
 from __future__ import annotations
@@ -84,15 +90,40 @@ def eui64_link_local(mac: str) -> IPv6Address:
     return eui64_address(_LINK_LOCAL, mac)
 
 
+def delegated_subnet(prefix: IPv6Network, subnet_id: int) -> IPv6Network:
+    """The /64 at `subnet_id` under a delegated prefix: the id is the bits between the prefix and the /64.
+
+    A network that takes its IPv6 from the delegated prefix holds the /64 its
+    prefix id names, so the id is a decision and the prefix an observation:
+    `2001:db8:83:1710::/60` at id 7 is `2001:db8:83:1717::/64`. An id that does
+    not fit under the prefix's length is refused rather than wrapped into
+    another network's /64, and so is a prefix longer than the /64 it would
+    have to hold.
+    """
+    if prefix.prefixlen > _IDENTIFIER_PREFIXLEN:
+        raise ValueError(f'{prefix} is longer than a /{_IDENTIFIER_PREFIXLEN}, so it holds no subnet')
+    room = 1 << (_IDENTIFIER_PREFIXLEN - prefix.prefixlen)
+    if not 0 <= subnet_id < room:
+        raise ValueError(f'subnet id {subnet_id:x} does not fit under {prefix}, which holds ids 0 to {room - 1:x}')
+    return IPv6Network((int(prefix.network_address) + (subnet_id << _IDENTIFIER_PREFIXLEN), _IDENTIFIER_PREFIXLEN))
+
+
+def subnet_id(prefix: IPv6Network, subnet: IPv6Network) -> int:
+    """The id of a /64 under a delegated prefix: `delegated_subnet`'s inverse, refusing a subnet outside it."""
+    if subnet.prefixlen != _IDENTIFIER_PREFIXLEN or not subnet.subnet_of(prefix):
+        raise ValueError(f'{subnet} is not a /{_IDENTIFIER_PREFIXLEN} under {prefix}')
+    return (int(subnet.network_address) - int(prefix.network_address)) >> _IDENTIFIER_PREFIXLEN
+
+
 @dataclass(frozen=True)
 class SiteNetwork:
     """One subnet the gateway serves, and the gateway's own leg on it."""
 
     name: str
     v4: IPv4Network
-    #: The tag the subnet is carried on, where this program names one. `None`
-    #: is the untagged LAN, and the networks the site had before this program.
-    vlan_id: int | None = None
+    #: The tag the subnet is carried on, `0` for the untagged LAN, as the
+    #: controller's own `vlan_id` spells it.
+    vlan_id: int
     #: The gateway's address on the subnet, where this program decides it —
     #: the nodes' default route, and the address a routing session is held at.
     gateway_v4: IPv4Address | None = None
@@ -101,6 +132,16 @@ class SiteNetwork:
     def v6(self) -> IPv6Network:
         """The subnet's unique-local /64, numbered by the site's addressing rule."""
         return ula_subnet(self.v4)
+
+    @property
+    def prefix_id(self) -> int:
+        """The /64 of the delegated prefix the network takes (`delegated_subnet`): its VLAN id.
+
+        The site rule makes the two one fact (physical/gateway.md §1), so the id
+        is read off the tag rather than recorded beside it, where a second
+        field would be free to disagree.
+        """
+        return self.vlan_id
 
     def require_gateway(self) -> IPv4Address:
         """The gateway's leg, or a refusal naming the network that has none declared."""
@@ -111,10 +152,10 @@ class SiteNetwork:
 
 #: The untagged server LAN: the homelab host itself and the LAN's general
 #: population.
-SERVER_LAN = SiteNetwork(name='server', v4=IPv4Network('192.168.80.0/24'))
+SERVER_LAN = SiteNetwork(name='server', v4=IPv4Network('192.168.80.0/24'), vlan_id=0)
 
 #: Home Assistant and its devices — the LAN's least-trusted population.
-IOT_VLAN = SiteNetwork(name='iot', v4=IPv4Network('192.168.90.0/24'))
+IOT_VLAN = SiteNetwork(name='iot', v4=IPv4Network('192.168.90.0/24'), vlan_id=2)
 
 #: The gateway's own containers, on the bridge the device calls `br5`.
 CONTAINER_VLAN = SiteNetwork(

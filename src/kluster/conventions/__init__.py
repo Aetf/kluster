@@ -326,8 +326,10 @@ from kluster.conventions.site import (
     SiteHost,
     SiteNetwork,
     Vip,
+    delegated_subnet,
     eui64_address,
     eui64_link_local,
+    subnet_id,
     ula_subnet,
 )
 
@@ -444,6 +446,7 @@ __all__ = (
     'Vip',
     'alert',
     'barman_repo_path',
+    'delegated_subnet',
     'eui64_address',
     'eui64_link_local',
     'forge',
@@ -453,6 +456,7 @@ __all__ = (
     'overlay',
     'routes',
     'sealed',
+    'subnet_id',
     'ula_subnet',
     'volsync_repo_path',
 )

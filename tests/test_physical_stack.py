@@ -715,34 +715,6 @@ def test_no_two_resources_declare_one_image_file(ran: Run) -> None:
 
 
 @pytest.mark.asyncio
-async def test_the_pinhole_waits_for_an_address_the_worker_has_not_formed_yet(setup: Installation) -> None:
-    """The second nested egg: the address is SLAAC off a network this run makes.
-
-    The worker's global address is formed from the router advertisement of the
-    cluster VLAN, and that VLAN is declared by this same program — so the first
-    apply of all is asked for a value only its own outcome produces. `workerGua`
-    is therefore optional, and absent it the one rule that names a literal
-    address is not declared: the worker's IPv6 is outbound-only, which is the
-    stage the design already accepts when the home prefix rotates under a rule
-    that has not been re-applied yet.
-    """
-    pulumi.runtime.set_all_config({key: value for key, value in STACK_CONFIG.items() if key != 'kluster:workerGua'})
-
-    async with declaring():
-        await physical.main()
-
-    declared = setup.names_declared
-    # Nothing else waits with it. The v4 half names the node address the
-    # address plan states rather than one a booted machine reports — what it
-    # waits for is the application, and that key is set here — and the rest of
-    # the census never named the worker at all.
-    assert f'{conventions.CLUSTER_NAME}-firewall-peer-v6' not in declared
-    assert f'{conventions.CLUSTER_NAME}-firewall-peer-v4' in declared
-    assert f'{conventions.CLUSTER_NAME}-firewall-cluster-egress' in declared
-    assert f'{conventions.CLUSTER_NAME}-firewall-network' in declared
-
-
-@pytest.mark.asyncio
 async def test_the_peer_forward_waits_for_qbittorrent_to_run_on_the_worker(setup: Installation) -> None:
     """Until its own wave, the legacy qbittorrent holds the peer port's WAN side.
 
@@ -753,7 +725,7 @@ async def test_the_peer_forward_waits_for_qbittorrent_to_run_on_the_worker(setup
     host's inbound IPv4 away with nothing reporting it. So with
     `qbittorrentOnWorker` absent — the state of every apply before that wave —
     the forward is not declared, and nothing else goes with it: the pinhole
-    names the worker's own address and waits for that instead.
+    names the worker's own address, which nothing else holds.
     """
     pulumi.runtime.set_all_config(
         {key: value for key, value in STACK_CONFIG.items() if key != f'kluster:{physical.QBITTORRENT_ON_WORKER}'}
@@ -814,12 +786,12 @@ async def test_a_flag_that_is_not_a_boolean_refuses_the_run() -> None:
         await physical.main()
 
 
-def test_the_pinhole_admits_the_configured_address_once_it_is_known(ran: Run) -> None:
-    """And with the address configured, the rule is back and carries it.
+def test_the_pinhole_admits_the_address_the_run_derives_from_the_read_prefix(ran: Run) -> None:
+    """The pinhole is declared from the first apply, naming the worker's address under the prefix the run read.
 
-    Step three of the bring-up ceremony is writing the key, so what follows it
-    has to be the pinhole itself — the configured address, on the port the
-    census holds, into the zone the worker sits in. The port is not configured beside
+    No key holds the address: the read of the delegated prefix is part of the
+    run, so the pinhole carries the derived address, on the port the census
+    holds, into the zone the worker sits in. The port is not configured beside
     it: two firewall rules name it and they have to agree, so it is the port of
     the exposure census's row through the site's forward, in `conventions`
     (rfc-002 §11).
@@ -920,13 +892,15 @@ def test_the_program_exports_every_name_the_structure_carries_and_nothing_else(r
     assert set(ran.exported) == set(conventions.PHYSICAL_OUTPUTS.names())
 
 
-def test_the_workers_gua_is_exported_as_the_stack_configures_it(ran: Run) -> None:
+@on_the_runs_loop
+async def test_the_workers_gua_is_exported_as_the_run_derives_it(ran: Run) -> None:
     """The worker's own pool and a `SiteForward` port's Service read it across the reference (rfc-008 §4.1).
 
-    It is the configured measurement the gateway's pinhole names too, so the
-    pool, the Service and the pinhole agree on one address.
+    It is the address the gateway's pinhole names too, derived from the prefix
+    the run read, so the pool, the Service and the pinhole agree on one address.
     """
-    assert ran.exported[conventions.PHYSICAL_OUTPUTS.worker_gua] == WORKER_GUA
+    exported = cast('pulumi.Output[str]', ran.exported[conventions.PHYSICAL_OUTPUTS.worker_gua])
+    assert await exported.future() == WORKER_GUA
 
 
 @pytest.mark.asyncio
@@ -1755,7 +1729,7 @@ async def test_the_program_never_reads_the_devices_own_credential() -> None:
     )
 
     async with declaring():
-        physical._gateway(pulumi.Config(), worker_gua=WORKER_GUA)  # pyright: ignore[reportPrivateUsage]
+        physical._gateway(pulumi.Config())  # pyright: ignore[reportPrivateUsage]
 
 
 @pytest.mark.usefixtures('setup')

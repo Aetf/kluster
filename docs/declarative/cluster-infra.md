@@ -726,7 +726,8 @@ All decided behavior from architecture.md §3, expressed as config:
     stands outside the block too, and a pod on the worker reaches it
     through the gateway's allow from the cluster zone (physical/gateway.md
     §4.2 rule 3): it is out of the delegated prefix, which the ISP assigns
-    and rotates, so no declaration can name it.
+    and rotates and which only the `physical` run reads, off the gateway,
+    and the block names no part of it.
 
 ## 3. What this stack deliberately does not do
 

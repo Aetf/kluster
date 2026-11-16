@@ -137,6 +137,15 @@
     answering, and only then does the run with no targets write the
     route that names it ([physical/gateway.md](../physical/gateway.md)
     §2.2, §2.5).
+*   **Updated:** 2026-11-15 — `workerGua` is now derived from the read
+    prefix ([Aetf/kluster-ops#760](https://github.com/Aetf/kluster-ops/issues/760)):
+    §11's row "`workerGua` — observed off a booted machine" is no
+    configuration in what is built. The `physical` run reads the site's
+    delegated prefix off the gateway's PD lease and derives the worker's
+    GUA from it. §10.1's `SiteNetwork.vlan_id` is a required `int`, `0`
+    for the untagged LAN, and the network's prefix id on the delegated
+    prefix is its VLAN id. The design is
+    [physical/gateway.md](../physical/gateway.md) §1 and §4.2.
 *   **Created:** 2026-08-28
 *   **Authority:** the style rules (`docs/style/`) are what this document
     obeys; where they are silent, a rule proposed here is marked **new rule**.

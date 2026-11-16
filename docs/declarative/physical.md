@@ -43,8 +43,9 @@ node's private IP (`node_private_ips`, the name a Talos call gives
 the node, §2), each cloud node's GUA (`node_guas` — with the
 private IPv4s, `vip1_private` and the NLB's two addresses, the
 `internet` pool's members, which `k8s-base` and `apps` read; rfc-007
-§4.4), the worker's GUA as `workerGua` configures it (`worker_gua`,
-absent until that is set — the worker's own pool in `k8s-base` and a
+§4.4), the worker's GUA (`worker_gua`, derived on every run from the
+site's delegated prefix the run reads off the gateway, §4, and so
+always present — the worker's own pool in `k8s-base` and a
 `SiteForward` port's Service in `apps` read it; rfc-008 §4.1), both
 of the NLB's public addresses (IPv4 and IPv6 — the cluster anchor in
 `dns` carries an A and an AAAA), the
@@ -734,6 +735,18 @@ from the `physical` stack via the bridged `zerotier/zerotier`
 provider (architecture.md §5.3). The gw-config repo retires;
 periodic backup *pulls* move to a yadm timer on the homelab host.
 
+The same session carries **one read**: the site's delegated prefix,
+which the ISP decides and moves, and which the controller does not report.
+`kluster.providers.pd_lease` reads the device's PD lease,
+`/data/udapi-config/pd.leases`, in `check` on every preview and
+update, and writes nothing anywhere; it uses the transport's read verb
+alone, and the same pinned key and client credential as every device
+resource. `Gateway` declares it once, through
+`components/gateway/prefix.py`, and derives from it each declared
+network's /64 at the network's prefix id and the worker's GUA, which
+the census's pinhole names and the stack exports as `worker_gua`
+(physical/gateway.md §4.2).
+
 A root filesystem is a tree rather than bytes in state, so
 `DeviceArtifact`'s surface is `root` — the directory the tree is
 unpacked into — plus the pin that fills it. **The device does the
@@ -759,7 +772,8 @@ resources of this repository's own, **all in this stack** — the co-location ex
 resources follow the gateway's credential tier, so the `apps` CI
 environment never holds a controller credential; app components keep
 a pointer (workloads.md §4). The census: the **cluster VLAN network
-object** (id 7, `192.168.70.0/24`) and the **firewall zone of its
+object** (id 7, `192.168.70.0/24`, prefix id 7 on the delegated prefix,
+physical/gateway.md §1) and the **firewall zone of its
 own** it is placed in — the isolation the shared server LAN could not
 offer (physical/gateway.md §4.2) — the **site's BGP configuration**,
 the FRR text the routing session is (physical/gateway.md §1.3), with
@@ -789,9 +803,9 @@ a pair the census orders is the census's whole, so a rule wanted there
 is a row of it whatever traffic it is about (physical/gateway.md §4.2) —
 the qbittorrent v6 pinhole, on the port and transports of the exposure
 census's one row through the site's forward
-(`conventions.routes.SiteForward`) — declared only once `workerGua` carries
-the worker's SLAAC address, which no apply before the worker's first
-boot can supply (physical/gateway.md §4.2) — and its v4 peer-port
+(`conventions.routes.SiteForward`) — declared on every apply, naming the
+worker's GUA as the run derives it from the prefix it read
+(physical/gateway.md §4.2) — and its v4 peer-port
 forward to `192.168.70.10` (**the only port forward**; no management
 inbound exists), declared only once `qbittorrentOnWorker` says
 qbittorrent runs on the worker, and any static LAN host entries (dns.md §4). The
@@ -1162,6 +1176,30 @@ password included. The swap takes this resource out of state with
 `pulumi state delete` before the apply that declares the bridged one,
 since in one apply its delete would remove what the bridged create
 wrote (the provider's docstring).
+
+**The PD lease read is a layer of the same kind.**
+`kluster.providers.pd_lease`, the one construction in
+`components/gateway/prefix.py` that builds its resource, and
+`gateway-health`'s reading of the lease (physical/gateway.md §1.6) work
+around the controller reporting no held delegated prefix. They come
+out once a controller field carries the held prefix with its length,
+reached through a data source of the pinned `filipowm/unifi` or a
+controller read of this repository's own: the construction reads that
+field instead, the resource leaves state with `pulumi state delete`
+(it wrote nothing, so the order carries no hazard), and the package
+and the lease reading are deleted. Its tripwires:
+
+-   the parser's refusals, at every `physical` preview and update;
+-   `gateway-health`'s daily reading of the lease's line for each
+    declared bridge;
+-   the suite's copy of the lease, `tests/data/pd.leases`, verbatim but
+    for the prefix, which the parser is held to;
+-   the step in physical/gateway.md §3's "The device's base moved"
+    that re-reads the lease's shape and looks again for the controller
+    field.
+
+The regeneration of `sdks/unifi` above is where a data source for the
+held prefix would first show.
 
 Security verifications (from the 2026-08-23 audit,
 cluster/security-audit.md): a pod's request to `169.254.169.254` is

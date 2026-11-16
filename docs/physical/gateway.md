@@ -21,18 +21,31 @@ declarative/physical.md §4.
     `lan` pool** (192.168.71.0/24 + its ULA /64), learned from the
     homelab worker VM at its VLAN-7 address.
 
-    **Site addressing convention**: every network this box hosts
-    sits inside 192.168.0.0/16 and takes its **third octet from the
-    VLAN id, times ten** — VLAN 7 → 192.168.70.0/24, VLAN 9 → IoT's
-    192.168.90.0/24 — and a network that advertises a unique-local
-    prefix takes the /64 out of the site's ULA prefix repeating that
-    same third octet. The cluster VLAN advertises none: it carries the
-    delegated prefix alone (§2.5 step 3). The container VLAN's
-    10.0.5.0/24 is the single network outside the scheme. The `lan`
-    pool's 192.168.71.0/24 is deliberately not a multiple of ten: it
-    is no VLAN and never becomes a network object (§4.1), and
-    numbering it next to the VLAN it is announced from keeps the pair
-    legible at a glance.
+    **Site addressing.** No rule derives an IPv4 subnet from a VLAN
+    id: each subnet is a decision recorded on its network
+    (`conventions.site`).
+
+    | Network | Bridge | VLAN | IPv4 subnet |
+    | --- | --- | --- | --- |
+    | Server LAN | br0 | untagged | 192.168.80.0/24 |
+    | IoT | br2 | 2 | 192.168.90.0/24 |
+    | Container | br5 | 5 | 10.0.5.0/24 |
+    | Cluster | br7 | 7 | 192.168.70.0/24 |
+
+    A network that advertises a unique-local prefix takes the /64 out
+    of the site's ULA prefix that repeats the third octet of its IPv4
+    subnet (`ula_subnet`). The cluster VLAN advertises none: it carries
+    the delegated prefix alone. **A network on the site's delegated
+    prefix takes the /64 whose prefix id is its VLAN id**, `0` for the
+    untagged LAN: the id is a decision, written to the controller as
+    the network's `ipv6_pd_prefixid`, and the prefix is the ISP's,
+    which the `physical` run reads off the device (§4.2). The cluster
+    network's id is its VLAN id, 7, declared on the network this
+    program creates. The console's three networks are not declared
+    here, and hold the ids the firmware chose for them, 0, 1 and 2. The
+    `lan` pool's 192.168.71.0/24 is no VLAN and never becomes a network
+    object (§4.1); it is numbered next to the VLAN it is announced
+    from, which keeps the pair legible at a glance.
 -   **nspawn container services**, one **machine** each: caddy, AdGuard
     ×2 (alice/bob), and the **ZeroTier member container** (§2) as the
     fourth. A pin is a whole image reference,
@@ -1101,7 +1114,7 @@ each sits where the fact it compares against is declared:
 
 | Piece | Lives in | Runs | Compares the device against |
 | --- | --- | --- | --- |
-| `gateway-health` | this repository, rendered onto the device as `/data/custom/bin/gateway-health` | on demand, over the homelab host's SSH | what `Gateway` declares: its machines and the bridge each attaches to, the units the persistence layer delivers, the BGP daemon's hold on the declared peer, the offline package cache, the base the program is written for, and what `networkd` is told |
+| `gateway-health` | this repository, rendered onto the device as `/data/custom/bin/gateway-health` | on demand, over the homelab host's SSH | what `Gateway` declares: its machines and the bridge each attaches to, the units the persistence layer delivers, the BGP daemon's hold on the declared peer, each declared network's /64 of the delegated prefix and the PD lease's line for it, the offline package cache, the base the program is written for, and what `networkd` is told |
 | `check-gateway` | homelab-ops, behind a yadm timer on the homelab host | daily | `gateway-health`'s verdict, the proxy's certificates as a LAN host sees them, and how fresh the copies of the backups are; it mails each finding with its playbook |
 | `gateway-backup-pull` | homelab-ops, behind a yadm timer on the homelab host | weekly | nothing: it copies the controller's autobackups into `~/.config/gw-backups`, and the resolvers' configuration until [sources-of-truth.md](../sources-of-truth.md) R2 flips |
 
@@ -1247,6 +1260,26 @@ What it reads:
     `vb-adguard-alice` is one such name. The finding quotes the name the
     device gives the port. A machine that is not running is reading 1's
     finding, and its port is not read.
+9.  **Every declared network holds its /64 of the delegated prefix**,
+    read two ways for each network this program declares on the prefix
+    (`NETWORK_BRIDGES`; today the cluster network, on `br7`). The /64 is
+    rendered in: the prefix the last `physical` run read, at the
+    network's id (§1).
+    -   *the bridge*: `ip -6 -o addr show dev <bridge> scope global`
+        holds the gateway's address on that /64, its first address,
+        which is where the firmware puts the gateway on every bridge
+        the prefix numbers. A bridge that holds another is the finding
+        "The site's delegated prefix rotated", quoting what the bridge
+        holds. This one reads the kernel, and stays when the lease
+        read below goes.
+    -   *the lease*: while the bridge holds its /64, the line of
+        `/data/udapi-config/pd.leases` for the bridge on `eth8` names
+        that /64, with six fields and integer lifetimes, which is the
+        shape the `physical` run's read of the lease knows. A file
+        missing, a line missing, and a line of another shape or another
+        /64 are each the finding "The PD lease no longer reads as
+        declared", quoting the line. This reading belongs to the lease
+        read's layer (§4.2) and leaves with it.
 
 `gateway-health --certificates` reads nothing, and prints one line per
 certificate the declared proxy obtains: the proxy's address and one
@@ -2465,9 +2498,8 @@ by reaching it before the window rather than derived here
 The ceremony is four steps, and each of them applies. Step 1 is the
 window's targeted run and then the rest of the stack less the overlay's
 network and members, and neither writes to Central; step 2 creates the
-gateway's member and nothing else; step 3 converges the network and
-applies again with the worker's address; step 4 applies over the
-overlay.
+gateway's member and nothing else; step 3 converges the network; step
+4 applies over the overlay.
 
 1.  **Set `gatewayBootstrapHost`, then `physical` up, the overlay's
     network and members left out.** The push goes
@@ -2484,15 +2516,8 @@ overlay.
     follows once the window has closed, with the overlay's network and
     every member excluded until step 3 (gateway-cutover.md §4 step 3,
     then §5 step 5). Why it is split that way is below. Step 2 needs
-    only the window's run; step 3 needs both, because the address it
-    reads is formed by a machine the second one boots. `workerGua`
-    is unset here and optional to `physical` for that reason: the
-    address it carries is formed by the worker off this apply's own
-    router advertisement, so the pinhole waits for step 3 (§4.2). The
-    stack exports it as `worker_gua`, absent until it is set, and
-    `k8s-base` and `apps` stop at their read of it while it is, so
-    their first runs come after step 3
-    ([bring-up.md](bring-up.md) stage 2 before stage 5).
+    only the window's run; step 3 needs both, because its converge
+    follows step 5's first run.
 
     What each of the two runs does to the overlay network:
 
@@ -2596,8 +2621,7 @@ overlay.
     the flow rules that confine the CI identities to it. The stop has no
     way back to walk, because nothing routes through the member until a
     device opens the tunnel.
-3.  **Converge the network, then read the worker's GUA and apply again,
-    knob still set.**
+3.  **Converge the network, knob still set.**
 
     **The run with no targets converges the network, and is read before
     it is run.** It runs once step 5's first run and step 2 of this
@@ -2689,43 +2713,6 @@ overlay.
     The default route is written by this run. Each personal device's
     setting is read before it (§2.2), because a device left opted in
     takes the route the moment Central holds it.
-
-    Then **read the worker's GUA off the VLAN-7 advertisement** — the
-    address it formed by SLAAC once step 1 declared the network and
-    booted it — into `workerGua`, and **apply again, knob still
-    set.** The worker is a Talos node and has no shell, so the address
-    is read over the machine API. `talosctl` reads its credential
-    from a file rather than from the export, so step 1's export is
-    written out first — it is a cluster-admin credential, so it is
-    written where the operator keeps such things and not left in a
-    working directory. The export is read from the root of the checkout
-    that holds `.credentials/`, under `physical`'s own passphrase, with
-    the stack passphrase `mise.toml` hands every run taken out
-    (credentials.md §4.4):
-
-    ```sh
-    mkdir -p ~/.talos
-    (umask 077; mise x -- env -u PULUMI_CONFIG_PASSPHRASE \
-        PULUMI_CONFIG_PASSPHRASE_FILE=.credentials/physical.passphrase \
-        pulumi stack output talosconfig --show-secrets --stack physical > ~/.talos/kluster)
-    talosctl --talosconfig ~/.talos/kluster -n 192.168.70.10 get addresses
-    ```
-
-    The value is the address out of the site's delegated prefix — one
-    beginning with `2` or `3` — **on the link that carries
-    `192.168.70.10`**, which is the row to find first, because that
-    listing covers every link the node has. Two families of decoy sit
-    in it: an `fe80::` link-local on each link, and the `fd`-prefixed
-    unique-local address KubeSpan gives the node on its own interface.
-    The VLAN advertises the delegated prefix and nothing else
-    (`ipv6_ra_enable`, `ipv6_interface_type='pd'` on the network this
-    same declaration creates), so on that link there is exactly one
-    candidate. A worker with none there has seen no advertisement,
-    which is a fault to chase rather than something to wait for.
-
-    That apply declares the inbound-v6 pinhole (§4.2) for the first
-    time. The read and the apply are one step because the apply exists
-    to carry what was read.
 4.  **Unset the knob and apply once more.** Every client is back on the
     overlay address, so this run dials over the overlay — which is the
     verification rather than a formality: it rewrites the services through
@@ -3133,6 +3120,48 @@ command runs on the device unless the entry says otherwise.
     -   **Then the declaration moves**: `DEVICE_BASE` in
         `kluster.components.gateway` takes what the device reads, and
         the `physical` push that delivers it clears the finding.
+
+    A firmware update that moves the base can move the PD lease's
+    format too, which no reading of the base covers: re-read
+    `/data/udapi-config/pd.leases` against the shape §4.2 records, and
+    look again for a controller field that carries the held delegated
+    prefix with its length, which is the condition for removing the
+    lease read.
+-   **The site's delegated prefix rotated** — trigger: `gateway-health`
+    reports a bridge that does not hold the gateway's address on its
+    declared /64 (§1.6), or a `physical` plan whose diff is confined to
+    the read of the prefix and what derives from it. Read the bridge's
+    line in `/data/udapi-config/pd.leases`, which tells the two causes
+    apart:
+    -   **The lease names a new prefix**: the ISP moved it. The firmware
+        has renumbered every network; the pinhole, the `worker_gua`
+        export, the worker's pool and the peer Service still name the
+        old address, and inbound IPv6 to the worker is down until they
+        move. Dispatch the deploy chain and approve `up-physical`; the
+        chain's `up-k8s-base` and `up-apps` follow in the same run. From
+        a workstation it is an `up` of `physical`, then of `k8s-base`,
+        then of `apps`.
+    -   **The lease names the old prefix at another id**: the firmware
+        did not honor the network's declared id. Read the network's
+        `ipv6_pd_prefixid` in `rest/networkconf`: an id that reads as
+        declared and is not held is the firmware's to answer for, and
+        the declared ids rest on it (§1). The way back for the cluster
+        network is a declaration of the id the bridge holds, applied,
+        until the cause is known; an undeclared id is not a way back,
+        since every write through the pinned provider leaves the id to
+        the firmware.
+-   **The PD lease no longer reads as declared** — trigger:
+    `gateway-health` reports the lease missing, or the bridge's line
+    missing or of another shape or /64, while the bridge holds its
+    declared /64 (§1.6); or a `physical` preview refuses at the read,
+    naming the file and the line. The read is the workaround of §4.2,
+    and its parser knows one format. Compare the file with the shape
+    §4.2 records and with the suite's copy of it
+    (`tests/data/pd.leases`); a changed format is a fix to
+    `kluster.providers.pd_lease`'s parser, with the copy replaced by
+    the new file's lines, its prefix rewritten under `2001:db8::/32`,
+    and the provider's version moved. Until it lands every `physical`
+    run stops at the read.
 -   **The firmware's policy rules exposed to removal** — trigger:
     `gateway-health` reports `ip -4 rule` holding no rule that looks up
     `main`, a link `networkd` manages, or an option of the declared
@@ -3288,6 +3317,32 @@ filipowm/unifi provider and, for each pair's order and for the site's
 BGP configuration, a dynamic resource of this repository's own (auth
 discipline: dedicated local admin + API key, throttled retries —
 declarative/physical.md §4).
+
+**Beside it, one observation that is not a controller object: the
+site's delegated prefix.** Rule 5 names an address out of it, and the
+ISP decides it and moves it, so the run reads it instead of holding it.
+The controller reports only the per-network /64s, with no field that
+carries the delegated prefix or its length; the device's DHCPv6 client
+holds both, in `/data/udapi-config/pd.leases`. So `Gateway` reads that
+file on every preview and every update, over the device's own SSH
+session with the transport's read verb alone, through
+`kluster.providers.pd_lease`, a dynamic resource that writes nothing
+and makes its observation in `check`: a prefix the ISP moved is a diff
+a plain preview shows, with no refresh. A missing file, a lease with no
+line for `eth8`, and a line of a shape the parser does not know refuse
+the run by name, with the path and the line number. The lease is
+internal to UBIOS, and its format is an observation read on UniFi OS
+6.0.17 with Network 10.6.109: one line per bridge on the prefix,
+`<wan> <bridge> <delegated prefix> <the bridge's /64> <valid>
+<preferred>`, single spaces, the lifetimes absolute expiries in
+milliseconds. The read is a workaround layer that comes out whole once
+a controller field carries the held prefix with its length
+(declarative/physical.md §6). What leaves it is the prefix and the
+/64s the site's networks hold, and from the prefix the run derives each
+declared network's /64 at its id (§1) and the worker's GUA: the
+cluster network's /64 with the EUI-64 of the worker's MAC. An id that
+does not fit under the held prefix refuses the run, naming the
+network.
 
 **Two address populations, two control planes.** The distinction runs
 through every rule below, and the two are policed by different
@@ -3496,11 +3551,12 @@ leg itself, and the controller stores the shape with the flag off (read
     declaring it as its namespace's reach
     (declarative/workloads.md §1, cluster-infra.md §2). Narrowing it
     here would move that decision behind a gateway credential. One
-    destination stays open that no declaration can close: a home
-    machine's global IPv6 address, out of the delegated prefix the ISP
-    assigns and rotates, which a pod on the worker reaches over this
-    allow on any port. A pod on a cloud node reaches the same address
-    only as the internet does.
+    destination stays open: a home machine's global IPv6 address, out
+    of the delegated prefix the ISP assigns and rotates, which a pod on
+    the worker reaches over this allow on any port. The `physical` run
+    reads that prefix, but the application base's egress block is
+    declared in `k8s-base` and names no part of it. A pod on a cloud
+    node reaches the same address only as the internet does.
 4.  **Internal → cluster zone: return traffic, then the IoT VLAN
     dropped, then allow.** The allow gives the trusted VLANs the reach
     they have to every host of the Internal zone — debugging straight
@@ -3537,27 +3593,18 @@ leg itself, and the controller stores the shape with the flag off (read
     `conventions.routes.SiteForward`). Constraint on record: the
     zone-policy API matches
     literal IPs only (no prefix-relative objects), so the rule
-    embeds the current GUA and is **re-declared when the dynamic
-    home prefix rotates**; a stale rule degrades to the accepted
+    names the GUA the run derives from the prefix it read (above):
+    the address the worker forms by SLAAC on the cluster network's
+    /64, the EUI-64 of its MAC. It is declared from the first apply,
+    and **re-declared by the run that reads a new prefix**; until that
+    run is applied the rule is stale, which degrades to the accepted
     outbound-only-v6 stage (inbound v4 unaffected) — annoying, not
-    urgent. The same address is the IPv6 member of the cluster's
-    `worker` pool in `k8s-base` and the address the peer port's Service
-    asks for in `apps` (rfc-008 §4.1), so a rotation is re-declared in
-    three stacks, in order: `physical`, then `k8s-base`, then `apps`.
-
-    **The address is configuration, and `workerGua` is optional** —
-    the one conditional *policy* of the census. The GUA is a SLAAC
-    address the worker forms from what the VLAN declared here
-    advertises, so it comes into being one boot *after* the apply
-    that declares the VLAN, and no first apply can be given it. With
-    the key unset this rule is not declared at all, which is the same
-    outbound-only-v6 stage a stale rule leaves behind, reached from
-    the other side and with nothing wrong pointed at; the key is
-    optional to `physical` alone, and `k8s-base` and `apps` refuse to
-    run, naming the output, while it is unset. Step 3 of the
-    bring-up ceremony (§2.5) is where it gets set. The v4 peer-port
-    forward below does not wait for it: it names an address the
-    address plan states rather than one a booted machine reports.
+    urgent. The same address is the stack's `worker_gua` export: the
+    IPv6 member of the cluster's `worker` pool in `k8s-base` and the
+    address the peer port's Service asks for in `apps` (rfc-008 §4.1),
+    so a rotation is re-declared in three stacks, in order: `physical`,
+    then `k8s-base`, then `apps`, which the deploy chain runs in that
+    order (§3, "The site's delegated prefix rotated").
 6.  **qbittorrent v4 peer-port forward** — target the worker at
     `192.168.70.10`, on the same row's port and transports as the
     pinhole, and **the only port forward on the device**. No

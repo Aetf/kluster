@@ -45,7 +45,7 @@ class PhysicalOutputs:
     private address; the balancer's IPv6 backends name the same addresses.
     """
     worker_gua: str
-    """The homelab worker's GUA, as the stack's `workerGua` configures it, and absent until that is set.
+    """The homelab worker's GUA, derived from the site's delegated prefix as the run reads it.
 
     The worker's own pool's IPv6 member, beside its IPv4, which is a
     convention (`HOMELAB_NODE_IPV4`): `k8s-base` declares the pool from it,

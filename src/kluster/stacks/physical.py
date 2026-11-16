@@ -75,20 +75,16 @@ OCI_PRIVATE_KEY = 'ociPrivateKey'
 
 #: Further stack configuration this program reads: the audience for the
 #: budget's alerts, the certificate account the gateway buys its own TLS with,
-#: the password on its BGP session, the worker's global IPv6 address once
-#: the advertisement it is formed from has been seen, and whether qbittorrent
-#: has moved onto the worker.
+#: the password on its BGP session, and whether qbittorrent has moved onto the
+#: worker.
 BUDGET_ALERT_RECIPIENTS = 'budgetAlertRecipients'
 GATEWAY_ACME_TOKEN = 'gatewayAcmeToken'
 GATEWAY_BGP_PASSWORD = 'gatewayBgpPassword'
-WORKER_GUA = 'workerGua'
 QBITTORRENT_ON_WORKER = 'qbittorrentOnWorker'
 
 #: The first-bring-up knob: a LAN address for the gateway, set only while the
 #: ceremony brings it onto the overlay. Absent — the steady state — every client
-#: of the gateway derives its address from `conventions.overlay.UDM`. One of the
-#: optional keys, and `workerGua` is its mirror image: this one is set only
-#: during the ceremony, `workerGua` only after it.
+#: of the gateway derives its address from `conventions.overlay.UDM`.
 GATEWAY_BOOTSTRAP_HOST = 'gatewayBootstrapHost'
 
 
@@ -396,10 +392,9 @@ async def main() -> None:
     # components, because the overlay is a network several machines belong to
     # and the gateway is one of them: what may join and what the rules are is
     # not the gateway's business (rfc-002 §6). The gateway's own outputs are on
-    # the device, so nothing downstream reads a handle to it. The worker's
-    # global address is read once, here, because it is exported too.
-    worker_gua = config.get(WORKER_GUA)
-    _ = _gateway(config, worker_gua=worker_gua)
+    # the device, apart from the worker's global address, which derives from
+    # the delegated prefix the gateway reads and is exported below.
+    gateway = _gateway(config)
     overlay = Overlay(
         conventions.CLUSTER_NAME,
         network_id=conventions.overlay.NETWORK_ID,
@@ -465,11 +460,13 @@ async def main() -> None:
     # addresses, the `internet` pool's members, which `k8s-base` builds the
     # pool from (rfc-007 §4.4).
     pulumi.export(outputs.node_guas, nodes.guas)
-    # The worker's GUA, as configured, and `None` until the bring-up sets it:
-    # beside its IPv4, which is a convention, the worker's own pool in
-    # `k8s-base` and the address a `SiteForward` port's Service asks for in
-    # `apps` (rfc-008 §4.1). Each reader refuses an absent value by name.
-    pulumi.export(outputs.worker_gua, worker_gua)
+    # The worker's GUA, derived from the delegated prefix this run read: beside
+    # its IPv4, which is a convention, the worker's own pool in `k8s-base` and
+    # the address a `SiteForward` port's Service asks for in `apps` (rfc-008
+    # §4.1). A run that reads a new prefix exports the new address, and the
+    # readers follow in the same deploy chain. Each reader refuses an absent
+    # value by name.
+    pulumi.export(outputs.worker_gua, gateway.worker_gua)
 
     # Both are cluster-admin credentials, and both are marked secret at the
     # source; `k8s-base` and `apps` read them from here rather than from a file
@@ -502,8 +499,8 @@ async def main() -> None:
         pulumi.export(output, pulumi.Output.secret(overlay.identities[member].private_key))
 
 
-def _gateway(config: pulumi.Config, *, worker_gua: str | None) -> Gateway:
-    """The device and the controller behind it, from the four values it is told.
+def _gateway(config: pulumi.Config) -> Gateway:
+    """The device and the controller behind it, from what the stack configuration tells it.
 
     Three credentials authorize three different things — the device's own
     desired state over SSH, the controller's firewall over its API, the
@@ -519,10 +516,8 @@ def _gateway(config: pulumi.Config, *, worker_gua: str | None) -> Gateway:
     `gatewayPrivateKey` is read there and by nothing else (framework/pulumi.md
     §5.2).
 
-    What is left is a knob and two secrets a file's content is rendered from,
-    beside one measurement, `worker_gua`, which the program reads and hands in
-    because it exports it as well. Where the device answers and which key it must present are
-    not among them: the pin is a decision and lives in `conventions`, and the
+    What is left is a knob and two secrets a file's content is rendered from.
+    Where the device answers and which key it must present are not among them: the pin is a decision and lives in `conventions`, and the
     address derives from the roster unless the ceremony below overrides it.
 
     **`gatewayBootstrapHost` is the first-bring-up knob**, and it answers one
@@ -599,15 +594,6 @@ def _gateway(config: pulumi.Config, *, worker_gua: str | None) -> Gateway:
         ),
         site=conventions.gateway.UNIFI_SITE,
         static_hosts=GATEWAY_STATIC_HOSTS,
-        # Optional, and absent on the first apply of all: the worker's global
-        # address is a SLAAC address formed from the router advertisement of
-        # the VLAN this same call declares, so it comes into being one boot
-        # after this run rather than before it. Absent, the pinhole is not
-        # declared and the worker's IPv6 is outbound-only — the degraded stage
-        # the design already accepts (physical/gateway.md §4.2) — and the
-        # bring-up ceremony sets the key once the address can be read off the
-        # advertisement (physical/gateway.md §2.5).
-        worker_gua=worker_gua,
         # Optional, and absent until qbittorrent's own migration wave: the
         # legacy qbittorrent on the homelab host holds the peer port's WAN
         # side until then, by a UPnP lease or a rule kept by hand, and the

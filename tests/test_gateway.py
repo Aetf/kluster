@@ -14,14 +14,16 @@ from __future__ import annotations
 
 import os
 import re
+from ipaddress import IPv6Network
 from pathlib import Path
+from typing import Any, override
 
 import device_shell
 import process_sessions
 import pulumi
 import pytest
 import pytest_asyncio
-from device_places import DEVICE_ARTIFACT, DEVICE_FILE
+from device_places import DEVICE_ARTIFACT, DEVICE_FILE, stated_type
 from fake_systemd import FakeSystemd
 from mock_monitor import declaring, run_under_backstop
 from unifi_controller import Controller
@@ -30,15 +32,21 @@ from kluster import conventions
 from kluster.components.gateway import (
     BACKUP_PULL_PACKAGES,
     HEALTH_PROGRAM,
+    NETWORK_BRIDGES,
     PLAYBOOKS,
     Gateway,
+    PrefixIdRefused,
     access,
     container,
+    declared_subnet,
+    gateway_address,
     nspawn,
     persistence,
     routing,
     unifi,
 )
+from kluster.components.gateway.prefix import WAN_INTERFACE
+from kluster.providers import pd_lease
 
 NAME = 'kluster'
 HOST = 'gateway.invalid'
@@ -51,15 +59,33 @@ ACME_TOKEN = 'a-zone-scoped-token'
 CI_KEY = access.PublicKey(name='kluster-physical', key='ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIci kluster-physical@gw')
 DIGEST = f'sha256:{"e" * 64}'
 
+#: The lease as the gateway held it, its prefix rewritten under the
+#: documentation prefix (`tests/data/pd.leases`), and what the read reports of it.
+LEASE = pd_lease.parse((Path(__file__).parent / 'data' / 'pd.leases').read_text(), WAN_INTERFACE)
+PREFIX_READ = stated_type(pd_lease.DelegatedPrefixLease)
+
+
+class Site(Controller):
+    """The controller's stand-in, and the device's lease as the read reports it: what `check` adds to its inputs."""
+
+    @override
+    def computed(self, args: pulumi.runtime.MockResourceArgs) -> dict[str, Any]:
+        if args.typ == PREFIX_READ:
+            return {
+                pd_lease.PREFIX: str(LEASE.prefix),
+                pd_lease.SUBNETS: {bridge: str(subnet) for bridge, subnet in LEASE.subnets.items()},
+            }
+        return super().computed(args)
+
 
 def pin(service: conventions.gateway.ContainerService) -> container.Rootfs:
     return container.Rootfs(repository=f'registry.invalid/installation/{service.artifact}', tag='7', digest=DIGEST)
 
 
 @pytest_asyncio.fixture(scope='module', loop_scope='module', autouse=True)
-async def monitor() -> Controller:
+async def monitor() -> Site:
     pulumi.runtime.set_all_config({f'kluster:{unifi.API_KEY}': API_KEY})
-    return await run_under_backstop(Controller(site=SITE), stack='physical')
+    return await run_under_backstop(Site(site=SITE), stack='physical')
 
 
 def declare(name: str, host: str) -> Gateway:
@@ -87,7 +113,6 @@ def declare(name: str, host: str) -> Gateway:
         ),
         keys=(CI_KEY,),
         site=SITE,
-        worker_gua=None,
         static_hosts={},
     )
 
@@ -116,6 +141,7 @@ async def test_the_machine_carrying_the_session_actuates_after_every_other_child
     # every other child contributes is read back through one resource of each.
     elsewhere = (
         gateway.persistence.units,
+        gateway.prefix_read,
         gateway.runtime.machines,
         *(workload.settings for workload in gateway.containers),
         gateway.routing.config,
@@ -351,6 +377,14 @@ def test_the_health_reading_reads_every_machine_and_every_unit_the_program_deliv
     # No routing suite answers here either, so the peer it holds the BGP daemon
     # to is reported, and it is the session's.
     assert {subject for subject, title in read if title == PLAYBOOKS.routing} == {str(conventions.HOMELAB_NODE_IPV4)}
+    # And no bridge here holds the gateway's address on the /64 the read
+    # prefix gives each declared network's id, so every declared bridge is
+    # reported, each against the address derived for it.
+    assert {subject for subject, title in read if title == PLAYBOOKS.prefix} == set(NETWORK_BRIDGES.values())
+    for network, bridge in NETWORK_BRIDGES.items():
+        subnet = declared_subnet(LEASE.prefix, network)
+        (line,) = (line for line in reading.stdout.splitlines() if line.startswith(f'{bridge}: '))
+        assert f'not {gateway_address(subnet)}/{subnet.prefixlen} ' in line, line
 
 
 @pytest.mark.asyncio
@@ -369,3 +403,46 @@ async def test_an_ipv6_host_is_bracketed_in_the_controller_url_and_an_ipv4_host_
 
     assert monitor.inputs_of('v6-firewall-unifi', 'pulumi:providers:unifi')['apiUrl'] == 'https://[2001:db8::1]'
     assert monitor.inputs_of('v4-firewall-unifi', 'pulumi:providers:unifi')['apiUrl'] == 'https://192.0.2.1'
+
+
+@pytest.mark.asyncio
+async def test_the_worker_address_derives_from_the_read_prefix_and_the_pinhole_names_it(gateway: Gateway) -> None:
+    """The cluster network's /64 is the read prefix at its id, the worker's address is that /64 and its MAC's EUI-64.
+
+    Under the recorded lease, read while the cluster network held id 3, the
+    declared id 7 gives `2001:db8:83:1717::/64`, so the worker's address is
+    the one below, and the firewall's pinhole and the component's output are
+    that one address.
+    """
+    worker = await gateway.worker_gua.future()
+    pinhole = await gateway.firewall.policies['peer-v6'].destination.future()
+
+    assert worker == '2001:db8:83:1717:5054:ff:fe07:a'
+    assert pinhole is not None
+    assert pinhole.ips == [worker]
+    assert await gateway.delegated_prefix.future() == str(LEASE.prefix)
+    assert await gateway.held_subnets.future() == sorted(str(subnet) for subnet in LEASE.subnets.values())
+
+
+@pytest.mark.asyncio
+async def test_the_read_runs_over_the_devices_own_session_on_the_wan(gateway: Gateway, monitor: Controller) -> None:
+    """The read dials the device the other device resources dial, with the same pin, on the WAN the prefix is on."""
+    read = monitor.inputs_of(f'{NAME}-prefix', PREFIX_READ)
+    health = monitor.inputs_of(f'{NAME}-bin-{HEALTH_PROGRAM}', DEVICE_FILE)
+
+    connection = ('host', 'port', 'username', 'host_key')
+    assert {key: read[key] for key in connection} == {key: health[key] for key in connection}
+    assert read['wan'] == WAN_INTERFACE
+
+
+def test_a_declared_id_the_held_prefix_cannot_hold_is_refused_naming_the_network() -> None:
+    """A delegation too short for a declared id stops the run at the read, naming the network, rather than wrapping.
+
+    The site's ids all fit under the /60 the ISP delegates; a /62 holds ids 0
+    to 3, so the cluster network's 7 has no /64 there.
+    """
+    held = IPv6Network('2001:db8:83:1710::/62')
+
+    with pytest.raises(PrefixIdRefused, match=f'the {conventions.CLUSTER_VLAN.name} network'):
+        _ = declared_subnet(held, conventions.CLUSTER_VLAN)
+    assert declared_subnet(held, conventions.SERVER_LAN) == IPv6Network('2001:db8:83:1710::/64')

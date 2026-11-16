@@ -181,6 +181,63 @@ def test_an_identifier_completes_only_a_64() -> None:
             _ = conventions.eui64_address(IPv6Network(prefix), '52:54:00:12:34:56')
 
 
+@pytest.mark.parametrize(
+    ('prefix', 'subnet_id', 'subnet'),
+    [
+        # The site's delegation, rewritten under the documentation prefix: a
+        # /60, whose ids are the hex digit after its last full hextet.
+        pytest.param('2001:db8:83:1710::/60', 7, '2001:db8:83:1717::/64', id='inside-a-60'),
+        pytest.param('2001:db8:83:1710::/60', 0xF, '2001:db8:83:171f::/64', id='the-last-of-a-60'),
+        # A /48 numbers the whole fourth hextet.
+        pytest.param('2001:db8:83::/48', 0x1A2B, '2001:db8:83:1a2b::/64', id='inside-a-48'),
+        pytest.param('2001:db8:83:1717::/64', 0, '2001:db8:83:1717::/64', id='a-64-holds-itself'),
+    ],
+)
+def test_a_delegated_subnet_is_the_prefix_with_the_id_in_the_bits_above_the_64(
+    prefix: str, subnet_id: int, subnet: str
+) -> None:
+    """The id is the network's place under the prefix, and `subnet_id` reads it back off the /64."""
+    derived = conventions.delegated_subnet(IPv6Network(prefix), subnet_id)
+
+    assert derived == IPv6Network(subnet)
+    assert conventions.subnet_id(IPv6Network(prefix), derived) == subnet_id
+
+
+@pytest.mark.parametrize(
+    ('prefix', 'subnet_id'),
+    [
+        pytest.param('2001:db8:83:1710::/60', 0x10, id='one-past-a-60'),
+        pytest.param('2001:db8:83:1710::/62', 7, id='a-vlan-id-past-a-62'),
+        pytest.param('2001:db8:83:1710::/60', -1, id='negative'),
+        pytest.param('2001:db8:83:1717::/80', 0, id='a-prefix-longer-than-a-64'),
+    ],
+)
+def test_an_id_the_prefix_cannot_hold_is_refused_rather_than_wrapped(prefix: str, subnet_id: int) -> None:
+    """An id past the prefix's room would land in a /64 outside it, or in another network's, so it is refused."""
+    with pytest.raises(ValueError, match=r'fit|longer'):
+        _ = conventions.delegated_subnet(IPv6Network(prefix), subnet_id)
+
+
+@pytest.mark.parametrize(
+    'subnet',
+    [
+        pytest.param('2001:db8:83:1727::/64', id='outside'),
+        pytest.param('2001:db8:83:1717::/80', id='not-a-64'),
+    ],
+)
+def test_the_id_of_a_subnet_outside_the_prefix_is_refused(subnet: str) -> None:
+    with pytest.raises(ValueError, match='is not a /64 under'):
+        _ = conventions.subnet_id(IPv6Network('2001:db8:83:1710::/60'), IPv6Network(subnet))
+
+
+def test_no_two_site_networks_share_a_vlan_and_so_none_shares_a_delegated_subnet() -> None:
+    """A network's prefix id is its VLAN id, so two networks on one tag would claim one /64 of the prefix."""
+    tags = [network.vlan_id for network in conventions.SITE_NETWORKS]
+    assert len(tags) == len(set(tags)), tags
+    ids = [network.prefix_id for network in conventions.SITE_NETWORKS]
+    assert len(ids) == len(set(ids)), ids
+
+
 def test_a_site_hosts_ula_is_the_one_its_interface_forms_from_its_mac() -> None:
     """The ULA is derived from the network and the MAC, so the two cannot be declared apart."""
     host = conventions.SiteHost(

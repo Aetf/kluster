@@ -4,7 +4,9 @@
 # The device read against what the physical stack declares for it: every
 # declared machine running, every machine on a bridge attached to it, every
 # unit the persistence layer delivers enabled
-# and active, the BGP daemon holding the declared peer, the overlay member online, an offline
+# and active, the BGP daemon holding the declared peer, every network on the
+# site's delegated prefix on the /64 the declaration derives for it, the PD
+# lease naming that /64, the overlay member online, an offline
 # package cache that would carry an offline boot, the base under the firmware
 # being the one the program is written for, and systemd-networkd kept from the
 # firmware's policy routing. Nothing on the device
@@ -15,7 +17,8 @@
 # runs in its --check mode, which writes nothing, the overlay member is read
 # with `zerotier-cli info` in its machine's mount namespace, a machine's port with
 # `ip link show` in its machine's network namespace and in the device's, the
-# BGP daemon with `vtysh -c 'show bgp neighbors <peer> json'`, and networkd's
+# BGP daemon with `vtysh -c 'show bgp neighbors <peer> json'`, a bridge's
+# addresses with `ip -6 -o addr show`, the PD lease with `awk`, and networkd's
 # state with `ip rule show`, `networkctl list` and `systemd-analyze cat-config`.
 #
 # A healthy device gives no output and exit status 0. Otherwise it prints one
@@ -234,6 +237,48 @@ else
         esac
     fi
 fi
+
+# Every network on the site's delegated prefix, by its bridge: the bridge holds
+# the gateway's address on the /64 the declaration derives from the prefix the
+# last run read, at the network's id. A bridge that holds another is a prefix
+# the ISP moved since that run, or an id the firmware did not honor; the
+# lease, which the finding's playbook reads, tells the two apart. While the
+# bridge holds it, the PD lease's line for the bridge on the WAN names the
+# same /64 in the shape the program's read knows, six fields with integer
+# lifetimes: a lease that does not is a format the program's read would
+# refuse, read here first.
+delegation() {
+    bridge=$1
+    address=$2
+    subnet=$3
+    apart ip -6 -o addr show dev "$bridge" scope global
+    if ! printf '%s\n' "$out" | awk -v want="$address" '
+        { for (i = 1; i < NF; i++) if ($i == "inet6" && $(i + 1) == want) found = 1 }
+        END { exit !found }'; then
+        held=$(printf '%s\n' "$out" | awk '{ for (i = 1; i < NF; i++) if ($i == "inet6") print $(i + 1) }' | oneline)
+        if [ -z "$held" ]; then
+            said=$(printf '%s\n' "$err" | oneline)
+            held="no global address${said:+ ($said)}"
+        fi
+        finding "$bridge" "holds $held, not $address" {{ playbooks.prefix }}
+        return 0
+    fi
+    if [ ! -f {{ pd_leases }} ]; then
+        finding "$bridge" {{ pd_leases }}" is missing" {{ playbooks.lease }}
+        return 0
+    fi
+    line=$(awk -v wan={{ pd_wan }} -v bridge="$bridge" '$1 == wan && $2 == bridge { print; exit }' {{ pd_leases }} | oneline)
+    if [ -z "$line" ]; then
+        finding "$bridge" {{ pd_leases }}" holds no line for it on "{{ pd_wan }} {{ playbooks.lease }}
+    elif ! printf '%s\n' "$line" | awk -v want="$subnet" '
+        NF == 6 && $4 == want && $5 ~ /^[0-9]+$/ && $6 ~ /^[0-9]+$/ { found = 1 }
+        END { exit !found }'; then
+        finding "$bridge" {{ pd_leases }}" reads '$line', not $subnet" {{ playbooks.lease }}
+    fi
+}
+{% for delegation in delegations %}
+delegation {{ delegation }}
+{%- endfor %}
 
 # networkd and the firmware's policy routing, read three ways. networkd under
 # its defaults removes every policy rule it did not create from a link it

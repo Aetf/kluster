@@ -8,14 +8,16 @@ with the release a case sets. `machinectl`, which names a running machine's
 leader, `nsenter`, which runs `zerotier-cli info` in the overlay member's
 leader's mount namespace and `ip -o link show host0` in a bridged machine's
 leader's network namespace, the package script, whose `--check` the reading
-relays, `ip`, which lists the policy rules and the device's links, and
+relays, `ip`, which lists the policy rules, the device's links and a bridge's
+global addresses, and
 `vtysh`, which answers for the routing session's peer with what the BGP daemon
 was recorded answering, are stand-ins that answer what a case sets and record
 what they were asked.
 `networkctl` and `systemd-analyze` are the stand-in systemd's own: the links it
 reports are the ones a case set, and the configuration it assembles is the
 files under the stand-in's tree. The base is read under that tree too: its
-`/etc/debian_version` and its `/bin/sh` are files there.
+`/etc/debian_version` and its `/bin/sh` are files there, and so is the PD
+lease.
 
 What it reads it reads against the declaration, so the wiring of the
 declaration into the program -- which machines, which units -- is
@@ -30,6 +32,7 @@ import os
 import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
+from ipaddress import IPv6Network
 from pathlib import Path
 
 import device_shell
@@ -41,6 +44,8 @@ from gateway_services import caddy, pin
 from kluster import conventions
 from kluster.components import gateway
 from kluster.components.gateway import container, nspawn, persistence
+from kluster.components.gateway.prefix import WAN_INTERFACE
+from kluster.providers import pd_lease
 
 #: What the BGP daemon answers `vtysh -c 'show bgp neighbors <peer> json'` with for
 #: the session's peer, as the gateway answered it with the controller's
@@ -102,6 +107,49 @@ PORT = 'vb-caddy'
 #: The longest name a network interface may have (IFNAMSIZ less its terminator).
 IFNAME_MAX = 15
 
+#: The lease the read last reported: the gateway's, recorded with its prefix
+#: rewritten under the documentation prefix, while the cluster network held id 3.
+RECORDED_LEASE = (Path(__file__).parent / 'data' / 'pd.leases').read_text()
+HELD_PREFIX = pd_lease.parse(RECORDED_LEASE, WAN_INTERFACE).prefix
+
+#: Each declared network's bridge, and the /64 the declaration derives for it
+#: from that prefix at the network's id.
+DELEGATED = {
+    bridge: gateway.declared_subnet(HELD_PREFIX, network) for network, bridge in gateway.NETWORK_BRIDGES.items()
+}
+
+#: The cluster network's bridge.
+BRIDGE = gateway.NETWORK_BRIDGES[conventions.CLUSTER_VLAN]
+
+
+def _renumbered(lease: str, subnets: Mapping[str, IPv6Network]) -> str:
+    """`lease` with each line for one of `subnets`' bridges naming that bridge's /64 instead, as the gateway writes it."""
+    lines: list[str] = []
+    for line in lease.splitlines():
+        fields = line.split(' ')
+        if fields[1] in subnets:
+            fields[3] = str(subnets[fields[1]])
+        lines.append(' '.join(fields))
+    return ''.join(f'{line}\n' for line in lines)
+
+
+#: The lease once every declared network holds its declared /64.
+LEASE = _renumbered(RECORDED_LEASE, DELEGATED)
+
+
+def _addresses(bridge: str, *held: str) -> str:
+    """What `ip -6 -o addr show dev <bridge> scope global` prints for addresses `held`, one line each, as UBIOS holds them."""
+    return ''.join(
+        f'9: {bridge}    inet6 {address} scope global dynamic noprefixroute \\       '
+        'valid_lft 86313sec preferred_lft 14313sec\n'
+        for address in held
+    )
+
+
+def _holding(bridge: str, subnet: IPv6Network) -> str:
+    """A bridge's global addresses while it holds `subnet`: the gateway's address there, beside its ULA."""
+    return _addresses(bridge, f'{gateway.gateway_address(subnet)}/{subnet.prefixlen}', 'fd1a:665f:8bcb:70::1/64')
+
 
 def port_name(machine: str) -> str:
     """The host end of a bridged machine's pair, named the way nspawn names it.
@@ -162,6 +210,11 @@ class _Device:
     links: Path
     #: Present, `ip -o link show` on the device fails with what it holds.
     links_fail: Path
+    #: What `ip -6 -o addr show dev <bridge> scope global` prints, one file per
+    #: bridge; a bridge with no file is one the device does not have.
+    addresses: Path
+    #: The PD lease, where the device keeps it under the stand-in's tree.
+    leases: Path
     #: What `ip -o link show host0` prints in each leader's network namespace, one file per leader, and
     #: beside each a `<leader>.warn` it writes to stderr first, where a case sets one.
     netns: Path
@@ -247,6 +300,8 @@ def _device(tmp_path: Path, *, legacy: tuple[conventions.gateway.LegacyVhost, ..
         root / 'rules',
         root / 'netns',
         root / 'gone',
+        root / 'addresses',
+        root / pd_lease.LEASES.lstrip('/').rpartition('/')[0],
         etc_networkd,
     ):
         directory.mkdir(parents=True)
@@ -269,6 +324,8 @@ def _device(tmp_path: Path, *, legacy: tuple[conventions.gateway.LegacyVhost, ..
         },
         links=root / 'links',
         links_fail=root / 'links-fail',
+        addresses=root / 'addresses',
+        leases=root / pd_lease.LEASES.lstrip('/'),
         netns=root / 'netns',
         gone=root / 'gone',
         machinectl_calls=logs / 'machinectl',
@@ -349,17 +406,26 @@ def _device(tmp_path: Path, *, legacy: tuple[conventions.gateway.LegacyVhost, ..
     )
     _ = device.member.write_text(ONLINE)
     # `ip -<family> rule show`, which prints the rules a case set for that
-    # family, and `ip -o link show`, which prints the device's links; nothing
-    # else is modeled.
+    # family, `ip -o link show`, which prints the device's links, and
+    # `ip -6 -o addr show dev <bridge> scope global`, which prints the
+    # bridge's addresses a case set, or what `ip` says of a device it does not
+    # have; nothing else is modeled.
     _stub(
         tools / 'ip',
         f'echo "$*" >>{device.ip_calls}\n'
         'case "$*" in\n'
         f'-?" rule show") cat {device.rules}/"${{1#-}}" ;;\n'
         f'"-o link show") [ ! -e {device.links_fail} ] || {{ cat {device.links_fail} >&2; exit 1; }}; cat {device.links} ;;\n'
-        '*) echo "stand-in ip: modeled for -<family> rule show and -o link show only, not $*" >&2; exit 1 ;;\n'
+        '"-6 -o addr show dev "*" scope global")\n'
+        f'    [ -e {device.addresses}/"$6" ] || {{ echo "Device \\"$6\\" does not exist." >&2; exit 1; }}\n'
+        f'    cat {device.addresses}/"$6" ;;\n'
+        '*) echo "stand-in ip: modeled for -<family> rule show, -o link show and -6 -o addr show only, not $*" >&2\n'
+        '    exit 1 ;;\n'
         'esac\n',
     )
+    for bridge, subnet in DELEGATED.items():
+        _ = (device.addresses / bridge).write_text(_holding(bridge, subnet))
+    _ = device.leases.write_text(LEASE)
     # `vtysh -c 'show bgp neighbors <peer> json'`, which prints what the case
     # set, or fails with what it set; nothing else is modeled.
     _stub(
@@ -401,6 +467,7 @@ def _device(tmp_path: Path, *, legacy: tuple[conventions.gateway.LegacyVhost, ..
             resolvers=RESOLVERS,
             overlay_daemon=OVERLAY,
             peer=PEER,
+            delegated=DELEGATED,
             packages_script=str(packages),
             root=str(root),
         )
@@ -567,6 +634,48 @@ def _turn_an_option_back_on_in_a_later_drop_in(device: _Device) -> None:
     _ = (device.etc_networkd / later).write_text(f'[{nspawn.NETWORKD_SECTION}]\n{GUARDED}=yes\n')
 
 
+#: The /64 the cluster network held when the lease was recorded, at id 3: the
+#: one a bridge keeps when the firmware does not honor the declared id.
+RECORDED_SUBNET = pd_lease.parse(RECORDED_LEASE, WAN_INTERFACE).subnets[BRIDGE]
+
+
+def _leave_the_bridge_on_its_old_subnet(device: _Device) -> None:
+    """The declared id written and not honored: the bridge and its lease line still at the recorded /64."""
+    _ = (device.addresses / BRIDGE).write_text(_holding(BRIDGE, RECORDED_SUBNET))
+    _ = device.leases.write_text(RECORDED_LEASE)
+
+
+def _rotate_the_prefix(device: _Device) -> None:
+    """The ISP moved the prefix since the last run: every bridge and every lease line on the new one."""
+    moved = conventions.delegated_subnet(IPv6Network('2001:db8:84:20::/60'), conventions.CLUSTER_VLAN.prefix_id)
+    _ = (device.addresses / BRIDGE).write_text(_holding(BRIDGE, moved))
+    _ = device.leases.write_text(LEASE.replace('2001:db8:83:171', '2001:db8:84:2'))
+
+
+def _take_the_bridge_away(device: _Device) -> None:
+    (device.addresses / BRIDGE).unlink()
+
+
+def _remove_the_lease(device: _Device) -> None:
+    device.leases.unlink()
+
+
+def _drop_the_bridges_lease_line(device: _Device) -> None:
+    _ = device.leases.write_text(''.join(line for line in LEASE.splitlines(keepends=True) if f' {BRIDGE} ' not in line))
+
+
+def _name_another_subnet_in_the_lease(device: _Device) -> None:
+    _ = device.leases.write_text(_renumbered(LEASE, {BRIDGE: RECORDED_SUBNET}))
+
+
+def _misshape_the_bridges_lease_line(device: _Device) -> None:
+    _ = device.leases.write_text(
+        ''.join(
+            line.rstrip('\n') + ' 0\n' if f' {BRIDGE} ' in line else line for line in LEASE.splitlines(keepends=True)
+        )
+    )
+
+
 @pytest.mark.parametrize(
     ('deviation', 'subject', 'playbook'),
     [
@@ -588,6 +697,13 @@ def _turn_an_option_back_on_in_a_later_drop_in(device: _Device) -> None:
         (_lose_the_main_rule, f'ip -{FAMILY} rule', gateway.PLAYBOOKS.networkd),
         (_let_networkd_manage_a_port, PORT, gateway.PLAYBOOKS.networkd),
         (_turn_an_option_back_on_in_a_later_drop_in, GUARDED, gateway.PLAYBOOKS.networkd),
+        (_leave_the_bridge_on_its_old_subnet, BRIDGE, gateway.PLAYBOOKS.prefix),
+        (_rotate_the_prefix, BRIDGE, gateway.PLAYBOOKS.prefix),
+        (_take_the_bridge_away, BRIDGE, gateway.PLAYBOOKS.prefix),
+        (_remove_the_lease, BRIDGE, gateway.PLAYBOOKS.lease),
+        (_drop_the_bridges_lease_line, BRIDGE, gateway.PLAYBOOKS.lease),
+        (_name_another_subnet_in_the_lease, BRIDGE, gateway.PLAYBOOKS.lease),
+        (_misshape_the_bridges_lease_line, BRIDGE, gateway.PLAYBOOKS.lease),
     ],
     ids=[
         'machine',
@@ -608,6 +724,13 @@ def _turn_an_option_back_on_in_a_later_drop_in(device: _Device) -> None:
         'no-main-rule',
         'managed-link',
         'option-on',
+        'id-not-honored',
+        'prefix-rotated',
+        'no-bridge',
+        'no-lease',
+        'no-lease-line',
+        'lease-elsewhere',
+        'lease-misshapen',
     ],
 )
 def test_each_deviation_is_exactly_one_finding_that_names_its_subject_and_its_playbook(
@@ -1052,6 +1175,8 @@ def _healthy(_: _Device) -> None:
         _turn_an_option_back_on_in_a_later_drop_in,
         _stop_the_suite,
         _peer_at_another_as,
+        _leave_the_bridge_on_its_old_subnet,
+        _name_another_subnet_in_the_lease,
     ],
 )
 def test_the_reading_writes_nothing(tmp_path: Path, deviation: Callable[[_Device], None]) -> None:
@@ -1079,11 +1204,60 @@ def test_the_reading_writes_nothing(tmp_path: Path, deviation: Callable[[_Device
         f'{gateway.ZEROTIER_CLI} info',
         'ip -o link show host0',
     }
-    assert {call.split(' ', 1)[1] for call in device.ip_calls.read_text().splitlines()} == {'rule show', 'link show'}
+    assert {call.split(' ', 1)[1] for call in device.ip_calls.read_text().splitlines()} == {
+        'rule show',
+        'link show',
+        *(f'-o addr show dev {bridge} scope global' for bridge in DELEGATED),
+    }
     assert {call.split()[0] for call in device.systemd.take_calls(NETWORKCTL)} == {'list'}
     assert {call.split()[-2] for call in device.systemd.take_calls(SYSTEMD_ANALYZE)} == {'cat-config'}
     assert set(device.vtysh_calls.read_text().splitlines()) == {f'-c show bgp neighbors {PEER} json'}
     assert (_tree(device.root), device.systemd.enabled, device.systemd.active) == before
+
+
+def test_a_bridge_off_its_declared_subnet_is_reported_with_what_it_holds(tmp_path: Path) -> None:
+    """The finding quotes the bridge's own addresses beside the declared one, which is what tells the two causes apart.
+
+    Its playbook reads the lease next: the old prefix at another id is an id
+    the firmware did not honor, a new prefix is a rotation.
+    """
+    device = _device(tmp_path)
+    _leave_the_bridge_on_its_old_subnet(device)
+    declared = DELEGATED[BRIDGE]
+
+    (finding,) = _findings(_read(device))
+
+    assert finding['state'] == (
+        f'holds {gateway.gateway_address(RECORDED_SUBNET)}/64 fd1a:665f:8bcb:70::1/64, '
+        f'not {gateway.gateway_address(declared)}/{declared.prefixlen}'
+    )
+
+
+def test_a_bridge_the_device_does_not_have_is_reported_with_what_ip_said(tmp_path: Path) -> None:
+    device = _device(tmp_path)
+    _take_the_bridge_away(device)
+
+    (finding,) = _findings(_read(device))
+
+    assert f'Device "{BRIDGE}" does not exist.' in finding['state']
+
+
+def test_a_lease_line_of_another_subnet_is_quoted_whole(tmp_path: Path) -> None:
+    device = _device(tmp_path)
+    _name_another_subnet_in_the_lease(device)
+
+    (finding,) = _findings(_read(device))
+
+    (line,) = (line for line in device.leases.read_text().splitlines() if f' {BRIDGE} ' in line)
+    assert finding['state'] == f"{device.leases} reads '{line}', not {DELEGATED[BRIDGE]}"
+
+
+def test_a_lease_renewed_with_the_same_prefix_is_no_finding(tmp_path: Path) -> None:
+    """The lifetimes move on every renewal, so the reading holds the line's shape and its /64, never its lifetimes."""
+    device = _device(tmp_path)
+    _ = device.leases.write_text(LEASE.replace('1794796588156', '1794796590000'))
+
+    assert _read(device).lines == []
 
 
 @pytest.mark.parametrize('args', [('--check',), ('--certificates', 'extra')])
