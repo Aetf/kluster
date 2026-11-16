@@ -2,7 +2,9 @@
 
 What these check is the part a chart or a controller would otherwise only tell
 us at apply time: that a chart is installed from the pin its caller resolved
-and from no other, that each webhook configuration a chart renders awaits the
+and from no other, that every chart the installation declares orders its
+render by class through the post-renderer it records, that each webhook
+configuration a chart renders awaits the
 CA bundle of every entry the API server could not yet verify, that a manifest is refused unless its bytes are the pinned
 ones, that a search through a chart's rendered set refuses to guess, that a
 SealedSecret carries its scope where the controller looks for it, that a value
@@ -27,6 +29,7 @@ from ipaddress import IPv4Address, IPv4Network, IPv6Address, IPv6Network, ip_net
 from types import MappingProxyType
 from typing import Any, cast
 
+import process_sessions
 import pulumi
 import pulumi_crds as crds
 import pulumi_kubernetes as k8s
@@ -34,10 +37,12 @@ import pytest
 import pytest_asyncio
 from k8s_base_installation import Run, applied
 from mock_monitor import Recorder, declaring, run_with, the_run_failed_with
+from ruamel.yaml import YAML
 
 from kluster import conventions
 from kluster.conventions import Transports
 from kluster.lib.config import Shape, ShapeRefused
+from kluster.lib.install_order import DEPENDS_ON
 from kluster.lib.versions import ChartPin, ManifestPin, versions
 
 DIGEST = f'sha256:{"c" * 64}'
@@ -1197,3 +1202,72 @@ def test_every_chart_the_installation_declares_awaits_its_admission_path(applied
             'jsonpath={.webhooks[0].clientConfig.caBundle}',
             'jsonpath={.webhooks[1].clientConfig.caBundle}',
         ], chart
+
+
+#: A render whose objects name no namespace: a workload, the account it runs
+#: as, and a definition with an object of its kind.
+UNPLACED_RENDER = """\
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: runner
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: runner
+spec:
+  template:
+    spec:
+      serviceAccountName: runner
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: widgets.example.com
+spec:
+  group: example.com
+  names: {kind: Widget, plural: widgets}
+  scope: Namespaced
+---
+apiVersion: example.com/v1
+kind: Widget
+metadata:
+  name: first
+"""
+
+
+def test_every_chart_the_installation_declares_orders_its_render_in_its_namespace(applied: Run) -> None:
+    """Each chart registration's own post-renderer, run as the provider runs it, orders a render by class.
+
+    The program runs whole, so a component that declares its chart some other
+    way than through `helm_chart` is caught here without being named; and the
+    namespace the references name is the one the chart is installed into.
+    """
+    charts = [request.name for request in applied.monitor.requested if request.type == CHART]
+    assert charts, 'the installation declared no chart'
+
+    for chart in charts:
+        inputs = applied.monitor.inputs_of(chart, CHART)
+        assert 'postRenderer' in inputs, f'{chart} is installed with no post-renderer'
+        renderer = inputs['postRenderer']
+        namespace = inputs['namespace']
+        filtered = process_sessions.run(
+            [renderer['command'], *renderer['args']], input=UNPLACED_RENDER.encode(), timeout=60, check=True
+        )
+        yaml = YAML(typ='safe')
+        loaded: Iterable[Any] = yaml.load_all(filtered.stdout.decode())  # pyright: ignore[reportUnknownMemberType] -- untyped stream
+        depends: dict[str, set[str]] = {}
+        for document in loaded:
+            annotations = cast('dict[str, str]', document['metadata'].get('annotations') or {})
+            depends[document['kind']] = set(annotations.get(DEPENDS_ON, '').split(',')) - {''}
+        assert depends == {
+            'ServiceAccount': set(),
+            'CustomResourceDefinition': set(),
+            'Deployment': {
+                f'/namespaces/{namespace}/ServiceAccount/runner',
+                'apiextensions.k8s.io/CustomResourceDefinition/widgets.example.com',
+            },
+            'Widget': {f'apps/namespaces/{namespace}/Deployment/runner'},
+        }, chart

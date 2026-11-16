@@ -1,7 +1,8 @@
 """Kubernetes helpers for the `k8s-base` and `apps` stacks.
 
 What both stacks need: checking the kubeconfig their Kubernetes provider is
-opened with, installing a pinned upstream chart, reaching into what one
+opened with, installing a pinned upstream chart with its objects created in
+the order they need (`kluster.lib.install_order`), reaching into what one
 rendered, creating a namespace at its Pod Security level, declaring a
 SealedSecret in the shape
 [declarative/cluster-infra.md](../../docs/declarative/cluster-infra.md) §1.1
@@ -31,6 +32,7 @@ from __future__ import annotations
 
 import fnmatch
 import json
+import sys
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -46,6 +48,7 @@ from kluster import conventions
 from kluster.conventions.cluster import POOL_WORKER, Transports
 from kluster.conventions.routes import Bare, Gate, Passthrough, Port, Proxied, Route
 from kluster.conventions.sealed import SealedValue, SealingScope
+from kluster.lib import install_order
 from kluster.lib.config import Shape, ShapeRefused, text
 from kluster.lib.secret import Secret
 from kluster.lib.versions import ChartPin
@@ -191,6 +194,16 @@ def helm_chart(
         upgrades a CRD it installed that way, so a component whose CRDs are
         declared separately sets this and keeps them upgradable.
 
+    Every chart is installed with `kluster.lib.install_order` as its Helm
+    post-renderer, so the objects it renders are created in three classes --
+    prerequisites, then what runs pods and routes API calls to them, then
+    objects of the kinds the chart defines and Services selecting pods it
+    does not run (cluster-infra.md §1.2). The post-renderer is run as
+    `sys.executable -I -m`, the interpreter this program runs under, so the
+    provider reaches it wherever the program runs (style/pulumi.md,
+    "Layering"); the chart records no inputs in the state, so the
+    interpreter's path is never a diff between checkouts.
+
     Every chart is installed with `await_admission_path` as a transform, so
     the chart is ready only once each admission webhook it renders can be
     verified by the API server (cluster-infra.md §1.2).
@@ -203,6 +216,9 @@ def helm_chart(
         repository_opts=None if pin.oci else k8s.helm.v4.RepositoryOptsArgs(repo=pin.repository),
         values=dict(values) if values is not None else None,
         skip_crds=skip_crds,
+        post_renderer=k8s.helm.v4.PostRendererArgs(
+            command=sys.executable, args=['-I', '-m', install_order.__name__, namespace]
+        ),
         opts=pulumi.ResourceOptions.merge(pulumi.ResourceOptions(transforms=[await_admission_path]), opts),
     )
 
