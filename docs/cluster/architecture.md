@@ -19,11 +19,11 @@ lock-in, and declarative management using Pulumi.
 
 ### 1.1 High-Level Design
 
--   **Cloud site (OCI, Phoenix)**: **three A1.Flex nodes (1 OCPU / 8 GB
+-   **Cloud site (OCI, Phoenix)**: **three A1.Flex nodes (2 OCPU / 8 GB
     each) forming the HA control plane** — etcd quorum stays within one
     region, so Raft never crosses the WAN — and simultaneously serving as
     the ingress/worker pool for internet-facing and stable-IP workloads
-    (hath). Sits inside the OCI free envelope today; ≤ ~$21/mo worst case
+    (hath). About $44 a month past the OCI free allowance
     (nodes.md §3.2).
 -   **Homelab site**: one large Talos **worker** VM on the physical server
     (libvirt) for internal, NAS-coupled, GPU, and bulk-egress workloads.
@@ -60,9 +60,9 @@ graph TD
   
  subgraph "Cloud Site (OCI Phoenix, one VCN)"  
  NLB(OCI Network Load Balancer <br> free; stable public v4+v6 <br> DNS anchor; source-IP preserving)  
- CP1[cp1 CP+ingress <br> 1 OCPU / 8 GB <br> hath + its dedicated VIP]  
- CP2[cp2 CP+ingress <br> 1 OCPU / 8 GB]  
- CP3[cp3 CP+ingress <br> 1 OCPU / 8 GB]  
+ CP1[cp1 CP+ingress <br> 2 OCPU / 8 GB <br> hath + its dedicated VIP]  
+ CP2[cp2 CP+ingress <br> 2 OCPU / 8 GB]  
+ CP3[cp3 CP+ingress <br> 2 OCPU / 8 GB]  
  NLB --> CP1  
  NLB --> CP2  
  NLB --> CP3  
@@ -966,7 +966,8 @@ The entire stack is deployed via Pulumi using multiple providers:
         row before it is a Service in `apps` (declarative/physical.md
         §1).
     -   Guardrails (nodes.md §3.2): compartment quotas pinning creatable
-        shapes to the free envelope + budget alerts.
+        shapes to the envelope the design is budgeted against + budget
+        alerts.
 3.  **UniFi (filipowm/unifi, bridged; decided 2026-08-23)**: firewall
     rules and the one surviving port-forward — the `lan` pool
     address-group policy (§3.4), the qbittorrent v6 pinhole (§3.5),
@@ -1296,7 +1297,7 @@ are not re-litigated from scratch. §6.5 documents the largest reversal
         outage. Cloud CP inverts this: a home outage degrades to "one
         worker NotReady" while the public face and management stay up.
     3.  The objections that killed the cloud-CP idea on 2026-08-21 fell
-        one by one: cost ($0 today, ≤~$21/mo, nodes.md §3.2), third
+        one by one: cost (about $44/mo, nodes.md §3.2), third
         provider (OCI is now *the* cloud site), tiny-VM OOM (8 GB
         dedicated-core shapes are not e2-micro), and management path
         (ZeroTier is no longer load-bearing for kubectl).

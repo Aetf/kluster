@@ -1,7 +1,7 @@
 # Day-2 Operations
 
 Who and what keeps the system current and its recovery paths proven:
-the update-ownership matrix, the upgrade and node-replacement
+the update-ownership matrix, the upgrade, node-replacement and resize
 runbooks, and the drill program with its trigger machinery. Sits at
 the docs root like [credentials.md](credentials.md) — day-2 crosses
 every layer boundary. Runbooks here follow the census discipline
@@ -198,7 +198,7 @@ from an HTTP repository, which offers nothing to check a download against
     to the API server — a provider error, not `UnusableKubeconfig`,
     which only an absent or blank copy raises — until the copy is made.
 
-## 3. Node replacement runbooks (census)
+## 3. Node replacement and resize runbooks (census)
 
 -   **§3.1 Cloud CP node.** Trigger: hardware loss, A1 reclamation,
     or deliberate rebuild. Gist: drain → `talosctl etcd
@@ -258,6 +258,103 @@ from an HTTP repository, which offers nothing to check a download against
     in the config.
 -   **§3.3 Total-cloud-loss / total-home-loss** — owned by nodes.md
     §5 (cold-standby drill, both directions).
+-   **§3.4 Cloud CP node resize.** Trigger: a merged change to
+    `conventions.NODE_OCPUS` or `NODE_MEMORY_GB`. Gist: the merge's own
+    `up-physical` is rejected at its approval; then the guardrails, then
+    one control plane at a time, each a targeted `physical up` from the
+    checkout, with etcd healthy again before the next; then a deploy
+    that finds nothing to do. Facts that shape it:
+
+    -   **A resize is an update in place that reboots the node.** The
+        pinned OCI provider marks neither `shapeConfig` nor any field in
+        it as replacing, and its Terraform upstream gives `shape_config`
+        no `ForceNew` and no `CustomizeDiff` rule
+        (`core_instance_resource.go`, at the commit pulumi-oci 5.6.0
+        bridges). The change goes out as one `UpdateInstance` call
+        carrying the new `shapeConfig`, and the provider waits on its
+        work request (`updateOptionsViaWorkRequest`). The call sets no
+        `updateOperationConstraint`, so OCI's default, `ALLOW_DOWNTIME`,
+        applies, and a running instance "is rebooted as part of the
+        change shape operation"
+        ([Changing the Shape of an Instance](https://docs.oracle.com/en-us/iaas/Content/Compute/Tasks/resizinginstances.htm)).
+        The instance keeps its addresses, its network interfaces and its
+        volume attachment. Talos boots again from STATE, and the machine
+        configuration selects its link by `physical: true` rather than
+        by name, so an interface the new shape renames changes nothing.
+    -   **Every control plane is an etcd member**, so one apply that
+        resized all three would reboot them together and lose quorum.
+        The merge's `up-physical` plans exactly that, which is why it is
+        rejected rather than approved (framework/ci.md §3). The
+        rejection stops that run's chain and sends its failure notice,
+        and it frees the `deploy` concurrency group, which holds a later
+        run queued behind a pending one.
+    -   **The quotas go first.** A resize grows the counts the
+        compartment quotas bound, and a bound written for the old size
+        can admit the first node at its new size and refuse the next.
+        Oracle documents that a shape change needs service limits for
+        the new shape and that the instance otherwise keeps its original
+        one; the tenancy's A1 core and memory limits, per AD and
+        regional, on the console's *Limits, Quotas and Usage* page, are
+        read against the new quotas before anything is applied. The
+        quota and the budget update in place.
+    -   **A1 capacity is what a reboot risks.** A running instance holds
+        its capacity; the resize asks its availability domain for the
+        larger shape and reboots, and Oracle documents no outcome for a
+        shape change that meets an AD with no A1 capacity. Its documented
+        check beforehand is a compute capacity report
+        (`CreateComputeCapacityReport`) for the shape in the node's AD, a
+        reading at one moment rather than a reservation, and nothing in
+        this repository makes that call. The standing quorum is the
+        hold: one member down leaves two, and no second node is touched
+        until the first is back.
+    -   **hath goes down with its node.** It has one instance, on the
+        node holding the dedicated VIP, and that node's reboot takes it
+        offline until the node is back.
+
+    From the root of the checkout that holds `.credentials/`, with
+    `physical` the function of declarative/physical.md §6, and `tal` and
+    `CPS` the setup of physical/gateway-cutover.md §8.1 (`tal -n "$CPS"`
+    asks every control plane):
+
+        urn() { physical stack --show-urns | sed -n "s|.*URN: \(.*[\$]$1::$2\)\$|\1|p"; }
+        Q=$(urn oci:Limits/quota:Quota kluster-quota) && B=$(urn oci:Budget/budget:Budget kluster-budget) && echo "$Q" "$B"
+        physical preview --diff --target "$Q" --target "$B"    # two updates: the quota's statements, the budget's amount
+        physical up --target "$Q" --target "$B"
+
+    Then, for each node in turn, with `<node>` its name (`cp1`), never
+    two at once:
+
+        U=$(urn oci:Core/instance:Instance kluster-<node>) && echo "$U"
+        physical preview --diff --target "$U"    # one update: shapeConfig
+        physical up --target "$U"
+        tal -n "$CPS" etcd status                # every member listed, none reporting an error
+
+    Each `echo` prints one URN; an empty line is a name that matched
+    nothing, and the command after it would target nothing. Any plan
+    other than the one in the comment is a diff nobody expected, and
+    nothing is applied until it has been read. The next node waits
+    until `etcd status` answers from every control plane, lists every
+    member and reports no error; a member still joining shows as an
+    error or a missing row, and the reading is taken again.
+
+    **A node that does not come back** — the `up` fails, the instance
+    is not `RUNNING`, or `etcd status` keeps missing its member — stops
+    the rollout where it is, with no other node touched, since quorum
+    holds at two. The instance's state and shape, in the console, say
+    which case it is. `RUNNING` at its old shape is a failed update:
+    nothing changed, `physical refresh --run-program --target "$U"`
+    brings state back to the cloud, and the node is retried later.
+    Stopped, it is started from the console. One that does not boot at
+    its new shape goes back to its original one, Oracle's instruction
+    for that case, through the console's *Edit shape*, followed by the
+    same refresh, and the resize waits for capacity. One that cannot be
+    started at all is replaced by §3.1, which creates the replacement
+    at the declared size.
+
+    Once all three are done, the deploy chain is dispatched
+    (`deploy.yml` takes `workflow_dispatch`): `plan-physical` finds no
+    diff, `up-physical` is skipped, and the chain runs on to the
+    layers the rejected run never reached.
 
 ## 4. Drill program
 

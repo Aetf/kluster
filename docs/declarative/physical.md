@@ -99,7 +99,7 @@ credential (`ci_zerotier_identity_physical`,
     factory declared for it, and for the worker's image (§3), at the end
     of its own `xz` stream. The public factory publishes no checksum for
     an artifact.
--   **Nodes**: 3× `VM.Standard.A1.Flex` (1 OCPU / 8 GB), one per
+-   **Nodes**: 3× `VM.Standard.A1.Flex` (2 OCPU / 8 GB), one per
     availability domain (fault domains only as the tiebreak, nodes.md
     §5), boot volume ~50 GB. Machine config is delivered as
     base64 `user_data` in instance metadata (the Talos `oracle` platform
@@ -183,7 +183,8 @@ credential (`ci_zerotier_identity_physical`,
     volumes and their attachments, the reserved public IP,
     `machine_secrets` — carry `protect=True` per storage.md §3.3.
 -   **Guardrails**: compartment quotas pinning creatable shapes to the
-    free envelope, plus a budget with alert rules (nodes.md §3.2).
+    envelope the design is budgeted against, plus a budget with alert
+    rules (nodes.md §3.2).
 
 ## 2. Talos day-1 (pulumiverse-talos)
 
