@@ -7,7 +7,8 @@ written where they are owned:
 [gateway-cutover.md](gateway-cutover.md),
 [gateway.md](gateway.md) §2.5,
 [credentials.md](../credentials.md) §4.1,
-[cluster/migration.md](../cluster/migration.md) §1 and
+[cluster/migration.md](../cluster/migration.md) §1,
+[operations.md](../operations.md) §3.5 and
 [rfc-007](../rfc/rfc-007-k8s-base-and-apps.md) §14. This document repeats
 none of their commands. It is what none of them is: the sequence.
 
@@ -63,7 +64,8 @@ a step that needs one.
 | 3 | **Readings with no network plugin**: gateway-cutover.md §8.1, the device half of gateway.md §2.4.2, the node volume's size in bytes, and the home uplink's MTU, read off the gateway's WAN interface | operator, dispatcher records | stage 2 | each item's own; at a decimal GB the volume's row grows, and under 1500 `KUBESPAN_MTU` follows the uplink | A failing item is fixed on the empty cluster, and costs only time |
 | 4 | **One sitting**: the `dns` first `up` (gateway-cutover.md §8.2), the identity sync and `deploy.yml` enabled (gateway-cutover.md §8.3), and at once `credentials derived sync --only kubeconfig` with both stack files committed | operator | stage 3 | the readings of gateway-cutover.md §8.2 and §8.3, and the copy in both stack files | Each has its way back in gateway-cutover.md §8.2 and §8.3. Disabling `deploy.yml` stops the chain, and undoes no write already made |
 | 5 | **The first `k8s-base` and `apps` runs**, which merging stage 4's commit starts | chain, dispatcher reads | stage 4 | `up-k8s-base` green, every node `Ready`, no `kube-proxy` DaemonSet, the sealing certificate answering, and the host's available memory read with the worker running | Fix forward in a pull request; the chain runs it. §3 |
-| 6 | **One sealing sitting**: `credentials derived cloudflare-dns01 mint`, `bgp seal` and `alert-webhook record` (credentials.md §4.1 stage 11), the webhook at Home Assistant's own address, so that an in-cluster alert stays direct, one commit to `Pulumi.k8s-base.yaml` | operator, chain on the merge | stage 5, and the webhook of stage 0 | a certificate issued for the primary zone; each Gateway's Service holding exactly its addresses; a route in the gateway's kernel table for a VIP of each family, the IPv6 one through the worker's link-local, which the gateway's neighbor table resolves to the worker's MAC (gateway-cutover.md §5); an alert reaching the phone | Re-run the one command, which writes a fresh ciphertext, and merge it. §3 |
+| 5a | **The rebuild drill**: the cluster deleted and created again from the repository and the credentials, by operations.md §3.5, once, touching nothing outside the cluster (Aetf/kluster-ops#782 records it) | operator, chain on the merge, dispatcher records | stage 5, and the first `up` of `k8s-base` and `apps` converging in one run | operations.md §3.5's pass readings, stage 5's gate among them, and nothing outside changed | Forward, by operations.md §3.5's own steps. §3 |
+| 6 | **One sealing sitting**: `credentials derived cloudflare-dns01 mint`, `bgp seal` and `alert-webhook record` (credentials.md §4.1 stage 11), the webhook at Home Assistant's own address, so that an in-cluster alert stays direct, one commit to `Pulumi.k8s-base.yaml` | operator, chain on the merge | stage 5a, and the webhook of stage 0 | a certificate issued for the primary zone; each Gateway's Service holding exactly its addresses; a route in the gateway's kernel table for a VIP of each family, the IPv6 one through the worker's link-local, which the gateway's neighbor table resolves to the worker's MAC (gateway-cutover.md §5); an alert reaching the phone | Re-run the one command, which writes a fresh ciphertext, and merge it. §3 |
 | 7 | **The echo server wired**: rfc-007 slice 12's second half, on `route` as the migration's design composes it | chain | stage 6's certificate, and that design's `route` merged | the exit criterion of rfc-007 §14 slice 12 | Revert it; nothing else stands on it |
 | 8 | **The gate**: rfc-007 §14 slice 13's list, and the rest of migration.md §1 item 4. A transcript per item. Then the pull request that deletes the sealed tolerance of §1 | dispatcher, operator for anything a credential reads, a builder for the pull request | stage 7 | every item, with a fallback that flips landing in the document that records it | A failing item is its own issue. No application moves until it closes |
 | 9 | **Handing over**: the legacy sealing key carried, the certificate the controller serves confirmed as the cluster's own, and then the backup bucket's writer keys sealed and Authelia's storage encryption key imported from the legacy cluster into the escrow, which seals it (credentials.md §4.1 stage 12). These open the first wave | operator | stage 8, and the `physical` apply that minted the writer keys | the certificate confirmed, each key sealed, and `escrow/authelia/storage-key/1.age` and `Pulumi.apps.yaml` committed | §3 |
@@ -82,6 +84,24 @@ failure is an outage. The cluster can be rebuilt: `physical` holds what
 makes it, and `k8s-base` and `apps` hold nothing they cannot declare
 again. A stage that fails is fixed forward by a pull request, and the
 legacy estate goes on serving.
+
+**After a rebuild, a plain `up` of the chain creates nothing in the
+cluster until the states of `k8s-base` and `apps` are refreshed.** A
+plain `up` diffs the program against the state, and the state still
+holds every object the old cluster held; the chain's `up` takes no
+`--refresh`. So the first `up` of both stacks on a rebuilt cluster
+follows a `pulumi refresh` of each, which drops what the cluster no
+longer holds (operations.md §3.5, step 8).
+
+**Stage 5a gives up the empty cluster on purpose, and costs least
+there.** No sealed value exists before stage 6, so the new sealing key
+leaves nothing to seal again, and the BGP session is not up, so the
+gateway has no `lan` route to withdraw. Stages 6 to 9 then run once, on
+the rebuilt cluster. The stage's way back is forward: once the instances are
+terminated, the old cluster is gone, and operations.md §3.5 says what a
+failure at each step leaves running. Its one risk is A1 capacity, which
+it takes only on a day the capacity reading passes in every
+availability domain.
 
 **Stage 4 is the only stage with a public consequence**, because the
 `dns` first `up` writes the live zones. gateway-cutover.md §8.2 states
@@ -109,6 +129,7 @@ same key again (credentials.md §4).
 | Stage 1 | The device's new layout | Nothing. The gateway serves as it did |
 | Stage 2 | The cloud fleet, the balancer, the backup bucket and the worker | The cloud side is free while idle. The worker takes about 1.5 GiB of host memory while idle, and the VPS bills as it always did |
 | Stage 5 | The platform on the worker: monitoring first | The worker's real use grows into its 10 GiB, which is why stage 5's gate reads the host's memory |
+| Stage 5a | Nothing new | Nothing in money: the rebuilt fleet bills what the fleet bills. A capacity hunt costs only time |
 | Stage 9 | Nothing new | Coexistence is cheap until here. It costs for real from the first wave, which starts stopping and moving applications |
 
 **The pass takes about four days, three of them with the operator**,

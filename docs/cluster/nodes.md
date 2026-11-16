@@ -568,7 +568,10 @@ by construction; Tier 0 remains the foundation everything else sits on:
     1 node → quorum holds, replace at leisure (the capacity hold, §3.2);
     lose 2 → etcd disaster recovery from the surviving member
     (re-bootstrap single-member, scale back to 3 — minutes-to-an-hour of
-    API downtime, no data loss); lose all 3 → Tier 0 cold standby.
+    API downtime, no data loss); lose all 3 → Tier 0: the cold standby,
+    or, with the account intact, the fleet created again by the program
+    with etcd empty and both cluster stacks applied again
+    (operations.md §3.5).
     On the Vultr fallback this tier degrades to the superseded
     homelab-CP layout (architecture.md §6.5) with the drill direction
     flipped back.
