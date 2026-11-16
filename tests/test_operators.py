@@ -2,8 +2,9 @@
 
 The program runs whole, against a `physical` that has published its addresses
 (`k8s_base_installation`), and the cases read what it handed the provider:
-CloudNativePG and its Barman Cloud plugin, VolSync, NFD and the Intel GPU
-plugin (rfc-007 §8), the namespaces each creates, the order they are installed
+CloudNativePG and its Barman Cloud plugin, VolSync and the volume snapshot
+definitions it watches, NFD and the Intel GPU plugin (rfc-007 §8), the
+namespaces each creates, the order they are installed
 in (declarative/cluster-infra.md §1), and what keeps the GPU plugin inert until
 the worker's GPU is bound.
 
@@ -16,12 +17,13 @@ from __future__ import annotations
 
 import pytest
 import pytest_asyncio
-from k8s_base_installation import Run, applied
+from k8s_base_installation import Run, applied, source_file
 
 from kluster.lib.versions import versions
 
 CHART = 'kubernetes:helm.sh/v4:Chart'
 NAMESPACE = 'kubernetes:core/v1:Namespace'
+CONFIG_GROUP = 'kubernetes:yaml/v2:ConfigGroup'
 
 #: The label the GPU plugin chart's `NodeFeatureRule` puts on a node with an
 #: Intel display-class PCI device whose kernel has `i915` or `xe`
@@ -38,6 +40,7 @@ INTEL_OPERATOR = 'intel-device-plugins-operator'
 INTEL_GPU = 'intel-device-plugins-gpu'
 CERT_MANAGER = 'cert-manager'
 CILIUM = 'cilium'
+SNAPSHOT_DEFINITIONS = 'snapshot-definitions'
 
 #: Each chart, by its logical name, and the `versions:chart-<name>` pin it is
 #: installed from.
@@ -156,6 +159,26 @@ def test_every_child_is_installed_behind_what_its_component_is_ordered_after(
 
     assert children
     assert [(typ, name) for typ, name, dependencies in children if behind not in dependencies] == []
+
+
+def test_volsync_is_installed_behind_the_snapshot_definitions_it_watches(applied: Run) -> None:
+    """Its controller's caches wait on `VolumeSnapshot`, so a cluster that does not serve the kind never runs it.
+
+    Held on every resource the component registers, as the order above is.
+    """
+    children = applied.children(VOLSYNC_OPERATOR)
+    behind = applied.urn(CONFIG_GROUP, SNAPSHOT_DEFINITIONS)
+
+    assert children
+    assert [(typ, name) for typ, name, dependencies in children if behind not in dependencies] == []
+
+
+def test_the_snapshot_definitions_are_the_files_of_their_pin(applied: Run) -> None:
+    """Every file the source pin names, each as the fetch returned it, and nothing else."""
+    pin = versions.source['external-snapshotter']
+    applied_text = applied.inputs(CONFIG_GROUP, SNAPSHOT_DEFINITIONS)['yaml']
+
+    assert applied_text.split('\n---\n') == [source_file(pin, path) for path in pin.files]
 
 
 @pytest.mark.parametrize(

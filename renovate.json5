@@ -42,10 +42,11 @@
   // routes the cluster only pulls are the container images, by tag and by
   // digest, and the Helm charts: the first rule under `packageRules` takes
   // the age off them. The age is set here rather than per route, so a
-  // route added later waits unless it is one of those. One more waits,
-  // though the cluster only pulls it as it does a chart: the Gateway API
-  // definitions, whose data source, `github-release-attachments`, the
-  // exemption does not name. The exemption is one rule keyed by data source
+  // route added later waits unless it is one of those. The definitions the
+  // cluster pulls from GitHub wait too, though the cluster only pulls them as
+  // it does a chart: the Gateway API definitions and the volume snapshot
+  // definitions, whose data sources, `github-release-attachments` and
+  // `github-tags`, the exemption does not name. The exemption is one rule keyed by data source
   // alone, and a test holds the age to that shape.
   //
   // A data source that reports no release time cannot be aged, and two
@@ -356,10 +357,10 @@
       groupSlug: 'mise-release',
     },
     {
-      // Inside the cluster: the charts, the Gateway API definitions and the
-      // container images the in-cluster stacks install, read off the
-      // `versions:` block of `Pulumi.yaml` by the chart, manifest and image
-      // managers below and applied by a rollout. Matched by the file those
+      // Inside the cluster: the charts, the definitions and the container
+      // images the in-cluster stacks install, read off the `versions:` block
+      // of `Pulumi.yaml` by the chart, manifest, source and image managers
+      // below and applied by a rollout. Matched by the file those
       // managers read and the data sources they read through, which no other
       // pin in the file shares but the gateway's root filesystems: those are
       // images too, and the gateway rule further down takes them back into a
@@ -376,6 +377,7 @@
         'helm',
         'docker',
         'github-release-attachments',
+        'github-tags',
       ],
       groupName: 'in-cluster charts and images',
       groupSlug: 'in-cluster',
@@ -1245,6 +1247,25 @@
         'versions:manifest-[\\w-]+:\\s+value:\\s+repository: (?<depName>[\\w.-]+/[\\w.-]+)\\s+release: (?<currentValue>\\S+)\\s+asset: \\S+\\s+sha256: (?<currentDigest>[0-9a-f]{64})',
       ],
       datasourceTemplate: 'github-release-attachments',
+    },
+    {
+      // The source pins: files of a GitHub repository's tree, fetched at a
+      // commit, with the tag that commit carries beside it. The tag is the
+      // version and the commit its digest, captured in one match, so the
+      // `github-tags` data source -- which resolves a tag to the commit it
+      // names, as it does for an action pinned by commit -- moves the two
+      // together. The files' sha256s are not renovate's to compute: a bump
+      // arrives with the old ones, and every run of the program refuses it
+      // until a person records the new ones on the branch
+      // (framework/pulumi.md §3.2).
+      customType: 'regex',
+      managerFilePatterns: [
+        '/^Pulumi\\.yaml$/',
+      ],
+      matchStrings: [
+        'versions:source-[\\w-]+:\\s+value:\\s+repository: (?<depName>[\\w.-]+/[\\w.-]+)\\s+tag: (?<currentValue>\\S+)\\s+commit: (?<currentDigest>[0-9a-f]{40})',
+      ],
+      datasourceTemplate: 'github-tags',
     },
     {
       // The image pins in the same project-level block. Each value is a whole

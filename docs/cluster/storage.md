@@ -120,6 +120,16 @@ the controller idles at well under 100 Mi. This one mechanism serves as:
     claimRef surgery.
 -   **DR**: a restore from the repository, onto a rebuilt node.
 
+**The snapshot definitions are served all the same.** VolSync's
+controller watches `VolumeSnapshot` objects whatever a source's
+`copyMethod`, and does not start on a cluster that does not serve the
+kind, so `k8s-base` installs `external-snapshotter`'s
+`snapshot.storage.k8s.io` definitions ahead of it
+(declarative/cluster-infra.md §1, item 5). That is all it installs of
+`external-snapshotter`: VolSync creates a snapshot only for
+`copyMethod: Snapshot`, and every mover here copies `Direct`, so
+nothing creates one and no snapshot controller runs.
+
 **A move is asked for, and it backs nothing up.** VolSync 0.16.0 has no
 idle mover to leave standing: every source syncs on its first
 reconcile, whatever its trigger, so a restic source declared on a claim
