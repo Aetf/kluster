@@ -73,9 +73,34 @@ def _refuse_unparented(
     ``Transformations cannot currently be used to change the 'parent' of a
     resource``, because the parent is what selects which transformations run in
     the first place — so it refuses instead, naming both halves of the mistake.
+
+    A resource object built with ``opts.urn`` is a *reference* to a resource
+    that is already registered, not a declaration, and passes. That is how the
+    SDK rehydrates a resource reference it finds in a registration's outputs,
+    such as the ``resources`` of a ``Chart`` or a ``ConfigGroup``: in pulumi
+    3.274.1, ``rpc.deserialize_resource`` (``pulumi/runtime/rpc.py`` line 1032)
+    hands the reference's URN to the package's ``construct``, which for
+    ``pulumi-kubernetes`` 4.34.2 is ``TheClass(name,
+    pulumi.ResourceOptions(urn=urn))`` (``pulumi_kubernetes/_utilities.py`` line
+    213). ``Resource.__init__`` runs the transformations before it looks at
+    ``urn`` (``pulumi/resource.py`` lines 1055–1066), and this one sees the
+    reference with no parent, because the URN already fixes it. Then
+    ``opts.urn`` sends the object to ``get_resource`` (lines 1129–1131), whose
+    one request is the ``pulumi:pulumi:getResource`` invoke carrying the URN
+    alone, with no parent and no provider (``pulumi/runtime/resource.py`` lines
+    598–614): nothing is registered, so there is no parent to name and no
+    provider to inherit. And it runs during the registration whose outputs held
+    the reference, which keeps the scope of the component that declared it.
+
+    ``opts.id`` is not exempt. It makes the object a read (``pulumi/resource.py``
+    lines 1132–1141), whose request carries a parent and a provider
+    (``pulumi/runtime/resource.py`` lines 875–876): the engine records it in the
+    stack's state under the parent the options name, read through the provider
+    that parent hands down, so an unparented ``.get`` inside a component is the
+    same mistake as an unparented declaration.
     """
     enclosing = _under_construction.get()
-    if not enclosing or args.opts.parent is not None:
+    if not enclosing or args.opts.parent is not None or args.opts.urn is not None:
         return None
     raise UnparentedChildError(
         f'{args.type_} "{args.name}" is declared inside component {enclosing[-1]} but names no parent. '
@@ -100,9 +125,11 @@ def install_parent_backstop() -> None:
     Calling it more than once against the same stack is a no-op.
 
     What it does *not* catch: a resource declared outside any component, which
-    is a stack program's business and legitimate; and anything declared after a
-    component that never called ``register_outputs``, which is the failure mode
-    documented on `Component.register_outputs`.
+    is a stack program's business and legitimate; a resource object built from
+    a URN, which the SDK makes of a resource reference in a registration's
+    outputs and which declares nothing (`_refuse_unparented`); and anything
+    declared after a component that never called ``register_outputs``, which
+    is the failure mode documented on `Component.register_outputs`.
     """
     root = runtime.get_root_resource()
     if root is None:

@@ -7,19 +7,25 @@ names a missing provider rather than a missing parent. rfc-002 §8.2 is why
 the framework refuses it instead of repairing it.
 
 The cases below are the boundary of that refusal, in both directions. Nothing
-here contacts an engine: the monitor is Pulumi's mock, and every resource is a
-stand-in whose only interesting property is the options it was given.
+here contacts an engine: the monitor is Pulumi's mock, and every resource but
+one is a stand-in whose only interesting property is the options it was given.
+The one is the Kubernetes provider's `ConfigMap`, which the SDK rehydrates from
+a resource reference in a registration's outputs through that provider's own
+package code.
 """
 
 from __future__ import annotations
 
 import contextvars
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
+from typing import Any, cast
 
 import pulumi
+import pulumi_kubernetes as k8s
 import pytest
 import pytest_asyncio
 from mock_monitor import Recorder, declaring, run_under_backstop, run_with
+from pulumi import runtime
 from pulumi.runtime import settings
 
 from putils import Component, UnparentedChildError, install_parent_backstop
@@ -252,6 +258,97 @@ async def test_a_forgotten_register_outputs_misnames_the_next_refusal() -> None:
     message = refused(leak_then_declare)
     assert 'innocent-bystander' in message
     assert 'leaky (test:NeverClosesTop)' in message
+
+
+# -- a reference is not a declaration -----------------------------------------
+#
+# A registration's outputs can hold resource references -- a chart's or a
+# config group's `resources` -- and the SDK rehydrates each into a resource
+# object built from its URN alone, while the registration that returned it is
+# still inside the scope of the component that declared it. The engine is what
+# returns such outputs; here the mock returns them in the engine's wire form,
+# and everything from there on is the SDK's own code: `rpc.resolve_outputs`,
+# `rpc.deserialize_resource`, the Kubernetes provider's `construct`, and the
+# stack transformation.
+
+#: The wire form of a resource reference in a registration's outputs: an
+#: object whose signature key holds the resource signature, beside the URN and
+#: the name and type it carries (Pulumi's `sdk/go/common/resource/sig`).
+SIGNATURE_KEY = '4dabf18193072939515e22adb298388d'
+RESOURCE_SIGNATURE = '5cf8f73096256a8f31e491e813e4eb8e'
+
+GROUP = 'test:index:Group'
+
+
+class Group(pulumi.CustomResource):
+    """A stand-in for a chart or a config group: its `resources` output refers to resources registered elsewhere."""
+
+    resources: pulumi.Output[list[pulumi.Resource]]
+
+    def __init__(
+        self, name: str, members: Sequence[pulumi.Input[str]], opts: pulumi.ResourceOptions | None = None
+    ) -> None:
+        super().__init__(GROUP, name, {'members': members, 'resources': None}, opts)
+
+
+class Referring(Recorder):
+    """A monitor that answers a `Group` with a reference to each URN it was given, as the engine answers a chart."""
+
+    def computed(self, args: runtime.MockResourceArgs) -> dict[str, Any]:
+        if args.typ != GROUP:
+            return {}
+        # `MockResourceArgs.inputs` is an untyped dict in the SDK.
+        members = cast('list[str]', args.inputs['members'])
+        return {'resources': [reference(urn) for urn in members]}
+
+
+def reference(urn: str) -> dict[str, str]:
+    """`urn` as the engine sends a resource reference."""
+    qualified_type, name = urn.split('::')[-2:]
+    return {SIGNATURE_KEY: RESOURCE_SIGNATURE, 'urn': urn, 'name': name, 'type': qualified_type.split('$')[-1]}
+
+
+class Grouping(Component, pulumi_type='test:Grouping'):
+    """A component whose group, declared with a parent, returns a reference to the member beside it."""
+
+    def __init__(self, name: str) -> None:
+        super().__init__(name)
+        self.member = k8s.core.v1.ConfigMap(f'{name}-member', opts=self.child_opts())
+        self.group = Group(f'{name}-group', members=[self.member.urn], opts=self.child_opts())
+        self.register_outputs({})
+
+
+@pytest.mark.asyncio
+async def test_a_reference_rehydrated_from_a_components_outputs_passes() -> None:
+    """The rehydrated object names no parent and declares nothing, so it is not refused."""
+    _ = await run_under_backstop(Referring(), stack='test', project='putils')
+    async with declaring():
+        grouping = Grouping('grouping')
+
+    resources = await grouping.group.resources.future()
+
+    assert resources is not None
+    (rehydrated,) = resources
+
+    # The provider's own class, built from the reference: the SDK did rehydrate it.
+    assert isinstance(rehydrated, k8s.core.v1.ConfigMap)
+    assert await rehydrated.urn.future() == await grouping.member.urn.future()
+
+
+@pytest.mark.asyncio
+async def test_a_read_by_id_without_a_parent_is_refused() -> None:
+    """A read is recorded under a parent like a declaration, so only a URN makes a reference."""
+
+    class Reads(Component, pulumi_type='test:Reads'):
+        def __init__(self, name: str) -> None:
+            super().__init__(name)
+            self.thing = Thing(f'{name}-thing', opts=pulumi.ResourceOptions(id='existing'))
+            self.register_outputs({})
+
+    message = refused(lambda: Reads('reads'))
+
+    assert 'reads-thing' in message
+    assert 'reads (test:Reads)' in message
 
 
 @pytest.mark.asyncio
