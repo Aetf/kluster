@@ -1304,27 +1304,91 @@ def test_every_variable_a_workflow_reads_is_one_the_census_declares_for_this_rep
     )
 
 
-def test_an_apps_client_id_is_a_variable_only_where_the_app_is_installed() -> None:
-    """A mint handed a client id on a repository the App is not installed on fails at the mint.
+#: The `repositories:` a mint asks for when it names the repository its run is
+#: in, the way `sdk-regenerate.yml` does; absent, the action asks for the same.
+THIS_REPOSITORY = re.compile(r'^\$\{\{\s*github\.event\.repository\.name\s*\}\}$')
+
+
+def _mints() -> dict[str, dict[str, object]]:
+    """Every `actions/create-github-app-token` step here, as `<file>: <job> #<n>`, by its `with:`."""
+    found: dict[str, dict[str, object]] = {}
+    for path in workflows_and_actions():
+        if path.parent.name != 'workflows':
+            continue
+        for name, job in workflow_jobs(read_workflow(path), path.name).items():
+            for position, entry in enumerate(cast('list[object]', job.get('steps', []))):
+                step = mapping(entry, f'{path.name} job {name} step {position}')
+                if str(step.get('uses', '')).startswith('actions/create-github-app-token@'):
+                    found[f'{path.name}: {name} #{position}'] = mapping(step.get('with'), f'{path.name}: {name} mint')
+    return found
+
+
+def test_every_mint_here_names_an_app_installed_on_each_repository_it_mints_for() -> None:
+    """A mint asked for a repository the App is not installed on fails at the mint.
 
     `actions/create-github-app-token` resolves the App's installation on the
-    repository the run names, so the client id and the installation are two
-    fields of one row that are only correct together: a row that carries the
-    variable and not the App is a run that fails at its first step. The
-    installation itself is console state nothing here declares
-    (framework/github.md §4), so this is the one place the relation is held.
+    repositories it is asked for, so the App a mint's client id names has to
+    be installed on each of them. The client id is a variable of the
+    repository the workflow runs in, and the installation is a field of the
+    repository the token acts on: one row where a run pushes to its own
+    repository (`sdk-regenerate.yml`), two where it acts on another
+    (`alert.yml`, and the ops repository's drift trigger, whose mint this
+    repository cannot read). The installation itself is console state nothing
+    here declares (framework/github.md §4), so this is where the relation is
+    held, for every mint this repository's workflows make.
     """
     apps = {app.client_id: app for repository in conventions.forge.REPOSITORIES for app in repository.apps}
+    values = {variable.name: variable.value for variable in conventions.forge.DEPLOYMENT.variables}
+    by_name = {repository.name: repository for repository in conventions.forge.REPOSITORIES}
 
-    # The dispatch App's row is the one this exists for: a census that lost
-    # it would leave both loops below over empty tuples and the case green.
-    assert conventions.forge.DISPATCH_APP in conventions.forge.DEPLOYMENT.apps
-    assert conventions.forge.DISPATCH_APP_CLIENT_ID in conventions.forge.DEPLOYMENT.variables
-    for repository in conventions.forge.REPOSITORIES:
-        for variable in repository.variables:
-            app = apps.get(variable.value)
-            if app is not None:
-                assert app in repository.apps, f'{repository.name} hands {app.slug} to a mint and does not carry it'
+    mints = _mints()
+    # Both of the repositories a mint here acts on are visited: a scan that
+    # stopped reaching one would leave its relation unheld and the case green.
+    assert {'sdk-regenerate.yml', 'alert.yml'} <= {where.split(':')[0] for where in mints}, sorted(mints)
+    for where, mint in mints.items():
+        variable = CLIENT_ID_VARIABLE.match(str(mint.get('client-id')))
+        assert variable is not None, f'{where}: the client id is not read from a repository variable'
+        assert variable.group(1) in values, (
+            f'{where}: {variable.group(1)} is declared for {conventions.forge.DEPLOYMENT.name} nowhere'
+        )
+        app = apps.get(values[variable.group(1)])
+        assert app is not None, f'{where}: the client id names an App the census installs nowhere'
+
+        asked = str(mint.get('repositories', ''))
+        targets = (
+            [conventions.forge.DEPLOYMENT.name]
+            if not asked or THIS_REPOSITORY.match(asked)
+            else [name.strip() for name in re.split(r'[,\n]', asked) if name.strip()]
+        )
+        for target in targets:
+            assert target in by_name, f'{where}: mints for {target}, which the census does not carry'
+            assert app in by_name[target].apps, f'{where}: mints {app.slug} for {target}, which does not carry it'
+
+
+def test_a_client_id_variable_names_an_app_the_census_installs() -> None:
+    """A variable carrying an App's client id is spelled from an App the census records.
+
+    The other side of the case above, for the variables of every repository,
+    including the ops repository's, whose workflows this repository cannot
+    read: a variable named for an App's client id whose value no installed App
+    carries is a mint that fails on whatever repository it asks for.
+    """
+    installed = {app.client_id for repository in conventions.forge.REPOSITORIES for app in repository.apps}
+    named = [
+        (repository.name, variable)
+        for repository in conventions.forge.REPOSITORIES
+        for variable in repository.variables
+        if variable.name.endswith('_APP_CLIENT_ID')
+    ]
+
+    # Both Apps' variables are reached: a census that lost them would leave
+    # the loop over an empty list and the case green.
+    assert {variable.name for _, variable in named} >= {
+        conventions.forge.DISPATCH_APP_CLIENT_ID.name,
+        conventions.forge.TRIGGER_APP_CLIENT_ID.name,
+    }
+    for repository, variable in named:
+        assert variable.value in installed, f'{repository} hands {variable.name} for an App installed nowhere'
 
 
 def test_every_login_a_workflow_compares_against_is_one_the_census_names() -> None:
@@ -2143,10 +2207,10 @@ def test_the_producer_mints_for_the_ops_repository_with_an_app_installed_there()
     the ops repository is a mint that fails at the first alert. The variable
     is this repository's (the workflow runs here), and the installation that
     matters is the ops repository's (the dispatch lands there): two rows of
-    the forge, which is why the relation between them is held here rather than
-    by `test_an_apps_client_id_is_a_variable_only_where_the_app_is_installed`,
-    which holds one row. The endpoint the dispatch goes to is the same
-    repository, spelled in the workflow, and held to the forge too.
+    the forge, which `test_every_mint_here_names_an_app_installed_on_each_repository_it_mints_for`
+    holds for every mint here. What this adds is the producer's own: the
+    endpoint the dispatch goes to is the same repository, spelled in the
+    workflow, and held to the forge too, and the permission the mint asks for.
     """
     mint = mapping(_producer_step('actions/create-github-app-token@').get('with'), 'the mint')
 

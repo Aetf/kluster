@@ -451,8 +451,8 @@ def backup_labels() -> tuple[str, ...]:
 #: How each App's key is created, and where the identifier that goes with it
 #: comes from. The client id is never a row here: it is a public identifier
 #: the App's own page shows for as long as the App exists, unlike the key,
-#: which is disclosed once. Where it is recorded differs between the Apps, so
-#: that sentence is each App's own (`_DISPATCH_CLIENT_ID`, `_TRIGGER_CLIENT_ID`).
+#: which is disclosed once. It is recorded in the census and declared as a
+#: repository variable instead (`_client_id`).
 _APP_KEY_CONSOLE = """github.com/settings/apps → the "kluster {name}" App → Private keys →
   Generate a private key. The PEM downloads once and is shown never again;
   GitHub publishes no API that creates one, so nothing here can mint it and
@@ -483,22 +483,24 @@ def _declared_on(variable: conventions.forge.Variable) -> str:
     )
 
 
-#: The dispatch App's client id is a census fact: recorded in the clear and
-#: declared by the forge as the repository variable the workflows minting
-#: from it read (credentials.md §3), so no step here reads it off the page by hand.
-_DISPATCH_CLIENT_ID = (
-    'It is recorded in the clear on `conventions.forge.DISPATCH_APP` (its `client_id`), and the `github` stack declares it as '
-    f'the {_declared_on(conventions.forge.DISPATCH_APP_CLIENT_ID)} repository variable '
-    f'`{conventions.forge.DISPATCH_APP_CLIENT_ID.name}` the workflows minting from it read, so nothing about it is typed into '
-    'a console. A newly created App has a new one: record it there and land it with `operator-stack github up`.'
-)
+def _client_id(app: str, variable: conventions.forge.Variable) -> str:
+    """Where an App's client id is recorded, as the steps for its key say it.
 
-#: The trigger App has no row in the census (`conventions.forge`) and no
-#: variable declared for it, so its client id is read off the App's page.
-_TRIGGER_CLIENT_ID = (
-    'It is public and readable there for as long as the App exists, so it is read off the page when the '
-    'delivery slot is filled rather than stored here.'
-)
+    A census fact: recorded in the clear on the App's entry (`app`, its
+    attribute name in `conventions.forge`) and declared by the forge as the
+    repository variable the workflows minting from it read (credentials.md
+    §3), so no step here reads it off the page by hand.
+    """
+    return (
+        f'It is recorded in the clear on `conventions.forge.{app}` (its `client_id`), and the `github` stack declares it '
+        f'as the {_declared_on(variable)} repository variable `{variable.name}` the workflows minting from it read, so '
+        'nothing about it is typed into a console. A newly created App has a new one: record it there and land it with '
+        '`operator-stack github up`.'
+    )
+
+
+_DISPATCH_CLIENT_ID = _client_id('DISPATCH_APP', conventions.forge.DISPATCH_APP_CLIENT_ID)
+_TRIGGER_CLIENT_ID = _client_id('TRIGGER_APP', conventions.forge.TRIGGER_APP_CLIENT_ID)
 
 
 def _app_key_console(*, name: str, permission: str, installed: str, client_id: str) -> str:
@@ -609,12 +611,13 @@ def register() -> dict[str, Label]:
         ),
         Label(
             TRIGGER_KEY,
-            "the trigger App's private key, which signs for actions:write on the deployment repository",
+            f"the trigger App's private key, which signs for actions:write on "
+            f'{_installed_on(conventions.forge.TRIGGER_APP)}',
             Console(
                 _app_key_console(
                     name='trigger',
                     permission='Actions: Read and write',
-                    installed='kluster',
+                    installed=_installed_on(conventions.forge.TRIGGER_APP),
                     client_id=_TRIGGER_CLIENT_ID,
                 ),
                 kit=KitAttachment('seeds/GitHub App (trigger)', 'private-key.pem'),
@@ -1023,9 +1026,9 @@ def from_kit(kit: KdbxStore, label: str) -> str:
 
     The kit row carries one half the escrow does not: the App's client id, in
     `UserName`. That half is a public identifier the App's own page shows for
-    as long as the App exists, so the register stores it nowhere -- but it is
-    printed here, because this is the last command with any reason to open the
-    kit for this row.
+    as long as the App exists, so the register stores it nowhere -- the census
+    records it (`conventions.forge.App`) -- but it is printed here, because
+    this is the last command with any reason to open the kit for this row.
     """
     row = _row(label)
     origin = row.origin

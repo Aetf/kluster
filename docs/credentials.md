@@ -1055,12 +1055,16 @@ on the page in the same visit. The client id the JWT is issued under
 is not a row here at all: it identifies the App instead of
 authenticating as it, and the App's page shows it for as long as the
 App exists, so it is a public fact of the installation recorded in the
-clear in `conventions/forge.py` (`DISPATCH_APP`), the way the tenancy
-OCID and the Cloudflare account id are. The forge declares it as the
-`kluster` repository variable `DISPATCH_APP_CLIENT_ID` from that record
-(framework/github.md §3), landed by `operator-stack github up` like every
-other resource of that stack, and `sdk-regenerate.yml` and `alert.yml`
-each hand it to the minting action beside the key.
+clear in `conventions/forge.py` (`DISPATCH_APP`, `TRIGGER_APP`), the way
+the tenancy OCID and the Cloudflare account id are. The forge declares
+each as a repository variable from that record (framework/github.md
+§3), on the repository whose workflow reads it, and lands it with
+`operator-stack github up` like every other resource of that stack: the
+dispatch App's as the `kluster` variable `DISPATCH_APP_CLIENT_ID`, which
+`sdk-regenerate.yml` and `alert.yml` each hand to the minting action
+beside the key, and the trigger App's as the `kluster-ops` variable
+`TRIGGER_APP_CLIENT_ID`, the one the drift trigger is designed to hand
+it under.
 
 ## 4. The scripts
 
