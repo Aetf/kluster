@@ -402,6 +402,12 @@ def test_cert_managers_children_are_installed_behind_the_sealing_controller(appl
     assert [urn for urn in children if sealing not in _behind(applied, urn)] == []
 
 
+@pytest.mark.parametrize('binding', [ROLE_BINDING, CLUSTER_ROLE_BINDING], ids=['helper-pods', 'volumes'])
+def test_the_provisioner_is_created_behind_each_of_its_bindings(applied: Run, binding: str) -> None:
+    """It needs its permissions from its first API call, and names neither binding, so it is declared behind both."""
+    assert applied.urn(binding, LOCAL_PATH) in applied.dependencies(DEPLOYMENT, LOCAL_PATH)
+
+
 def test_every_child_carries_its_components_name(applied: Run) -> None:
     assert applied.monitor.children_not_named_for_their_component() == {}
 
