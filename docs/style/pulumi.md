@@ -193,9 +193,9 @@ measurement belongs in configuration only when nothing the program
 reaches reports it. The read is a resource that observes
 ([framework/pulumi.md](../framework/pulumi.md) §5.2), so a moved fact is a
 diff of the run that reads it rather than a stale key: the site's
-delegated prefix, which the ISP decides, is read off the gateway, and
-what derives from it — a network's /64, the worker's address — follows
-on every run.
+delegated prefix, which the ISP decides, is read off the gateway with
+the /64 the firmware gives each network on it, and what derives from
+them — the worker's address — follows on every run.
 
 **Related constants are one structure, not a flat namespace** — the
 [illegal-states rule](README.md) applied to data: group them so that

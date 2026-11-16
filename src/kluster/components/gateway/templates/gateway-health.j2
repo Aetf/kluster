@@ -5,7 +5,7 @@
 # declared machine running, every machine on a bridge attached to it, every
 # unit the persistence layer delivers enabled
 # and active, the BGP daemon holding the declared peer, every network on the
-# site's delegated prefix on the /64 the declaration derives for it, the PD
+# site's delegated prefix on the /64 the last run read for it, the PD
 # lease naming that /64, the overlay member online, an offline
 # package cache that would carry an offline boot, the base under the firmware
 # being the one the program is written for, and systemd-networkd kept from the
@@ -239,10 +239,10 @@ else
 fi
 
 # Every network on the site's delegated prefix, by its bridge: the bridge holds
-# the gateway's address on the /64 the declaration derives from the prefix the
-# last run read, at the network's id. A bridge that holds another is a prefix
-# the ISP moved since that run, or an id the firmware did not honor; the
-# lease, which the finding's playbook reads, tells the two apart. While the
+# the gateway's address on the /64 the last run read for it. A bridge that
+# holds another is a prefix the ISP moved since that run, or the bridge
+# numbered anew by the firmware under the same prefix; the lease, which the
+# finding's playbook reads, tells the two apart. While the
 # bridge holds it, the PD lease's line for the bridge on the WAN names the
 # same /64 in the shape the program's read knows, six fields with integer
 # lifetimes: a lease that does not is a format the program's read would

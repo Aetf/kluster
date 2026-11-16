@@ -143,22 +143,17 @@ def test_a_renewal_that_keeps_the_prefix_reads_the_same() -> None:
     assert pd_lease.parse(renewed, WAN_INTERFACE) == pd_lease.parse(RECORDED, WAN_INTERFACE)
 
 
-def test_the_worker_address_derived_at_the_recorded_id_is_the_one_the_worker_formed() -> None:
-    """The derivation against the recorded lease: id 3 under its /60 is its `br7` line, and the worker's address on it.
+def test_the_worker_address_on_the_recorded_bridge_line_is_the_one_the_worker_formed() -> None:
+    """The derivation against the recorded lease: the cluster network's `br7` line, and the worker's address on it.
 
-    The cluster network held id 3 when the lease was read, and the worker's
-    address read on the cluster then was `2601:600:8583:1713:5054:ff:fe07:a`,
-    here under the same rewrite as the lease. So the derivation the program
-    uses at the declared id reproduces both readings at the id they were taken
-    at.
+    The worker's address read on the cluster when the lease was read was
+    `2601:600:8583:1713:5054:ff:fe07:a`, here under the same rewrite as the
+    lease, so the derivation the program uses reproduces that reading.
     """
     lease = pd_lease.parse(RECORDED, WAN_INTERFACE)
-    at_recorded_id = conventions.delegated_subnet(lease.prefix, 3)
+    subnet = lease.subnets[NETWORK_BRIDGES[conventions.CLUSTER_VLAN]]
 
-    assert at_recorded_id == lease.subnets[NETWORK_BRIDGES[conventions.CLUSTER_VLAN]]
-    assert str(conventions.eui64_address(at_recorded_id, conventions.HOMELAB_NODE_MAC)) == (
-        '2001:db8:83:1713:5054:ff:fe07:a'
-    )
+    assert str(conventions.eui64_address(subnet, conventions.HOMELAB_NODE_MAC)) == '2001:db8:83:1713:5054:ff:fe07:a'
 
 
 def test_lines_for_another_wan_are_not_read_into_this_ones_delegation() -> None:

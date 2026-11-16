@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import os
 import re
-from ipaddress import IPv6Network
 from pathlib import Path
 from typing import Any, override
 
@@ -35,17 +34,15 @@ from kluster.components.gateway import (
     NETWORK_BRIDGES,
     PLAYBOOKS,
     Gateway,
-    PrefixIdRefused,
     access,
     container,
-    declared_subnet,
     gateway_address,
     nspawn,
     persistence,
     routing,
     unifi,
 )
-from kluster.components.gateway.prefix import WAN_INTERFACE
+from kluster.components.gateway.prefix import WAN_INTERFACE, SubnetNotHeld, network_subnets
 from kluster.providers import pd_lease
 
 NAME = 'kluster'
@@ -377,12 +374,12 @@ def test_the_health_reading_reads_every_machine_and_every_unit_the_program_deliv
     # No routing suite answers here either, so the peer it holds the BGP daemon
     # to is reported, and it is the session's.
     assert {subject for subject, title in read if title == PLAYBOOKS.routing} == {str(conventions.HOMELAB_NODE_IPV4)}
-    # And no bridge here holds the gateway's address on the /64 the read
-    # prefix gives each declared network's id, so every declared bridge is
-    # reported, each against the address derived for it.
+    # And no bridge here holds the gateway's address on the /64 the read gives
+    # each declared network, so every declared bridge is reported, each
+    # against the address on its line of the lease.
     assert {subject for subject, title in read if title == PLAYBOOKS.prefix} == set(NETWORK_BRIDGES.values())
-    for network, bridge in NETWORK_BRIDGES.items():
-        subnet = declared_subnet(LEASE.prefix, network)
+    for bridge in NETWORK_BRIDGES.values():
+        subnet = LEASE.subnets[bridge]
         (line,) = (line for line in reading.stdout.splitlines() if line.startswith(f'{bridge}: '))
         assert f'not {gateway_address(subnet)}/{subnet.prefixlen} ' in line, line
 
@@ -406,18 +403,18 @@ async def test_an_ipv6_host_is_bracketed_in_the_controller_url_and_an_ipv4_host_
 
 
 @pytest.mark.asyncio
-async def test_the_worker_address_derives_from_the_read_prefix_and_the_pinhole_names_it(gateway: Gateway) -> None:
-    """The cluster network's /64 is the read prefix at its id, the worker's address is that /64 and its MAC's EUI-64.
+async def test_the_worker_address_is_on_the_bridges_read_subnet_and_the_pinhole_names_it(gateway: Gateway) -> None:
+    """The cluster network's /64 is the lease's line for its bridge; the worker's address is that /64 and its EUI-64.
 
-    Under the recorded lease, read while the cluster network held id 3, the
-    declared id 7 gives `2001:db8:83:1717::/64`, so the worker's address is
-    the one below, and the firewall's pinhole and the component's output are
-    that one address.
+    The firmware numbers each bridge's /64 itself. The recorded lease holds the
+    cluster network's bridge at `2001:db8:83:1713::/64`, id 3 of the prefix,
+    which is not its VLAN id, so the worker's address is the one below, and the
+    firewall's pinhole and the component's output are that one address.
     """
     worker = await gateway.worker_gua.future()
     pinhole = await gateway.firewall.policies['peer-v6'].destination.future()
 
-    assert worker == '2001:db8:83:1717:5054:ff:fe07:a'
+    assert worker == '2001:db8:83:1713:5054:ff:fe07:a'
     assert pinhole is not None
     assert pinhole.ips == [worker]
     assert await gateway.delegated_prefix.future() == str(LEASE.prefix)
@@ -435,14 +432,17 @@ async def test_the_read_runs_over_the_devices_own_session_on_the_wan(gateway: Ga
     assert read['wan'] == WAN_INTERFACE
 
 
-def test_a_declared_id_the_held_prefix_cannot_hold_is_refused_naming_the_network() -> None:
-    """A delegation too short for a declared id stops the run at the read, naming the network, rather than wrapping.
+def test_a_declared_network_whose_bridge_the_read_does_not_name_is_refused_naming_both() -> None:
+    """A lease with no line for the cluster network's bridge stops the run at the read, rather than deriving a /64.
 
-    The site's ids all fit under the /60 the ISP delegates; a /62 holds ids 0
-    to 3, so the cluster network's 7 has no /64 there.
+    The other bridges' lines are no stand-in for it: the firmware numbers each
+    bridge itself, so nothing else the read holds says which /64 the bridge
+    would advertise.
     """
-    held = IPv6Network('2001:db8:83:1710::/62')
+    bridge = NETWORK_BRIDGES[conventions.CLUSTER_VLAN]
+    held = {other: str(subnet) for other, subnet in LEASE.subnets.items() if other != bridge}
 
-    with pytest.raises(PrefixIdRefused, match=f'the {conventions.CLUSTER_VLAN.name} network'):
-        _ = declared_subnet(held, conventions.CLUSTER_VLAN)
-    assert declared_subnet(held, conventions.SERVER_LAN) == IPv6Network('2001:db8:83:1710::/64')
+    with pytest.raises(SubnetNotHeld, match=f'names no /64 on {bridge} .* the {conventions.CLUSTER_VLAN.name} network'):
+        _ = network_subnets(held, NETWORK_BRIDGES)
+    whole = {other: str(subnet) for other, subnet in LEASE.subnets.items()}
+    assert network_subnets(whole, NETWORK_BRIDGES) == {bridge: LEASE.subnets[bridge]}

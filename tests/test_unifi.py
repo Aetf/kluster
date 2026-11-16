@@ -263,20 +263,12 @@ async def test_the_cluster_vlan_hands_out_no_leases() -> None:
 
 
 @pytest.mark.asyncio
-async def test_the_cluster_vlan_takes_the_delegated_subnet_its_vlan_id_names() -> None:
-    """The site's rule: a network's prefix id is its VLAN id, written as the controller stores an id, in hex.
-
-    An id left undeclared is the firmware's choice, since every write through
-    the pinned provider turns the controller's automatic ids off; so the
-    network the program declares states its id, and states the tag's.
-    """
+async def test_the_cluster_vlan_takes_its_ipv6_from_the_delegated_prefix_within_a_range() -> None:
+    """The network advertises a /64 of the delegated prefix, which /64 being the firmware's to assign."""
     firewall = build()
 
     assert await firewall.network.ipv6_interface_type.future() == 'pd'
-    prefix_id = await firewall.network.ipv6_pd_prefixid.future()
-    assert prefix_id is not None
-    assert int(prefix_id, 16) == await firewall.network.vlan_id.future()
-    assert await firewall.network.ipv6_interface_type.future() == 'pd'
+    assert await firewall.network.ipv6_pd_interface.future() == 'wan'
     # The controller refuses a delegated network with no range, and reads each
     # bound as an address.
     start = IPv6Address(await firewall.network.ipv6_pd_start.future())

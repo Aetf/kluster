@@ -43,8 +43,8 @@ ZT_NETWORK_ID = '0123456789abcdef'
 #: documentation prefix, which the run's read of the delegated prefix reports.
 LEASE = pd_lease.parse((Path(__file__).parent / 'data' / 'pd.leases').read_text(), WAN_INTERFACE)
 #: The worker VM's global address under that lease: the cluster network's /64,
-#: the prefix at its declared id, and the EUI-64 of the worker's MAC.
-WORKER_GUA = '2001:db8:83:1717:5054:ff:fe07:a'
+#: the lease's line for its bridge, and the EUI-64 of the worker's MAC.
+WORKER_GUA = '2001:db8:83:1713:5054:ff:fe07:a'
 KUBECONFIG = 'apiVersion: v1\nkind: Config\n'
 TALOSCONFIG = 'context: kluster\n'
 #: The libvirt client identity, as it arrives from configuration. Nothing

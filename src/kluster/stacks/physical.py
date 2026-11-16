@@ -393,7 +393,8 @@ async def main() -> None:
     # and the gateway is one of them: what may join and what the rules are is
     # not the gateway's business (rfc-002 §6). The gateway's own outputs are on
     # the device, apart from the worker's global address, which derives from
-    # the delegated prefix the gateway reads and is exported below.
+    # the cluster network's /64 of the delegated prefix, as the gateway reads
+    # it, and is exported below.
     gateway = _gateway(config)
     overlay = Overlay(
         conventions.CLUSTER_NAME,
@@ -460,10 +461,10 @@ async def main() -> None:
     # addresses, the `internet` pool's members, which `k8s-base` builds the
     # pool from (rfc-007 §4.4).
     pulumi.export(outputs.node_guas, nodes.guas)
-    # The worker's GUA, derived from the delegated prefix this run read: beside
-    # its IPv4, which is a convention, the worker's own pool in `k8s-base` and
-    # the address a `SiteForward` port's Service asks for in `apps` (rfc-008
-    # §4.1). A run that reads a new prefix exports the new address, and the
+    # The worker's GUA, derived from the cluster network's /64 this run read:
+    # beside its IPv4, which is a convention, the worker's own pool in
+    # `k8s-base` and the address a `SiteForward` port's Service asks for in
+    # `apps` (rfc-008 §4.1). A run that reads a new /64 exports the new address, and the
     # readers follow in the same deploy chain. Each reader refuses an absent
     # value by name.
     pulumi.export(outputs.worker_gua, gateway.worker_gua)
