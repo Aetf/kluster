@@ -8,9 +8,13 @@ and a test holds the record to the block. A bump of a pin the script reads is
 therefore red in `checks` until someone runs `update_crds` on the branch, and a
 bump of one it reads nothing else from leaves this record as it is.
 
-The pins the script reads are the chart pins it renders definitions from, the
+The pins the script reads are of the kinds that carry what the bundle is
+rendered from (`READ_KINDS`): the chart pins it renders definitions from, the
 chart pins whose version names a source tree's ref, the chart pins carrying a
-floor it checks, and every manifest pin.
+floor it checks, and every manifest pin. A source pin
+(`versions:source-<name>`) is not among them: what one installs is applied as
+its upstream wrote it, and no program declares an object of it, so nothing is
+generated from it and its bump leaves the record as it is.
 
 Beside the pin record, in a file of its own, the script records the operator
 version each chart it reads declares, its `Chart.yaml`'s `appVersion`, at the
@@ -41,6 +45,12 @@ from kluster.scripts.update_crds.values import ValuePaths
 
 #: Beside the bundle, in the directory the `packages:` entry names it in.
 FILE_NAME = 'rendered-from.json'
+
+#: The kinds of pin the script reads: those whose artifact the bundle is
+#: rendered from, or a chart whose facts the run checks. A kind outside it is
+#: read by the programs alone, and no stack file overriding one of its pins
+#: can part the bundle from what is installed.
+READ_KINDS = (CHART, MANIFEST)
 
 #: Beside the pin record: the operator version each chart it reads declares.
 APP_VERSIONS_FILE_NAME = 'app-versions.json'

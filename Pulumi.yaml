@@ -263,6 +263,24 @@ config:
       asset: experimental-install.yaml
       sha256: d7fa77650e4ef28fca0411536fcb5e237deb4d50301cfded3be49d9a1b7bbd02
 
+  # The volume snapshot definitions VolSync's controller watches
+  # (storage.md §3.1), which external-snapshotter publishes only in its
+  # source tree: fetched at `commit` by the program, through
+  # `kluster.lib.source_files.fetch_source_files`, which refuses a file whose
+  # sha256 is not the one written beside its path. `update_crds` reads
+  # nothing here, since no program declares a snapshot object. Renovate moves
+  # `tag` and `commit` together; the digests are a person's to record, and the
+  # fetch refuses the bump until they are.
+  versions:source-external-snapshotter:
+    value:
+      repository: kubernetes-csi/external-snapshotter
+      tag: v8.7.0
+      commit: 9cc6050ab00a0c56d84ba0279e518a00367363e7
+      files:
+        client/config/crd/snapshot.storage.k8s.io_volumesnapshotclasses.yaml: 75e6565aac2c0f2949ed13ea884bbaa388cb7be576b558b709cf1168e011828d
+        client/config/crd/snapshot.storage.k8s.io_volumesnapshotcontents.yaml: 895a3c1e73b60f06a0deb566dd123d01bdf1b2efc5d5ff5231ff8bbcf42dafc7
+        client/config/crd/snapshot.storage.k8s.io_volumesnapshots.yaml: b032116e987fb1d7d93cec7d942833adeb9d95c9bdc7e00c10b280c2fe4a6c33
+
 # The generated SDKs under `sdks/`, one entry per SDK. None of them is a
 # published Pulumi SDK, and this block is their recipe -- `pulumi install`
 # regenerates every `sdks/<name>` from it, and the result is committed (every

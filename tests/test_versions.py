@@ -25,12 +25,14 @@ from kluster.lib.versions import (
     CHART,
     IMAGE,
     MANIFEST,
+    SOURCE,
     ChartPin,
     Floor,
     ImagePin,
     ManifestPin,
     ProgramConfig,
     ProjectFile,
+    SourcePin,
     Versions,
     versions,
 )
@@ -60,6 +62,12 @@ MANIFEST_PIN = {
     'asset': 'experimental-install.yaml',
     'sha256': 'b' * 64,
 }
+SOURCE_PIN = {
+    'repository': 'kubernetes-csi/external-snapshotter',
+    'tag': 'v8.7.0',
+    'commit': 'c' * 40,
+    'files': {'client/config/crd/one.yaml': 'd' * 64, 'client/config/crd/two.yaml': 'e' * 64},
+}
 
 #: The configuration a program is handed: a plain pin as itself, an object as
 #: the JSON text of its `value:`, which is how the engine passes a
@@ -70,6 +78,7 @@ PINS = {
     'versions:chart-cert-manager': json.dumps(OCI_CHART),
     'versions:chart-cloudnative-pg': json.dumps(HTTP_CHART),
     'versions:manifest-gateway-api': json.dumps(MANIFEST_PIN),
+    'versions:source-external-snapshotter': json.dumps(SOURCE_PIN),
     'versions:image-gateway-caddy': f'{REPOSITORY}:3@{DIGEST}',
 }
 
@@ -96,7 +105,7 @@ def project_block() -> dict[str, object]:
 def test_every_kind_shares_one_namespace_and_differs_by_key_prefix() -> None:
     """Which is what lets one renovate manager per kind match its own entries.
 
-    Four kinds and one `versions:` namespace, read the same way from any stack
+    Five kinds and one `versions:` namespace, read the same way from any stack
     because the keys are project-level configuration rather than one copy of
     the same value per stack.
     """
@@ -119,6 +128,13 @@ def test_every_kind_shares_one_namespace_and_differs_by_key_prefix() -> None:
         floor=Floor(operator='1.26', document='cluster-infra.md §1 item 5'),
     )
     assert versions.manifest['gateway-api'] == ManifestPin(name='gateway-api', **MANIFEST_PIN)
+    assert versions.source['external-snapshotter'] == SourcePin(
+        name='external-snapshotter',
+        repository='kubernetes-csi/external-snapshotter',
+        tag='v8.7.0',
+        commit='c' * 40,
+        files={'client/config/crd/one.yaml': 'd' * 64, 'client/config/crd/two.yaml': 'e' * 64},
+    )
 
 
 def test_a_chart_is_located_by_its_digest_where_its_registry_serves_one() -> None:
@@ -151,15 +167,19 @@ def test_the_parser_reads_the_same_pins_from_a_program_and_from_the_file() -> No
 
     charts = project.names(CHART)
     manifests = project.names(MANIFEST)
+    trees = project.names(SOURCE)
     images = project.names(IMAGE)
     # Not vacuous: the block pins every kind.
     assert charts
     assert manifests
+    assert trees
     assert images
     for name in charts:
         assert from_program.chart[name] == from_file.chart[name], name
     for name in manifests:
         assert from_program.manifest[name] == from_file.manifest[name], name
+    for name in trees:
+        assert from_program.source[name] == from_file.source[name], name
     for name in images:
         assert from_program.image[name] == from_file.image[name], name
     assert from_program.talos == from_file.talos
@@ -184,9 +204,10 @@ def test_a_structured_pin_written_outside_value_is_refused_by_name() -> None:
         ('the Talos release', lambda: versions.talos),
         ('versions:chart-nowhere', lambda: versions.chart['nowhere']),
         ('versions:manifest-nowhere', lambda: versions.manifest['nowhere']),
+        ('versions:source-nowhere', lambda: versions.source['nowhere']),
         ('versions:image-nowhere', lambda: versions.image['nowhere']),
     ],
-    ids=['talos', 'chart', 'manifest', 'image'],
+    ids=['talos', 'chart', 'manifest', 'source', 'image'],
 )
 def test_a_pin_nothing_configures_is_refused_by_name(missing: str, read: Callable[[], object]) -> None:
     """A half-filled configuration is the ordinary state of a first run.
@@ -265,6 +286,53 @@ def test_a_manifest_pin_of_the_wrong_shape_is_refused_by_name(pin: dict[str, str
 
     with pytest.raises(ValueError, match='versions:manifest-gateway-api') as refused:
         _ = versions.manifest['gateway-api']
+    assert refusal in str(refused.value)
+
+
+@pytest.mark.parametrize(
+    ('pin', 'refusal'),
+    [
+        (SOURCE_PIN | {'commit': 'c' * 12}, 'carries no full lower-case hexadecimal commit'),
+        (SOURCE_PIN | {'commit': 'C' * 40}, 'carries no full lower-case hexadecimal commit'),
+        (SOURCE_PIN | {'repository': 'external-snapshotter'}, 'names no `<owner>/<name>` GitHub repository'),
+        (SOURCE_PIN | {'files': {}}, 'has no `files` object with an entry'),
+        (SOURCE_PIN | {'files': ['client/config/crd/one.yaml']}, '`files` is not an object'),
+        (SOURCE_PIN | {'files': {'one.yaml': 1}}, 'carries a `files` entry that is not a string'),
+        (SOURCE_PIN | {'files': {'one.yaml': f'sha256:{"d" * 64}'}}, 'no lower-case hexadecimal sha256 for `one.yaml`'),
+        (SOURCE_PIN | {'files': {'../one.yaml': 'd' * 64}}, 'names `../one.yaml`, which is no path below'),
+        (SOURCE_PIN | {'files': {'/one.yaml': 'd' * 64}}, 'names `/one.yaml`, which is no path below'),
+        (SOURCE_PIN | {'files': {'crd//one.yaml': 'd' * 64}}, 'names `crd//one.yaml`, which is no path below'),
+        (SOURCE_PIN | {'files': {'crd/one.yaml?x=1': 'd' * 64}}, 'names `crd/one.yaml?x=1`, which is no path below'),
+        ({key: value for key, value in SOURCE_PIN.items() if key != 'tag'}, 'has no `tag` string'),
+        (SOURCE_PIN | {'release': 'v8.7.0'}, 'fields this kind has not got: release'),
+    ],
+    ids=[
+        'abbreviated commit',
+        'upper-case commit',
+        'no owner',
+        'no files',
+        'files a list',
+        'digest not a string',
+        'prefixed digest',
+        'parent path',
+        'absolute path',
+        'empty segment',
+        'query in path',
+        'no tag',
+        'a manifest field',
+    ],
+)
+def test_a_source_pin_of_the_wrong_shape_is_refused_by_name(pin: dict[str, object], refusal: str) -> None:
+    """Refused where it is read, before a URL is built from it.
+
+    The commit is what the files are fetched at, so an abbreviation -- which a
+    branch or a tag can be named like -- is refused, and so is a path that
+    would leave the tree's root or carry anything but a path into the URL.
+    """
+    pulumi.runtime.set_all_config(dict(PINS) | {'versions:source-external-snapshotter': json.dumps(pin)})
+
+    with pytest.raises(ValueError, match='versions:source-external-snapshotter') as refused:
+        _ = versions.source['external-snapshotter']
     assert refusal in str(refused.value)
 
 

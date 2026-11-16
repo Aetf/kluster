@@ -99,7 +99,15 @@ empty cluster:
 5.  **CNPG operator** (≥1.26 — the floor for declarative offline
     in-place major upgrades, workloads.md §4), **VolSync** —
     independent of each other; both before any app declares a
-    database or a backup schedule.
+    database or a backup schedule. VolSync is behind the **volume
+    snapshot definitions** (`snapshot.storage.k8s.io`, from
+    `external-snapshotter`), which its controller watches whatever a
+    mover's copy method; they are served and nothing more, with no
+    snapshot controller (storage.md §3.1). `external-snapshotter`
+    publishes them only in its source tree, so they are a
+    `versions:source-external-snapshotter` pin
+    (framework/pulumi.md §3.2) and a component of their own,
+    `components/backup/snapshots.py`.
 6.  **Monitoring**: VictoriaMetrics (vmsingle + vmagent + vmalert) +
     grafana, PromQL-compatible replacement for the legacy
     prometheus-operator stack at ~1/5 the RAM (nodes.md §4.4), from the

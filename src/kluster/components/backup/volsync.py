@@ -4,8 +4,10 @@ The operator alone, with no secret: a `claim` under a retention class declares
 its own `ReplicationSource`, and the restic repository's password and the
 namespace's writer key arrive with it, while a move's copy is an `rsync-tls`
 pair that needs neither (`kluster.components.apps.storage`, rfc-007 §8).
-Installed after cert-manager, with the database operator
-(declarative/cluster-infra.md §1, item 5).
+Installed after cert-manager, with the database operator, and behind the
+volume snapshot definitions its controller watches
+(`kluster.components.backup.snapshots`; declarative/cluster-infra.md §1,
+item 5).
 
 Its namespace is `restricted`: the chart's security contexts meet it, and the
 movers that touch a volume run in the namespace of the PVC they back up, not

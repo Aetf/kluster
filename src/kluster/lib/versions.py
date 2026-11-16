@@ -2,8 +2,9 @@
 
 Every pin a stack program reads is the same kind of fact — a build somebody
 else produced, selected by version — so the Talos release, the Helm charts, the
-release manifests and the container images share one `versions:` namespace and
-differ by a prefix on the key (docs/framework/pulumi.md §3.2):
+release manifests, the files of a source tree and the container images share
+one `versions:` namespace and differ by a prefix on the key
+(docs/framework/pulumi.md §3.2):
 
     versions:talos: v1.13.9
     versions:image-gateway-caddy: ghcr.io/aetf/homelab-containers/caddy:3@sha256:8258d234…
@@ -19,6 +20,13 @@ differ by a prefix on the key (docs/framework/pulumi.md §3.2):
         release: v1.6.1
         asset: experimental-install.yaml
         sha256: d7fa7765…
+    versions:source-external-snapshotter:
+      value:
+        repository: kubernetes-csi/external-snapshotter
+        tag: v8.7.0
+        commit: 9cc6050a…
+        files:
+          client/config/crd/snapshot.storage.k8s.io_volumesnapshots.yaml: b032116e…
 
 The gateway's container root filesystems are in the image kind rather than a
 kind of their own: they are published as registry images, so an image reference
@@ -62,6 +70,7 @@ TALOS = 'talos'
 CHART = 'chart'
 IMAGE = 'image'
 MANIFEST = 'manifest'
+SOURCE = 'source'
 
 #: A Talos release as upstream tags one: `v<major>.<minor>.<patch>`. That
 #: spelling is what the image factory's paths and the image names built from the
@@ -83,6 +92,16 @@ _SHA256 = re.compile(r'[0-9a-f]{64}')
 
 #: A GitHub repository, `<owner>/<name>`.
 _GITHUB_REPOSITORY = re.compile(r'[\w.-]+/[\w.-]+')
+
+#: A git commit as GitHub names one in a URL and the `github-tags` data source
+#: writes one back on a bump: the full forty lower-case hex digits. An
+#: abbreviation is refused, since a branch or tag can be named like one.
+_COMMIT = re.compile(r'[0-9a-f]{40}')
+
+#: A file's path within a source tree: segments of the characters a path in a
+#: URL carries unescaped, none of them empty, `.` or `..`, so the path names
+#: one file below the tree's root and nothing a URL could resolve elsewhere.
+_SEGMENT = re.compile(r'[\w.-]+')
 
 #: The two schemes a chart repository is reached by. An OCI registry serves a
 #: chart by digest, and Helm checks one written into the reference; an HTTP
@@ -287,6 +306,37 @@ class ManifestPin:
         return f'https://github.com/{self.repository}/releases/download/{self.release}/{self.asset}'
 
 
+@dataclass(frozen=True, kw_only=True)
+class SourcePin:
+    """Files of a GitHub repository's tree at a tag, each with its sha256.
+
+    For an upstream that publishes what is installed only in its source tree,
+    with no release asset to pin. The tag is what a reader and renovate know
+    the release by; the commit is what the files are fetched at, since a tag
+    can be moved and a commit cannot; and each file's sha256 holds the bytes
+    to what was proposed, as a manifest pin's does.
+    """
+
+    name: str
+    repository: str
+    """The GitHub repository, `<owner>/<name>`."""
+
+    tag: str
+    commit: str
+    """The commit the tag names, in full."""
+
+    files: Mapping[str, str]
+    """Each file's path from the tree's root, and its sha256, in the order the pin writes them."""
+
+    @property
+    def key(self) -> str:
+        return f'{NAMESPACE}:{SOURCE}-{self.name}'
+
+    def url(self, path: str) -> str:
+        """Where the file at `path` is served at the pinned commit."""
+        return f'https://raw.githubusercontent.com/{self.repository}/{self.commit}/{path}'
+
+
 class _Fields:
     """One structured pin's fields, each read once and refused by key and field name."""
 
@@ -310,6 +360,17 @@ class _Fields:
         if not isinstance(value, str) or not value:
             raise self.malformed(f'has no `{name}` string')
         return value
+
+    def strings(self, name: str) -> Mapping[str, str]:
+        """An object of strings to strings, with at least one entry."""
+        value = self.mapping(name)
+        if not value:
+            raise self.malformed(f'has no `{name}` object with an entry')
+        # A YAML key such as `1` arrives as a number, whatever `mapping` says of it.
+        entries = cast('Mapping[object, object]', value).items()
+        if not all(isinstance(key, str) and isinstance(entry, str) for key, entry in entries):
+            raise self.malformed(f'carries a `{name}` entry that is not a string')
+        return cast('Mapping[str, str]', value)
 
     def flag(self, name: str) -> bool:
         self._read.add(name)
@@ -491,6 +552,43 @@ class ManifestVersions(_Kind):
 
 
 @final
+class SourceVersions(_Kind):
+    """Files of a source tree, each pin an object under `value:`: the repository, tag, commit and each file's sha256.
+
+    The commit is checked to be one in full and each digest to be a sha256, and
+    each path to stay below the tree's root, so a pin that would fetch from
+    anywhere else is refused by name before anything is fetched. That the
+    commit is the tag's is not checked here: renovate moves the two together
+    off the tag, and a hand edit that parts them is a reviewed one.
+    """
+
+    def __init__(self, source: PinSource) -> None:
+        super().__init__(source, SOURCE)
+
+    def __getitem__(self, name: str) -> SourcePin:
+        fields = self.structured(name)
+        pin = SourcePin(
+            name=name,
+            repository=cast('str', fields.text('repository')),
+            tag=cast('str', fields.text('tag')),
+            commit=cast('str', fields.text('commit')),
+            files=dict(fields.strings('files')),
+        )
+        fields.done()
+        if _GITHUB_REPOSITORY.fullmatch(pin.repository) is None:
+            raise fields.malformed('names no `<owner>/<name>` GitHub repository')
+        if _COMMIT.fullmatch(pin.commit) is None:
+            raise fields.malformed('carries no full lower-case hexadecimal commit')
+        for path, sha256 in pin.files.items():
+            segments = path.split('/')
+            if not all(_SEGMENT.fullmatch(segment) and segment not in {'.', '..'} for segment in segments):
+                raise fields.malformed(f"names `{path}`, which is no path below the tree's root")
+            if _SHA256.fullmatch(sha256) is None:
+                raise fields.malformed(f'carries no lower-case hexadecimal sha256 for `{path}`')
+        return pin
+
+
+@final
 class Versions:
     """Every pin in the `versions:` block, by kind, read from one source."""
 
@@ -499,6 +597,7 @@ class Versions:
         self.chart = ChartVersions(source)
         self.image = ImageVersions(source)
         self.manifest = ManifestVersions(source)
+        self.source = SourceVersions(source)
 
     @property
     def talos(self) -> str:

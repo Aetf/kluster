@@ -400,15 +400,15 @@ namespace may carry a value but neither a type nor a default.
 
 Every version pin a stack program reads lives in that block, in one
 `versions:` namespace with **the kind in the key** —
-`versions:talos`, `versions:image-<name>`, `versions:chart-<name>` and
-`versions:manifest-<name>`, a container root filesystem being an image
-like any other. One namespace because they are one kind of fact, a
+`versions:talos`, `versions:image-<name>`, `versions:chart-<name>`,
+`versions:manifest-<name>` and `versions:source-<name>`, a container
+root filesystem being an image like any other. One namespace because they are one kind of fact, a
 build somebody else produced and this repository selects by version;
 the prefix because it is what lets renovate's managers for a kind match
 its own entries and nothing else.
 
-The Talos release and an image are plain values. A chart and a manifest
-are objects, and **an object is written under `value:`**, the one form
+The Talos release and an image are plain values. A chart, a manifest and
+a source are objects, and **an object is written under `value:`**, the one form
 Pulumi's project schema accepts for one: written directly under the key,
 the CLI refuses the whole file as an invalid type declaration. A chart
 pin holds where the chart is served, its version and, for a chart from
@@ -418,12 +418,34 @@ it renders definitions, the values that make it render them, and the
 floor its operator version has to clear with the section that states
 it. A manifest pin, a YAML bundle published as a release asset, holds
 the GitHub repository, the release, the asset and the asset's sha256.
+A source pin, files of a GitHub repository's tree, holds the repository,
+the tag, the full commit the tag names, and each file's path from the
+tree's root with the file's sha256.
 `lib/versions.py` exposes one accessor per kind, each checking the
 pin's shape and returning it parsed — a chart as `ChartPin`, a manifest
-as `ManifestPin`, an image as its repository, tag and digest, the Talos
-release as a tag checked to be one — and each refusing a missing or
-malformed pin by naming the key, so a pin nobody set fails where it is
-read instead of somewhere downstream.
+as `ManifestPin`, a source as `SourcePin`, an image as its repository,
+tag and digest, the Talos release as a tag checked to be one — and each
+refusing a missing or malformed pin by naming the key, so a pin nobody
+set fails where it is read instead of somewhere downstream.
+
+**Which kind pins a release depends on what its publisher ships.** A chart where
+the upstream serves one, since a chart is what installs its software. A
+manifest where what is installed is a file the upstream attaches to its
+release, as the Gateway API definitions are. A source pin where the
+upstream publishes the files in its source tree and nowhere else, with
+no chart and no release asset — `external-snapshotter`'s volume snapshot
+definitions (storage.md §3.1). Each kind that names a file holds the
+bytes to what was proposed, and is fetched and refused the same way: a
+manifest through `lib/release_assets.py`, a source pin's files through
+`lib/source_files.py`, from `raw.githubusercontent.com` at the commit
+rather than the tag, since a tag can be moved and a commit cannot, each
+file refused unless its sha256 is the one the pin writes beside its
+path. Renovate tracks every kind: a source pin through the `github-tags`
+data source, which resolves a tag to the commit it names and moves the
+two together. It cannot recompute the files' sha256s, so a bump arrives
+with the old ones and every run of the program refuses it, naming the
+file and both digests, until a person records the new ones on the
+branch.
 
 A pin no stack program reads lives with the tool that reads it: Python
 dependencies in `pyproject.toml` and `uv.lock`, the command-line tools
@@ -803,10 +825,15 @@ not those files, and the tests above go red on the branch rather than
 on the workstation.
 
 **The bundle records the pins it was rendered from.** The script
-reads the chart and manifest pins out of the `versions:` block (§3.2),
-reads the `appVersion` each chart it reads declares and checks the
-chart's floor against it, so no operator version is kept by hand beside
-a pin, and renders the definitions. Beside the bundle it writes
+reads the pins of the kinds the bundle is rendered from or checked
+against out of the `versions:` block (§3.2) — the chart and manifest
+pins, `update_crds/record.py`'s `READ_KINDS` — and no other kind: a
+source pin installs files as its upstream wrote them, which no program
+declares an object of through the SDK, so nothing is generated from one
+and a bump of one leaves the record it writes as it is. It reads the
+`appVersion` each chart it reads declares and checks the chart's floor
+against it, so no operator version is kept by hand beside a pin, and
+renders the definitions. Beside the bundle it writes
 `packages/crds/rendered-from.json`: every pin it read, as the file holds
 it — a chart that renders definitions, the chart whose version is the
 ref of the Cilium source tree the script reads Cilium's definitions

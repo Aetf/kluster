@@ -1,4 +1,4 @@
-"""The `k8s-base` program's stand-ins and its whole run: what `physical` has published, the pins, the release asset.
+"""The `k8s-base` program's stand-ins and its whole run: what `physical` has published, the pins, the fetched files.
 
 Every suite that runs `k8s_base.main` whole needs the same three things the
 program reads besides its kubeconfig, so they are here rather than in any one
@@ -28,7 +28,7 @@ from mock_monitor import Recorder, declaring, run_under_backstop
 from kluster import conventions
 from kluster.lib.k8s import KUBECONFIG_KEY
 from kluster.lib.stack_addresses import UnusableAddressOutput
-from kluster.lib.versions import ManifestPin
+from kluster.lib.versions import ManifestPin, SourcePin
 
 OUTPUTS = conventions.PHYSICAL_OUTPUTS
 
@@ -162,12 +162,29 @@ VERSIONS_CONFIG = {
             'sha256': 'e' * 64,
         }
     ),
+    'versions:source-external-snapshotter': json.dumps(
+        {
+            'repository': 'example/external-snapshotter',
+            'tag': 'v9.14.0',
+            'commit': 'f' * 40,
+            'files': {'crd/classes.yaml': 'c' * 64, 'crd/snapshots.yaml': '5' * 64},
+        }
+    ),
 }
 
 #: The release asset's bytes, as a fetch that matched the pin returns them.
 #: Nothing parses them under mocks; the case asks that these, and nothing
 #: else, reach the declaration.
 GATEWAY_API_DEFINITIONS = '# the Gateway API definitions the pin names\n'
+
+
+def source_file(pin: SourcePin, path: str) -> str:
+    """A file of a source pin, as a fetch that matched the pin returns it: text naming where it came from.
+
+    Nothing parses it under mocks; it names the repository, the commit and the
+    path, so text that reached a declaration says which pin's file it is.
+    """
+    return f'# {pin.repository}@{pin.commit}:{path}\n'
 
 
 class Physical(Recorder):
@@ -185,10 +202,11 @@ class Physical(Recorder):
 
 @contextmanager
 def release_assets() -> Generator[list[ManifestPin]]:
-    """The program's release-asset fetch answered here, and every pin it was asked for recorded.
+    """The program's fetches answered here, and every release-asset pin it was asked for recorded.
 
-    The program fetches the asset before it declares anything, so a run that
-    reaches the network is one the suite does not control.
+    The program fetches the release asset and the source files before it
+    declares anything, so a run that reaches the network is one the suite does
+    not control. A source pin's files are answered by `source_file`.
     """
     from kluster.stacks import k8s_base
 
@@ -198,8 +216,12 @@ def release_assets() -> Generator[list[ManifestPin]]:
         fetched.append(pin)
         return GATEWAY_API_DEFINITIONS
 
+    def fetch_source(pin: SourcePin) -> list[str]:
+        return [source_file(pin, path) for path in pin.files]
+
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr(k8s_base, 'fetch_manifest', fetch)
+        patch.setattr(k8s_base, 'fetch_source_files', fetch_source)
         yield fetched
 
 

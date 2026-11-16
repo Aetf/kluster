@@ -33,7 +33,8 @@ import ruamel.yaml.main as ruamel_yaml_main
 from renovate_text import as_python_spells_it, as_renovate_spells_it, group, listed, package_rules, scalar
 from tqdm import tqdm
 
-from kluster.lib.versions import CHART, MANIFEST, ChartPin, Floor, ProjectFile, Versions
+from kluster.lib import source_files
+from kluster.lib.versions import CHART, MANIFEST, SOURCE, ChartPin, Floor, ProjectFile, Versions
 from kluster.scripts.update_crds import cli, pins, record, sources, values
 from kluster.scripts.update_crds.values import CustomResourceSpec, MissingDefinition, ValuePaths, read_chart
 
@@ -210,8 +211,9 @@ def test_version_tuple(version: str, expected: tuple[int, ...]) -> None:
 def test_no_stack_file_overrides_a_pin_the_script_reads() -> None:
     """A stack's own file can override a project value, and the script reads only `Pulumi.yaml`.
 
-    A chart or manifest pin overridden in `Pulumi.<stack>.yaml` would install
-    one release while the bundle describes another, with every check green.
+    A pin of a kind the script reads overridden in `Pulumi.<stack>.yaml` would
+    install one release while the bundle describes another, with every check
+    green.
     """
     stack_files = sorted(ROOT.glob('Pulumi.*.yaml'))
     # Not vacuous: the stacks have files of their own.
@@ -220,7 +222,7 @@ def test_no_stack_file_overrides_a_pin_the_script_reads() -> None:
         f'{path.name}: {key}'
         for path in stack_files
         for key in sources.read_config(path, required=False)
-        if key.startswith((f'versions:{CHART}-', f'versions:{MANIFEST}-'))
+        if key.startswith(tuple(f'versions:{kind}-' for kind in record.READ_KINDS))
     ]
     assert overriding == []
 
@@ -588,6 +590,58 @@ def test_the_record_holds_what_the_script_reads_and_nothing_else() -> None:
     for name in unread:
         moved = with_version(config, f'versions:chart-{name}', '99.0.0')
         assert record.record(ProjectFile(moved)) == before, name
+
+
+def test_a_source_pin_is_read_by_the_programs_alone(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Nothing is generated from a source pin, so a run fetches none of its files and its record ignores it.
+
+    A bump of one, or its removal, leaves the record as it is, so it is not
+    held red waiting for a regeneration that would change nothing.
+    """
+    config = project_config()
+    project = ProjectFile(config)
+    names = project.names(SOURCE)
+    # Not vacuous: the block pins a source.
+    assert names
+    before = record.record(project)
+    for name in names:
+        key = f'versions:{SOURCE}-{name}'
+        pin = cast('dict[str, dict[str, object]]', config[key])['value']
+        moved = dict(config) | {
+            key: {'value': pin | {'tag': 'v99.0.0', 'commit': '0' * 40, 'files': {'crd/other.yaml': '0' * 64}}}
+        }
+        assert record.record(ProjectFile(moved)) == before, name
+        assert record.record(ProjectFile({k: v for k, v in config.items() if k != key})) == before, name
+
+    fetched: list[str] = []
+
+    def get(url: str, **_: object) -> requests.Response:
+        fetched.append(url)
+        raise AssertionError(f'a run fetched {url}')
+
+    def nothing(*_: object, **__: object) -> list[str]:
+        return []
+
+    def app_version(*_: object, **__: object) -> str:
+        return '99.0.0'
+
+    def value_paths(*_: object, **__: object) -> ValuePaths:
+        return ValuePaths(paths=frozenset(), free_form=frozenset())
+
+    def fetch_helm(_: Path) -> Path:
+        return tmp_path / 'helm'
+
+    monkeypatch.setattr(source_files.requests, 'get', get)
+    monkeypatch.setattr(sources, 'fetch_helm', fetch_helm)
+    monkeypatch.setattr(sources, 'chart_value_paths', value_paths)
+    monkeypatch.setattr(sources, 'chart_app_version', app_version)
+    monkeypatch.setattr(sources, 'fetch_source_tree', nothing)
+    monkeypatch.setattr(cli, 'fetch_manifest', app_version)
+    monkeypatch.setattr(sources, 'render_chart', app_version)
+
+    _ = cli.collect_documents(tmp_path, project)
+
+    assert fetched == []
 
 
 def test_a_chart_the_script_reads_only_for_its_floor_is_recorded() -> None:
@@ -1001,6 +1055,10 @@ MANIFEST_MATCH_STRING = (
     r'versions:manifest-[\w-]+:\s+value:\s+repository: (?<depName>[\w.-]+/[\w.-]+)'
     r'\s+release: (?<currentValue>\S+)\s+asset: \S+\s+sha256: (?<currentDigest>[0-9a-f]{64})'
 )
+SOURCE_MATCH_STRING = (
+    r'versions:source-[\w-]+:\s+value:\s+repository: (?<depName>[\w.-]+/[\w.-]+)'
+    r'\s+tag: (?<currentValue>\S+)\s+commit: (?<currentDigest>[0-9a-f]{40})'
+)
 
 
 def managers() -> list[str]:
@@ -1084,9 +1142,32 @@ def test_the_manifest_manager_moves_the_release_and_its_digest_in_one_match() ->
     assert scalar(entry, 'datasourceTemplate') == 'github-release-attachments'
 
 
+def test_the_source_manager_moves_the_tag_and_its_commit_in_one_match() -> None:
+    """The tag is the version and the commit its digest, so a bump moves both, through the tags data source.
+
+    Apart, a bump would land with the files fetched at the commit before it.
+    """
+    text = (ROOT / 'Pulumi.yaml').read_text()
+    versions = Versions(ProjectFile(project_config()))
+    entry = manager(SOURCE_MATCH_STRING)
+
+    found = [
+        (match['depName'], match['currentValue'], match['currentDigest'])
+        for match in as_python_spells_it(SOURCE_MATCH_STRING).finditer(text)
+    ]
+    expected = [
+        ((pin := versions.source[name]).repository, pin.tag, pin.commit)
+        for name in ProjectFile(project_config()).names(SOURCE)
+    ]
+    assert expected
+    assert found == expected
+    assert scalar(entry, 'datasourceTemplate') == 'github-tags'
+
+
 #: The data sources the block's in-cluster pins are read through: the two chart
-#: managers', the manifest manager's, and the image manager's.
-IN_CLUSTER_DATASOURCES = {'helm', 'docker', 'github-release-attachments'}
+#: managers', the manifest manager's, the source manager's and the image
+#: manager's.
+IN_CLUSTER_DATASOURCES = {'helm', 'docker', 'github-release-attachments', 'github-tags'}
 
 
 def in_cluster_rule(rules: list[str]) -> int:
@@ -1116,7 +1197,7 @@ def sibling_slugs(rules: list[str], index: int) -> set[str]:
 
 
 def test_the_in_cluster_rule_groups_what_the_block_managers_read() -> None:
-    """The group the chart, manifest and in-cluster image bumps travel in.
+    """The group the chart, manifest, source and in-cluster image bumps travel in.
 
     Matched by the file the managers read and the data sources they read
     through. The gateway's root filesystems are images in the same file, so
@@ -1135,7 +1216,7 @@ def test_the_in_cluster_rule_groups_what_the_block_managers_read() -> None:
     assert set(listed(rule, 'matchDatasources')) == IN_CLUSTER_DATASOURCES
     read_through = {
         scalar(entry, 'datasourceTemplate')
-        for pattern in (HTTP_CHART_MATCH_STRING, OCI_CHART_MATCH_STRING, MANIFEST_MATCH_STRING)
+        for pattern in (HTTP_CHART_MATCH_STRING, OCI_CHART_MATCH_STRING, MANIFEST_MATCH_STRING, SOURCE_MATCH_STRING)
         for entry in [manager(pattern)]
     }
     assert read_through <= IN_CLUSTER_DATASOURCES

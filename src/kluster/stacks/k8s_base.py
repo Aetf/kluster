@@ -1,7 +1,7 @@
 """The `k8s-base` stack: everything cluster-scoped that speaks the k8s API.
 
-Gateway API CRDs, Cilium, sealed-secrets, cert-manager, CNPG and VolSync,
-VictoriaMetrics, NFD and the GPU plugin, and the small standing set the legacy
+Gateway API CRDs, Cilium, sealed-secrets, cert-manager, CNPG and VolSync with
+the volume snapshot definitions it watches, VictoriaMetrics, NFD and the GPU plugin, and the small standing set the legacy
 cluster proved — in that dependency order, per
 docs/declarative/cluster-infra.md. The component list is closed: additions
 argue for themselves in writing first.
@@ -45,7 +45,8 @@ The chart set is pinned on first contact (declarative/README.md, "Deliberately
 not pre-decided"), and each chart is a project-level `versions:chart-<name>`
 pin in `Pulumi.yaml`'s `config:` block, which renovate moves
 (framework/pulumi.md §3.2), as the Gateway API definitions are a
-`versions:manifest-<name>` pin and local-path-provisioner's two images are
+`versions:manifest-<name>` pin, the volume snapshot definitions a
+`versions:source-<name>` pin and local-path-provisioner's two images
 `versions:image-<name>` pins; a component installs what the program reads
 through `kluster.lib.versions` and hands it. The custom resources are written
 against `sdks/crds`, which `mise x -- uv run update_crds` regenerates from the
@@ -59,6 +60,7 @@ import pulumi
 import pulumi_kubernetes as k8s
 
 from kluster import conventions
+from kluster.components.backup.snapshots import SnapshotDefinitions
 from kluster.components.backup.volsync import VolSync
 from kluster.components.certificates import CertManager
 from kluster.components.cilium import BgpSession, Cilium, internet_pool_members
@@ -71,6 +73,7 @@ from kluster.components.sealing import SealedSecretsController
 from kluster.lib import stack_addresses
 from kluster.lib.k8s import KUBECONFIG_KEY, kubeconfig_from, sealed_ciphertext
 from kluster.lib.release_assets import fetch_manifest
+from kluster.lib.source_files import fetch_source_files
 from kluster.lib.versions import versions
 from putils import background
 
@@ -78,9 +81,10 @@ from putils import background
 async def main() -> None:
     config = pulumi.Config()
 
-    # Fetched before anything is declared: it reads no output, and it is a
-    # release asset, refused unless its bytes are the pin's.
+    # Fetched before anything is declared: they read no output, and each is
+    # refused unless its bytes are the pin's.
     gateway_api_definitions = await background(fetch_manifest)(versions.manifest['gateway-api'])
+    snapshot_definitions = await background(fetch_source_files)(versions.source['external-snapshotter'])
 
     # Read so that anything but a kubeconfig stops the run, naming what it
     # found: no copy in this stack's configuration, or one that is blank or
@@ -141,7 +145,10 @@ async def main() -> None:
         after=[cert_manager],
         opts=opts,
     )
-    _ = VolSync('volsync', chart=versions.chart['volsync'], after=[cert_manager], opts=opts)
+    # VolSync's controller watches volume snapshots, so it is behind their
+    # definitions.
+    snapshots = SnapshotDefinitions('snapshot-definitions', definitions=snapshot_definitions, after=[cilium], opts=opts)
+    _ = VolSync('volsync', chart=versions.chart['volsync'], after=[cert_manager, snapshots], opts=opts)
     _ = Monitoring(
         'monitoring',
         stack_chart=versions.chart['victoria-metrics-k8s-stack'],
