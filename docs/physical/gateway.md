@@ -238,11 +238,26 @@ declarative/physical.md §4.
     deliver it stops the proxy instead of starting it somewhere else.
     The ZeroTier member
     is told nothing through its environment: it is host-networked, and
-    what it needs of its machine is the tunnel device and the state
-    directory that is its identity on the overlay. The one thing
-    declared into that directory is an initial state naming the network
-    it joins, `networks.d/<network id>.conf`, placed before the daemon's
-    first start and the daemon's own from then on.
+    what it needs of its machine is the tunnel device, the state
+    directory that is its identity on the overlay, and its settings on
+    the network. Two files are declared into that directory. An initial
+    state names the network it joins, `networks.d/<network id>.conf`,
+    placed before the daemon's first start and the daemon's own from
+    then on. Its settings on that network,
+    `networks.d/<network id>.local.conf` (§2.2), are a mounted file
+    bound read-only over the state directory, this program's on every
+    deployment. The daemon reads that file when the network comes up
+    and at no other time, and the content stamp restarts the machine
+    when the file changes (§1.1). The daemon writes the file only when
+    its control API is asked to change a setting, which is what
+    `zerotier-cli set` and a repeated `zerotier-cli join` send, and
+    deletes it only when it leaves the network. Against a read-only
+    bind both fail while the daemon carries on, so a setting changed by
+    hand lasts until the machine next starts, and the declaration is
+    what it starts with. The bind lands inside the state directory's
+    own bind because nspawn mounts a machine's binds in the order of
+    their targets, a directory before what is under it
+    (`custom_mount_prepare_all` in systemd 257, the device's).
 
     **Host-networked is a requirement rather than an accident**, and it
     is written here because it is easy to lose in a refactor: the
@@ -1482,7 +1497,7 @@ intuitive answers are wrong:
 | Linux, macOS, Windows | `allowDefault`, per network, off in a new network's settings (`zerotier-cli set <network id> allowDefault=1`, or Allow Default in the tray menu) | Nothing is installed. |
 | Android | Route Via ZeroTier, per network, in the app's network page | The default route is skipped; the system's VPN gets the overlay subnet and the multicast range (`kaaass/ZerotierFix`, `ZeroTierOneService.java`). |
 | The homelab host | Its `allowManaged=10.144.0.0/16` (below) | Refused whatever `allowDefault` says: an entry of that list admits a target it contains with a prefix no longer than the target's. |
-| The gateway | The route's `via` is its own address | Never installed. |
+| The gateway | The route's `via` is its own address, and its `allowDefault` is declared off (below) | Never installed. |
 | `haos`, the VPS, the CI runners | Linux clients on their defaults, a runner joining fresh each run | Nothing is installed. |
 | iOS | Not established: the app is closed source, and no roster member is known to be one | |
 
@@ -1550,6 +1565,24 @@ roster field carries it. The homelab host is the instance this
 repository states it for, because it is also the way in when the
 gateway's `zerotier` machine is down (§3), and its configuration
 management declares the file ([homelab-host.md](homelab-host.md) §4).
+
+**The gateway's own settings are declared in the same file** under
+its daemon's state (§1): `allowManaged=1`, `allowGlobal=1`,
+`allowDefault=0` and `allowDNS=0` (`container.OVERLAY_SETTINGS`).
+`allowManaged` keeps its overlay address and the overlay's subnet.
+`allowGlobal` admits a managed address or route in global scope, which
+is every IPv6 address outside `fc00::/7`, `fe80::/10` and `ff00::/8`:
+with it, the gateway takes a global address the network assigns it and
+the connected route to that address's prefix, which is the route a
+reply to a holder of a global overlay address finds. While every
+managed route is IPv4 (below), the network assigns nothing global and
+the setting admits nothing. `allowDefault` is off because the gateway
+is the default route's next hop and never its user, and `allowDNS` is
+off as it is on every Linux member, where it changes nothing (§2.7).
+No line has to be put back before each start, as the homelab host's
+must: the file is bound read-only from the deployment, so neither
+`zerotier-cli set` nor a repeated `zerotier-cli join` rewrites it, and
+the next start reads the declaration whatever was set by hand.
 
 **Every managed route is IPv4, and the pool's ULA /64 is deliberately
 not among them.** The overlay assigns no v6 address to any member

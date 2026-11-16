@@ -45,6 +45,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from ipaddress import IPv4Address
+from types import MappingProxyType
 from typing import Annotated, final
 
 import pulumi
@@ -76,6 +77,8 @@ __all__ = (
     'ENV_IPV4_GATEWAY',
     'ENV_IPV6_TOKEN',
     'KILL_SIGNAL',
+    'OVERLAY_NETWORKS',
+    'OVERLAY_SETTINGS',
     'OVERLAY_STATE',
     'S6_CMD_RECEIVE_SIGNALS',
     'S6_KILL_GRACETIME',
@@ -97,6 +100,7 @@ __all__ = (
     'mounted_path',
     'net_setup_environment',
     'nspawn_file',
+    'overlay_settings',
     'resolv_conf',
 )
 
@@ -168,6 +172,40 @@ CADDY_RESOLV_CONF = '/etc/resolv.conf'
 #: (`zerotier-one /var/lib/zerotier-one`), so it moves only with the image.
 TUN_DEVICE = '/dev/net/tun'
 OVERLAY_STATE = '/var/lib/zerotier-one'
+
+#: The directory under `OVERLAY_STATE` that holds one file per network the
+#: daemon is a member of: `<network id>.conf`, which it joins at start and
+#: rewrites with what its controller sends, and `<network id>.local.conf`,
+#: the member's own settings for that network, which it reads when the
+#: network comes up. Both names are the daemon's
+#: (`OneService.cpp` at ZeroTier 1.16.2).
+OVERLAY_NETWORKS = 'networks.d'
+
+#: The gateway's own settings on the overlay, in the daemon's names. They
+#: decide which of what the controller pushes the gateway installs, and the
+#: controller cannot read or set them:
+#:
+#: - `allowManaged`: the managed addresses and routes in private scope, the
+#:   gateway's overlay address among them.
+#: - `allowGlobal`: the same in global scope, which is every IPv6 address
+#:   outside `fc00::/7`, `fe80::/10` and `ff00::/8`. It is what lets the
+#:   gateway take a global address the network assigns it, and the connected
+#:   route to that address's prefix.
+#: - `allowDefault` off: the gateway is the default route's next hop, never
+#:   its user.
+#: - `allowDNS` off, its default: a Linux member applies no pushed DNS
+#:   either way (physical/gateway.md §2.7).
+#:
+#: Nothing global is installed until the network assigns a global address,
+#: so the file admits nothing while the overlay carries IPv4 alone.
+OVERLAY_SETTINGS: Mapping[str, bool] = MappingProxyType(
+    {
+        'allowManaged': True,
+        'allowGlobal': True,
+        'allowDefault': False,
+        'allowDNS': False,
+    }
+)
 
 #: The device bridge a service on the container VLAN attaches to. It is that
 #: VLAN's bridge — the container services are what the VLAN exists for.
@@ -477,8 +515,8 @@ class OverlayDaemon(ContainerDeclaration[conventions.gateway.HostNetworkService]
 
     Nothing is injected into its environment: the daemon is started with its
     state directory as its only argument, and it reaches its roots by literal
-    address. What it needs of its machine is the tunnel device and the state
-    bind that is its identity on the overlay.
+    address. What it needs of its machine is the tunnel device, the state
+    bind that is its identity on the overlay, and its settings on the network.
 
     **The network it joins is an initial state.** At start the daemon joins
     exactly the networks named by the files in `networks.d/` of that directory,
@@ -494,6 +532,26 @@ class OverlayDaemon(ContainerDeclaration[conventions.gateway.HostNetworkService]
     it ever leaves. Like every initial state it is placed only into a state
     directory that holds nothing, so a daemon that has already run keeps the
     identity and the memberships it has.
+
+    **Its settings on that network are a mounted file**, the
+    `<network id>.local.conf` beside the membership (`OVERLAY_SETTINGS`), and
+    this program's on every deployment. The daemon reads the file when the
+    network comes up and at no other time, so a change takes a restart, which
+    the file's place in the machine's directory gives it: it is in the content
+    stamp. The daemon writes the file in one place, when its control API is
+    asked to change a setting of the network (`zerotier-cli set`, or a
+    repeated `zerotier-cli join`), and deletes it when it leaves the network.
+    Bound read-only, both fail and the daemon carries on: the write leaves
+    the change in memory alone, and the next start reads the declaration
+    again. So nothing on the device contends with the declaration, and a
+    setting changed by hand lasts until the machine restarts.
+
+    The bind lands inside the state bind, and that holds because nspawn
+    mounts a machine's binds in the order of their targets, a directory
+    before what is under it (`custom_mount_prepare_all` in systemd 257, the
+    device's). Mounting it leaves an empty file at its target in the state
+    directory, after the initial state is placed, and the daemon reads an
+    empty file as its defaults.
     """
 
     @property
@@ -505,10 +563,19 @@ class OverlayDaemon(ContainerDeclaration[conventions.gateway.HostNetworkService]
         return (TUN_DEVICE,)
 
     @property
+    def mounted_files(self) -> tuple[MountedFile, ...]:
+        settings = f'{conventions.overlay.NETWORK_ID}.local.conf'
+        return (
+            MountedFile(
+                name=settings, target=f'{OVERLAY_STATE}/{OVERLAY_NETWORKS}/{settings}', content=overlay_settings()
+            ),
+        )
+
+    @property
     def initial_state(self) -> InitialState:
         # `into` is relative to the state directory, which is bind-mounted at
         # `OVERLAY_STATE` -- the directory the daemon is started against.
-        return InitialState(into=f'networks.d/{conventions.overlay.NETWORK_ID}.conf', content='')
+        return InitialState(into=f'{OVERLAY_NETWORKS}/{conventions.overlay.NETWORK_ID}.conf', content='')
 
 
 #: One service's declaration, whichever image it is for. A fifth service is a
@@ -766,6 +833,17 @@ def resolv_conf() -> str:
             resolver=str(conventions.CONTAINER_VLAN.require_gateway()),
         ),
     )
+
+
+def overlay_settings() -> str:
+    """The gateway's settings on the overlay network, as its daemon reads them.
+
+    One `name=value` line per setting, a boolean as `1` or `0`: the format the
+    daemon writes the file in itself and parses with its own dictionary type.
+    That format has no comment syntax, so the file carries no header naming
+    who manages it; `OverlayDaemon` says why nothing else writes it.
+    """
+    return ''.join(f'{name}={int(value)}\n' for name, value in OVERLAY_SETTINGS.items())
 
 
 @final
