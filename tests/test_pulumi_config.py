@@ -693,7 +693,7 @@ def test_a_stack_whose_state_is_committed_is_pointed_at_the_checkouts_checkpoint
         == f'{(tmp_path / stack_environment.CHECKPOINTS).as_uri()}?metadata=skip'
     )
     assert committed[stack_environment.DISABLE_BACKUPS_ENV] == 'true'
-    assert estate[pulumi_config.BACKEND_URL_ENV] == 'postgres://operator@192.0.2.10/pulumi_state'
+    assert estate[pulumi_config.BACKEND_URL_ENV] == 'postgres://operator@192.0.2.10/pulumi_state?binary_parameters=yes'
     assert stack_environment.DISABLE_BACKUPS_ENV not in estate
 
 

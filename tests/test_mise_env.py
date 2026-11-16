@@ -114,7 +114,10 @@ def _fill_slots(checkout: Path) -> dict[str, str]:
     # store, and nothing below may resolve it.
     _ = (slots / stack_environment.OPERATOR_PASSPHRASE_SLOT).write_text('slot-operator-passphrase\n')
     return {
-        'PULUMI_BACKEND_URL': SLOT_URL,
+        # What `pulumi` is given is the bundle's URL with the parameter the
+        # driver behind its backend reads (`bundle.pulumi_url`); the three
+        # files are named as they are for every client.
+        'PULUMI_BACKEND_URL': f'{SLOT_URL}?binary_parameters=yes',
         'PULUMI_CONFIG_PASSPHRASE': 'slot-passphrase',
         'PGSSLROOTCERT': str(bundle / bundle_files.CA_FILE),
         'PGSSLCERT': str(bundle / bundle_files.CERT_FILE),
@@ -269,6 +272,36 @@ def test_every_run_mise_starts_writes_the_state_compressed_and_without_backups(t
     resolved = _resolve(cwd, tmp_path / 'home', trusted=primary, extra=caller, names=expected.keys())
 
     assert resolved == expected
+
+
+#: The shapes a slot's connection string comes in: what `state-backend bundle`
+#: writes, one with no query, one that names its certificate files in the
+#: query as an older bundle does, an empty file, which names no backend, and
+#: a backend of another scheme.
+SLOT_URLS = {
+    'as written': f'{SLOT_URL}?sslmode=verify-full',
+    'no query': SLOT_URL,
+    'file parameters': f'{SLOT_URL}?sslmode=verify-full&sslrootcert=/b/ca.crt&sslcert=/b/client.crt&sslkey=/b/client.key',
+    'empty': '',
+    'another scheme': 'file:///scratch/state',
+}
+
+
+@needs_mise
+@pytest.mark.parametrize('written', list(SLOT_URLS.values()), ids=list(SLOT_URLS))
+def test_mise_gives_pulumi_the_url_the_python_side_gives_it(tmp_path: Path, written: str) -> None:
+    # Two spellings of one rule: the template `mise.toml` renders for every
+    # run it starts, CI's included, and `bundle.pulumi_url`, which every run
+    # the Python side starts from a slot is given. Whatever the slot holds,
+    # they agree.
+    checkout = _checkout(tmp_path / 'kluster')
+    _ = _fill_slots(checkout)
+    url_file = lib_workstation.slots(checkout) / stack_environment.BUNDLE_SLOT / bundle_files.URL_FILE
+    _ = url_file.write_text(written + '\n')
+
+    resolved = _resolve(checkout, tmp_path / 'home', names={'PULUMI_BACKEND_URL'})
+
+    assert resolved == {'PULUMI_BACKEND_URL': bundle_files.pulumi_url(written)}
 
 
 #: Where a command word stands in a line of shell: at its start, or after

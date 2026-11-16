@@ -531,7 +531,10 @@ through `mise.toml`'s `[env]`, and no `mise` task runs one
     [credentials.md](../credentials.md) §2 — the desktop secret store,
     its workstation slot, `KLUSTER_OPERATOR_PASSPHRASE`, a prompt at a
     terminal — and the backend the census names. That is the estate's backend, with the
-    `operator` client bundle's connection string and its three files, or
+    `operator` client bundle's connection string, given to `pulumi` with
+    `binary_parameters=yes` added as every run started from a slot is
+    ([physical/state-backend.md](../physical/state-backend.md) §7.5),
+    and its three files, or
     `file://<checkout>/checkpoints?metadata=skip` with
     `PULUMI_DIY_BACKEND_DISABLE_CHECKPOINT_BACKUPS` set. The process
     starts with none of the caller's variables that can steer `pulumi`

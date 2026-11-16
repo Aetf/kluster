@@ -33,6 +33,7 @@ from cryptography.hazmat.primitives import serialization
 from fake_gh import RecordedGh
 
 from kluster import conventions
+from kluster.lib import bundle as bundle_files
 from kluster.lib import pulumi_cli, stack_environment
 from kluster.lib.state_backend import settings as appliance_settings
 from kluster.scripts.credentials import devices, escrow, pki, pulumi_config, slots
@@ -1539,7 +1540,7 @@ class Dropping(RecordedPulumi):
     stopped: list[list[str]] = field(default_factory=list[list[str]])
 
     def __call__(self, args: Sequence[str], *, cwd: Path, env: Mapping[str, str], stdin: str | None) -> str:
-        if env.get(pulumi_config.BACKEND_URL_ENV) == STATE_BACKEND_URL:
+        if env.get(pulumi_config.BACKEND_URL_ENV) == bundle_files.pulumi_url(STATE_BACKEND_URL):
             self.reached.append(list(args))
             if self.drops(list(args)):
                 self.stopped.append(list(args))

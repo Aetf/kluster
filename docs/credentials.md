@@ -1504,7 +1504,8 @@ operator-passphrase generate` and `recover`.
     command writes the
     workstation slot (§4.4) as well as the ciphertext, and that slot is
     what a `pulumi` run reads from here on: `mise.toml` puts the
-    passphrase and the bundle's `PULUMI_BACKEND_URL` into the
+    passphrase and the `PULUMI_BACKEND_URL` it forms from the bundle's
+    connection string (physical/state-backend.md §7.5) into the
     environment of every later run, so no stage below prepares a shell.
     A second workstation that holds the kit fills the same slot once with
     `credentials derived pulumi-passphrase recover`, and one that does not

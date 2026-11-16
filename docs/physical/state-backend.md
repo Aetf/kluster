@@ -459,7 +459,8 @@ oraclecloud`, x86_64), the qcow2 imports as a custom image
     ever expanded inside the string itself. Paths in the string would
     make the recorded copy true of one directory on one machine, so
     moving a checkout would invalidate it silently. `mise.toml` sets
-    all four variables from the same slot, and a CI job materializes
+    all four variables from the same slot, the URL with one parameter of
+    `pulumi`'s driver added (§7.5), and a CI job materializes
     the `ci` bundle into `.credentials/state-backend/` of its checkout
     so that it resolves them the same way rather than through a
     workflow environment of its own. A slot written before the split
@@ -1241,12 +1242,34 @@ run through `mise` is already connected:
 mise x -- pulumi stack ls
 ```
 
-`PULUMI_BACKEND_URL` is the string in the bundle, and it names the appliance
-and none of the files:
+`PULUMI_BACKEND_URL` is the string in the bundle with `binary_parameters=yes`
+added to its query, and it names the appliance and none of the files:
 
 ```sh
-postgres://operator@<ip>:5432/pulumi_state?sslmode=verify-full
+postgres://operator@<ip>:5432/pulumi_state?sslmode=verify-full&binary_parameters=yes
 ```
+
+The parameter is an option of `lib/pq`, the driver behind Pulumi's Postgres
+backend, which hands it the URL less only a `table` parameter
+([`bucket.go` at 3.274.1](https://github.com/pulumi/pulumi/blob/v3.274.1/pkg/backend/diy/postgres/bucket.go#L77-L86)).
+With it, the driver sends each statement that carries parameters as one Parse,
+Bind, Describe, Execute and Sync, in a single round trip; without it, it sends
+a Parse and Describe, waits for their answer, and only then the Bind and
+Execute
+([`conn.go` at v1.12.3](https://github.com/lib/pq/blob/v1.12.3/conn.go#L905-L940),
+[`sendBinaryModeQuery`](https://github.com/lib/pq/blob/v1.12.3/conn.go#L1527-L1555)).
+A statement in one round trip is what a server shared between clients one
+transaction at a time requires (kluster-ops#784). Despite the name, no
+parameter the backend passes travels in binary: each is a string or an
+integer, and the driver sends only a byte slice in binary
+([`binaryEncode`](https://github.com/lib/pq/blob/v1.12.3/encode.go#L17-L24)),
+so the grouping is the only change on the wire. libpq refuses the parameter
+(`invalid URI query parameter`), so the bundle's file holds the string without
+it, and `psql`, `pg_dump` and `pg_restore` are given that. The parameter is
+added where a `pulumi` run's URL is formed from a slot: `mise.toml`, and
+`kluster.lib.bundle.pulumi_url` for the runs the `operator-stack` driver and
+the `credentials` commands start, the two held equal by a test. A
+`PULUMI_BACKEND_URL` a shell exported is passed on as it is.
 
 The three files travel beside it as `PGSSLROOTCERT`, `PGSSLCERT` and
 `PGSSLKEY`, resolved from the same slot the URL came from. That is the one

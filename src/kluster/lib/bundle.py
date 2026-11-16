@@ -49,6 +49,41 @@ def ssl_env(directory: Path) -> dict[str, str]:
     }
 
 
+#: The query parameter a bundle's connection string gains on its way to
+#: `pulumi`, and only there (`pulumi_url`).
+PULUMI_PARAMETER = 'binary_parameters=yes'
+#: The scheme of Pulumi's Postgres backend, the one whose driver reads it.
+POSTGRES_SCHEME = 'postgres://'
+
+
+def pulumi_url(url: str) -> str:
+    """The `PULUMI_BACKEND_URL` a bundle's connection string `url` becomes.
+
+    A `postgres://` `url` with `binary_parameters=yes` added to its query,
+    and any other `url` as it is. Pulumi's Postgres backend hands its URL,
+    less a `table` parameter, to the `lib/pq` driver, and this parameter
+    makes the driver send each statement that carries parameters as one
+    Parse, Bind, Describe, Execute and Sync, in a single round trip, instead
+    of a Parse and Describe answered before the Bind and Execute go out. A pooler that lends a server for one transaction can hand
+    it to another client between those two round trips, and cannot between
+    messages of one. Every parameter the backend passes is a string or an
+    integer, so none goes over in binary despite the name: what changes on
+    the wire is the grouping alone.
+
+    The bundle's own file keeps the URL without it, because libpq refuses
+    the parameter (`invalid URI query parameter`), and `psql`, `pg_dump` and
+    `pg_restore` read that file (`kluster.lib.state_backend.state`).
+    `mise.toml` forms the same value from the same file for every run it
+    starts, so the two spellings are held equal by
+    `tests/test_mise_env.py`. The parameter is that driver's, so a URL of
+    another scheme is left alone: a `file://` backend refuses a query
+    parameter it does not know, and an empty `url` names no backend.
+    """
+    if not url.startswith(POSTGRES_SCHEME):
+        return url
+    return f'{url}{"&" if "?" in url else "?"}{PULUMI_PARAMETER}'
+
+
 def backend_url_file(bundle_dir: Path) -> Path | None:
     """The bundle's URL file, or None when `bundle_dir` holds no bundle.
 
