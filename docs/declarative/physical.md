@@ -525,8 +525,9 @@ machine_secrets
     node with the SAN is enough to reach every node.
 -   **Footgun on record**: destroy-time `reset = true` wipes *all* disk
     partitions (provider issue #205) — never enabled on nodes carrying
-    data; node replacement is explicit (drain, etcd leave, destroy,
-    recreate).
+    data; node replacement is explicit, and destroys no instance through
+    the program: a lost node is refreshed out of state and created again,
+    and a deliberate one is replaced create-first (operations.md §3.1).
 -   **Secrets in state, accepted**: the TF provider's ephemeral
     resources don't bridge to Pulumi, so `machine_secrets` (cluster PKI)
     lives in Pulumi state — passphrase-encrypted, in the TLS-guarded

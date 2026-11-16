@@ -1,8 +1,8 @@
 # Day-2 Operations
 
 Who and what keeps the system current and its recovery paths proven:
-the update-ownership matrix, the upgrade, node-replacement and resize
-runbooks, and the drill program with its trigger machinery. Sits at
+the update-ownership matrix, the upgrade, node-replacement, rebuild and
+resize runbooks, and the drill program with its trigger machinery. Sits at
 the docs root like [credentials.md](credentials.md) — day-2 crosses
 every layer boundary. Runbooks here follow the census discipline
 (title, trigger, gist; executable form — the console scripts of
@@ -201,18 +201,107 @@ from an HTTP repository, which offers nothing to check a download against
 ## 3. Node replacement and resize runbooks (census)
 
 -   **§3.1 Cloud CP node.** Trigger: hardware loss, A1 reclamation,
-    or deliberate rebuild. Gist: drain → `talosctl etcd
-    remove-member` → destroy in `physical` (unprotect if flagged) →
-    re-create → rejoin quorum → health gate. The re-created node joins
-    by itself from its `user_data`, the cluster being live, and one
-    whose etcd service is `Failed` on the join timeout joins after its
-    next boot (declarative/physical.md §6). Facts that shape it:
-    A1 capacity at re-create is the known risk (the standing quorum
-    holds capacity; rebuild promptly), NLB backends follow from
-    `physical` automatically; a node carrying a **block volume** needs
-    it reattached, through the program (declarative/physical.md §6),
-    and the node holding the **dedicated VIP** needs the secondary
-    private IP and the reserved-IP NAT re-pointed (architecture.md §3.2).
+    or deliberate rebuild. **Rule: no instance is destroyed through the
+    program.** A lost node is recovered by a targeted
+    `refresh --run-program` and an `up`. A deliberate replacement is a
+    create-first `up --target-replace`, the order the regional quota is
+    sized for: the fleet plus one node (cluster/nodes.md §3.2).
+
+    The program has no delete-first path for the node holding the
+    **dedicated VIP**. A targeted destroy of that instance reaches its
+    dependents: the secondary private IP and, through it, the reserved
+    public IP. That address is protected because it is
+    identity-bearing, and lifting that protection to let the destroy
+    through deletes it. OCI keeps a reserved IP whose private IP is
+    deleted, unassigned, so both paths below keep the address and
+    re-point it with one update of its `private_ip_id`
+    (`components/cloud/nodes.py`).
+
+    Facts that shape both paths:
+
+    -   **The re-created node joins by itself** from its `user_data`,
+        the cluster being live, and one whose etcd service is `Failed`
+        on the join timeout joins after its next boot
+        (declarative/physical.md §6). A control plane joining etcd with
+        an empty data directory first removes any member that carries
+        its own hostname (physical/gateway-cutover.md §5), and every
+        node's hostname is its declared name (declarative/physical.md
+        §2), so the member a lost node leaves behind goes with that
+        join. `tal -n "$CPS" etcd members` after the `up`, with the
+        setup taken again from the new outputs, lists one member per
+        control plane, and a member still listed for the
+        lost node is removed with `talosctl etcd remove-member`.
+    -   **A1 capacity at the create is the known risk.** The standing
+        quorum holds the capacity of the other two while one create
+        hunts, so a lost node is re-created promptly; a create that is
+        refused fails that instance alone, and the same `up` again
+        retries it.
+    -   **What follows the node is the program's.** The balancer's
+        backends name the instance or its GUA. A node carrying a
+        **block volume** has it attached again by the program
+        (declarative/physical.md §6). On the dedicated VIP's node the
+        secondary private IP lives on the instance's VNIC, and the
+        reserved IP's `private_ip_id` names it. The day-1 chain names
+        each node by its private address. A changed `node` updates the
+        `Bootstrap` in state and bootstraps nothing: the pinned
+        provider's update writes the plan into state and calls no node
+        (`talos_machine_bootstrap_resource.go` in
+        `terraform-provider-talos` v0.11.0, which `pulumiverse-talos`
+        0.8.1 bridges).
+
+    **A lost node.** OCI terminated it, or it is gone for good: the
+    console shows the instance `TERMINATED`, or the node is to be
+    abandoned in place. From the root of the checkout that holds
+    `.credentials/`, with `physical` the function of
+    declarative/physical.md §6, `tal` and `CPS` the setup of
+    physical/gateway-cutover.md §8.1, and `<node>` the lost node's name
+    (`cp2`):
+
+        urns() { physical stack --show-urns | sed -n 's|.*URN: \(urn:.*\)$|\1|p' | grep -E "$1"; }
+        T=($(urns '\$kluster:cloud:CloudNodes\$oci:(Core/instance:Instance::kluster-<node>|NetworkLoadBalancer/backend:Backend::kluster-nlb-.*-<node>)$'))
+        printf '%s\n' "${T[@]}"                  # the instance, and one backend per forwarded port and family
+        physical refresh --run-program "${T[@]/#/--target=}"
+        physical preview --diff
+        physical up
+
+    A URN carries `$`, which the array keeps as it is, since the output
+    of a command substitution is not expanded again.
+
+    On the dedicated VIP's node the targets add the
+    `oci:Core/privateIp:PrivateIp` and the `oci:Core/publicIp:PublicIp`
+    under `$kluster:cloud:CloudNodes$`, and the
+    `oci:Core/volumeAttachment:VolumeAttachment` under
+    `$kluster:cloud:NodeVolume$`. The refresh drops what reads back
+    without an ID: the instance and, on that node, the secondary private
+    IP and the attachment, the attachment whatever its `protect`
+    (declarative/physical.md §6, whose fallback applies if it stays).
+    The reserved IP stays, its `private_ip_id` reading empty. The
+    preview plans the creates of what the refresh dropped, the backends'
+    creates or updates, the reserved IP's one update on that node, and
+    changes to the day-1 resources that name the node's address. Any
+    other plan, the volume itself above all, is a diff nobody expected,
+    and nothing is applied until it has been read. The `up` ends on the
+    Talos health gate, every node named, and §2.5's sync follows it, as
+    it follows every `physical` `up`.
+
+    Two facts of this path are not established, and the first recovery
+    reads them: whether OCI removes a backend whose instance is
+    terminated, so that the refresh drops it, or leaves it for the `up`
+    to update; and whether the health gate, which the refresh's run of
+    the program reaches, waits on the lost node and fails the refresh.
+
+    **A deliberate replacement.** The node is up and is to be replaced:
+    drain it, then, with `U` its instance's URN,
+    `physical preview --diff --target-replace "$U"` and, once its plan
+    has been read, `physical up --target-replace "$U"`. The
+    replacement launches first, from the program's current values, and
+    the old instance is deleted at the end of the run. While both run
+    they are two nodes of one name, which evict each other's etcd member
+    (declarative/physical.md §1). How that window is held is settled on
+    its own (Aetf/kluster-ops#742), and no deliberate replacement of a
+    control plane runs before it is. On the dedicated VIP's node the
+    attachment is replaced with the instance, and is protected, so it
+    is unprotected first with `physical state unprotect`.
 -   **§3.2 Homelab worker VM.** Trigger: VM/disk loss or rebuild.
     Gist: from the root of the checkout that holds `.credentials/`,
     with `physical` the function of declarative/physical.md §6, which
@@ -257,7 +346,8 @@ from an HTTP repository, which offers nothing to check a download against
     re-point untouched; BGP session re-establishes from the static IP
     in the config.
 -   **§3.3 Total-cloud-loss / total-home-loss** — owned by nodes.md
-    §5 (cold-standby drill, both directions).
+    §5 (cold-standby drill, both directions). The loss of every cloud
+    node with the account intact is §3.5.
 -   **§3.4 Cloud CP node resize.** Trigger: a merged change to
     `conventions.NODE_OCPUS` or `NODE_MEMORY_GB`. Gist: the merge's own
     `up-physical` is rejected at its approval; then the guardrails, then
@@ -303,13 +393,42 @@ from an HTTP repository, which offers nothing to check a download against
         shape change that meets an AD with no A1 capacity. Its documented
         check beforehand is a compute capacity report
         (`CreateComputeCapacityReport`) for the shape in the node's AD, a
-        reading at one moment rather than a reservation, and nothing in
-        this repository makes that call. The standing quorum is the
-        hold: one member down leaves two, and no second node is touched
-        until the first is back.
+        reading at one moment rather than a reservation, taken by the
+        capacity reading below. The standing quorum is the hold: one
+        member down leaves two, and no second node is touched until the
+        first is back.
     -   **hath goes down with its node.** It has one instance, on the
         node holding the dedicated VIP, and that node's reboot takes it
         offline until the node is back.
+
+    **The capacity reading** comes first, and §3.5 takes it too. It is
+    taken in the OCI console's Cloud Shell, with the console set to the
+    cluster's region, and nothing in this repository makes the call. A
+    report's compartment is always the tenancy's root, which `physical`'s
+    key cannot reach, being confined to its own compartment, while Cloud
+    Shell runs Oracle's `oci` CLI under the operator's own identity. The
+    form is the CLI's documented one,
+    [`oci compute compute-capacity-report create`](https://docs.oracle.com/en-us/iaas/tools/oci-cli/latest/oci_cli_docs/cmdref/compute/compute-capacity-report/create.html),
+    with `--shape-availabilities` given inline as JSON, whose keys are
+    those of the API's `CreateCapacityReportShapeAvailabilityDetails`:
+
+        oci iam availability-domain list --compartment-id <tenancy OCID>
+        oci compute compute-capacity-report create --compartment-id <tenancy OCID> --availability-domain <AD> \
+          --shape-availabilities '[{"instanceShape":"VM.Standard.A1.Flex","instanceShapeConfig":{"ocpus":<ocpus>,"memoryInGBs":<GB>}}]'
+
+    The first command lists the region's availability domains by `name`;
+    the tenancy's OCID is on the console's *Tenancy details* page. The
+    second runs once per AD the reading covers, with `<ocpus>` and `<GB>`
+    the size the instances are to have: `conventions.NODE_OCPUS` and
+    `NODE_MEMORY_GB` as the change declares them. Its one entry under
+    `shape-availabilities` carries an `availability-status` of
+    `AVAILABLE`, `OUT_OF_HOST_CAPACITY` or `HARDWARE_NOT_SUPPORTED`, and
+    an `available-count`, the number of instances of that configuration
+    the AD can create
+    ([`CapacityReportShapeAvailability`](https://docs.oracle.com/en-us/iaas/tools/python/latest/api/core/models/oci.core.models.CapacityReportShapeAvailability.html)).
+    An AD passes at `AVAILABLE` with a count of at least 1. A resize
+    reads each node's AD before that node's `up`, and a node whose AD
+    does not pass waits.
 
     From the root of the checkout that holds `.credentials/`, with
     `physical` the function of declarative/physical.md §6, and `tal` and
@@ -355,6 +474,273 @@ from an HTTP repository, which offers nothing to check a download against
     (`deploy.yml` takes `workflow_dispatch`): `plan-physical` finds no
     diff, `up-physical` is skipped, and the chain runs on to the
     layers the rejected run never reached.
+
+-   **§3.5 The whole cluster, the account intact.** Trigger: the loss
+    of every cloud control plane while the tenancy, the region and the
+    balancer survive; and the bring-up's rebuild drill, which runs it
+    once on the empty cluster (physical/bring-up.md §2, stage 5a).
+    Gist: the three instances are gone, by the loss or by a termination
+    in the console; a targeted refresh records that in `physical`'s
+    state; one `physical up` creates the fleet, the worker and the
+    day-1 chain again; then the states of `k8s-base` and `apps` are
+    refreshed and the deploy chain applies both stacks from empty. The
+    steps below are written for the deliberate run. After an actual
+    loss, step 3 has already happened, step 0 records what still reads,
+    and steps 1 and 2 run next.
+
+    **What is kept.** The balancer with its listeners and backend sets;
+    the network, from the VCN to the subnet; the dedicated VIP's
+    reserved public IP; the Talos secrets; the node volume; the cloud
+    image with its archive and bucket; the guardrails; and the libvirt
+    pool. Outside the cluster, the gateway, the overlay, the `dns`
+    zones, the backup bucket and the state backend take no write.
+
+    So every identity that a consumer outside the cluster holds
+    survives:
+
+    -   the reserved VIP, which the A record of `vip1.hosts` names and
+        hath registers with a third party;
+    -   the cluster endpoint, the balancer's two addresses: the records
+        of `kluster.hosts`, every apid SAN and every machine
+        configuration, and the server of the kubeconfig;
+    -   the worker's IPv4, a convention, which the gateway's BGP
+        neighbor names; its MAC and the link-local derived from it, the
+        gateway's IPv6 next hop; and its GUA, which the gateway's
+        pinhole names, read off the delegated /64 and the MAC;
+    -   the Talos PKI, so the operator's talosconfig and the kubeconfig
+        copies in `Pulumi.k8s-base.yaml` and `Pulumi.apps.yaml` keep
+        opening the cluster.
+
+    **What is lost, and created again.** The three instances with their
+    boot volumes; the balancer's backends; the VIP's secondary private
+    IP, whose address OCI picks again, so the `vip1_private` output
+    moves and `k8s-base` reads the new one at its first `up`; the
+    volume's attachment; the worker's image, disk, seed and domain, by
+    §3.2's form; and the day-1 chain, one `ConfigurationApply` per node,
+    the `Bootstrap` and the `Kubeconfig`, so that a fresh etcd is
+    bootstrapped under the kept PKI. With etcd go every object of
+    `k8s-base` and `apps`, the KubeSpan keys and node identities, which
+    no object outside the cluster names, and the sealing key, which the
+    new controller draws.
+
+    **Where it applies as written: before bring-up stage 6.** No sealed
+    value exists there. The tolerance of physical/bring-up.md §1
+    declares nothing for an absent value, so the new sealing key leaves
+    nothing to seal again; the BGP session holds no password on the
+    worker's side and is not up, so no `lan` route is installed on the
+    gateway to withdraw. A rebuild after stage 6 also takes stage 6's
+    sealing sitting again, with `bgp seal` and never `bgp record`, which
+    would draw a new password and rewrite the gateway's BGP
+    configuration. Once an application holds data, its data comes back
+    by the restores of storage.md §5. This procedure carries neither.
+
+    **A1 capacity is the risk it takes.** It gives up, by construction,
+    the hold of cluster/nodes.md §3.2, never needing more than one
+    create at once: three creates follow three terminations, each in
+    the AD its node's position fixes, and a full AD refuses its create
+    for as long as the hunt takes, which may be days (cluster/nodes.md
+    §3.1). The regional quota admits the whole fleet at once, since it
+    is the fleet plus one node. Before stage 6 a hunt costs calendar
+    time and no money, the half-built fleet billing what the fleet
+    bills. So a deliberate run goes only on a day when §3.4's capacity
+    reading, taken in the hour before the termination for every AD of
+    the region at the declared size, passes in each; and the
+    termination and the rebuild run back to back. A create that is
+    refused fails that instance alone. The launched nodes wait out the
+    windows of declarative/physical.md §6, and the same `up` again
+    creates the refused one.
+
+    **Setup.** Every command runs from the root of the checkout that
+    holds `.credentials/`, with `physical` the function of
+    declarative/physical.md §6, `urns` the helper of §3.1, and `tal`,
+    `CP`, `CPS`, `WORKER` and `ip_of` the setup of
+    physical/gateway-cutover.md §8.1, whose node volume item also gives
+    `ids`, with `V=hath-cache` and `N` the address of `cp1`. Scratch
+    goes under the checkout's `.claude/drill/`, which is deleted when
+    the run closes, and a transcript of each step goes on the issue
+    that records the run. Steps 1 to 5 run in one sitting.
+
+        D=.claude/drill; mkdir -p "$D"
+        SCOPE='\$kluster:cloud:CloudNodes\$|\$kluster:cloud:NodeVolume\$oci:Core/volumeAttachment:|\$kluster:talos:TalosDay1\$|\$kluster:homelab:HomelabHost\$libvirt:index/(domain|volume):|FactoryImage::kluster-worker-nocloud$|pulumi:pulumi:Stack::'
+        protected() { physical stack export | jq -r '.deployment.resources[] | select(.protect) | .urn' | sort; }
+        outside() { physical stack export --show-secrets | jq -c --arg s "$SCOPE" '[.deployment.resources[] | select(.urn | test($s) | not) | {urn, inputs, outputs, protect}] | sort_by(.urn)' | sha256sum; }
+        anchors() { for n in kluster.hosts vip1.hosts; do for t in A AAAA; do echo "$n $t $(dig +short @1.1.1.1 "$n.unlimited-code.works" "$t" | sort | tr '\n' ' ')"; done; done; }
+        sealing() { mise x -- kubeseal --kubeconfig ~/.kube/kluster --fetch-cert \
+            $(mise x uv -- uv run python -c 'from kluster import conventions as c; print("--controller-namespace", c.SEALING_NAMESPACE, "--controller-name", c.SEALING_CONTROLLER)'); }
+
+    `SCOPE` matches every resource the run changes, and nothing else:
+    the cloud nodes with what hangs off them, the attachment, the
+    day-1 chain, the worker's domain and volumes with its image, and the
+    stack's outputs. `outside` prints a digest of every other resource's
+    entry, secrets included, so that only the digest leaves the pipe.
+
+    **Step 0: the baseline, and the go.**
+
+        gh workflow disable deploy.yml --repo Aetf/kluster
+        physical preview --refresh --run-program --expect-no-changes
+        for s in dns k8s-base apps; do mise x -- pulumi preview --refresh --expect-no-changes --stack "$s"; done
+        physical stack export > "$D/export.json"
+        protected > "$D/protected"; outside > "$D/outside"; anchors > "$D/anchors"; ids > "$D/ids"; sealing > "$D/sealing.pem"
+        for o in cluster_endpoint cluster_endpoint_v6 vip1 worker_gua; do echo "$o $(physical stack output "$o")"; done > "$D/outputs"
+
+    Disabling `deploy.yml` is bring-up stage 4's way back used as a
+    freeze: a merge, a Renovate automerge among them, would otherwise
+    run the chain against a half-built cluster. Every preview exits 0,
+    and a diff stops the run: it starts converged, so that every later
+    diff is its own. `gateway-health` is clean (physical/gateway.md
+    §1.6). A deliberate run then takes §3.4's capacity reading, and goes
+    only if every AD passes; otherwise it waits for another day, with
+    nothing changed but the workflow, which is enabled again.
+
+    **Step 1: the day-1 chain leaves state.**
+
+        T=($(urns '\$kluster:talos:TalosDay1\$talos:')); printf '%s\n' "${T[@]}"
+        physical destroy "${T[@]/#/--target=}"
+
+    The list and the destroy's preview hold one `ConfigurationApply`
+    per node, the `Bootstrap` and the `Kubeconfig`, and nothing else.
+    Their delete resets nothing, because `on_destroy` keeps `reset` off
+    (`components/talos`): every node still answers
+    `tal -n <node> version`.
+
+    **Step 2:** `physical state unprotect '<worker disk URN>'`, the
+    disk of §3.2.
+
+    **Step 3: the loss.** For a deliberate run, in the console, in
+    `physical`'s compartment, terminate `kluster-cp1`, `kluster-cp2`
+    and `kluster-cp3`, each with its boot volume deleted. The loss is
+    taken in the console rather than by a `destroy`, because a destroy
+    of `cp1` reaches the reserved IP (§3.1). Readings: the three
+    instances are `TERMINATED` and no boot volume of theirs is left;
+    `kluster-vip1` is listed as reserved and unassigned;
+    `kluster-hath-cache` is available; `gateway-health` is still clean.
+    From here the way is forward only.
+
+    **Step 4: the state records the loss.**
+
+        T=($(urns '\$kluster:cloud:CloudNodes\$oci:(Core/instance:Instance|Core/privateIp:PrivateIp|Core/publicIp:PublicIp|NetworkLoadBalancer/backend:Backend)::|\$kluster:cloud:NodeVolume\$oci:Core/volumeAttachment:VolumeAttachment::'))
+        printf '%s\n' "${T[@]}"
+        physical refresh --run-program "${T[@]/#/--target=}"
+
+    Readings: the instances, the secondary private IP and the
+    attachment leave state; the reserved IP stays, its `private_ip_id`
+    reading empty; a backend may leave state or stay, and step 5 handles
+    either; an attachment that stays takes the fallback of
+    declarative/physical.md §6.
+
+    **Step 5: the rebuild.**
+
+        WI=$(urns '::kluster-worker-nocloud$'); WD=$(urns '::kluster-worker-disk$'); echo "$WI" "$WD"
+        physical preview --diff --replace "$WI" --replace "$WD"
+        physical preview --json --replace "$WI" --replace "$WD" | jq -r '.steps[] | select(.op != "same") | .urn' | grep -Ev "$SCOPE"
+        physical up --replace "$WI" --replace "$WD"
+
+    The scope check, the second preview through `grep`, prints nothing.
+    The plan holds creates of the three instances, the secondary
+    private IP, the backends, the attachment and the day-1 chain; one
+    update, the reserved IP's `private_ip_id`; replacements of the
+    worker's image, disk, seed and domain; and the stack's outputs.
+    Anything else, the node volume above all, is a diff nobody
+    expected, and nothing is applied until it has been read. The `up`
+    ends on the Talos health gate, every node named.
+
+    **Step 6: `physical` converges.** A further `physical up` reports
+    no changes, and `physical preview --refresh --run-program
+    --expect-no-changes` exits 0 over the whole stack, the gateway and
+    the overlay included. `protected` prints what `$D/protected` holds,
+    and `outside` what `$D/outside` holds.
+
+    **Step 7: the readings that need no network plugin,**
+    physical/gateway-cutover.md §8.1 on the rebuilt cluster, its setup
+    taken again from the new outputs, with `~/.kube/kluster` written
+    again and the talosconfig written again from the `talosconfig`
+    output: `version` answers from every node at the pin; the worker's
+    link-local is the convention's, and the worker holds `worker_gua`;
+    the etcd fsync item passes, both halves, every boot volume being new
+    (declarative/physical.md §6); the node volume's first item passes,
+    `ids` printing what `$D/ids` holds; `u-storage` is ready on every
+    node; and the node label sits on `cp1`. The volume's other items ran
+    at bring-up and are not repeated.
+
+    **Step 8: `k8s-base` and `apps` from empty.**
+
+        mise x -- pulumi refresh --stack k8s-base
+        mise x -- pulumi refresh --stack apps
+        credentials derived sync --only kubeconfig
+
+    Each refresh runs under the committed kubeconfig copy, which
+    authenticates, the PKI and the endpoint being kept, and drops every
+    object the rebuilt cluster does not hold. **Without those two
+    refreshes a plain `up` of either stack creates nothing**: a plain
+    `up` diffs the program against the state, which still holds every
+    object the old cluster held, and the chain's `up` takes no
+    `--refresh` (framework/ci.md §3.2). The `Kubeconfig` was issued
+    again, so the sync of §2.5 follows. Then: a pull request committing
+    the two stack files alone;
+    `gh workflow enable deploy.yml --repo Aetf/kluster`; and the merge.
+    The chain runs: `plan-physical` finds no diff, and `up-k8s-base` and
+    `up-apps` are both stacks' first `up` on an empty cluster.
+
+    **Step 9:** bring-up stage 5's gate on the rebuilt cluster, the
+    sealing certificate differing from `$D/sealing.pem`; then the pass
+    readings.
+
+    **It passes when each of these holds:**
+
+    1.  Step 5's `up` exits 0 behind the health gate, and step 6's
+        readings hold.
+    2.  Step 7's readings hold, the volume's two UUIDs those of the
+        baseline.
+    3.  Bring-up stage 5's gate holds on the rebuilt cluster, and each
+        of `up-k8s-base` and `up-apps` converged in its one run.
+    4.  **Nothing outside changed:**
+        -   `gateway-health` is clean at step 0, after step 3 and after
+            step 9;
+        -   `physical`'s refreshed preview is clean, the gateway, the
+            overlay's members, routes, rules and DNS, and the backup
+            bucket included, and `outside` equals the baseline;
+        -   `mise x -- pulumi preview --refresh --expect-no-changes
+            --stack dns` exits 0, the four outputs equal `$D/outputs`,
+            and `anchors` prints what `$D/anchors` holds;
+        -   every plan read during the run passed the scope check.
+    5.  `deploy.yml` is enabled again, and `.claude/drill/` is deleted.
+
+    **What a failure leaves running.** Through step 2, the old cluster,
+    whole: steps 1 and 2 changed state alone, and they run in the same
+    sitting as step 3, after step 0's go. After step 3 and until step 5
+    passes, no control plane exists, the old worker idles until step 5
+    deletes it, and the balancer answers nothing; the reserved IP is
+    unassigned and the volume detached; the gateway, the overlay and the
+    zones run as before, since nothing in them reads the cluster.
+    Recovery is forward, steps 4 and 5 again. A create refused at step
+    5 leaves that instance missing, and its dependents, the day-1 chain
+    among them, are not created, so nothing is bootstrapped; the
+    launched nodes reboot on Talos's 70-minute timer. A preview of a
+    plain `physical up` is read and the `up` run, at intervals, until
+    the instance launches. The `--replace` flags are not repeated for a
+    resource the failed run already replaced, and §3.2 covers a worker
+    left half-built. Any other failure is fixed forward in a pull
+    request (physical/bring-up.md §3).
+
+    **Not established, and read by the first run:**
+
+    -   whether a targeted `destroy` of an instance refuses while a
+        protected dependent stays outside the targets, or drops it; the
+        console termination of step 3 stands either way;
+    -   whether OCI removes a backend whose instance is terminated, for
+        which step 4 is written both ways;
+    -   whether step 4's `refresh --run-program`, run while no control
+        plane exists, skips the invoke of the health gate, which depends on
+        the day-1 resources that step 1 removed;
+    -   whether the refresh of step 8 drops a custom resource whose
+        definition the cluster no longer has, or errors on it; if it
+        errors, the resources it names leave state with
+        `pulumi state delete`;
+    -   whether the console deletes boot volumes by default at a
+        termination, which step 3 reads either way;
+    -   after an actual loss, whether step 1's deletes go through with
+        no node to reach; a resource whose delete does not go through
+        leaves state with `physical state delete`.
 
 ## 4. Drill program
 
@@ -568,7 +954,7 @@ Owning docs keep the content — the index only locates it.
 | --- | --- |
 | State backend (cert/CA, PG major, rebuild, age rotation) | physical/state-backend.md §7 |
 | Gateway (ZeroTier container down, firmware-wiped device, UDM replacement; and every finding of the daily gateway check: a machine, the boot chain, a delivered unit, the routing daemon or the offline package cache, a check that did not run, a certificate not renewing, an autobackup not copied off) | physical/gateway.md §3 |
-| Node replacement (CP node, worker VM, block volume and VIP extras) | §3 here |
+| Node replacement (CP node, worker VM, block volume and VIP extras; the whole cluster with the account intact) | §3 here |
 | Upgrades (Talos serial, Cilium canary) | §2 here |
 | Backup restores (CNPG, VolSync, etcd) | storage.md §5; the drills are §4 here |
 | Alert-channel failure (HA push down → meta-alert; GitHub leg down; a scheduled ops-repo workflow that stopped checking in) | architecture.md §4.3; the contract and the dead-man are §4 here |
