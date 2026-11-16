@@ -1169,12 +1169,17 @@ host:
     host-networking nspawn misbehaves: the unifios-utilities pattern
     (apt install re-run from on_boot.d — package reinstall on firmware
     update is already proven working on this device).
--   **Firewall fact on record**: the UBIOS zone firewall classifies by
-    known interfaces/ipsets; `zt*` interfaces match neither, so
-    overlay-forwarded traffic rides the FORWARD chain's default ACCEPT —
-    unpoliced, accepted knowingly (overlay membership is the auth
-    boundary). The tunnel's traffic is that traffic, outside the zone
-    policy in both directions.
+-   **Firewall fact on record**: the UBIOS zone firewall classifies
+    forwarded traffic by its ingress interface and then by the zone set
+    its destination is in, and no zone holds the overlay's interface or
+    its addresses. So traffic
+    entering from the overlay meets no zone policy and passes on the
+    FORWARD chain's ACCEPT, accepted knowingly (overlay membership is
+    the auth boundary). Traffic toward an overlay address meets the zone
+    policy of the side it enters from: from the WAN, External →
+    External, which admits replies and drops what the internet opens.
+    Each direction, with the reading behind it, is
+    [physical/gateway.md](../physical/gateway.md) §4.1.
 -   **ZeroTier Central config joins Pulumi**: network managed routes, the
     managed DNS block (gateway.md §2.7), member authorizations
     (including the CI ephemeral-member pre-auth), and
@@ -1184,8 +1189,9 @@ host:
     declarative/physical.md §4) and the homelab host's libvirt SSH,
     `ci-dns` to the AdGuard APIs — so a leaked CI join credential buys
     neither general LAN access nor the other identity's reach
-    (necessary because overlay-forwarded traffic rides the UDM's
-    default ACCEPT, above: Central rules are the only policing layer).
+    (necessary because traffic entering from the overlay meets no zone
+    policy, above: Central rules are the only policy on what a member
+    sends).
     The rules name each identity by its node address rather than its
     role tag, because a tag is a credential the member itself presents
     and a holder of a leaked identity could withhold it (gateway.md
