@@ -379,22 +379,35 @@ oraclecloud`, x86_64), the qcow2 imports as a custom image
     both start `pulumi` without their caller's `PULUMI_` variables, so
     `github`'s checkpoint here stays `github.json`
     (framework/pulumi.md §3.3).
--   **A change of suffix leaves a `.bak` nothing replaces.** A save that
+-   **A change of format leaves copies nothing replaces.** A save that
     writes the checkpoint under a new suffix copies the old checkpoint to
     its own `.bak` and deletes it, and every later save backs up the new
     key instead (`saveCheckpoint` in `pkg/backend/diy/state.go`). The
-    old `.bak` — the full-size uncompressed copy, for a stack that has
-    turned compression on — stays, and lies under the prefix every
-    listing of that stack sizes. `state-backend census` counts the
+    other copies the backend keeps carry a suffix as well: a writing
+    operation's `history/` copy is `<stack>-<nanoseconds>.checkpoint.json`
+    with the suffix its writer writes (`addToHistory`), and its `backups/`
+    copy is `<stack>.<nanoseconds>.json` with the checkpoint's
+    (`backupStack`). So a stack that has turned compression on keeps the
+    old `.bak` and every `history/` and `backups/` copy written before,
+    all full-size uncompressed values, and nothing the backend does
+    replaces or removes them. Nothing reads them back either: `pulumi
+    stack history` lists the stack's `history/` directory and reads only
+    the update records among it, the keys ending in `.history.json` and a
+    suffix (`getHistory`), so a deleted copy changes nothing it prints;
+    and no command reads `backups/`. `state-backend census` counts the
     table by kind of key, with each value's stored size read through
-    `pg_column_size`, which never reads an out-of-line value; with
-    `--prune-superseded` it lists each `.bak` whose stack has a
-    checkpoint and none under the suffix that `.bak` carries, and with
-    `--yes` beside it deletes them. The delete re-checks every key
-    against the table as of the statement's snapshot, and takes only a
-    `.bak` whose own checkpoint is not in it, so it deletes no checkpoint
-    and no copy of one it sees. A stack with no checkpoint keeps its `.bak`, which is all
-    that is left of a removed stack.
+    `pg_column_size`, which never reads an out-of-line value. With
+    `--prune-superseded` it lists each copy, a `.bak` or one under
+    `history/` or `backups/`, whose stack has a checkpoint and none under
+    the suffix that copy carries, and with `--yes` beside it deletes them.
+    The delete applies the same definition again, in the statement and to
+    the table as of its snapshot, so it deletes no checkpoint, no update
+    record, and no copy in a format its stack's checkpoint is stored in. A
+    stack with no checkpoint keeps its copies, which are all that is left
+    of a removed stack. A row the prune deletes stays in every nightly
+    dump taken while it existed, for as long as the retention of §5 keeps
+    that dump, and `state-backend dump` just before the prune puts the
+    rows in one taken then.
 
 ## 3. PKI: a tiny offline CA
 
@@ -1208,7 +1221,7 @@ state-backend pins                    # verify the pinned digests (CI runs this)
 state-backend dump                    # a dump of the live state, encrypted like the nightly one
 state-backend restore <dump>          # feed a dump into a box that serves no stack
 state-backend census                  # the state table's rows and stored bytes by kind of key, and each checkpoint's size
-state-backend census --prune-superseded        # also list the `.bak` rows a change of suffix left (§2)
+state-backend census --prune-superseded        # also list the copies stored in a format their stack no longer writes (§2)
 state-backend census --prune-superseded --yes  # and delete them
 state-backend probe                   # the scheduled checks, run by the ops repository
 state-backend ssh                     # a diagnostic login; the box is never configured by hand

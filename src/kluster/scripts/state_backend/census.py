@@ -5,13 +5,13 @@ at, and prints the rows and bytes of each kind of key (`state.Kind`), then
 every checkpoint with its own size. It writes nothing: the session it reads
 in is one the server holds read-only (`state.census`).
 
-`--prune-superseded` adds the `.bak` rows that no save will ever replace,
-because their stack's checkpoint now lives under another suffix
-(`state.superseded`): the full-size uncompressed copy a stack keeps once its
-writers compress (physical/state-backend.md §2). It prints them and deletes
-nothing unless `--yes` is given too, and what it deletes is never a
-checkpoint, nor a `.bak` whose own checkpoint is in the table as of the
-delete's snapshot (`state.prune`).
+`--prune-superseded` adds the copies of a checkpoint stored in a format
+their stack no longer writes (`state.superseded`): the `.bak`, `history/`
+and `backups/` copies a stack keeps, full-size and uncompressed, from before
+its writers compressed (physical/state-backend.md §2). It prints them and
+deletes nothing unless `--yes` is given too, and what it deletes is never a
+checkpoint, an update's `history/` record, nor a copy in a format its stack
+is stored in as of the delete's snapshot (`state.prune`).
 """
 
 from __future__ import annotations
@@ -75,7 +75,7 @@ def run(target: state.Connection, *, prune: bool, yes: bool, out: TextIO) -> int
     stale = state.superseded(rows, database)
     total = sum(row.size for row in stale)
     print('', file=out)
-    print(f'superseded {state.Kind.PREVIOUS.value} rows: {len(stale)}, {total:,} bytes stored', file=out)
+    print(f'superseded copies: {len(stale)}, {total:,} bytes stored', file=out)
     for row in stale:
         print(f'  {row.key}  {row.size:,} bytes', file=out)
     if not stale:
@@ -91,7 +91,7 @@ def run(target: state.Connection, *, prune: bool, yes: bool, out: TextIO) -> int
     kept = [key for key in asked if key not in deleted]
     if kept:
         log.error(
-            '%d row(s) were not deleted, because each is gone or its checkpoint is back in the table: %s',
+            '%d row(s) were not deleted, because each is gone or was no longer superseded when the delete ran: %s',
             len(kept),
             ', '.join(kept),
         )
