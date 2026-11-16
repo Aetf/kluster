@@ -298,6 +298,29 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     podman and the buildah it carries, which are what the module's own
     podman workarounds name as the conditions for removing them.
 
+-   **Every job that runs the program installs its plugins first, with
+    the job's token.** An `Install plugins` step runs
+    `pulumi plugin install` with no arguments ahead of the step that
+    previews or applies, which asks the language host for the plugins
+    the installed packages name, the set the program's own run resolves.
+    Each package says where its plugin is published. The talos
+    provider's names a `github://` server, and the CLI fetches a
+    plugin from such a server through GitHub's REST API, trying a
+    direct release download first only for the `pulumi` organization's
+    own. That API limits an unauthenticated address, and a runner's
+    address is shared, so an unauthenticated fetch fails at random:
+    `rate limit exceeded: 403`, an error the preview reports as a plugin
+    it could not install. The CLI authenticates that fetch with
+    `GITHUB_TOKEN` when it is set, so the step sets it to the job's own
+    token, `github.token`, whose purpose is the job's own calls to
+    GitHub. **The token is the install step's alone.** The github
+    provider takes `GITHUB_TOKEN` as its credential when its
+    configuration names none, so a step that runs the program with it
+    set would hand the job's token to any github provider declared
+    without a token of its own. A failed install fails its step by
+    name, ahead of the program. A test in `checks` holds every job whose
+    steps run the program to an authenticated install before the first
+    of them, and the token to no other step.
 -   **Merge side runs `up` only — except `physical`, which gets a plan
     job** (2026-08-24, superseding the pure-up shape): for
     dns/k8s-base/apps, `pulumi up --yes` performs its own preview as
@@ -310,7 +333,20 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     entirely and the chain proceeds with **zero clicks**; a real diff
     routes to `up-physical` in the gated `physical` environment, and
     the whole chain waits for the approval (correct: downstream layers
-    may depend on the physical change). Workflow mechanics on record:
+    may depend on the physical change). **The plan has three outcomes,
+    read off the preview's exit**: 0 is a zero diff; 7 is
+    `--expect-no-changes` refusing the changes the preview proposed,
+    the code the CLI's exit-code table gives that refusal
+    ([`ExitNoChanges` at 3.274.1](https://github.com/pulumi/pulumi/blob/v3.274.1/pkg/cmd/pulumi/cmd/exit_codes.go),
+    a table the CLI calls a stable contract); and any other exit is a
+    preview that failed, a plugin it could not install or a provider it
+    could not reach, which proposed no plan at all. That one fails
+    `plan-physical` by name and sets no diff, so `up-physical` never
+    waits for an approval with nothing to approve; every later job's
+    condition reads `plan-physical`'s success, so the chain stops there,
+    and `notify-failure` fires. `tests/test_workflow_shape.py` runs the
+    plan step against a stand-in preview for each outcome. Workflow
+    mechanics on record:
     downstream jobs need skip-tolerant conditions — `always()`, and
     `up-physical`'s result either `success` or `skipped` — because a
     skipped gate job must not cascade-skip the chain, while any other

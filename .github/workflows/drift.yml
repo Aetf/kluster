@@ -34,7 +34,7 @@ jobs:
     # The sum of its steps' bounds, a `uses:` step twice, plus five minutes
     # for the runner's own phases: a backstop for what no step bound reaches
     # (framework/ci.md §3).
-    timeout-minutes: 80
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
@@ -115,6 +115,14 @@ jobs:
           ca: ${{ secrets.PULUMI_BACKEND_CA }}
           certificate: ${{ secrets.PULUMI_BACKEND_CERT }}
           key: ${{ secrets.PULUMI_BACKEND_KEY }}
+      - name: Install plugins
+        # Before the program runs, with the job's token, and that token in
+        # this step alone: deploy.yml's `plan-physical` says why
+        # (framework/ci.md §3).
+        timeout-minutes: 10
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: mise x -- pulumi plugin install
       - name: Refresh and compare
         timeout-minutes: 30
         env:

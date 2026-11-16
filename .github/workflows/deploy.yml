@@ -4,7 +4,8 @@ name: deploy
 # there is no separate preview job — except for physical, whose apply sits
 # behind an approval gate and therefore gets a plan first: a zero diff (the
 # common case) skips the gated job entirely and the chain proceeds with no
-# clicks, while a real diff stalls the whole chain until a human reads it.
+# clicks, a real diff stalls the whole chain until a human reads it, and a
+# plan that failed fails its job and stops the chain.
 
 on:
   push:
@@ -30,7 +31,7 @@ jobs:
     # The sum of its steps' bounds, a `uses:` step twice, plus five minutes
     # for the runner's own phases: a backstop for what no step bound reaches
     # (framework/ci.md §3).
-    timeout-minutes: 80
+    timeout-minutes: 90
     # Ungated on purpose: reading the diff is the approval moment, so the
     # reading itself must not need approval.
     environment: physical-plan
@@ -74,6 +75,23 @@ jobs:
           ca: ${{ secrets.PULUMI_BACKEND_CA }}
           certificate: ${{ secrets.PULUMI_BACKEND_CERT }}
           key: ${{ secrets.PULUMI_BACKEND_KEY }}
+      - name: Install plugins
+        # Every plugin the program needs, installed before it runs rather
+        # than fetched in the middle of the preview: with no arguments,
+        # `pulumi plugin install` asks the language host for the set the
+        # installed packages name, which is the set the preview resolves.
+        # The talos provider's package names a `github://` server, which the
+        # CLI reaches through GitHub's API; that API limits an
+        # unauthenticated address, and a runner's address is shared, so the
+        # step sends the job's own token, the one the CLI reads from
+        # `GITHUB_TOKEN`. This step alone holds it: the github provider
+        # takes `GITHUB_TOKEN` as its credential, so a step that runs the
+        # program with it set would hand the token to any github provider
+        # declared without one (framework/ci.md §3).
+        timeout-minutes: 10
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: mise x -- pulumi plugin install
       - name: Plan
         timeout-minutes: 30
         id: plan
@@ -82,12 +100,24 @@ jobs:
           # `physical` hold; the stack passphrase is in neither
           # (credentials.md §3).
           PULUMI_CONFIG_PASSPHRASE: ${{ secrets.PULUMI_CONFIG_PASSPHRASE }}
+        # Three outcomes, read off the preview's exit: 0 is no change; 7 is
+        # `--expect-no-changes` refusing the changes the preview proposed,
+        # the code the CLI's exit-code table gives that refusal; anything
+        # else is a preview that failed, which proposed no plan to read. That
+        # one fails this job by name and writes no `diff`, so `up-physical`
+        # never asks for approval on it, and every `up` job after it, each
+        # gated on this one's success, stands down (framework/ci.md §3).
         run: |
-          if mise x -- pulumi preview --stack physical --diff --expect-no-changes; then
-            echo 'diff=false' >> "$GITHUB_OUTPUT"
-          else
-            echo 'diff=true' >> "$GITHUB_OUTPUT"
-          fi
+          status=0
+          mise x -- pulumi preview --stack physical --diff --expect-no-changes || status=$?
+          case $status in
+            0) echo 'diff=false' >> "$GITHUB_OUTPUT" ;;
+            7) echo 'diff=true' >> "$GITHUB_OUTPUT" ;;
+            *)
+              echo "::error::the physical preview failed (exit $status), so it proposed no plan to approve"
+              exit "$status"
+              ;;
+          esac
 
   up-physical:
     needs: plan-physical
@@ -96,7 +126,7 @@ jobs:
     # The sum of its steps' bounds, a `uses:` step twice, plus five minutes
     # for the runner's own phases: a backstop, since the `Up` step's bound
     # fires first and fails the job (framework/ci.md §3).
-    timeout-minutes: 170
+    timeout-minutes: 180
     # Reviewer-gated: this is the layer that can root the gateway.
     environment: physical
     concurrency:
@@ -129,6 +159,13 @@ jobs:
           ca: ${{ secrets.PULUMI_BACKEND_CA }}
           certificate: ${{ secrets.PULUMI_BACKEND_CERT }}
           key: ${{ secrets.PULUMI_BACKEND_KEY }}
+      - name: Install plugins
+        # Before the program runs, with the job's token, as in
+        # `plan-physical`; that step says why the token is this step's alone.
+        timeout-minutes: 10
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: mise x -- pulumi plugin install
       - name: Up
         # Killing an apply leaves its operations pending in the state, so the
         # bound sits far above a slow healthy apply. An apply that exceeds it
@@ -152,7 +189,7 @@ jobs:
     # The sum of its steps' bounds, a `uses:` step twice, plus five minutes
     # for the runner's own phases: a backstop, since the `Up` step's bound
     # fires first and fails the job (framework/ci.md §3).
-    timeout-minutes: 170
+    timeout-minutes: 180
     environment: dns
     # Shared with every other job that joins on the dns environment's identity:
     # a preview, a noop-automerge proof, a drift check.
@@ -193,6 +230,13 @@ jobs:
           ca: ${{ secrets.PULUMI_BACKEND_CA }}
           certificate: ${{ secrets.PULUMI_BACKEND_CERT }}
           key: ${{ secrets.PULUMI_BACKEND_KEY }}
+      - name: Install plugins
+        # Before the program runs, with the job's token, as in
+        # `plan-physical`; that step says why the token is this step's alone.
+        timeout-minutes: 10
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: mise x -- pulumi plugin install
       - name: Up
         # Killing an apply leaves its operations pending in the state, so the
         # bound sits far above a slow healthy apply. An apply that exceeds it
@@ -215,7 +259,7 @@ jobs:
     # The sum of its steps' bounds, a `uses:` step twice, plus five minutes
     # for the runner's own phases: a backstop, since the `Up` step's bound
     # fires first and fails the job (framework/ci.md §3).
-    timeout-minutes: 160
+    timeout-minutes: 170
     environment: k8s-base
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
@@ -237,6 +281,13 @@ jobs:
           ca: ${{ secrets.PULUMI_BACKEND_CA }}
           certificate: ${{ secrets.PULUMI_BACKEND_CERT }}
           key: ${{ secrets.PULUMI_BACKEND_KEY }}
+      - name: Install plugins
+        # Before the program runs, with the job's token, as in
+        # `plan-physical`; that step says why the token is this step's alone.
+        timeout-minutes: 10
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: mise x -- pulumi plugin install
       - name: Up
         # Killing an apply leaves its operations pending in the state, so the
         # bound sits far above a slow healthy apply. An apply that exceeds it
@@ -254,7 +305,7 @@ jobs:
     # The sum of its steps' bounds, a `uses:` step twice, plus five minutes
     # for the runner's own phases: a backstop, since the `Up` step's bound
     # fires first and fails the job (framework/ci.md §3).
-    timeout-minutes: 160
+    timeout-minutes: 170
     environment: apps
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
@@ -276,6 +327,13 @@ jobs:
           ca: ${{ secrets.PULUMI_BACKEND_CA }}
           certificate: ${{ secrets.PULUMI_BACKEND_CERT }}
           key: ${{ secrets.PULUMI_BACKEND_KEY }}
+      - name: Install plugins
+        # Before the program runs, with the job's token, as in
+        # `plan-physical`; that step says why the token is this step's alone.
+        timeout-minutes: 10
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: mise x -- pulumi plugin install
       - name: Up
         # Killing an apply leaves its operations pending in the state, so the
         # bound sits far above a slow healthy apply. An apply that exceeds it
