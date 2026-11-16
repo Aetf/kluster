@@ -370,9 +370,15 @@ Grouped by who controls their software:
     forges, is accepted. The gateway is an exit for the personal overlay
     members: a device that opens the overlay's tunnel reaches the home
     and the internet through it as a home client does, so its parity with
-    sitting on the LAN is literal, and the traffic the gateway forwards
-    for it bypasses the zone policy in both directions
-    ([physical/gateway.md](physical/gateway.md) §2.2, §4.1). Nothing is
+    sitting on the LAN is literal. The zone policy sees one direction of
+    that traffic and not the other. What a member sends into the gateway
+    meets no zone policy, the overlay's flow rules being the only policy
+    on it. What the gateway forwards to a member's address meets the zone
+    policy of the side it comes from: from the internet, replies are
+    admitted and a connection the internet opens is dropped; from the
+    home, the allow from the source zone toward the internet admits it
+    ([physical/gateway.md](physical/gateway.md) §2.2, §4.1, which names
+    the reading behind each direction and the ones not read). Nothing is
     published on the overlay for them.
 -   **IoT devices**, on the IoT VLAN, whose firmware the operator does not
     control. **In scope**, as the likeliest compromised host at home.

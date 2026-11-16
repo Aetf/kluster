@@ -3169,30 +3169,75 @@ were decided in their owning docs (architecture.md §3.4/§3.5, audit
 M2, workloads.md §4); this section is the one place that holds the
 complete set and the zone-matrix target state.
 
-### 4.1 Ground truth (measured 2026-08-23)
+### 4.1 Ground truth, as read off the device
 
--   The UBIOS zone firewall classifies forwarded traffic by
-    **destination ipset**, not interface pairs.
+Each item names when it was read.
+
+-   The UBIOS zone firewall classifies forwarded traffic by **ingress
+    interface, then destination ipset**, not by interface pairs: the
+    destination half read 2026-08-23, the ingress dispatch 2026-11-15
+    (the overlay item below).
 -   All three pre-existing VLANs — br0 (server LAN `192.168.80.0/24`,
     the homelab host), br2 (IoT `192.168.90.0/24`, HAOS lives here),
     br5 (containers `10.0.5.0/24`) — sit in the **LAN zone**, and
     LAN→LAN is an unconditional predefined ACCEPT: **zero inter-VLAN
-    isolation today**. This is a recorded dependency-in-force, not an
-    endorsement (§4.3 is the plan to change it). The cluster VLAN
-    (§1) does not join them: it is created in a zone of its own,
-    which is the entire reason it is a separate network (§4.2).
+    isolation today** (read 2026-08-23). This is a recorded
+    dependency-in-force, not an endorsement (§4.3 is the plan to change
+    it). The cluster VLAN (§1) does not join them: it is created in a
+    zone of its own, which is the entire reason it is a separate network
+    (§4.2).
 -   The `lan` pool `192.168.71.0/24` (+ ULA /64) is deliberately
     never a network object (it would fight the BGP /32s,
     architecture.md §3.4), so it sits in no zone ipset: pool-bound
-    traffic falls through to the **LAN→WAN chain** (ACCEPT today)
-    and inherits any WAN-side machinery. Bootstrap verification: no
-    NAT/IPS/content-filter interference on the LAN→pool path. Any
-    rule naming the pool must use address groups — forever.
--   `zt*` interfaces match no zone; overlay-forwarded traffic rides
-    FORWARD's default ACCEPT in both directions — the Central flow rules
-    (§2.3) are its only policing layer. That is what carries the
-    tunnel's traffic (§2.2) to every home subnet and to the uplink with
-    nothing added, outside the zone policy both ways.
+    traffic falls through to the **LAN→WAN chain** (ACCEPT, read
+    2026-08-23) and inherits any WAN-side machinery. Bootstrap
+    verification: no NAT/IPS/content-filter interference on the
+    LAN→pool path. Any rule naming the pool must use address groups —
+    forever.
+-   **The overlay's traffic meets the zone firewall by the interface it
+    enters on.** No zone holds the overlay's interface (`zt*`), and the
+    overlay's addresses are no network object, so no zone's set holds
+    them either. Direction by direction:
+    -   **In from the overlay**, toward the internet or a home subnet:
+        **no zone policy.** `UBIOS_FORWARD_IN_USER` dispatches by
+        ingress interface alone, `-i eth8|eth9|br0|br2|br5|br7`, and
+        `FORWARD`'s policy is `ACCEPT`, so the packet is forwarded with
+        nothing of the zone firewall on it. Read for IPv6 on 2026-11-15,
+        UniFi OS 6.0.17
+        ([Aetf/kluster-ops#757](https://github.com/Aetf/kluster-ops/issues/757#issuecomment-6901536237)),
+        and for IPv4 on 2026-08-23. The Central flow rules (§2.3) are
+        the only policy on this direction. That is what carries the
+        tunnel's traffic (§2.2) to every home subnet and to the uplink
+        with nothing added.
+    -   **In from the WAN, toward an overlay address: External →
+        External.** `UBIOS_WAN_IN_USER` dispatches a destination in no
+        zone's set to `UBIOS_WAN_WAN_USER`, which holds, in order, a
+        `RELATED,ESTABLISHED` accept, an `INVALID` drop, a log rule and a
+        drop. So a reply to a connection an overlay member opened is
+        admitted, and a connection the internet opens toward an overlay
+        address is dropped. The chain holds no custom policy: the drop
+        is the controller's predefined tail, which no row of §4.2
+        declares. The chain was read in both families on 2026-11-15,
+        UniFi OS 6.0.17
+        ([Aetf/kluster-ops#760](https://github.com/Aetf/kluster-ops/issues/760#issuecomment-6904427334)).
+        The dispatch to it was read for IPv6, whose zone sets are the
+        per-bridge `UBIOS_ALL_NETv6_br{0,2,5,7}` and `UBIOS6LAN_subnets`,
+        none holding the whole delegated prefix. For IPv4 the dispatch
+        of `10.144.0.0/16` to that chain is not read: it rests on the
+        same premise, and an IPv4 reply reaches `FORWARD` already
+        translated back to the member's address (the masquerade, next
+        item). The tunnel's IPv4 replies do arrive, which corroborates
+        the admission and not the chain.
+    -   **In from a home bridge, toward an overlay address** — a home
+        host's connection to an overlay member, and every reply to one
+        a member opened into the home: **the source zone's pair toward
+        External**, by the destination-set classification the pool's
+        traffic takes. From the LAN zone that is the LAN→WAN chain,
+        ACCEPT as read for IPv4 on 2026-08-23; the census's row on that
+        pair, §4.2 rule 1, names the pool and not the overlay. From the cluster zone it is
+        §4.2 rule 2's allow. Neither pair's chain has been read with an
+        overlay destination, and the LAN→WAN chain's IPv6 contents are
+        in no reading.
 -   **UBIOS masquerades by outgoing interface** (read 2026-11-15,
     `iptables -t nat -S`): `UBIOS_POSTROUTING_USER_HOOK` holds, for each
     WAN interface, `-o eth8 -m set ! --match-set UBIOS_ALL_ADDRv4_eth8
