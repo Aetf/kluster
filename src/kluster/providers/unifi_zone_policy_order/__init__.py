@@ -38,11 +38,13 @@ ones. A refused batch is retried once from a fresh read, a console edit between
 the read and the write being its one benign cause. `delete` sends nothing, the
 ranking being no object of its own.
 
-**The credential is the controller's API key**, read in `configure`, under the
-key `API_KEY_CONFIG` names. Where the session goes and whether it verifies the
-controller's certificate are declared inputs, since a provider decides neither
-(framework/pulumi.md §5.2). `check` stamps `session` and `provider_version`
-through `kluster.providers.configured`.
+**The session is the one every provider here opens with the controller**
+(`kluster.providers.unifi_session`): the API key out of stack configuration,
+the address and the certificate posture as declared inputs, and the stamps
+`check` adds. A refusal relays the controller's answer whole, since nothing
+this provider sends is secret. A transient answer fails the run rather than
+being retried, since a re-run is safe and only a console edit earns a second
+try (`_rank`).
 
 **The only write an update skips is a stamp's.** A moved stamp, or a moved
 address, changes nothing about the rank, so an update reached for one records
@@ -70,10 +72,17 @@ from typing import Any, cast, final
 import pulumi
 import pulumi.dynamic as dynamic
 import requests
-import urllib3
-from urllib3.exceptions import InsecureRequestWarning
 
-from kluster.providers.configured import STAMPS, ConfiguredProvider, declared_change, has_unknowns, is_unknown
+from kluster.providers.configured import STAMPS, declared_change, has_unknowns, is_unknown
+from kluster.providers.unifi_session import (
+    API_KEY_CONFIG,
+    TIMEOUT,
+    ControllerProvider,
+    ControllerRefused,
+    answered,
+    relayed,
+    site_url,
+)
 
 __all__ = (
     'API_KEY_CONFIG',
@@ -92,19 +101,6 @@ __all__ = (
     'ZonePolicyOrder',
     'ZonePolicyOrderProvider',
 )
-
-#: Long enough for a controller under parallel load, short enough that an
-#: unreachable gateway fails the resource instead of hanging the stack. A
-#: transient answer fails the run rather than being retried, since a re-run is
-#: safe and only a console edit earns a second try (`_rank`).
-TIMEOUT = 15
-
-#: The stack-configuration key the controller's API key is read from
-#: (`configured`).
-API_KEY_CONFIG = 'unifiApiKey'
-
-#: The header the controller reads an API key from.
-API_KEY_HEADER = 'X-API-KEY'
 
 #: What identifies an order, and therefore what replaces one: a pair of zones
 #: on a site. The rank of another pair is another object.
@@ -128,7 +124,7 @@ DRIFT = 'drift'
 VERSION = '1'
 
 
-class BatchRefused(RuntimeError):
+class BatchRefused(ControllerRefused):
     """The controller refused a batch, with its own reason."""
 
 
@@ -254,13 +250,8 @@ def _listed(props: Mapping[str, Any]) -> list[str]:
     return [str(policy) for policy in props['policy_ids']]
 
 
-def _base(props: Mapping[str, Any]) -> str:
-    """The controller, without the trailing slash a caller may write."""
-    return str(props['api_url']).rstrip('/')
-
-
 def _policies_url(props: Mapping[str, Any]) -> str:
-    return f'{_base(props)}/proxy/network/v2/api/site/{props["site"]}/firewall-policies'
+    return site_url(props, 'firewall-policies')
 
 
 def _identity(props: Mapping[str, Any]) -> str:
@@ -268,31 +259,9 @@ def _identity(props: Mapping[str, Any]) -> str:
     return '|'.join(str(props[key]) for key in IDENTITY)
 
 
-def _answered(response: requests.Response, what: str) -> requests.Response:
-    """A success, or the failure named with the controller's own reason.
-
-    Anything but a 2xx fails, redirects included: a redirect is not followed,
-    since it would carry the key's header to wherever it points.
-    """
-    if not 200 <= response.status_code < 300:
-        raise RuntimeError(f'{what} answered {response.status_code}: {response.text}')
-    return response
-
-
 @final
-class ZonePolicyOrderProvider(ConfiguredProvider):
+class ZonePolicyOrderProvider(ControllerProvider):
     """The rank of one zone pair, through the controller's v2 API."""
-
-    api_key: str
-
-    def _read_credential(self, config: dynamic.Config) -> None:
-        self.api_key = str(config.require(API_KEY_CONFIG))
-
-    def _credential(self) -> str:
-        return self.api_key
-
-    def _endpoint(self, props: Mapping[str, Any]) -> str:
-        return _base(props)
 
     def _version(self) -> str:
         return VERSION
@@ -332,20 +301,10 @@ class ZonePolicyOrderProvider(ConfiguredProvider):
     def delete(self, _id: str, _props: dict[str, Any]) -> None:
         """Nothing: a rank has no object to delete, and the policies go through their own resources."""
 
-    def _opened(self, props: Mapping[str, Any]) -> requests.Session:
-        session = requests.Session()
-        session.headers[API_KEY_HEADER] = self.api_key
-        session.verify = not props['allow_insecure']
-        if props['allow_insecure']:
-            # The posture is the caller's, stated once where it is declared; a
-            # warning per request would stand above every plan.
-            urllib3.disable_warnings(InsecureRequestWarning)
-        return session
-
     def _read_pair(self, session: requests.Session, props: Mapping[str, Any]) -> Pair:
         url = _policies_url(props)
         pulumi.log.info(f'reading the policies of {props["source_zone_id"]} -> {props["destination_zone_id"]}')
-        response = _answered(session.get(url, timeout=TIMEOUT, allow_redirects=False), f'GET {url}')
+        response = answered(session.get(url, timeout=TIMEOUT, allow_redirects=False), f'GET {url}', reason=relayed)
         return _pair(
             cast('list[dict[str, Any]]', response.json()),
             str(props['source_zone_id']),
@@ -360,9 +319,8 @@ class ZonePolicyOrderProvider(ConfiguredProvider):
         pulumi.log.info(f'ranking {len(listed)} policies on {pair}')
         url = f'{_policies_url(props)}/batch-reorder'
         response = session.put(url, json=_batch(pair, listed, previous), timeout=TIMEOUT, allow_redirects=False)
-        if response.status_code == 400:
-            raise BatchRefused(f'PUT {url} answered 400: {response.text}')
-        _ = _answered(response, f'PUT {url}')
+        refused = BatchRefused if response.status_code == 400 else ControllerRefused
+        _ = answered(response, f'PUT {url}', reason=relayed, refused=refused)
 
     def _rank(self, props: Mapping[str, Any], previous: Sequence[str]) -> None:
         """Rank the list on its pair, and read back that it took."""
