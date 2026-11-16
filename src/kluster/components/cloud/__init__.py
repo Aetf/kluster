@@ -1,9 +1,9 @@
 """The cloud installation: everything declared against the OCI account.
 
 The area holds the network below, the nodes and their load balancer
-(`nodes`), the tenancy-level quotas and budget that keep the account inside
-the free envelope (`guardrails`), and the block storage attached to a node
-(`storage`).
+(`nodes`), the tenancy-level quotas and budget that hold the account to the
+envelope the design is budgeted against (`guardrails`), and the block storage
+attached to a node (`storage`).
 
 **The network** (docs/declarative/physical.md §1).
 

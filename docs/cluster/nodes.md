@@ -7,7 +7,7 @@ availability" means for a two-site, budget-capped cluster. Price-driven;
 baseline to beat is the legacy Vultr VPS at $30/mo all-in.
 
 > **Status**: as decided 2026-08-22 — **cloud site = OCI, 3× A1.Flex
-> (1 OCPU / 8 GB) combined control-plane + ingress nodes** (§3.1–3.2);
+> (2 OCPU / 8 GB) combined control-plane + ingress nodes** (§3.1–3.2);
 > homelab VM is a pure worker (§4); Vultr is the scripted fallback. All
 > prices are as-of August 2026, USD, verified against official price
 > pages/APIs, and must be re-verified in the provider calculators before
@@ -31,11 +31,22 @@ workloads. This means the cloud pool needs:
 
 -   **Per node**: ~2–2.5 GB for etcd+apiserver+controllers, ~1.5 GB
     platform floor (Talos/kubelet/Cilium/Envoy), leaving ~4 GB of an
-    8 GB node for workloads. One dedicated Ampere core per node covers
-    steady-state CP load at this cluster size (the whole legacy VPS node
-    idles at ~0.4 cores); workload CPU limits keep bursts away from etcd
-    (architecture.md §6.5 for why this budget, honestly kept, avoids the
-    legacy CP-starvation failure).
+    8 GB node for workloads. **Two dedicated Ampere cores (2 OCPU) per
+    node**: the fewest Talos documents for a control plane, two cores
+    minimum and four recommended
+    ([system requirements](https://docs.siderolabs.com/talos/v1.13/getting-started/system-requirements)),
+    and the low end of etcd's guidance that "typical clusters need two
+    to four cores to run smoothly"
+    ([hardware recommendations](https://etcd.io/docs/v3.6/op-guide/hardware/)).
+    The steady state needs a fraction of one core (load 0.1–0.3, CPU
+    pressure 5–7%); a burst of creates, such as a first `k8s-base`
+    apply, does not fit in one. On one core such a burst held CPU
+    pressure at 21–45% (avg60) against 2–4% for IO, and etcd on every
+    member logged `slow fdatasync` warnings, requests that took too
+    long and leader changes, until requests timed out
+    (Aetf/kluster-ops#780). Workload CPU limits keep bursts away from
+    etcd (architecture.md §6.5 for why this budget, honestly kept,
+    avoids the legacy CP-starvation failure).
 -   **Stable public dual-stack IPs** per node (their on-the-wire forms —
     the v4 *private* primaries behind OCI's 1:1 NAT, plus the v6 GUAs —
     double as the `internet` pool VIPs, architecture.md §3.2) plus the
@@ -142,7 +153,7 @@ months).
 
 | | GCP e2-medium (mixed tier) | AWS t4g.medium | Hetzner CPX21 (US) | Vultr 4 GB | Oracle A1.Flex (free) |
 | --- | --- | --- | --- | --- | --- |
-| Specs | 2 shared vCPU / 4 GB | 2 vCPU ARM / 4 GB | 3 vCPU / 4 GB | 2 vCPU / 4 GB | ARM, 2 OCPU / 12 GB (4 / 24 under PAYG, eroding) |
+| Specs | 2 shared vCPU / 4 GB | 2 vCPU ARM / 4 GB | 3 vCPU / 4 GB | 2 vCPU / 4 GB | ARM, 2 OCPU / 12 GB, in every tenancy |
 | Instance (1y commit) | $15.41 (3y: $11.01) | $15.40 (1y RI no-upfront) | $37.49 (no commit) | $20 vc2 / $24 vhp-5TB (no commit) | $0 |
 | Boot disk 50 GB | $5.00 (pd-balanced $0.10/GiB) | $4.00 (gp3 $0.08/GB) | included (80 GB) | included (80–100 GB) | free (within 200 GB boot+block allowance, home region) |
 | Public IPv4 | $3.65 ($0.005/hr) | $3.65 ($0.005/hr, idle same) | $0.60 | included | $0 (reserved & idle also $0; 50/region limit) |
@@ -152,7 +163,7 @@ months).
 | Talos support | image upload | AMI upload | no ISO — rescue-mode dd / packer snapshot | **native custom ISO** | custom image (.oci qcow2), official guide |
 | Dual-stack, stable IPs | static v4 (Standard) + v6 (Premium) reservable | EIP + stable v6 | primary IPs detachable, v6 /64 free | reserved IPs (v4 + v6) | reserved v4; v6 on dual-stack VCN |
 | Additional IP (VIP fallback) | static IP + alias/forwarding rules | EIP re-assignable | floating v4 $3.50 / v6 $1.50 | reserved IP | reserved public IP |
-| Risk notes | v6-share billing unpredictable; CUD lock-in | KubeSpan metering kills it | 2 hikes in 18 mo; US traffic cut to 1–2 TB | legacy incumbent; pricing stable through 2024–2026 | **platform risk**: capacity hunts, 2026 free-tier halving (Always-Free → 2 OCPU/12 GB, enforced 2026-08-18; PAYG holds 4/24 for now), reports of account purges; PAYG conversion mitigates |
+| Risk notes | v6-share billing unpredictable; CUD lock-in | KubeSpan metering kills it | 2 hikes in 18 mo; US traffic cut to 1–2 TB | legacy incumbent; pricing stable through 2024–2026 | **platform risk**: capacity hunts, 2026 free-tier halving (to 2 OCPU/12 GB, in every tenancy), reports of account purges; PAYG conversion mitigates |
 
 The KubeSpan row matters more for its *variance* than its magnitude:
 steady-state cross-site TX is ~150–250 GB/mo (re-measured 2026-08-22,
@@ -184,16 +195,15 @@ KubeSpan TX steady state, with multi-hundred-GB spike days):
     changes materially once the tenancy is converted to Pay-As-You-Go
     with a card on file (one-time $100 verification hold, refunded),
     *while still paying $0* for Always-Free-shaped usage:
-    -   **Design against 2 OCPU / 12 GB, treat 4 / 24 as an eroding
-        bonus.** The 2026 halving cut Always-Free tenancies to
-        2 OCPU / 12 GB (enforced by termination from 2026-08-18); PAYG
-        tenancies still hold 4 OCPU / 24 GB *as of August 2026*, but
-        contemporary coverage expects PAYG to converge to the same
-        limits eventually — the architecture must stay valid at 12 GB
-        (it does: platform floor ~2 GiB + cloud workloads fit with room
-        to spare, §4.4). Mechanically the allowance is
-        1,500 OCPU-hours + 9,000 GB-hours/month across A1 VMs; PAYG is
-        billed (not killed) beyond it.
+    -   **The A1 allowance is the same in every tenancy, PAYG
+        included.** Oracle's Always Free page reads: "All tenancies get
+        the first 1,500 OCPU hours and 9,000 GB hours per month for free
+        for VM instances using the VM.Standard.A1.Flex shape"
+        ([Always Free Resources](https://docs.oracle.com/en-us/iaas/Content/FreeTier/freetier_topic-Always_Free_Resources.htm)).
+        That is about 2 OCPU / 12 GB always on, and the page draws no
+        line between free and paid tenancies for A1. PAYG is billed (not
+        killed) beyond it, and the fleet runs beyond it (§3.2, the
+        node-shape math).
     -   PAYG tenancies are **exempt from the idle-reclaim policy** (the
         documented 7-day/95th-percentile-CPU rule targets Always Free
         accounts).
@@ -215,7 +225,7 @@ KubeSpan TX steady state, with multi-hundred-GB spike days):
 
 **Decided: OCI A1.Flex under PAYG, as the 3-node combined pool of §1.**
 The deciding observations: (a) the §4.4 analysis shows cloud-node cost
-is dictated by the fixed platform floor, which free 8 GB shapes simply
+is dictated by the fixed platform floor, which cheap 8 GB A1 shapes simply
 delete as a concern; (b) A1 billing's fungibility turns the free/cheap
 allowance into *three* nodes — buying CP HA and ingress HA that no paid
 single-instance alternative offers at any similar price (§3.2); (c)
@@ -252,8 +262,9 @@ program no longer exists on the official page. PAYG specifics:
 -   **There is no hard spending cap.** Budgets are alerts only,
     evaluated every ~24 h. The real guardrails are resource-side:
     **compartment quotas + service limits** pinning creatable shapes to
-    the free envelope, plus budget alerts. Accept this consciously —
-    "billed, not killed" means the bill is the failure mode. The quotas
+    the envelope the design is budgeted against, plus budget alerts.
+    Accept this consciously — "billed, not killed" means the bill is the
+    failure mode. The quotas
     bound A1 twice, per availability domain and per region, and the
     regional bound is the compartment's ceiling: the fleet plus one node.
     A replacement is created before the node it replaces is deleted, so a
@@ -293,26 +304,31 @@ shape itself):
 $0.01/OCPU-h + $0.0015/GB-h; preemptible capacity is a flat −50%;
 E4 $0.025/OCPU-h. Egress beyond 10 TB: $0.0085/GB (NA). **Compute
 capacity reservations exist** (unused capacity bills at 85%) — a priced
-hedge against the A1 re-creation capacity hunt at worst-case ~$47/mo
-for 4/24; not recommended (the Vultr fallback is cheaper insurance),
-but it exists if OCI ever becomes load-bearing.
+hedge against the A1 re-creation capacity hunt at worst-case ~$61/mo
+for the fleet's 6 OCPU / 24 GB; not recommended (the Vultr fallback is
+cheaper insurance), but it exists if OCI ever becomes load-bearing.
 
 **The node-shape math (accepted posture: "we always pay something",
-budget ~$20/mo).** A1 billing is *fungible*: OCPU-hours and GB-hours
-accrue per tenancy across all A1 instances, free tier subtracted from
-the totals — shapes are freely splittable across nodes. At 744 h/mo the
-marginal prices are **$7.44 per always-on OCPU** and **$1.116 per
-always-on GB**. The as-designed shape:
+budget $50/mo).** A1 billing is *fungible*: OCPU-hours and GB-hours
+accrue per tenancy across all A1 instances, the free 1,500 OCPU-hours
+and 9,000 GB-hours subtracted from the totals — shapes are freely
+splittable across nodes. At 744 h, the longest month, the marginal
+prices are **$7.44 per always-on OCPU** and **$1.116 per always-on
+GB**, and the allowance covers about 2 OCPU and 12 GB always on. Each
+month below includes the block storage past 200 GB, $1.40:
 
-| Shape | Total | Cost under 3,000/18,000 free (current billing) | Under 1,500/9,000 (conservative) |
-| --- | --- | --- | --- |
-| **3 × (1 OCPU / 8 GB)** — as designed | 3 OCPU / 24 GB | **$0** | **$20.83/mo** |
-| bump one node +1 OCPU (if hath's node runs hot) | 4 / 24 | $0 | $28.27/mo |
+| Shape | Total | OCPU past the allowance | Memory past the allowance | Month |
+| --- | --- | --- | --- | --- |
+| **3 × (2 OCPU / 8 GB)** — as designed | 6 OCPU / 24 GB | $29.64 | $13.28 | **≈ $44.3** |
+| 3 × (2 OCPU / 6 GB) | 6 OCPU / 18 GB | $29.64 | $6.59 | ≈ $37.6 |
+| 3 × (1 OCPU / 8 GB) | 3 OCPU / 24 GB | $7.32 | $13.28 | ≈ $22.0 |
 
-(The estimator still prices 4 OCPU/24 GB at $0 because the price API's
-free tiers are still 3,000/18,000 — data stamped 2026-08-14 — while the
-docs already say 1,500/9,000: a docs-first rollout of the halving. The
-design is budgeted against the conservative column.)
+One OCPU a node is below Talos's control-plane minimum and does not
+carry a burst of creates (§1). Six GB a node would halve the ~4 GB that
+§1 leaves each node for workloads. The budget alert
+(`components/cloud/guardrails.py`) is set at $50: the designed month
+rounded up, the remainder covering about a week of one replacement node
+running beside the node it replaces, at about $0.77 a day.
 
 What the three-way split buys over one big node — each a standing
 benefit, so the ~2× platform-floor overhead (3 × ~1.5 GiB instead of 1)
@@ -331,7 +347,7 @@ and two more Talos nodes to patch pass the §4.4 standing-rent test:
 limit increases are often refused (PAYG requests go through); Always
 Free resources are mostly home-region-locked and the home region is
 immutable at signup; the A1 free allowance is measured in OCPU-hours
-(1,500 or 3,000/mo — see the eroding-allowance note above), so a
+(1,500/mo in every tenancy, §3.1), so a
 deleted-and-recreated instance burns the same pool; watch the
 31/90-day minimum-retention rules if Object Storage IA/Archive tiers
 ever get used.
@@ -477,7 +493,7 @@ answered with `kubectl top` on the legacy cluster (2026-08-22), of
 
 | Infra component | Measured | Fate in the new cluster |
 | --- | --- | --- |
-| k3s server + containerd (host procs) | ~1.7 GiB | CP moved cloud-side; the homelab VM keeps only kubelet+containerd (~0.5 GiB). The CP cost re-appears as ~2–2.5 GiB × 3 on the cloud nodes — paid out of free OCI RAM, not out of the 32 GB host |
+| k3s server + containerd (host procs) | ~1.7 GiB | CP moved cloud-side; the homelab VM keeps only kubelet+containerd (~0.5 GiB). The CP cost re-appears as ~2–2.5 GiB × 3 on the cloud nodes — paid out of OCI RAM, not out of the 32 GB host |
 | Monitoring (prometheus 948 Mi, grafana 428 Mi, exporters/operator/alertmanager ~200 Mi) | ~1.6 GiB | **switch to VictoriaMetrics** (vmsingle + vmagent + vmalert): PromQL-compatible, typically ~1/5 the RAM at this scale; grafana stays. Target ≤0.7 GiB |
 | Shared-JuiceFS stack (CSI ×5, redis, 4 mount pods) | ~1.0 GiB | gone by design: no CSI driver, no shared metadata store, and no workload mounts JuiceFS (storage.md §6). A workload admitted later brings its own sidecar mount, **budgeted honestly at 0.5–1 GiB requests** — root cause (b) of the legacy instability was starving exactly this process |
 | Everything else in kube-system (coredns, metrics-server, cert-manager, sealed-secrets, nfd, local-path, reloader) | ~0.45 GiB | kept as-is — **sealed-secrets stays** (the secret-management model is unchanged from kluster-code); only the JuiceFS dashboard is dropped |
@@ -498,7 +514,7 @@ size is set by the fixed floors, not by workloads**. Platform floor
 (Talos + kubelet + Cilium + Envoy) is ~1.5 GiB; the CP slice
 (etcd+apiserver+controllers) another ~2–2.5 GiB — before the first app
 pod. This is what made 2–4 GB paid instances structurally cramped and
-what the 8 GB A1 nodes absorb for free: each still keeps ~4 GiB for
+what the 8 GB A1 nodes absorb, billed at A1's memory rate (§3.2): each still keeps ~4 GiB for
 hath (~0.3) and Envoy. Meanwhile, the homelab
 side, though tighter on paper, is the flexible one: workloads can be
 trimmed, ARC squeezed, and RAM added (§4.2) — memory pressure there is

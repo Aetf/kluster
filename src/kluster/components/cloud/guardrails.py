@@ -33,8 +33,9 @@ replacement while the old node still runs.
     one node at once, nodes.md §3.2). The per-AD numbers multiplied by the
     region's ADs would admit more, and the regional quota is what stops it.
 
-Both are looser than the free envelope, and deliberately so: the replacement
-in flight is billed for as long as it runs beside the node it replaces.
+Both are looser than the free envelope, and deliberately so: the fleet itself
+bills past it (nodes.md §3.2), and so does the replacement in flight, for as
+long as it runs beside the node it replaces.
 
 **Statement order is load-bearing.** Within one policy, a later statement
 supersedes an earlier one for the same quota, so the wildcard `zero` comes
@@ -53,12 +54,12 @@ import pulumi_oci as oci
 
 from putils import Component, async_output, resolve
 
-#: Per AD. One node is 1 OCPU / 8 GB; the second core is the recorded headroom
-#: for the node carrying the cache workload if it runs hot (nodes.md §3.2).
-A1_CORES_PER_AD = 2
+#: Per AD. Two nodes' worth: one node is 2 OCPU / 8 GB, the fleet puts one in
+#: each AD, and the second is the room the replacement takes beside it.
+A1_CORES_PER_AD = 4
 A1_MEMORY_GB_PER_AD = 16
 
-#: Regional. The fleet plus one node: three nodes of 1 OCPU / 8 GB
+#: Regional. The fleet plus one node: three nodes of 2 OCPU / 8 GB
 #: (`conventions.CLOUD_NODES`, `NODE_OCPUS`, `NODE_MEMORY_GB`) and the
 #: replacement that runs beside one of them, because the replacement is created
 #: before the node it replaces is deleted and a bound of the fleet alone would
@@ -66,7 +67,7 @@ A1_MEMORY_GB_PER_AD = 16
 #: conventions: a bound that followed the fleet's declaration would follow a
 #: fat-fingered node count or size along with it, which is the mistake it is
 #: here to refuse. The suite compares the two instead.
-A1_CORES_REGIONAL = 4
+A1_CORES_REGIONAL = 8
 A1_MEMORY_GB_REGIONAL = 32
 
 #: Per AD. A node's boot volume is 50 GB and a node may carry one attached
@@ -91,12 +92,16 @@ VOLUME_BACKUPS = 5
 #: fleet.
 OBJECT_STORAGE_GB = 250
 
-#: A month's spend the design already accepts: the A1 fleet under the
-#: conservative half of the free allowance, plus the block storage past 200 GB
-#: (nodes.md §3.2). Alerts fire against this, in whole units of the tenancy's
-#: currency. Not a parameter: there is one tenancy and no caller has a second
-#: opinion about what its month costs.
-BUDGET_AMOUNT = 25
+#: A month's spend the design already accepts, in whole units of the tenancy's
+#: currency: the A1 fleet past the free allowance of 1,500 OCPU-hours and
+#: 9,000 GB-hours, plus the block storage past 200 GB, over the longest month
+#: of 744 hours -- about 44.3 (nodes.md §3.2) -- rounded up to 50. The rest is
+#: what a month adds beyond the fleet as declared, and the design's one such
+#: cost is the replacement in flight: billed for as long as it runs beside the
+#: node it replaces, at about 0.77 a day for one node, it is covered for about
+#: a week. Alerts fire against this. Not a parameter: there is one tenancy and
+#: no caller has a second opinion about what its month costs.
+BUDGET_AMOUNT = 50
 
 
 class NoRecipient(ValueError):

@@ -15,9 +15,13 @@ CLOUD_NODES = ('cp1', 'cp2', 'cp3')
 #: Every Talos node this program declares.
 ALL_NODES = (*CLOUD_NODES, HOMELAB_NODE)
 
-#: Designed against the conservative half of the A1 allowance (2 OCPU/12 GB),
-#: so the architecture stays valid if the free tier halves again (nodes.md §3.2).
-NODE_OCPUS = 1
+#: Two OCPUs per node: the fewest cores Talos documents for a control plane,
+#: and the low end of what etcd's hardware guide gives a typical cluster. One
+#: core carries the steady state but not a burst of creates, under which etcd
+#: on every member missed its deadlines (nodes.md §1). The fleet bills past the
+#: A1 free allowance, which is the same for every tenancy; what its month costs
+#: is nodes.md §3.2, and the budget is set from it (`components/cloud/guardrails.py`).
+NODE_OCPUS = 2
 NODE_MEMORY_GB = 8
 NODE_BOOT_VOLUME_GB = 50
 

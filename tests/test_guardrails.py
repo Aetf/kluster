@@ -4,8 +4,9 @@ A quota policy is a text document the service parses, so the things worth
 asserting are textual: that the default-deny statement precedes the exceptions
 (their order is what decides which one wins), that the shapes named are the
 ones the design creates, and that the units are the units each family is
-spelled in. The budget's own assertion is smaller and blunter — that it points
-at the compartment and that somebody receives its alerts.
+spelled in. The budget's own assertions are smaller and blunter — that it
+points at the compartment, that somebody receives its alerts, and that its
+amount holds the month the declared fleet costs at Oracle's list prices.
 """
 
 import re
@@ -20,12 +21,14 @@ from kluster import conventions
 from kluster.components.cloud.guardrails import (
     A1_CORES_PER_AD,
     A1_MEMORY_GB_PER_AD,
+    BUDGET_AMOUNT,
     OBJECT_STORAGE_GB,
     AlertRule,
     Guardrails,
     NoRecipient,
     quota_statements,
 )
+from kluster.lib.state_backend import settings as state_backend
 
 TENANCY_ID = 'ocid1.tenancy.oc1..test'
 COMPARTMENT_ID = 'ocid1.compartment.oc1..test'
@@ -132,6 +135,55 @@ def test_the_region_bounds_what_the_ads_together_would_admit() -> None:
     ads = len(conventions.CLOUD_NODES)
     per_ad = (quotas['standard-a1-core-count'], quotas['standard-a1-memory-count'])
     assert not admitted(ads * per_ad[0], ads * per_ad[1], quotas=quotas, scope='region')
+
+
+def test_the_region_refuses_a_second_replacement_in_flight() -> None:
+    quotas = quota_values(quota_statements(COMPARTMENT_NAME))
+    # Never more than one node created at once: the capacity hold rests on
+    # it, and it is the regional quota alone that enforces it.
+    nodes = len(conventions.CLOUD_NODES) + 2
+    assert not admitted(
+        nodes * conventions.NODE_OCPUS, nodes * conventions.NODE_MEMORY_GB, quotas=quotas, scope='region'
+    )
+
+
+#: Oracle's list prices and free allowances, the independent source the budget
+#: is held against: A1 per OCPU-hour and per GB-hour past the allowance every
+#: tenancy gets (the Always Free resources page), and block storage per
+#: GB-month past its 200 GB, priced at the Lower Cost tier (VPU 0) as
+#: nodes.md §3.2 prices that overage.
+A1_PER_OCPU_HOUR = 0.01
+A1_PER_GB_HOUR = 0.0015
+A1_FREE_OCPU_HOURS = 1500
+A1_FREE_GB_HOURS = 9000
+BLOCK_PER_GB_MONTH = 0.0255
+BLOCK_FREE_GB = 200
+
+#: A 31-day month, the longest a monthly budget has to cover.
+LONGEST_MONTH_HOURS = 744
+
+
+def test_the_budget_holds_the_month_the_fleet_declares() -> None:
+    # The forecast alert fires on a month projected past the amount, so an
+    # amount below what the declared fleet costs alerts on every month, and
+    # one that stopped following a resized fleet is caught here.
+    nodes = len(conventions.CLOUD_NODES)
+    ocpu_hours = nodes * conventions.NODE_OCPUS * LONGEST_MONTH_HOURS
+    gb_hours = nodes * conventions.NODE_MEMORY_GB * LONGEST_MONTH_HOURS
+    # The whole tenancy's block storage: the allowance is the tenancy's, so
+    # the overage is counted entire, whichever compartment it bills to.
+    block_gb = (
+        nodes * conventions.NODE_BOOT_VOLUME_GB
+        + sum(entry.size_gb for entry in conventions.NODE_VOLUMES.values())
+        + state_backend.BOOT_VOLUME_GB
+    )
+    month = (
+        max(0, ocpu_hours - A1_FREE_OCPU_HOURS) * A1_PER_OCPU_HOUR
+        + max(0, gb_hours - A1_FREE_GB_HOURS) * A1_PER_GB_HOUR
+        + max(0, block_gb - BLOCK_FREE_GB) * BLOCK_PER_GB_MONTH
+    )
+    assert month > 0  # not vacuous: the fleet bills past the allowance
+    assert month <= BUDGET_AMOUNT
 
 
 def test_object_storage_is_capped_in_the_unit_it_is_spelled_in() -> None:
