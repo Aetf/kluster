@@ -94,8 +94,17 @@ Consequences worth knowing:
     needs no parent of its own while a nested one does; a component that never
     calls `register_outputs` stays on the scope and the next unparented
     resource is refused in its name instead of its own.
--   **Nothing is exempt**, providers included. Resources declared outside any
-    component, which is what a stack program does, pass untouched.
+-   **No declaration is exempt**, providers included, and neither is a read by
+    id, a `.get`, which the engine records under the parent its options name.
+    Resources declared outside any component, which is what a stack program
+    does, pass untouched.
+-   **A reference is not a declaration.** A resource object built from a URN,
+    with `ResourceOptions(urn=...)`, registers nothing and passes. That is the
+    object the SDK makes of each resource reference in a registration's
+    outputs, the `resources` of a chart or a config group among them, while
+    that registration is still inside the scope of the component that
+    declared it. Why the URN is the signal, line by line in the pinned SDK, is
+    the comment on `_refuse_unparented`.
 -   **A provider a component builds for itself is its sibling, not its
     child.** It is built before the component's own `super().__init__()`,
     because a provider reaches a subtree through the component's options and
