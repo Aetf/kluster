@@ -362,7 +362,8 @@ def test_the_ignition_carries_every_recipient_the_roots_name_one_per_line() -> N
 
 
 #: Where the Butane template puts the files that decide who may connect as whom.
-HBA_FILE = '/etc/kluster/pki/pg_hba.conf'
+HBA_FILE = '/etc/kluster/pgstate/pg_hba.conf'
+POOLER_HBA_FILE = '/etc/kluster/pgbouncer/hba.conf'
 INIT_FILE = '/etc/kluster/initdb/00-roles.sql'
 DUMP_ENV_FILE = '/etc/kluster/state-dump.env'
 POSTGRES_UNIT = 'pgstate.service'
@@ -395,22 +396,28 @@ def test_no_role_a_certificate_names_is_the_superuser(ignition: str) -> None:
 
     The image makes whatever `POSTGRES_USER` names its superuser, and a
     client role there would put every CI job's certificate one `COPY ... TO
-    PROGRAM` away from a shell beside the server's key. pg_hba is the other
-    half: the superuser is admitted on the local socket alone, and over TCP
-    only the two client roles are, into the state's database alone -- so a
-    certificate the CA signs for any other name is worth nothing here.
+    PROGRAM` away from a shell beside the server's key. The two `hba` files
+    are the other half. From the network only the pooler's admits anyone,
+    and only the two client roles, by certificate, into the state's entries
+    alone -- so a certificate the CA signs for any other name is worth
+    nothing here. Postgres's admits on local sockets alone: the superuser,
+    and the client roles into the state's database.
     """
     superuser = _postgres_env(ignition)['POSTGRES_USER']
     assert superuser not in CLIENT_ROLES
 
     rules = [line.split() for line in _delivered(ignition, HBA_FILE).splitlines() if line.strip()]
-    assert [rule[:3] for rule in rules if rule[0] == 'local'] == [['local', 'all', superuser]]
-    remote = [rule for rule in rules if rule[0] != 'local']
+    assert {rule[0] for rule in rules} == {'local'}
+    assert sorted((rule[1], rule[2]) for rule in rules) == sorted(
+        [('all', superuser), (settings.DATABASE, ','.join(sorted(CLIENT_ROLES)))]
+    )
+    pooler = [line.split() for line in _delivered(ignition, POOLER_HBA_FILE).splitlines() if line.strip()]
+    remote = [rule for rule in pooler if rule[0] != 'local']
     assert remote
     for rule in remote:
         assert rule[0] == 'hostssl', rule
-        assert rule[1] == settings.DATABASE, rule
-        assert set(rule[2].split(',')) == CLIENT_ROLES, rule
+        assert rule[1] in {settings.DATABASE, settings.SESSION_DATABASE}, rule
+        assert set(rule[2].split(',')) <= CLIENT_ROLES, rule
         assert rule[4] == 'cert', rule
 
     # The dump reaches Postgres over the local socket, as the one role

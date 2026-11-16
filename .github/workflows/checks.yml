@@ -75,17 +75,21 @@ jobs:
         run: mise x uv -- uv run lint-imports
 
       # `tests/test_state_roles.py` runs the appliance's Postgres roles in the
-      # image the box runs, and skips where no copy of it is local rather
-      # than fetch one mid-run; this step makes it local, so those cases run
-      # on every event (framework/ci.md §3). The image is the one
-      # `settings.POSTGRES_IMAGE` pins, by its tag and digest.
+      # images the box runs, Postgres and the PgBouncer in front of it, and
+      # skips where no copy of either is local rather than fetch one mid-run;
+      # this step makes both local, so those cases run on every event
+      # (framework/ci.md §3). The images are the ones
+      # `settings.POSTGRES_IMAGE` and `settings.PGBOUNCER_IMAGE` pin, by
+      # their tags and digests.
       #
       # Docker Hub limits anonymous pulls per address, and a runner's address
-      # is shared, so the image is pulled from Google's mirror of Docker Hub
-      # instead, by the pinned digest: the mirror serves exactly the pinned
-      # image or the pull fails. It is then tagged with the repository and
-      # tag of the pin, which is what lets the pinned reference -- tag and
-      # digest -- resolve to it locally, as the cases run it.
+      # is shared, so the Postgres image is pulled from Google's mirror of
+      # Docker Hub instead, by the pinned digest: the mirror serves exactly
+      # the pinned image or the pull fails. PgBouncer's is pulled from its own
+      # registry, GitHub's, by its digest. Each is then tagged with the
+      # repository and tag of its pin, which is what lets the pinned
+      # reference -- tag and digest -- resolve to it locally, as the cases
+      # run it.
       #
       # The log names the podman the module runs on and the buildah it
       # carries, which is what the module's podman workarounds name as their
@@ -99,6 +103,11 @@ jobs:
           read -r repository tag digest <<<"$pin"
           echo "pulling $repository:$tag@$digest from mirror.gcr.io"
           id=$(podman pull --quiet "mirror.gcr.io/${repository#docker.io/}@$digest")
+          podman tag "$id" "$repository:$tag"
+          pin=$(mise x uv -- uv run python -c 'from kluster.lib.state_backend import settings as s; print(s.PGBOUNCER_REPOSITORY, s.PGBOUNCER_TAG, s.PGBOUNCER_DIGEST)')
+          read -r repository tag digest <<<"$pin"
+          echo "pulling $repository:$tag@$digest"
+          id=$(podman pull --quiet "$repository@$digest")
           podman tag "$id" "$repository:$tag"
 
       # A hung case fails by name under the per-case bound `pyproject.toml`

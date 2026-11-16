@@ -1,7 +1,7 @@
 """The state-backend appliance, declared: every entity it is, in one stack (rfc-006 §4).
 
-The appliance is the Postgres box every other stack keeps its state in
-(physical/state-backend.md). Everything it stands on is declared here, so a
+The appliance is the Postgres box every other stack keeps its state in,
+reached through the PgBouncer in front of it (physical/state-backend.md). Everything it stands on is declared here, so a
 difference anywhere is a step the engine plans and repairs in place, and a
 run that finds none writes nothing:
 
@@ -129,8 +129,8 @@ RULES = frozenset(
             protocol='6',
             peer=ANYWHERE,
             ports=(settings.PORT, settings.PORT),
-            reason='Postgres, from anywhere: its clients include CI runners, which have no address range a rule '
-            'could name, and the client certificate it demands is the wall',
+            reason='the state, from anywhere, at the pooler in front of Postgres: its clients include CI runners, '
+            'which have no address range a rule could name, and the client certificate the pooler demands is the wall',
         ),
         Rule(
             ingress=True,
@@ -158,8 +158,8 @@ RULES = frozenset(
             ingress=False,
             protocol='all',
             peer=ANYWHERE,
-            reason='all egress: the box pulls its Postgres image and its OS updates and uploads its dumps to B2, '
-            'and none of those has a fixed address range',
+            reason='all egress: the box pulls its Postgres and PgBouncer images and its OS updates and uploads its '
+            'dumps to B2, and none of those has a fixed address range',
         ),
     }
 )

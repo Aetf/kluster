@@ -212,6 +212,29 @@ def ssh(command: Sequence[str]) -> NoReturn:
 DIGEST_HEADER = 'Docker-Content-Digest'
 
 
+@dataclass(frozen=True)
+class Registry:
+    """Where one registry hands out an anonymous pull token, and where its manifests are."""
+
+    #: The token endpoint, with `{name}` for the repository's name in the
+    #: registry.
+    token_url: str
+    #: The API's base, which the name and `manifests/<reference>` follow.
+    api: str
+
+
+#: The registries the appliance's images come from, by the host its
+#: repositories are named under: Docker Hub's for Postgres, GitHub's for
+#: PgBouncer.
+REGISTRIES = {
+    'docker.io': Registry(
+        token_url='https://auth.docker.io/token?service=registry.docker.io&scope=repository:{name}:pull',
+        api='https://registry-1.docker.io/v2',
+    ),
+    'ghcr.io': Registry(token_url='https://ghcr.io/token?scope=repository:{name}:pull', api='https://ghcr.io/v2'),
+}
+
+
 def _image_digest(repository: str, reference: str) -> str:
     """The digest `reference` -- a tag, or a digest -- resolves to in `repository`, via the registry API.
 
@@ -223,15 +246,15 @@ def _image_digest(repository: str, reference: str) -> str:
     `DigestMissing`.
     """
     image = f'{repository}@{reference}' if reference.startswith('sha256:') else f'{repository}:{reference}'
-    repository = repository.removeprefix('docker.io/')
+    host, _, name = repository.partition('/')
+    registry = REGISTRIES[host]
     log.info('asking the registry what %s resolves to', image)
 
-    token_url = f'https://auth.docker.io/token?service=registry.docker.io&scope=repository:{repository}:pull'
-    with urllib_request.urlopen(token_url, timeout=60) as response:
-        token = _string(json.load(response), 'token', what=f'the registry pull token for {repository}')
+    with urllib_request.urlopen(registry.token_url.format(name=name), timeout=60) as response:
+        token = _string(json.load(response), 'token', what=f'the registry pull token for {name}')
 
     request = urllib_request.Request(
-        f'https://registry-1.docker.io/v2/{repository}/manifests/{reference}',
+        f'{registry.api}/{name}/manifests/{reference}',
         method='HEAD',
         headers={
             'Authorization': f'Bearer {token}',
@@ -250,30 +273,37 @@ def _image_digest(repository: str, reference: str) -> str:
     return str(digest)
 
 
-def _postgres_pin_ok() -> bool:
-    """Whether the registry serves the Postgres pin's digest; that the tag has moved past it is said, not failed."""
+def _image_pin_ok(repository: str, tag: str, digest: str) -> bool:
+    """Whether the registry serves an image pin's digest; that the tag has moved past it is said, not failed."""
+    image = f'{repository}:{tag}@{digest}'
     try:
-        pinned = _image_digest(settings.POSTGRES_REPOSITORY, settings.POSTGRES_DIGEST)
-        current = _image_digest(settings.POSTGRES_REPOSITORY, settings.POSTGRES_TAG)
+        pinned = _image_digest(repository, digest)
+        current = _image_digest(repository, tag)
     except (urllib_error.HTTPError, DigestMissing, DocumentIncomplete) as exc:
-        log.error('%s: registry says %s (is the digest published?)', settings.POSTGRES_IMAGE, exc)
+        log.error('%s: registry says %s (is the digest published?)', image, exc)
         return False
-    if pinned != settings.POSTGRES_DIGEST:
-        log.error('%s: the registry serves the pin as %s', settings.POSTGRES_IMAGE, pinned)
+    if pinned != digest:
+        log.error('%s: the registry serves the pin as %s', image, pinned)
         return False
     if current == pinned:
-        log.info('%s is the tag %s as the registry serves it now', pinned, settings.POSTGRES_TAG)
+        log.info('%s is the tag %s as the registry serves it now', pinned, tag)
     else:
-        # Not a failure: the tag is rebuilt for every minor release and base
-        # image, and renovate's monthly digest update moves the pin
-        # (settings.py). The box runs the pinned image until then.
-        log.info(
-            'the registry serves the pinned %s; the tag %s has since moved to %s',
-            pinned,
-            settings.POSTGRES_TAG,
-            current,
-        )
+        # Not a failure: the tag is rebuilt for every new base, and the
+        # Postgres tag for every minor release too, and renovate's monthly
+        # digest update moves the pin (settings.py). The box runs the pinned
+        # image until then.
+        log.info('the registry serves the pinned %s; the tag %s has since moved to %s', pinned, tag, current)
     return True
+
+
+def _postgres_pin_ok() -> bool:
+    """The Postgres image's pin, through `_image_pin_ok`."""
+    return _image_pin_ok(settings.POSTGRES_REPOSITORY, settings.POSTGRES_TAG, settings.POSTGRES_DIGEST)
+
+
+def _pgbouncer_pin_ok() -> bool:
+    """The pooler image's pin, through `_image_pin_ok`."""
+    return _image_pin_ok(settings.PGBOUNCER_REPOSITORY, settings.PGBOUNCER_TAG, settings.PGBOUNCER_DIGEST)
 
 
 def verify_pins() -> bool:
@@ -281,10 +311,11 @@ def verify_pins() -> bool:
 
     Renovate can bump a version but cannot compute the tarball's digest, and
     a digest written by hand can name an image nobody published, so this runs
-    in CI on every PR: a bump that leaves AGE_SHA256 stale, or a Postgres pin
+    in CI on every PR: a bump that leaves AGE_SHA256 stale, or an image pin
     whose digest the registry does not serve, fails here rather than at first
-    boot -- where the first strands the appliance without an encryptor and
-    the second leaves it without a database.
+    boot -- where the first strands the appliance without an encryptor, a bad
+    Postgres pin leaves it without a database, and a bad PgBouncer pin
+    leaves the database out of every client's reach.
     """
     ok = True
 
@@ -301,6 +332,7 @@ def verify_pins() -> bool:
         log.info('age %s matches its pin', settings.AGE_VERSION)
 
     ok = _postgres_pin_ok() and ok
+    ok = _pgbouncer_pin_ok() and ok
 
     # The stream publishes its current release alone, so the pinned digest is
     # checked against it while the pin is that release; an older pin is held

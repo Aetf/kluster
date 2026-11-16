@@ -49,7 +49,8 @@ CURVE = ec.SECP256R1()
 CA_VALIDITY = dt.timedelta(days=3653)
 LEAF_VALIDITY = dt.timedelta(days=1096)
 
-#: Postgres maps a client certificate's Common Name to a database user.
+#: The appliance's pooler maps a client certificate's Common Name to the
+#: Postgres role it connects as.
 CLIENT_NAMES = ('ci', 'operator')
 
 CA_COMMON_NAME = 'kluster state-backend CA'

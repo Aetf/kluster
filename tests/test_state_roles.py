@@ -1,18 +1,21 @@
-"""The appliance's Postgres roles, run in the image the box runs.
+"""The appliance's Postgres roles, run in the images the box runs, behind its pooler.
 
-The rendered Ignition's own files -- `pg_hba.conf`, the init script, the TLS
-material -- go into the pinned image under the Postgres unit's own `podman
-run` arguments. What changes is only what has to: the address the server
-certificate names, the port it is published on and the network it is reached
-through, which is a second container's (`_network`), the delivered
-directories, which are copied into the container rather than mounted from a
-host that does not have them, and a data directory on a tmpfs, which starts
-empty and goes away with the container. So what is exercised is the image's own
-initialization mechanism (`/docker-entrypoint-initdb.d`), the server's own
-authentication, and real clients: `pulumi` from this workstation, and the
-Postgres client tools from the same image, which are the server's own
-release. The workstation's client, `mise.toml`'s `postgres` pin, is held only
-to the server's major (`tests/test_postgres_client.py`).
+The rendered Ignition's own files -- `pg_hba.conf`, the init script, the
+pooler's configuration, the TLS material -- go into the pinned images under
+each unit's own `podman run` arguments: Postgres's, and PgBouncer's in front
+of it. What changes is only what has to: the address the server certificate
+names, the port the pooler is published on and the network it is reached
+through, which is a third container's (`_network`), the delivered
+directories, which are copied into each container rather than mounted from a
+host that does not have them, the directory the two units share for
+Postgres's socket, which is a volume of the box's own (`Launcher.appliance`),
+and a data directory on a tmpfs, which starts empty and goes away with the
+container. So what is exercised is the image's own initialization mechanism
+(`/docker-entrypoint-initdb.d`), the pooler's own authentication and cap, the
+server's own authorization, and real clients: `pulumi` from this
+workstation, and the Postgres client tools from the same image, which are the
+server's own release. The workstation's client, `mise.toml`'s `postgres` pin,
+is held only to the server's major (`tests/test_postgres_client.py`).
 
 Nothing here mounts a host path. A remote `podman` -- one whose service runs
 in another mount namespace than this process -- sees none of this process's
@@ -22,24 +25,29 @@ Every container here ends by itself (`_bounded`), and every command a case
 starts -- `podman`, the client tools, the log follower -- runs through
 `process_sessions` under a bound below the case's (framework/testing.md §1.2).
 
-The properties held here are the ones the box's roles exist for: the bootstrap
-superuser answers on the container's local socket and to no certificate, the
-client roles are not superusers, `pulumi` writes as one client role and reads
-as the other, a dump from a box whose client roles are superusers restores
-into one whose roles are not, and the appliance's dump script and the
-operator's `state.verify_dump` count the stack checkpoints the pinned `pulumi`
-writes -- none on a box the backend has only opened, one after `stack init`.
+The properties held here are the ones the box's roles and its pooler exist
+for: the bootstrap superuser answers on the container's local socket and to
+no certificate, the client roles are not superusers, `pulumi` writes as one
+client role and reads as the other, a dump from a box whose client roles are
+superusers restores into one whose roles are not, a dump and a restore go
+through the pooler, the appliance's dump script and the operator's
+`state.verify_dump` count the stack checkpoints the pinned `pulumi` writes --
+none on a box the backend has only opened, one after `stack init` -- a
+client beyond the pooler's cap waits rather than being refused, and the
+pooler starts only once the serving Postgres answers.
 
-**Skipped where the image cannot be run without fetching it.** A test that
-pulls an image needs the network. This one runs where the pinned image is
-already local -- a workstation has it once it has pulled
-`settings.POSTGRES_IMAGE`, the tag and digest the box runs, and again after
-each move of the pin -- and is skipped elsewhere with the reason named.
+**Skipped where the images cannot be run without fetching them.** A test that
+pulls an image needs the network. This one runs where both pinned images are
+already local -- a workstation has them once it has pulled
+`settings.POSTGRES_IMAGE` and `settings.PGBOUNCER_IMAGE`, the tags and
+digests the box runs, and again after each move of a pin -- and is skipped
+elsewhere with the reason named.
 """
 
 from __future__ import annotations
 
 import base64
+import dataclasses
 import errno
 import gzip
 import io
@@ -49,11 +57,15 @@ import re
 import shlex
 import shutil
 import socket
+import ssl
+import struct
 import subprocess as sp
 import tarfile
+import time
 import tomllib
 import uuid
 from collections.abc import Callable, Iterator
+from contextlib import ExitStack
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any, cast
@@ -65,14 +77,16 @@ from root_credentials import fake
 from scratch_projects import cli_directories
 
 from kluster.conventions import identity
-from kluster.lib import pulumi_cli, stack_environment
+from kluster.lib import bundle, pulumi_cli, stack_environment
 from kluster.lib.bundle import CA_ENV, CERT_ENV, KEY_ENV, ssl_env
 from kluster.lib.state_backend import render, settings, state
+from kluster.providers import postgres_tls
 from kluster.scripts.credentials import pki, pulumi_config
-from kluster.scripts.state_backend import census, cli, config
+from kluster.scripts.state_backend import census, cli, config, probe
 
 ADDRESS = '127.0.0.1'
 IMAGE = settings.POSTGRES_IMAGE
+POOLER_IMAGE = settings.PGBOUNCER_IMAGE
 CLIENT_ROLES = (settings.CI_ROLE, settings.OPERATOR_ROLE)
 
 #: The bound on each command a case starts, and on each one the code under
@@ -106,11 +120,14 @@ CONTAINER_TIMEOUT = 1200
 #: what a run has left: `podman ps --all --filter label=kluster-test=<module>`.
 LABEL = f'kluster-test={Path(__file__).stem}'
 
-#: The image's own `VOLUME`s. A container is given an anonymous volume for
+#: Each image's own `VOLUME`s. A container is given an anonymous volume for
 #: each one nothing is mounted on, so each is mounted as a tmpfs instead;
 #: `test_every_container_ends_by_itself_and_mounts_no_volume` holds this to
-#: the image.
-IMAGE_VOLUMES = (PurePosixPath('/var/lib/postgresql/data'),)
+#: the images.
+IMAGE_VOLUMES = {
+    IMAGE: (PurePosixPath('/var/lib/postgresql/data'),),
+    POOLER_IMAGE: (),
+}
 
 #: The variables a client tool is handed from the case's environment, where it
 #: has them: the bundle's three files, which every connection reads, and the
@@ -118,8 +135,10 @@ IMAGE_VOLUMES = (PurePosixPath('/var/lib/postgresql/data'),)
 #: the settings a census session is opened with.
 TOOL_ENV = (CA_ENV, CERT_ENV, KEY_ENV, state.CONNECT_TIMEOUT_ENV, state.SESSION_OPTIONS_ENV)
 
-#: The unit whose `podman run` this repeats.
+#: The units whose `podman run` this repeats: Postgres, and the pooler in
+#: front of it.
 UNIT = 'pgstate.service'
+POOLER_UNIT = 'pgbouncer.service'
 
 #: Where the pinned `pulumi` keeps a stack's checkpoint: the backend's default
 #: table, and the directory of keys under the database's own prefix. Written
@@ -138,6 +157,8 @@ DUMP_SCRIPT = Path(render.__file__).with_name(render.MACHINE) / render.DUMP_SCRI
 #: announces readiness too.
 INIT_DONE = 'PostgreSQL init process complete; ready for start up.'
 READY = 'database system is ready to accept connections'
+#: What the pooler prints once it listens.
+POOLER_UP = 'process up: PgBouncer'
 
 #: Where the dumps of a box these cases start would go; none is taken.
 RECIPIENT = 'age1exampleexampleexampleexampleexampleexampleexampleexamplezzzz'
@@ -147,6 +168,10 @@ STACK = 'roles'
 
 #: The status coreutils `timeout` exits with when its command ran out of time.
 TIMED_OUT = 124
+
+#: How often `_until` reads the state it waits on. Nothing is decided by it:
+#: the condition decides, and `COMMAND_TIMEOUT` is the stop-loss.
+POLL_INTERVAL = 0.1
 
 #: How many zero bytes the tripwire on `_archive`'s workaround puts after its
 #: probe's end-of-archive blocks: sixteen times what the pipe between podman
@@ -174,9 +199,10 @@ def image_is_local() -> None:
     """
     if shutil.which('podman') is None:
         pytest.skip('podman is not on PATH')
-    found = process_sessions.run(['podman', 'image', 'exists', IMAGE], timeout=COMMAND_TIMEOUT)
-    if found.returncode != 0:
-        pytest.skip(f'there is no local copy of {IMAGE}')
+    for image in (IMAGE, POOLER_IMAGE):
+        found = process_sessions.run(['podman', 'image', 'exists', image], timeout=COMMAND_TIMEOUT)
+        if found.returncode != 0:
+            pytest.skip(f'there is no local copy of {image}')
 
 
 def _podman(*args: str, stdin: bytes | None = None) -> bytes:
@@ -253,10 +279,15 @@ def _delivered(ignition: dict[str, Any]) -> list[File]:
     return files
 
 
-def _unit_command(ignition: dict[str, Any]) -> list[str]:
-    """The Postgres unit's `ExecStart`, as an argument vector."""
-    unit = next(entry for entry in ignition['systemd']['units'] if entry['name'] == UNIT)
-    lines = str(unit['contents']).replace('\\\n', ' ').splitlines()
+def _unit_lines(ignition: dict[str, Any], name: str) -> list[str]:
+    """One unit's lines, its continuations joined."""
+    unit = next(entry for entry in ignition['systemd']['units'] if entry['name'] == name)
+    return str(unit['contents']).replace('\\\n', ' ').splitlines()
+
+
+def _unit_command(ignition: dict[str, Any], name: str = UNIT) -> list[str]:
+    """A unit's `ExecStart`, as an argument vector."""
+    lines = _unit_lines(ignition, name)
     return shlex.split(next(line for line in lines if line.startswith('ExecStart=')).removeprefix('ExecStart='))
 
 
@@ -266,7 +297,7 @@ def _unit_env(ignition: dict[str, Any]) -> dict[str, str]:
     return dict(pairs)
 
 
-def _bounded(verb: str, *args: str) -> list[str]:
+def _bounded(verb: str, *args: str, image: str = IMAGE) -> list[str]:
     """`podman <verb>` of a container that ends and goes by itself, and is given no volume.
 
     `--timeout` has conmon end the container at `CONTAINER_TIMEOUT` and
@@ -276,30 +307,74 @@ def _bounded(verb: str, *args: str) -> list[str]:
     lists it. A container created and never started is not reached: conmon
     counts from the start.
 
-    Each of the image's `VOLUME`s is a tmpfs. Otherwise each would be an
+    Each of `image`'s `VOLUME`s is a tmpfs. Otherwise each would be an
     anonymous volume, which holds one of the host's podman locks and
     outlives a container `podman rm` removes without `--volumes`.
+
+    The log is a file of the container's own (`k8s-file`), because the
+    readiness waits read it (`_await_log`) and a host whose podman logs to
+    journald drops lines from a burst of containers starting at once: its
+    rate limit suppresses them, and a wait for a line that was dropped
+    ends only at its bound.
     """
-    tmpfs = [f'--tmpfs={volume}' for volume in IMAGE_VOLUMES]
-    return [verb, '--rm', '--timeout', str(CONTAINER_TIMEOUT), '--label', LABEL, *tmpfs, *args]
+    tmpfs = [f'--tmpfs={volume}' for volume in IMAGE_VOLUMES[image]]
+    return [
+        verb,
+        '--rm',
+        '--timeout',
+        str(CONTAINER_TIMEOUT),
+        '--label',
+        LABEL,
+        '--log-driver',
+        'k8s-file',
+        *tmpfs,
+        *args,
+    ]
 
 
-def _unit_container(ignition: dict[str, Any]) -> tuple[list[str], list[File]]:
-    """The Postgres unit's `podman run` as a `podman create`, and what to copy in.
+def _unit_image(ignition: dict[str, Any], name: str) -> str:
+    """The image a unit runs: its `ExecStart`'s first argument that is no option or option value."""
+    argv = _unit_command(ignition, name)
+    (image,) = [arg for arg in argv if arg in IMAGE_VOLUMES]
+    return image
+
+
+def _volumes(ignition: dict[str, Any], name: str) -> list[tuple[str, str, str]]:
+    """A unit's `--volume` arguments, as host path, path inside, and options."""
+    argv = _unit_command(ignition, name)
+    found: list[tuple[str, str, str]] = []
+    for at, arg in enumerate(argv):
+        if arg == '--volume':
+            host, inside, *options = argv[at + 1].split(':')
+            found.append((host, inside, ':'.join(options)))
+    return found
+
+
+def _shared(ignition: dict[str, Any]) -> list[str]:
+    """The host directories both units mount: what the two containers share."""
+    postgres = {host for host, _, _ in _volumes(ignition, UNIT)}
+    return sorted(host for host, _, _ in _volumes(ignition, POOLER_UNIT) if host in postgres)
+
+
+def _unit_container(
+    ignition: dict[str, Any], name: str = UNIT, shared: dict[str, str] | None = None
+) -> tuple[list[str], list[File]]:
+    """A unit's `podman run` as a `podman create`, and what to copy in.
 
     Every argument is the unit's except these: `--replace` and the name,
     which the caller gives; the published port, which the box does without,
     since it is reached through the network the caller joins it to
     (`_network`); each volume a delivered file sits under, which becomes a
-    copy of those files at the path the volume mounts them on; and the one
+    copy of those files at the path the volume mounts them on; a directory
+    `shared` names, which becomes the volume it maps it to; and the one
     volume nothing is delivered into, which is the box's own state and starts
     here empty, as the tmpfs `_bounded` mounts on the path the image's own
     `VOLUME` names. `_bounded`'s arguments are added.
     """
-    argv = _unit_command(ignition)
+    argv = _unit_command(ignition, name)
     assert argv[:2] == ['/usr/bin/podman', 'run'], argv
     delivered = _delivered(ignition)
-    created = _bounded('create')
+    created = _bounded('create', image=_unit_image(ignition, name))
     copies: list[File] = []
     rest = iter(argv[2:])
     for arg in rest:
@@ -311,10 +386,14 @@ def _unit_container(ignition: dict[str, Any]) -> tuple[list[str], list[File]]:
             case '--publish':
                 _ = next(rest)
             case '--volume':
-                host, inside, *_options = next(rest).split(':')
+                host, inside, *options = next(rest).split(':')
+                if shared is not None and host in shared:
+                    created += ['--volume', ':'.join([shared[host], inside, *options])]
+                    continue
                 under = [file for file in delivered if file.path.is_relative_to(host)]
                 if not under:
-                    assert PurePosixPath(inside) in IMAGE_VOLUMES, (inside, IMAGE_VOLUMES)
+                    volumes = IMAGE_VOLUMES[_unit_image(ignition, name)]
+                    assert PurePosixPath(inside) in volumes, (inside, volumes)
                 copies += [
                     File(
                         PurePosixPath(inside) / file.path.relative_to(host), file.content, file.mode, file.uid, file.gid
@@ -328,11 +407,17 @@ def _unit_container(ignition: dict[str, Any]) -> tuple[list[str], list[File]]:
 
 @dataclass(frozen=True)
 class Box:
-    """One running Postgres container, and the name its superuser goes by."""
+    """One running Postgres container, the name its superuser goes by, and the pooler in front of it.
+
+    `port` is the host port clients reach the box on: the pooler's, on a box
+    the appliance's Ignition builds, and Postgres's own on one without a
+    pooler.
+    """
 
     name: str
     port: int
     superuser: str
+    pooler: str | None = None
 
     def local(self, sql: str) -> str:
         """SQL as the superuser on the container's local socket: the dump timer's way in."""
@@ -346,9 +431,23 @@ class Box:
             raise state.StateError(done.stderr.strip())
         return done.stdout.strip()
 
+    def pools(self) -> list[dict[str, str]]:
+        """The pooler's `SHOW POOLS`, a row per pool: its statistics console, on its own socket."""
+        assert self.pooler is not None, f'{self.name} has no pooler'
+        done = process_sessions.run(
+            ['podman', 'exec', self.pooler, 'psql', '--no-psqlrc', '-v', 'ON_ERROR_STOP=1', '--csv']  # noqa: RUF005 -- keeps -h, -U and -c beside their values
+            + ['-h', '/tmp', '-p', str(settings.PORT), '-U', 'pgbouncer', '-c', 'SHOW POOLS', 'pgbouncer'],
+            text=True,
+            timeout=COMMAND_TIMEOUT,
+        )
+        if done.returncode != 0:
+            raise AssertionError(done.stderr.strip())
+        header, *rows = done.stdout.strip().splitlines()
+        return [dict(zip(header.split(','), row.split(','), strict=True)) for row in rows]
 
-def _await_ready(name: str, *, timeout: float = COMMAND_TIMEOUT) -> None:
-    """Follow the container's log until the serving Postgres says it is up.
+
+def _await_log(name: str, marks: tuple[str, ...], *, timeout: float = COMMAND_TIMEOUT) -> None:
+    """Follow the container's log until each of `marks` has appeared, in order.
 
     The log is the event: the entrypoint prints each stage as it reaches it,
     and a container that dies ends the stream, which ends the wait with the
@@ -363,15 +462,25 @@ def _await_ready(name: str, *, timeout: float = COMMAND_TIMEOUT) -> None:
         follower, stdout=process_sessions.PIPE, stderr=process_sessions.STDOUT, text=True
     ) as follow:
         assert follow.stdout is not None
-        initialized = False
+        waiting = list(marks)
         for text in follow.stdout:
             seen.append(text)
-            initialized = initialized or INIT_DONE in text
-            if initialized and READY in text:
-                return
+            if waiting[0] in text:
+                del waiting[0]
+                if not waiting:
+                    return
         if follow.wait(timeout=COMMAND_TIMEOUT) == TIMED_OUT:
             raise sp.TimeoutExpired(follower, timeout, output=''.join(seen))
-        raise AssertionError(f'{name} stopped before it served:\n{"".join(seen)}')
+        raise AssertionError(f'{name} stopped before it printed {waiting[0]!r}:\n{"".join(seen)}')
+
+
+def _await_ready(name: str, *, timeout: float = COMMAND_TIMEOUT) -> None:
+    """Follow a Postgres container's log until the serving Postgres says it is up.
+
+    Readiness alone is not enough: the entrypoint runs the init scripts
+    against a temporary server, which announces readiness too.
+    """
+    _await_log(name, (INIT_DONE, READY), timeout=timeout)
 
 
 def _remove(name: str) -> None:
@@ -475,34 +584,127 @@ def _superusers() -> list[str]:
     )
 
 
-Start = Callable[[list[str], list[File], str], Box]
+def _directory(ignition: dict[str, Any], path: str) -> tuple[int, int, int]:
+    """The mode, owner and group the Ignition creates a directory with."""
+    (entry,) = [entry for entry in ignition['storage']['directories'] if entry['path'] == path]
+    user = int(entry['user']['id']) if 'user' in entry else 0
+    group = int(entry['group']['id']) if 'group' in entry else user
+    return int(entry.get('mode', 0o755)), user, group
 
 
-@pytest.fixture(scope='module')
-def start() -> Iterator[Start]:
-    """Create, fill and start containers, each in a network of its own, and remove every one when the module is done."""
-    names: list[str] = []
+def _remove_volume(name: str) -> None:
+    """Remove a volume these cases created; one already gone is no refusal."""
+    _ = _podman('volume', 'rm', '--force', name)
 
-    def run(created: list[str], copies: list[File], superuser: str) -> Box:
+
+def _fill(name: str, created: list[str], copies: list[File]) -> None:
+    """Create the container `name` and copy its delivered files in."""
+    _ = _podman(*_named(created, name))
+    if copies:
+        _ = _podman('cp', '--archive=false', '-', f'{name}:/', stdin=_archive(copies))
+
+
+class Launcher:
+    """Create, fill and start boxes, each in a network of its own, and remove every one when the module is done.
+
+    Called, it starts one container as a box of its own. `appliance` starts
+    the two the appliance's Ignition defines: Postgres, which has no
+    network, and the pooler, which joins the box's network and is published
+    there; the directory the two units share is a volume made for the box,
+    with the mode and owners the Ignition gives the directory, labelled and
+    removed with the box.
+    """
+
+    def __init__(self) -> None:
+        self.containers: list[str] = []
+        self.volumes: list[str] = []
+
+    def __call__(self, created: list[str], copies: list[File], superuser: str) -> Box:
         name = f'kluster-test-pgstate-{uuid.uuid4().hex[:12]}'
         network = f'{name}-network'
-        names.extend((network, name))
+        self.containers.extend((network, name))
         netns, port = _network(network)
-        _ = _podman(*_named(_joined(created, netns), name))
-        if copies:
-            _ = _podman('cp', '--archive=false', '-', f'{name}:/', stdin=_archive(copies))
+        _fill(name, _joined(created, netns), copies)
         _ = _podman('start', name)
         _await_ready(name)
         return Box(name=name, port=port, superuser=superuser)
 
-    yield run
-    refused: list[str] = []
-    for name in names:
-        try:
-            _remove(name)
-        except AssertionError as refusal:
-            refused.append(f'{name}: {refusal}')
-    assert not refused, refused
+    def shared(self, ignition: dict[str, Any], name: str) -> dict[str, str]:
+        """A volume for each directory the two units share, made the way the Ignition makes the directory.
+
+        The owners are the volume's own options rather than a `chown` inside
+        it: podman hands a volume without them to the user of the first
+        container that mounts it.
+        """
+        volumes: dict[str, str] = {}
+        for at, host in enumerate(_shared(ignition)):
+            volume = f'{name}-shared-{at}'
+            self.volumes.append(volume)
+            mode, user, group = _directory(ignition, host)
+            _ = _podman('volume', 'create', '--label', LABEL, '--opt', f'o=uid={user},gid={group}', volume)
+            _ = _podman(
+                *_bounded('run', '--volume', f'{volume}:/shared', '--entrypoint', 'chmod', IMAGE),
+                f'{mode:o}',
+                '/shared',
+            )
+            volumes[host] = volume
+        return volumes
+
+    def appliance(self, ignition: dict[str, Any], *, held: File | None = None) -> Box:
+        """The appliance's Postgres and its pooler, as the Ignition builds them.
+
+        The pooler starts once Postgres serves, which is what its unit
+        waits for on the box. `held` is one more file for the Postgres
+        container, an init script the caller holds the initialization with;
+        a box started with it is returned once Postgres has started, before
+        it serves, and with no pooler started.
+        """
+        name = f'kluster-test-pgstate-{uuid.uuid4().hex[:12]}'
+        network, pooler = f'{name}-network', f'{name}-pooler'
+        self.containers.extend((network, name, pooler))
+        netns, port = _network(network)
+        shared = self.shared(ignition, name)
+        created, copies = _unit_container(ignition, UNIT, shared)
+        _fill(name, created, [*copies, *([held] if held else [])])
+        _ = _podman('start', name)
+        superuser = _unit_env(ignition)['POSTGRES_USER']
+        if held is not None:
+            return Box(name=name, port=port, superuser=superuser, pooler=pooler)
+        _await_ready(name)
+        self.pooler(ignition, Box(name=name, port=port, superuser=superuser, pooler=pooler), netns, shared)
+        return Box(name=name, port=port, superuser=superuser, pooler=pooler)
+
+    def pooler(self, ignition: dict[str, Any], box: Box, netns: str, shared: dict[str, str]) -> None:
+        """Start `box`'s pooler in the network at `netns`."""
+        assert box.pooler is not None
+        created, copies = _unit_container(ignition, POOLER_UNIT, shared)
+        _fill(box.pooler, _joined(created, netns), copies)
+        _ = _podman('start', box.pooler)
+        _await_log(box.pooler, (POOLER_UP,))
+
+    def close(self) -> None:
+        refused: list[str] = []
+        for name in self.containers:
+            try:
+                _remove(name)
+            except AssertionError as refusal:
+                refused.append(f'{name}: {refusal}')
+        for volume in self.volumes:
+            try:
+                _remove_volume(volume)
+            except AssertionError as refusal:
+                refused.append(f'{volume}: {refusal}')
+        assert not refused, refused
+
+
+Start = Launcher
+
+
+@pytest.fixture(scope='module')
+def start() -> Iterator[Start]:
+    launcher = Launcher()
+    yield launcher
+    launcher.close()
 
 
 @pytest.fixture(scope='module')
@@ -516,10 +718,22 @@ def ignition(roots: config.Roots) -> dict[str, Any]:
     return json.loads(render.render_ignition(built))
 
 
+@pytest.fixture(scope='module')
+def capped(roots: config.Roots) -> dict[str, Any]:
+    """The appliance's Ignition with the transaction entry's cap at one server process.
+
+    Every client of that entry is then served by the same server process,
+    one transaction at a time, so what one client leaves on it is what the
+    next one meets, every time rather than when the pooler happens to lend
+    it the same process.
+    """
+    built = config.machine(roots, address=ADDRESS, dump_key_id='key-id', dump_key='secret', bucket_id='bucket')
+    return json.loads(render.render_ignition(dataclasses.replace(built, pool_cap=1)))
+
+
 def _appliance(start: Start, ignition: dict[str, Any]) -> Box:
-    """The appliance's Postgres, as its Ignition builds it."""
-    created, copies = _unit_container(ignition)
-    return start(created, copies, _unit_env(ignition)['POSTGRES_USER'])
+    """The appliance's Postgres and its pooler, as its Ignition builds them."""
+    return start.appliance(ignition)
 
 
 @pytest.fixture(scope='module')
@@ -540,19 +754,29 @@ def tools(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Path]:
     The tools are the image's, run in a container of their own on the host's
     network. Before each call the tool is handed a fresh copy of this
     directory at the same path, so every path a caller names means the same
-    inside as out.
+    inside as out; and the file `pg_dump` writes, the one its `--file=`
+    names, is copied back out once it has written it.
     """
     directory = tmp_path_factory.mktemp('clients')
     name = f'kluster-test-pgclient-{uuid.uuid4().hex[:12]}'
     _ = _podman(*_client(name))
     try:
         _ = _podman('exec', name, 'mkdir', '-p', str(directory))
-        for tool in (state.PSQL, state.PG_RESTORE):
+        for tool in (state.PSQL, state.PG_RESTORE, state.PG_DUMP):
             script = directory / tool
+            run = (
+                f'podman exec --interactive {" ".join(f"--env {variable}" for variable in TOOL_ENV)} {name} {tool} "$@"'
+            )
             _ = script.write_text(
                 '#!/bin/sh\n'
                 f'podman cp {shlex.quote(f"{directory}/.")} {shlex.quote(f"{name}:{directory}")} || exit 1\n'
-                f'exec podman exec --interactive {" ".join(f"--env {variable}" for variable in TOOL_ENV)} {name} {tool} "$@"\n'
+                + (
+                    f'{run} || exit $?\n'
+                    'for arg; do case $arg in --file=*) '
+                    f'podman cp "{name}:${{arg#--file=}}" "${{arg#--file=}}" || exit 1;; esac; done\n'
+                    if tool == state.PG_DUMP
+                    else f'exec {run}\n'
+                )
             )
             script.chmod(0o755)
         yield directory
@@ -564,7 +788,7 @@ def tools(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Path]:
 def clients(tools: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Where a case keeps its bundles and archives, with `state` and `pulumi` pointed there.
 
-    `state` runs the image's `pg_restore` and `psql`. `pulumi` gets a home of its own,
+    `state` runs the image's `pg_dump`, `pg_restore` and `psql`. `pulumi` gets a home of its own,
     and none of the operator's `PGSSL*` variables: a case names its bundle's
     files or connects without TLS, never through what the operator's shell
     happened to hold. Each command either one starts is bounded by
@@ -572,6 +796,7 @@ def clients(tools: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Pat
     a transfer over the network and, for `state`'s, sits above the run's.
     """
     monkeypatch.setattr(state, 'PG_RESTORE', str(tools / state.PG_RESTORE))
+    monkeypatch.setattr(state, 'PG_DUMP', str(tools / state.PG_DUMP))
     monkeypatch.setattr(state, 'PSQL', str(tools / state.PSQL))
     monkeypatch.setattr(pulumi_cli, 'TIMEOUT', COMMAND_TIMEOUT)
     monkeypatch.setattr(state, 'LISTING_TIMEOUT', COMMAND_TIMEOUT)
@@ -622,7 +847,7 @@ def _pulumi(target: state.Connection, project: Path, args: list[str], env: dict[
         args,
         cwd=project,
         env={
-            pulumi_config.BACKEND_URL_ENV: target.url,
+            pulumi_config.BACKEND_URL_ENV: target.form(bundle.Purpose.PULUMI),
             pulumi_config.PASSPHRASE_ENV: fake(pulumi_config.PASSPHRASE_ENV),
             **target.env,
             **(env or {}),
@@ -631,32 +856,41 @@ def _pulumi(target: state.Connection, project: Path, args: list[str], env: dict[
     )
 
 
-@pytest.mark.parametrize('container', ['appliance', 'superusers', 'network', 'client'])
-def test_every_container_ends_by_itself_and_mounts_no_volume(ignition: dict[str, Any], container: str) -> None:
-    """Each container these cases start is bounded, removed when it ends, labelled, and given no volume.
+@pytest.mark.parametrize('container', ['appliance', 'pooler', 'superusers', 'network', 'client'])
+def test_every_container_ends_by_itself_and_mounts_no_volume(
+    start: Start, ignition: dict[str, Any], container: str
+) -> None:
+    """Each container these cases start is bounded, removed when it ends, labelled, and given no anonymous volume.
 
     Read from the container podman made of the arguments rather than from
     the arguments: what podman does with them is what leaves a lock or a
-    volume behind.
+    volume behind. The one volume a box's container mounts is the directory
+    the two units share, which `Launcher` makes, labels and removes itself.
     """
     name = f'kluster-test-volumes-{uuid.uuid4().hex[:12]}'
+    start.containers.append(name)
+    shared = start.shared(ignition, name)
     argv = {
-        'appliance': lambda: _named(_unit_container(ignition)[0], name),
+        'appliance': lambda: _named(_unit_container(ignition, UNIT, shared)[0], name),
+        'pooler': lambda: _named(_unit_container(ignition, POOLER_UNIT, shared)[0], name),
         'superusers': lambda: _named(_superusers(), name),
         'network': lambda: _network_container(name),
         'client': lambda: _client(name),
     }[container]()
+    image = {'pooler': POOLER_IMAGE}.get(container, IMAGE)
     try:
         _ = _podman(*argv)
         made = json.loads(_podman('container', 'inspect', name))[0]
     finally:
         _remove(name)
-    declared: dict[str, Any] = json.loads(_podman('image', 'inspect', IMAGE))[0]['Config'].get('Volumes') or {}
+    declared: dict[str, Any] = json.loads(_podman('image', 'inspect', image))[0]['Config'].get('Volumes') or {}
 
-    # The premise: the image declares volumes, so a container given none is
-    # one whose tmpfs covers each, and `IMAGE_VOLUMES` names them all.
-    assert sorted(declared) == sorted(str(volume) for volume in IMAGE_VOLUMES)
-    assert [mount['Destination'] for mount in made['Mounts'] if mount['Type'] == 'volume'] == []
+    # The premise: the Postgres image declares volumes, so a container given
+    # none is one whose tmpfs covers each, and `IMAGE_VOLUMES` names them all.
+    assert IMAGE_VOLUMES[IMAGE]
+    assert sorted(declared) == sorted(str(volume) for volume in IMAGE_VOLUMES[image])
+    own = set(shared.values()) if container in {'appliance', 'pooler'} else set[str]()
+    assert {mount['Name'] for mount in made['Mounts'] if mount['Type'] == 'volume'} == own
     assert made['Config']['Timeout'] == CONTAINER_TIMEOUT
     assert made['HostConfig']['AutoRemove'] is True
     assert LABEL in {f'{key}={value}' for key, value in made['Config']['Labels'].items()}
@@ -821,13 +1055,13 @@ def test_a_certificate_naming_the_superuser_is_refused(
     code's rule, and anyone holding the key is not bound by it; the case
     lifts the rule to mint what such a holder could. The certificate is
     genuine -- same CA, verified the same way as a client role's -- and the
-    superuser is a role that exists. What refuses it is that no line of
-    `pg_hba.conf` admits that role over TCP.
+    superuser is a role that exists. What refuses it is that no line of the
+    pooler's `hba.conf` admits that role from the network.
     """
     monkeypatch.setattr(pki, 'CLIENT_NAMES', (*pki.CLIENT_NAMES, box.superuser))
     target = _bundle(roots, box, clients, box.superuser)
 
-    with pytest.raises(state.StateError, match=re.escape('no pg_hba.conf entry')):
+    with pytest.raises(state.StateError, match=re.escape('no authentication method is found')):
         _ = _psql(clients, target, 'SELECT 1')
 
 
@@ -1230,18 +1464,434 @@ def test_a_credentials_run_against_an_operator_stack_in_the_box_reaches_it_with_
     assert slot.exists()
 
 
+@pytest.mark.parametrize('role', CLIENT_ROLES)
 def test_the_census_reads_in_a_session_that_cannot_write(
-    box: Box, roots: config.Roots, clients: Path, monkeypatch: pytest.MonkeyPatch
+    box: Box, roots: config.Roots, clients: Path, monkeypatch: pytest.MonkeyPatch, role: str
 ) -> None:
-    # The census's statement replaced by a write: the server refuses it,
-    # because the session was opened read-only, not because of what the
-    # census's own statement happens to be.
-    target = _bundle(roots, box, clients, settings.OPERATOR_ROLE)
+    """Through the pooler's transaction entry, for either role.
+
+    The census's statement is replaced by a write: the server refuses it,
+    because the session was opened read-only, not because of what the
+    census's own statement happens to be. The setting reaches the server
+    process that serves the statement because the pooler carries it from the
+    client's startup, and it stays with the census: the role's next client,
+    served by the same pool, writes.
+    """
+    target = _bundle(roots, box, clients, role)
     monkeypatch.setattr(state, 'CENSUS_QUERY', 'CREATE TABLE census_wrote (x int)')
 
     with pytest.raises(state.StateError, match='read-only transaction'):
         _ = state.census(target)
     assert box.local("SELECT to_regclass('census_wrote') IS NULL") == 't'
+    _ = _psql(clients, target, f'CREATE TABLE census_after_{role} (x int)')
+    assert box.local(f'DROP TABLE census_after_{role}') == 'DROP TABLE'
+
+
+def _until(read: Callable[[], object], done: Callable[[Any], bool], what: str) -> Any:
+    """Read until `done` holds of what was read, and return it; fail naming `what` at the stop-loss.
+
+    The condition is the judgement. The bound, `COMMAND_TIMEOUT`, only ends a
+    wait whose condition never comes.
+    """
+    deadline = time.monotonic() + COMMAND_TIMEOUT
+    while True:
+        found = read()
+        if done(found):
+            return found
+        if time.monotonic() > deadline:
+            raise AssertionError(f'{what} never happened; last read: {found!r}')
+        time.sleep(POLL_INTERVAL)
+
+
+def _client_backends(box: Box, state_: str | None = None) -> int:
+    """How many server processes serve a client role, in `state_` if one is named."""
+    where = f" AND state = '{state_}'" if state_ else ''
+    return int(
+        box.local(
+            f"SELECT count(*) FROM pg_stat_activity WHERE usename IN ('{settings.CI_ROLE}', "
+            f"'{settings.OPERATOR_ROLE}'){where}"
+        )
+    )
+
+
+def _waiting(box: Box) -> int:
+    return sum(int(pool['cl_waiting']) for pool in box.pools())
+
+
+def _session(stack: ExitStack, clients: Path, target: state.Connection) -> process_sessions.Command:
+    """A `psql` session over the bundle, reading its statements from a pipe this case writes, ended with `stack`."""
+    return stack.enter_context(
+        process_sessions.started(
+            [str(clients / 'psql'), '--no-psqlrc', '-v', 'ON_ERROR_STOP=1', '-At', f'--dbname={target.url}'],
+            env={**os.environ, **target.env},
+            stdin=process_sessions.PIPE,
+            stdout=process_sessions.PIPE,
+            stderr=process_sessions.PIPE,
+            text=True,
+        )
+    )
+
+
+def _say(session: process_sessions.Command, sql: str) -> None:
+    assert session.stdin is not None
+    _ = session.stdin.write(sql + '\n')
+    session.stdin.flush()
+
+
+def test_a_client_beyond_the_cap_waits_and_runs_once_a_transaction_commits(
+    start: Start, ignition: dict[str, Any], roots: config.Roots, clients: Path
+) -> None:
+    """With the cap's worth of transactions open across both roles, the next statement waits, and is not refused.
+
+    The cap is one count over both roles' pools of the transaction entry, so
+    the transactions held are of both. The next client's statement waits in
+    the pooler -- its client is counted waiting, it holds no server process,
+    and the server processes stay at the cap -- until a transaction commits
+    and frees its server process, and then it runs. The commit is what the
+    case waits on; no wait here is decided by time.
+    """
+    box = _appliance(start, ignition)
+    cap = settings.POOL_CAP
+    ci = _bundle(roots, box, clients, settings.CI_ROLE)
+    operator = _bundle(roots, box, clients, settings.OPERATOR_ROLE)
+    roles = [operator] * (cap // 2) + [ci] * (cap - cap // 2)
+    with ExitStack() as stack:
+        holders = [_session(stack, clients, target) for target in roles]
+        for holder in holders:
+            _say(holder, 'BEGIN; SELECT 1;')
+        _ = _until(lambda: _client_backends(box, 'idle in transaction'), lambda held: held == cap, 'the cap held')
+
+        waiter = stack.enter_context(
+            process_sessions.started(
+                [str(clients / 'psql'), '--no-psqlrc', '-At', f'--dbname={ci.url}', '-c', 'SELECT 42'],
+                env={**os.environ, **ci.env},
+                stdout=process_sessions.PIPE,
+                stderr=process_sessions.PIPE,
+                text=True,
+            )
+        )
+        _ = _until(lambda: _waiting(box), lambda waiting: waiting == 1, 'a client waiting in the pooler')
+        assert waiter.returncode is None
+        assert _client_backends(box) == cap
+
+        _say(holders[-1], 'COMMIT;')
+        out, err = waiter.communicate(timeout=COMMAND_TIMEOUT)
+
+    assert (waiter.returncode, out.strip()) == (0, '42'), err
+
+
+def test_an_idle_server_process_of_one_role_yields_to_the_others_client(
+    start: Start, ignition: dict[str, Any], roots: config.Roots, clients: Path
+) -> None:
+    """The cap counts idle server processes too, and an idle one of one role's pool is closed for the other's.
+
+    After `ci` statements leave the cap's worth of idle server processes in
+    their pool, an `operator` session still gets one, rather than waiting
+    for the idle ones to time out.
+    """
+    box = _appliance(start, ignition)
+    cap = settings.POOL_CAP
+    ci = _bundle(roots, box, clients, settings.CI_ROLE)
+    operator = _bundle(roots, box, clients, settings.OPERATOR_ROLE)
+    with ExitStack() as stack:
+        holders = [_session(stack, clients, ci) for _ in range(cap)]
+        for holder in holders:
+            _say(holder, 'BEGIN; SELECT 1;')
+        _ = _until(lambda: _client_backends(box, 'idle in transaction'), lambda held: held == cap, 'the cap held')
+        for holder in holders:
+            _say(holder, 'COMMIT;')
+        _ = _until(lambda: _client_backends(box, 'idle'), lambda idle: idle == cap, 'the idle server processes')
+
+    assert _psql(clients, operator, 'SELECT current_user') == 'state_owner'
+
+
+def test_a_dump_through_the_pooler_restores_through_the_pooler(
+    start: Start, ignition: dict[str, Any], roots: config.Roots, clients: Path, tmp_path: Path
+) -> None:
+    """`state-backend dump` and `restore` reach the box through the pooler, and the round trip keeps the stack.
+
+    The dump is `state`'s own, over the operator's bundle, from one box; the
+    restore is `state`'s own into a second, which `pulumi` has only opened.
+    """
+    source, target = _appliance(start, ignition), _appliance(start, ignition)
+    _stack_init(_bundle(roots, source, clients, settings.CI_ROLE), tmp_path / 'project', STACK)
+    archive = clients / 'through-the-pooler.dump'
+
+    state.pg_dump(_bundle(roots, source, clients, settings.OPERATOR_ROLE), archive)
+    operator = _bundle(roots, target, clients, settings.OPERATOR_ROLE)
+    assert state.stacks(operator) == []
+    state.pg_restore(operator, archive)
+
+    for role in CLIENT_ROLES:
+        assert _names(state.stacks(_bundle(roots, target, clients, role))) == [STACK], role
+
+
+def _pooler_start_check(ignition: dict[str, Any], name: str) -> list[str]:
+    """The pooler unit's wait for Postgres, as the argument vector it runs inside the Postgres container `name`."""
+    (line,) = [line for line in _unit_lines(ignition, POOLER_UNIT) if 'podman exec' in line]
+    found = re.search(r'podman exec (\S+) (.+?); do', line)
+    assert found is not None, line
+    postgres = _unit_command(ignition, UNIT)
+    assert found.group(1) == postgres[postgres.index('--name') + 1], 'the wait names another container'
+    return ['exec', name, *shlex.split(found.group(2))]
+
+
+def _sockets(ignition: dict[str, Any]) -> list[str]:
+    """The directories the Postgres unit has the server put its sockets in."""
+    (setting,) = [arg for arg in _unit_command(ignition, UNIT) if arg.startswith('unix_socket_directories=')]
+    return setting.removeprefix('unix_socket_directories=').split(',')
+
+
+#: An init script that holds the image's initialization until the case
+#: releases it, and says when it has started holding.
+HOLD = File(
+    PurePosixPath('/docker-entrypoint-initdb.d/zz-hold.sh'),
+    b'echo kluster-test: holding the initialization\nuntil [ -e /tmp/release ]; do sleep 0.1; done\n',
+    0o755,
+)
+
+
+def test_the_pooler_waits_for_the_serving_postgres_and_not_the_initialization(
+    start: Start, ignition: dict[str, Any]
+) -> None:
+    """The pooler's unit starts it once the serving Postgres answers, which the image's initialization never does.
+
+    While the initialization runs, its temporary server answers on the
+    sockets -- the one the pooler's clients would be served on included --
+    and the unit's check refuses. Once the serving Postgres is up, it
+    passes. So the first handshake the box completes is with a pooler whose
+    Postgres serves the state, which is what the replacement's restore hook
+    takes the readiness wait to mean.
+    """
+    box = start.appliance(ignition, held=HOLD)
+    check = _pooler_start_check(ignition, box.name)
+    _await_log(box.name, ('kluster-test: holding the initialization',))
+
+    sockets = [
+        process_sessions.run(['podman', 'exec', box.name, 'pg_isready', f'--host={directory}'], timeout=COMMAND_TIMEOUT)
+        for directory in _sockets(ignition)
+    ]
+    held = process_sessions.run(['podman', *check], timeout=COMMAND_TIMEOUT)
+    _ = _podman('exec', box.name, 'touch', '/tmp/release')
+    _await_ready(box.name)
+    serving = process_sessions.run(['podman', *check], timeout=COMMAND_TIMEOUT)
+
+    # The premise: the temporary server answers on every socket, the one the
+    # pooler is served on among them.
+    assert len(sockets) > 1
+    assert [answer.returncode for answer in sockets] == [0] * len(sockets)
+    assert held.returncode != 0
+    assert serving.returncode == 0, serving.stderr.decode()
+
+
+def test_a_handshake_with_no_credential_completes_against_the_pooler(box: Box, roots: config.Roots) -> None:
+    """The readiness wait and the expiry probe read the server certificate with no client certificate of their own.
+
+    The pooler answers the protocol's TLS request, presents the server
+    certificate the CA issued for the box's address, and does not demand a
+    client certificate in the handshake.
+    """
+    postgres_tls.handshake(ADDRESS, box.port, roots.ca.certificate().cert_pem.decode())
+
+
+def test_the_pooler_runs_as_the_user_the_box_gives_its_files() -> None:
+    """The server key and the shared directory are given to `PGBOUNCER_UID` and `PGBOUNCER_GID`; the image runs as them."""
+    ran = process_sessions.run(
+        ['podman', *_bounded('run', '--entrypoint', 'id', POOLER_IMAGE, image=POOLER_IMAGE)],
+        text=True,
+        timeout=COMMAND_TIMEOUT,
+    )
+    found = re.match(r'uid=(\d+)\S* gid=(\d+)', ran.stdout)
+    assert found is not None, ran.stdout + ran.stderr
+
+    assert (int(found.group(1)), int(found.group(2))) == (settings.PGBOUNCER_UID, settings.PGBOUNCER_GID)
+
+
+# -- the wire protocol, at the grain the pooler lends a server process -------------
+
+
+class Wire:
+    """One client connection to the pooler, speaking the protocol's messages one by one.
+
+    The two round trips `lib/pq` makes of a statement with parameters, unless
+    told otherwise -- Parse and Describe, answered, then Bind and Execute --
+    are the subject, and no client tool here sends them apart, so this sends
+    the messages themselves: TLS on the protocol's own request, the bundle's
+    certificate, the startup, and each message as the protocol frames it.
+    """
+
+    def __init__(self, port: int, target: state.Connection, user: str) -> None:
+        raw = socket.create_connection((ADDRESS, port), timeout=COMMAND_TIMEOUT)
+        raw.sendall(struct.pack('!ii', 8, 80877103))
+        assert raw.recv(1) == b'S'
+        context = ssl.create_default_context(cafile=target.env[CA_ENV])
+        context.load_cert_chain(target.env[CERT_ENV], target.env[KEY_ENV])
+        self.socket: ssl.SSLSocket = context.wrap_socket(raw, server_hostname=ADDRESS)
+        body = b''.join(
+            f'{key}\0{value}\0'.encode() for key, value in (('user', user), ('database', settings.DATABASE))
+        )
+        body += b'\0'
+        self.socket.sendall(struct.pack('!ii', 8 + len(body), 196608) + body)
+        _ = self.until_ready()
+
+    def send(self, *messages: tuple[bytes, bytes]) -> None:
+        self.socket.sendall(b''.join(kind + struct.pack('!i', 4 + len(body)) + body for kind, body in messages))
+
+    def _exactly(self, count: int) -> bytes:
+        read = b''
+        while len(read) < count:
+            chunk = self.socket.recv(count - len(read))
+            assert chunk, 'the pooler closed the connection'
+            read += chunk
+        return read
+
+    def until_ready(self) -> list[str]:
+        """Every value of every row up to `ReadyForQuery`; an `ErrorResponse` fails, naming its message."""
+        values: list[str] = []
+        while True:
+            kind = self._exactly(1)
+            (length,) = struct.unpack('!i', self._exactly(4))
+            body = self._exactly(length - 4)
+            if kind == b'E':
+                raise AssertionError(body.decode(errors='replace'))
+            if kind == b'D':
+                (columns,) = struct.unpack('!h', body[:2])
+                at = 2
+                for _ in range(columns):
+                    (size,) = struct.unpack('!i', body[at : at + 4])
+                    values.append(body[at + 4 : at + 4 + size].decode())
+                    at += 4 + size
+            if kind == b'Z':
+                return values
+
+    def close(self) -> None:
+        self.socket.close()
+
+
+def _parse(sql: str) -> tuple[bytes, bytes]:
+    return b'P', f'\0{sql}\0'.encode() + struct.pack('!h', 0)
+
+
+DESCRIBE = (b'D', b'S\0')
+BIND = (b'B', b'\0\0' + struct.pack('!hhh', 0, 0, 0))
+EXECUTE = (b'E', b'\0' + struct.pack('!i', 0))
+SYNC = (b'S', b'')
+
+
+def test_the_transaction_entry_lends_a_server_process_between_a_statements_two_round_trips(
+    start: Start, capped: dict[str, Any], roots: config.Roots, clients: Path
+) -> None:
+    """Why `pulumi` is given `binary_parameters=yes` (`bundle.Purpose.PULUMI`), at the one server process the cap leaves.
+
+    A statement sent in two round trips -- Parse and Describe, answered, then
+    Bind and Execute, which is how `lib/pq` sends one by default -- is
+    executed as whatever the server process last parsed: another client's
+    statement, parsed in between. Sent in one round trip, which the parameter
+    makes `lib/pq` do, it is its own. `pulumi` keeps two connections open,
+    so the first is what its reads meet on any server process the pooler
+    lends both.
+    """
+    box = start.appliance(capped)
+    target = _bundle(roots, box, clients, settings.CI_ROLE)
+    first, second = Wire(box.port, target, settings.CI_ROLE), Wire(box.port, target, settings.CI_ROLE)
+    try:
+        first.send(_parse("SELECT 'first'"), DESCRIBE, SYNC)
+        _ = first.until_ready()
+        second.send(_parse("SELECT 'second'"), DESCRIBE, SYNC)
+        _ = second.until_ready()
+        first.send(BIND, EXECUTE, SYNC)
+        apart = first.until_ready()
+
+        first.send(_parse("SELECT 'first'"), BIND, DESCRIBE, EXECUTE, SYNC)
+        together = first.until_ready()
+    finally:
+        first.close()
+        second.close()
+
+    assert apart == ['second']
+    assert together == ['first']
+
+
+def test_a_pulumi_session_after_a_dump_and_a_restore_meets_the_default_search_path(
+    start: Start, capped: dict[str, Any], roots: config.Roots, clients: Path, tmp_path: Path
+) -> None:
+    """A restore empties `search_path` in its session, and that session is the session entry's, never a `pulumi` one.
+
+    `pg_restore` sets it for the whole session, so it outlasts the
+    restore's transaction on whichever server process ran it. At a cap of
+    one, a `pulumi` session or a query is served by the one server process
+    the transaction entry has, so a restore through that entry would leave
+    the setting there for the next. Through the session entry, the next
+    `pulumi` run creates its table and reads its stack.
+    """
+    box = start.appliance(capped)
+    operator = _bundle(roots, box, clients, settings.OPERATOR_ROLE)
+    _stack_init(operator, tmp_path / 'project', STACK)
+    archive = clients / 'leak.dump'
+
+    state.pg_dump(operator, archive)
+    state.pg_restore(operator, archive)
+
+    assert _psql(clients, operator, 'SHOW search_path') == '"$user", public'
+    assert _names(state.stacks(operator)) == [STACK]
+
+
+def test_the_session_entry_admits_operator_alone(box: Box, roots: config.Roots, clients: Path) -> None:
+    ci = _bundle(roots, box, clients, settings.CI_ROLE)
+    operator = _bundle(roots, box, clients, settings.OPERATOR_ROLE)
+    dumping = state.Connection(url=ci.form(bundle.Purpose.DUMP), env=ci.env)
+
+    with pytest.raises(state.StateError, match=re.escape('no authentication method is found')):
+        _ = _psql(clients, dumping, 'SELECT 1')
+    assert _psql(clients, state.Connection(url=operator.form(bundle.Purpose.DUMP), env=operator.env), 'SELECT 1') == '1'
+
+
+def test_a_certificate_names_the_one_role_it_logs_in_as_on_both_entries(
+    box: Box, roots: config.Roots, clients: Path
+) -> None:
+    """A `ci` certificate asking to be `operator` is refused on the transaction entry and on the session entry.
+
+    The pooler maps a certificate's CN to the role, which is the line between
+    `ci` and the session entry `operator` alone may use. The control: the
+    same certificate, as `ci`, is admitted.
+    """
+    ci = _bundle(roots, box, clients, settings.CI_ROLE)
+    posing = state.Connection(url=ci.url.replace(f'{settings.CI_ROLE}@', f'{settings.OPERATOR_ROLE}@', 1), env=ci.env)
+    assert urllib_parse.urlsplit(posing.url).username == settings.OPERATOR_ROLE
+
+    assert _psql(clients, ci, 'SELECT current_user') == 'state_owner'
+    for purpose in (bundle.Purpose.QUERY, bundle.Purpose.DUMP):
+        with pytest.raises(state.StateError, match='certificate authentication failed'):
+            _ = _psql(clients, state.Connection(url=posing.form(purpose), env=posing.env), 'SELECT 1')
+
+
+def test_a_certificate_another_authority_signed_is_refused_in_the_handshake(
+    box: Box, roots: config.Roots, clients: Path
+) -> None:
+    """A client role's name, in a certificate the box's CA did not sign, gets no further than the handshake."""
+    stranger = config.Roots(ca=pki.Authority.from_pem(pki.generate_ca_key()), age_recipients=(RECIPIENT,))
+    target = _bundle(stranger, box, clients, settings.CI_ROLE)
+    # The client trusts the box's CA, so the refusal is the box's and not the client's.
+    _ = Path(target.env[CA_ENV]).write_bytes(roots.ca.certificate().cert_pem)
+
+    with pytest.raises(state.StateError, match=r'SSL error|alert'):
+        _ = _psql(clients, target, 'SELECT 1')
+
+
+def test_a_client_that_presents_no_certificate_is_refused(box: Box, roots: config.Roots, clients: Path) -> None:
+    """The pooler asks for a certificate without demanding one in the handshake; its `hba.conf` refuses the client that sent none."""
+    target = _bundle(roots, box, clients, settings.CI_ROLE)
+    unsigned = state.Connection(url=target.url, env={**target.env, CERT_ENV: '/nonexistent', KEY_ENV: '/nonexistent'})
+
+    with pytest.raises(state.StateError, match='certificate authentication failed'):
+        _ = _psql(clients, unsigned, 'SELECT 1')
+
+
+def test_the_expiry_probe_reads_the_pooler_certificate_with_no_credential(box: Box) -> None:
+    """The probe's own handshake, `openssl s_client`, completes and reads the leaf though the pooler demands a client certificate."""
+    verdict = probe.certificate(address=ADDRESS, port=box.port)
+
+    assert verdict.passed, str(verdict)
 
 
 def test_census_yes_is_refused_without_prune_superseded(capsys: pytest.CaptureFixture[str]) -> None:

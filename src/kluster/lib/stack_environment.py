@@ -177,16 +177,16 @@ def backend_variables(stack: str, *, checkout: Path | None, estate_url: str | No
     """The backend a run against `stack` is pointed at: the committed one, or the estate's.
 
     `estate_url` is the appliance's connection string where the caller has
-    one, as its client bundle holds it, and the run is given the form meant
-    for `pulumi` alone (`bundle.pulumi_url`); a stack whose state is committed
-    ignores it, and needs `checkout` instead, since its backend is a
-    directory there.
+    one, read from its client bundle, and the run is given it in the form
+    meant for `pulumi` alone (`bundle.Purpose.PULUMI`), which a URL read in
+    that form already is; a stack whose state is committed ignores it, and
+    needs `checkout` instead, since its backend is a directory there.
     """
     if home(stack) is identity.StateHome.COMMITTED:
         if checkout is None:
             raise EnvironmentRefused(f'the {stack} stack keeps its state in a checkout, and none was named')
         return {BACKEND_URL_ENV: committed_url(checkout), DISABLE_BACKUPS_ENV: 'true'}
-    return {} if estate_url is None else {BACKEND_URL_ENV: bundle.pulumi_url(estate_url)}
+    return {} if estate_url is None else {BACKEND_URL_ENV: bundle.form(estate_url, bundle.Purpose.PULUMI)}
 
 
 #: How the chain's last layer asks: the question in, the answer out, or None
@@ -256,17 +256,13 @@ def operator_variables(stack: str, checkout: Path) -> dict[str, str]:
     if where is identity.StateHome.COMMITTED:
         return variables | backend_variables(stack, checkout=checkout, estate_url=None)
     slot = workstation.slots(checkout) / BUNDLE_SLOT
-    url = bundle.backend_url_file(slot)
+    url = bundle.read(slot, bundle.Purpose.PULUMI)
     if url is None:
         raise EnvironmentRefused(
             f'no client bundle in {slot}, so there is no backend to reach the {stack} stack in: '
             '`state-backend bundle operator` writes it'
         )
-    return (
-        variables
-        | backend_variables(stack, checkout=checkout, estate_url=url.read_text().strip())
-        | bundle.ssl_env(slot)
-    )
+    return variables | backend_variables(stack, checkout=checkout, estate_url=url) | bundle.ssl_env(slot)
 
 
 def process(base: Mapping[str, str], variables: Mapping[str, str]) -> pulumi_cli.WholeEnvironment:

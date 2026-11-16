@@ -279,8 +279,9 @@ def environment(
     acquisition chain (`stack_environment.operator_passphrase`), only when an
     operator stack is asked for, and at most once for this environment; the
     escrow is its recovery path, which `credentials derived
-    operator-passphrase recover` walks and a refusal names. The URL is read
-    from the bundle `state-backend bundle` writes, so the two halves of "log
+    operator-passphrase recover` walks and a refusal names. The URL is read,
+    in the form `pulumi` is given (`bundle.Purpose.PULUMI`), from the bundle
+    `state-backend bundle` writes, so the two halves of "log
     in to the backend" come from one command. A machine with no bundle yet
     answers with no URL and says why (`no_backend`). Every `pulumi` run
     against a stack whose state is in the backend is then refused by name
@@ -296,7 +297,7 @@ def environment(
     found = bundle.backend_url_file(bundle_dir)
     # An empty file names no backend, so it is no bundle rather than a URL:
     # handed on, it would be a `PULUMI_BACKEND_URL` that is set and says nothing.
-    url = (found.read_text().strip() or None) if found is not None else None
+    url = bundle.read(bundle_dir, bundle.Purpose.PULUMI) or None
     no_backend = None
     if found is None:
         no_backend = (

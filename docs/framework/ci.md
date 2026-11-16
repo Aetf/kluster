@@ -274,20 +274,22 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     runs the step against a stand-in checker and holds each annotation
     whole.
 
--   **The Postgres image the appliance's roles are tested in is on the
-    runner before the tests start.** `tests/test_state_roles.py` runs the
-    appliance's Postgres in the image the box runs, and skips where no
-    copy of it is local rather than fetch one in the middle of a run. A
-    runner starts with an empty image store, so without a pull every
-    one of its cases skips. The `Podman` step of `checks` pulls the image
-    `settings.POSTGRES_IMAGE` pins -- its tag and the digest the box runs,
-    so CI tests the image a box is running -- by that digest from
-    `mirror.gcr.io`, Google's mirror of Docker Hub, and tags it with the
-    pin's repository and tag, which is what lets the pinned reference
-    resolve to it locally. Docker Hub limits anonymous pulls per address,
-    and a runner's address is shared, so a pull from Docker Hub itself
-    fails at random; pulling by the digest means the mirror serves the
-    pinned image or nothing. The cost is
+-   **The images the appliance's roles are tested in are on the runner
+    before the tests start.** `tests/test_state_roles.py` runs the
+    appliance's Postgres and the pooler in front of it in the images
+    the box runs, and skips where no copy of either is local rather than
+    fetch one in the middle of a run. A runner starts with an empty image
+    store, so without a pull every one of its cases skips. The `Podman`
+    step of `checks` pulls the images `settings.POSTGRES_IMAGE` and
+    `settings.PGBOUNCER_IMAGE` pin -- each by its tag and the digest the box
+    runs, so CI tests the images a box is running -- by those digests, and
+    tags each with its pin's repository and tag, which is what lets the
+    pinned reference resolve to it locally. Postgres's comes from
+    `mirror.gcr.io`, Google's mirror of Docker Hub: Docker Hub limits
+    anonymous pulls per address, and a runner's address is shared, so a
+    pull from Docker Hub itself fails at random. The pooler's comes from
+    its own registry, GitHub's. Pulling by the digest means each registry
+    serves the pinned image or nothing. The cost is
     small beside what it buys: the pull takes seconds, and the module
     runs in about ten seconds under the suite's four workers, inside a
     `Tests` step of two minutes. Those cases are the only ones
