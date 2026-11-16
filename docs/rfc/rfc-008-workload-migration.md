@@ -51,6 +51,13 @@
     the overlay carries no route to the home, and such a name is reached
     at its one name through the tunnel a device opens itself, rather
     than at a VIP's address over the device's own routes.
+*   **Updated:** 2026-11-15. `workerGua` is now derived from the read
+    prefix ([Aetf/kluster-ops#760](https://github.com/Aetf/kluster-ops/issues/760)):
+    §4.1's `physical` output "of the `workerGua` it already reads" is
+    the GUA the run derives from the site's delegated prefix, which it
+    reads off the gateway, so the output is present from the first
+    apply and the pinhole with it
+    ([physical/gateway.md](../physical/gateway.md) §4.2).
 *   **Authority:** AGENTS.md,
     [framework/dispatch.md](../framework/dispatch.md),
     [framework/rfc.md](../framework/rfc.md) and the style rules

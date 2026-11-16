@@ -187,6 +187,16 @@ that cannot be matched to the one thing it names is not a census entry.
 Configuration is for the values an operator supplies or rotates:
 credentials, knobs, measurements of the moment.
 
+**A fact about the world that a system the program already reaches can
+report is read by the run, not typed into configuration.** A
+measurement belongs in configuration only when nothing the program
+reaches reports it. The read is a resource that observes
+([framework/pulumi.md](../framework/pulumi.md) §5.2), so a moved fact is a
+diff of the run that reads it rather than a stale key: the site's
+delegated prefix, which the ISP decides, is read off the gateway, and
+what derives from it — a network's /64, the worker's address — follows
+on every run.
+
 **Related constants are one structure, not a flat namespace** — the
 [illegal-states rule](README.md) applied to data: group them so that
 using one without its siblings does not type-check or does not parse.

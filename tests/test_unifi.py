@@ -98,7 +98,7 @@ def build(
     *,
     peer_on_worker: bool = True,
 ) -> unifi.SiteFirewall:
-    """The whole census: the worker's address known and the application on it."""
+    """The whole census, with the application on the worker."""
     return unifi.SiteFirewall(
         NAME,
         api_url=API_URL,
@@ -146,15 +146,15 @@ async def test_the_census_is_exactly_the_designed_set(mocks: Controller) -> None
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('worker_gua', [WORKER_GUA, None])
-async def test_every_address_group_is_named_by_a_declared_policy(mocks: Controller, worker_gua: str | None) -> None:
+@pytest.mark.parametrize('peer_on_worker', [True, False])
+async def test_every_address_group_is_named_by_a_declared_policy(mocks: Controller, peer_on_worker: bool) -> None:
     """A group exists because a rule names it, so none sits on the controller naming nothing.
 
-    Checked with the pinhole's pair absent too: a group only a conditional row
-    named would otherwise outlive it.
+    Checked with the conditional row absent too: a group only a conditional
+    row named would otherwise outlive it.
     """
     async with declaring():
-        unifi.SiteFirewall(NAME, api_url=API_URL, site=SITE, worker_gua=worker_gua, static_hosts={})
+        build(peer_on_worker=peer_on_worker)
 
     named = {
         side.get('ipGroupId')
@@ -260,6 +260,22 @@ async def test_the_cluster_vlan_hands_out_no_leases() -> None:
     # address formed from what this network advertises, which needs the
     # delegated prefix and the router advertisements that carry it.
     assert await firewall.network.ipv6_ra_enable.future() is True
+
+
+@pytest.mark.asyncio
+async def test_the_cluster_vlan_takes_the_delegated_subnet_its_vlan_id_names() -> None:
+    """The site's rule: a network's prefix id is its VLAN id, written as the controller stores an id, in hex.
+
+    An id left undeclared is the firmware's choice, since every write through
+    the pinned provider turns the controller's automatic ids off; so the
+    network the program declares states its id, and states the tag's.
+    """
+    firewall = build()
+
+    assert await firewall.network.ipv6_interface_type.future() == 'pd'
+    prefix_id = await firewall.network.ipv6_pd_prefixid.future()
+    assert prefix_id is not None
+    assert int(prefix_id, 16) == await firewall.network.vlan_id.future()
     assert await firewall.network.ipv6_interface_type.future() == 'pd'
     # The controller refuses a delegated network with no range, and reads each
     # bound as an address.

@@ -466,8 +466,10 @@ one home view.
     declared in `physical` via the unifi provider (§5.1), *not*
     the device-files provider's territory. Constraint on record: the
     zone-policy API matches literal IPs only — there is no
-    prefix-relative v6 rule — so the pinhole embeds the current GUA and
-    must be re-declared when the (dynamic) home prefix rotates.
+    prefix-relative v6 rule — so the pinhole embeds the current GUA,
+    which `physical` derives from the delegated prefix it reads off the
+    gateway on every run, and the run that reads a rotated prefix
+    re-declares it (physical/gateway.md §4.2).
     "Outbound-only v6" is the accepted first stage (peers are mostly
     reachable outbound; inbound v4 arrives via the v4 port forward
     that qbittorrent's own migration wave declares — physical/gateway.md
@@ -564,8 +566,9 @@ belongs to — this section holds the cluster-level statements).
     declared on its namespace with the reason and carved out of the
     deny. Egress elsewhere stays open. Its residuals: a platform
     namespace and a pod on the host network are outside it; a home
-    machine's global IPv6 address, out of a delegated prefix no
-    declaration can name, stays reachable on any port from a pod on the
+    machine's global IPv6 address, out of the delegated prefix, which
+    only the `physical` run reads and the block names no part of, stays
+    reachable on any port from a pod on the
     worker, and only as the internet reaches it from a pod on a cloud
     node; and where Cilium does not hold a node's public address as the
     node's, a pod's call to it leaves for the internet and returns as the

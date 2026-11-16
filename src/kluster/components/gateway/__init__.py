@@ -17,6 +17,9 @@ credential and neither implies the other:
     `conventions`; the credential that opens the session is the provider's own,
     read in its `configure` and handled by nothing here (framework/pulumi.md
     §5.2).
+    The site's delegated prefix is read over the same session, on every run:
+    the controller does not report it, and the device's PD lease does
+    (`prefix`).
 -   **The UniFi controller**, over its API, for the firewall and for the
     site's BGP configuration, which the routing session is (physical/gateway.md
     §1.3). Those resources live in this stack and not beside the applications whose traffic they
@@ -38,7 +41,7 @@ from __future__ import annotations
 import shlex
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
-from ipaddress import IPv4Address, IPv6Address, ip_address
+from ipaddress import IPv4Address, IPv6Address, IPv6Network, ip_address
 from typing import final
 
 import pulumi
@@ -56,9 +59,11 @@ from kluster.components.gateway.persistence import (
     DevicePersistence,
     on_boot_path,
 )
+from kluster.components.gateway.prefix import WAN_INTERFACE, held_prefix
 from kluster.components.gateway.routing import RoutingSession, SiteRouting
 from kluster.components.gateway.unifi import SiteFirewall
 from kluster.lib import templates
+from kluster.providers import pd_lease
 from kluster.providers.device_files.provider import Connection, DeviceFile
 from putils import Component
 
@@ -70,6 +75,7 @@ __all__ = (
     'DEVICE_BASE',
     'HEALTH_PROGRAM',
     'NETWORKD_CONFIG',
+    'NETWORK_BRIDGES',
     'PLAYBOOKS',
     'POLICY_RULE_FAMILIES',
     'SYSTEMD_TERMINATE_RELEASE',
@@ -80,10 +86,13 @@ __all__ = (
     'Gateway',
     'OverlayDaemon',
     'Playbooks',
+    'PrefixIdRefused',
     'PublicKey',
     'ResolverService',
     'Rootfs',
     'RoutingSession',
+    'declared_subnet',
+    'gateway_address',
     'health_program',
 )
 
@@ -123,6 +132,43 @@ NETWORKD_CONFIG = 'systemd/networkd.conf'
 #: The routing table a policy rule must look up for the gateway to route its
 #: own packets. The name is the kernel's.
 _MAIN_TABLE = 'main'
+
+#: Every network this program declares on the site's delegated prefix, and the
+#: bridge the device carries it on. Each one's /64 is the read prefix at the
+#: network's id (`declared_subnet`), and the health reading holds its bridge to
+#: that /64 (physical/gateway.md §1.6). The console's networks join once they
+#: are declared.
+NETWORK_BRIDGES: Mapping[conventions.SiteNetwork, str] = {conventions.CLUSTER_VLAN: 'br7'}
+
+
+class PrefixIdRefused(ValueError):
+    """A declared network's prefix id does not fit under the prefix the device holds."""
+
+
+def declared_subnet(prefix: IPv6Network, network: conventions.SiteNetwork) -> IPv6Network:
+    """The /64 `network` holds on the delegated prefix: the prefix at the network's id, or a refusal naming it.
+
+    A prefix too short for an id the site declares cannot be numbered the way
+    the declaration says, so the run stops at the read, naming the network,
+    rather than declaring addresses on a /64 the gateway does not route. A
+    delegation shrunk that far renumbers the whole site anyway.
+    """
+    try:
+        return conventions.delegated_subnet(prefix, network.prefix_id)
+    except ValueError as exc:
+        raise PrefixIdRefused(
+            f'the {network.name} network declares prefix id {network.prefix_id:x}, and the device holds {prefix}: {exc}'
+        ) from None
+
+
+def gateway_address(subnet: IPv6Network) -> IPv6Address:
+    """The address the gateway gives itself on a /64 of the delegated prefix: the subnet's first.
+
+    That is the firmware's choice rather than this program's, read on the
+    device on every bridge the prefix numbers (physical/gateway.md §1.6).
+    """
+    return subnet.network_address + 1
+
 
 #: Where the overlay image installs its client, which the health reading runs in
 #: the member's mount namespace, entered through the machine's leader as the
@@ -193,6 +239,8 @@ class Playbooks:
     packages: str = 'The offline cache would not carry an offline boot'
     base: str = "The device's base moved"
     networkd: str = "The firmware's policy rules exposed to removal"
+    prefix: str = "The site's delegated prefix rotated"
+    lease: str = 'The PD lease no longer reads as declared'
 
 
 PLAYBOOKS = Playbooks()
@@ -231,6 +279,11 @@ class _HealthParams:
     networkd_config: str
     networkd_section: str
     networkd_settings: tuple[str, ...]
+    #: Each network on the delegated prefix as three words: its bridge, the
+    #: gateway's address on its declared /64, and that /64.
+    delegations: tuple[str, ...]
+    pd_leases: str
+    pd_wan: str
     playbooks: Mapping[str, str]
 
 
@@ -240,6 +293,7 @@ def health_program(
     resolvers: Sequence[ResolverService],
     overlay_daemon: OverlayDaemon,
     peer: IPv4Address,
+    delegated: Mapping[str, IPv6Network],
     packages_script: str = on_boot_path(PACKAGES_SCRIPT),
     root: str = '',
 ) -> str:
@@ -265,6 +319,14 @@ def health_program(
     `nspawn.FOREIGN_MANAGEMENT` reading as declared in networkd's effective
     configuration. The options are the declaration's, rendered in, so the
     drop-in and the reading cannot part.
+
+    `delegated` is each bridge on the site's delegated prefix and the /64 the
+    declaration derives for it from the read prefix. The bridge is read for
+    the gateway's address on that /64 (`gateway_address`) — which is the
+    reading of a rotation, or of an id the firmware did not honor — and,
+    while it holds it, the PD lease's line for the bridge is read for the same
+    /64 under `root`, which is the reading of the lease's format and part of
+    the lease read's layer (`kluster.providers.pd_lease`).
 
     `--certificates` lists one name per site block of the proxy's `Caddyfile`,
     each block being one wildcard certificate: the controller's vhost, and the
@@ -311,6 +373,14 @@ def health_program(
             networkd_settings=tuple(
                 shlex.quote(f'{option}={value}') for option, value in nspawn.foreign_management_settings()
             ),
+            delegations=tuple(
+                ' '.join(
+                    shlex.quote(word) for word in (bridge, f'{gateway_address(subnet)}/{subnet.prefixlen}', str(subnet))
+                )
+                for bridge, subnet in delegated.items()
+            ),
+            pd_leases=shlex.quote(f'{root}{pd_lease.LEASES}'),
+            pd_wan=shlex.quote(WAN_INTERFACE),
             playbooks={field: shlex.quote(title) for field, title in asdict(PLAYBOOKS).items()},
         ),
     )
@@ -350,7 +420,6 @@ class Gateway(Component, pulumi_type='kluster:gateway:Gateway'):
         routing: RoutingSession,
         keys: Sequence[PublicKey],
         site: str,
-        worker_gua: pulumi.Input[str] | None,
         peer_on_worker: bool = False,
         static_hosts: Mapping[str, IPv4Address | IPv6Address],
         opts: pulumi.ResourceOptions | None = None,
@@ -376,13 +445,17 @@ class Gateway(Component, pulumi_type='kluster:gateway:Gateway'):
         door open across a firmware update, and the private half of each
         belongs to whoever holds it rather than to anything here.
 
-        `worker_gua` is the worker VM's global IPv6 address: the one firewall
-        rule that cannot be written against a stable object, because the
-        zone-policy API matches literal addresses and the site's delegated
-        prefix rotates. `None` is the state before the worker has one — the
-        address is formed by SLAAC off the very network the firewall census
-        declares — and it means the pinhole is not declared at all, leaving the
-        worker's IPv6 outbound-only.
+        The site's delegated prefix is read off the device on every run
+        (`prefix`), and three values leave the component from it:
+        `delegated_prefix`, the prefix with its length; `held_subnets`, the
+        /64s the site's networks hold on it; and `worker_gua`, the worker VM's
+        global IPv6 address. That address is the cluster network's /64 —
+        the read prefix at the network's id (`declared_subnet`) — with the
+        EUI-64 of the worker's MAC, which is the address the worker forms by
+        SLAAC off that network's advertisement. The firewall's pinhole names
+        it, since the zone-policy API matches literal addresses only, and the
+        stack exports it, so a prefix the ISP moved re-declares both in the
+        run that reads it.
 
         `peer_on_worker` says the bulk-transfer application runs on the worker,
         and it is what declares the IPv4 forward of the application's peer
@@ -434,6 +507,26 @@ class Gateway(Component, pulumi_type='kluster:gateway:Gateway'):
         # would be a second copy of one fact, free to disagree with the first.
         api_url = f'https://{url_host(host)}'
 
+        # The prefix the ISP delegates, read over the same session on every
+        # run, and what derives from it: each declared network's /64, and the
+        # worker's address on the cluster network's.
+        held = held_prefix(f'{name}-prefix', connection=connection, opts=self.child_opts())
+        self.prefix_read = held.read
+        self.delegated_prefix: pulumi.Output[str] = held.prefix
+        self.held_subnets: pulumi.Output[list[str]] = held.subnets
+        declared = held.prefix.apply(
+            lambda read: {
+                bridge: declared_subnet(IPv6Network(read), network) for network, bridge in NETWORK_BRIDGES.items()
+            }
+        )
+        self.worker_gua: pulumi.Output[str] = held.prefix.apply(
+            lambda read: str(
+                conventions.eui64_address(
+                    declared_subnet(IPv6Network(read), conventions.CLUSTER_VLAN), conventions.HOMELAB_NODE_MAC
+                )
+            )
+        )
+
         # The site's routing, which the controller holds, and who may open a
         # session on the device, which is its own files plus its own converger,
         # built through the mechanism the same way the runtime's are.
@@ -451,7 +544,7 @@ class Gateway(Component, pulumi_type='kluster:gateway:Gateway'):
             f'{name}-firewall',
             api_url=api_url,
             site=site,
-            worker_gua=worker_gua,
+            worker_gua=self.worker_gua,
             peer_on_worker=peer_on_worker,
             static_hosts=static_hosts,
             opts=self.child_opts(),
@@ -462,7 +555,15 @@ class Gateway(Component, pulumi_type='kluster:gateway:Gateway'):
         # member is last: a session may be riding the tunnel it carries.
         self.health: DeviceFile = self.persistence.executable(
             HEALTH_PROGRAM,
-            health_program(caddy=caddy, resolvers=resolvers, overlay_daemon=overlay_daemon, peer=routing.neighbor),
+            declared.apply(
+                lambda subnets: health_program(
+                    caddy=caddy,
+                    resolvers=resolvers,
+                    overlay_daemon=overlay_daemon,
+                    peer=routing.neighbor,
+                    delegated=subnets,
+                )
+            ),
             opts=self.child_opts(),
         )
 
@@ -479,6 +580,7 @@ class Gateway(Component, pulumi_type='kluster:gateway:Gateway'):
             connection=connection,
             after=(
                 self.persistence,
+                self.prefix_read,
                 self.runtime,
                 *self.containers,
                 self.routing,

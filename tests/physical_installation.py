@@ -19,13 +19,16 @@ from typing import Any, cast
 
 import pulumi
 import pytest
+from device_places import stated_type
 from mock_monitor import run_under_backstop
 from oci_conventions import with_compartment, with_tenancy_ocid
 from talos_secrets import generated_secrets
 from unifi_controller import Controller
 
 from kluster import conventions
+from kluster.components.gateway.prefix import WAN_INTERFACE
 from kluster.lib import workstation
+from kluster.providers import pd_lease
 
 LB_ADDRESS = '203.0.113.10'
 LB_ADDRESS_V6 = '2001:db8::10'
@@ -36,10 +39,12 @@ OBJECT_NAMESPACE = 'axmpletenancy'
 TENANCY_ID = 'ocid1.tenancy.oc1..test'
 BUDGET_RECIPIENTS = ['alerts@example.invalid', 'second@example.invalid']
 ZT_NETWORK_ID = '0123456789abcdef'
-#: The worker VM's global address, as the operator reads it off the cluster
-#: VLAN's router advertisement. Nothing derives it — that is the point of the
-#: key — so the value only has to be inside a documentation prefix.
-WORKER_GUA = '2001:db8:1:70::10'
+#: The gateway's PD lease as the device held it, its prefix rewritten under the
+#: documentation prefix, which the run's read of the delegated prefix reports.
+LEASE = pd_lease.parse((Path(__file__).parent / 'data' / 'pd.leases').read_text(), WAN_INTERFACE)
+#: The worker VM's global address under that lease: the cluster network's /64,
+#: the prefix at its declared id, and the EUI-64 of the worker's MAC.
+WORKER_GUA = '2001:db8:83:1717:5054:ff:fe07:a'
 KUBECONFIG = 'apiVersion: v1\nkind: Config\n'
 TALOSCONFIG = 'context: kluster\n'
 #: The libvirt client identity, as it arrives from configuration. Nothing
@@ -52,6 +57,9 @@ LIBVIRT_KEY = '-----BEGIN OPENSSH PRIVATE KEY-----\nexample\n-----END OPENSSH PR
 FACTORY_HOST = 'factory.talos.dev'
 FACTORY = f'https://{FACTORY_HOST}'
 
+#: The type the read of the delegated prefix registers under.
+PREFIX_READ = stated_type(pd_lease.DelegatedPrefixLease)
+
 #: A manifest digest, as a root filesystem pin carries one. Nothing here checks
 #: the bytes behind it; the shape is what the reader is checked against.
 DIGEST = f'sha256:{"f" * 64}'
@@ -60,17 +68,16 @@ DIGEST = f'sha256:{"f" * 64}'
 ROOTFS_TAG = '7'
 
 #: What the gateway reads out of stack configuration: two secrets a file's
-#: content is rendered from, the controller's key, one measurement, and the
-#: flag that says qbittorrent has moved onto the worker. Every value here is
-#: invented; what the test is for is that the keys line up and the values reach
-#: the right resource. The two optional keys are both set, so the run declares
-#: the whole census; the cases about either one's absence remove it.
+#: content is rendered from, the controller's key, and the flag that says
+#: qbittorrent has moved onto the worker. Every value here is invented; what
+#: the test is for is that the keys line up and the values reach the right
+#: resource. The optional flag is set, so the run declares the whole census;
+#: the cases about its absence remove it.
 GATEWAY_CONFIG = {
     'kluster:gatewayPrivateKey': '-----BEGIN OPENSSH PRIVATE KEY-----\nexample\n',
     'kluster:gatewayBgpPassword': 'a-session-password',
     'kluster:gatewayAcmeToken': 'a-zone-scoped-token',
     'kluster:unifiApiKey': 'a-controller-key',
-    'kluster:workerGua': WORKER_GUA,
     'kluster:qbittorrentOnWorker': 'true',
     'kluster:zerotierApiToken': 'a-central-token',
 }
@@ -161,6 +168,12 @@ class Installation(Controller):
                 return {'bucketId': 'b2-bucket-id'}
             case 'b2:index/applicationKey:ApplicationKey':
                 return {'applicationKeyId': args.name + '-key-id', 'applicationKey': args.name + '-secret'}
+            case typ if typ == PREFIX_READ:
+                # What the read's `check` adds to its inputs, off the recorded lease.
+                return {
+                    pd_lease.PREFIX: str(LEASE.prefix),
+                    pd_lease.SUBNETS: {bridge: str(subnet) for bridge, subnet in LEASE.subnets.items()},
+                }
             case _:
                 return {}
 

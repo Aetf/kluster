@@ -889,9 +889,10 @@ Every system here that Pulumi has no provider for is driven by code of
 this repository's own, one package per system under
 `src/kluster/providers/`: today the desired-state files on the gateway
 device, the UniFi controller's rank of a zone pair's policies and its
-site BGP configuration, the Talos image factory's artifacts, the
-rewrites on an AdGuard instance, the objects OCI imports a custom image
-from, and the appliance's TLS handshake waited for. Every one of them is
+site BGP configuration, the site's delegated prefix, read off the
+gateway's PD lease, the Talos image factory's artifacts, the rewrites
+on an AdGuard instance, the objects OCI imports a custom image from,
+and the appliance's TLS handshake waited for. Every one of them is
 a **dynamic provider**, and this section is what that costs and how one
 is written. *Which* of them
 should be one is a design decision, argued where each is designed
@@ -997,6 +998,17 @@ properties there that no caller declared. Two are worth adding:
     from a module is pickled **by reference**, so editing the body of
     `create` changes not one byte of state, produces no diff, and
     leaves every resource's outputs stale.
+
+**A dynamic resource that observes instead of writing makes its
+observation in `check`**, and writes nothing in `create`, `update` or
+`delete`. What `check` adds is what the engine compares and what a
+preview renders (§5.3 E4, E8), so a far side that moved is a planned
+update in a plain preview, with no refresh, and a resource built from
+the observed value plans its own update in the same preview, handed
+the new value as a known one. `read` hands back the state as stored, so
+`check` is the one place that observes. The site's delegated prefix is
+the instance (`kluster.providers.pd_lease`), and
+`tests/test_pd_lease_engine.py` holds the engine to both halves.
 
 Four ways to get this wrong, each measured:
 
