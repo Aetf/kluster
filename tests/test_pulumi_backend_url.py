@@ -1,11 +1,13 @@
-"""The backend URL `pulumi` is given, and the one the libpq tools are given.
+"""The forms of a bundle's one connection string, and which reader is given which.
 
-A client bundle holds one connection string (`kluster.lib.bundle`). `pulumi`
-is given it with `binary_parameters=yes` added to its query
-(`bundle.pulumi_url`), a parameter of the `lib/pq` driver behind Pulumi's
-Postgres backend; `psql`, `pg_dump` and `pg_restore` are given it as written,
-because libpq refuses that parameter. Held here for the Python side: every
-path that starts `pulumi` from a slot, and every libpq tool `state` runs.
+A client bundle holds one connection string, and `kluster.lib.bundle` reads
+it in the form its reader names (`bundle.Purpose`). `pulumi` is given it with
+`binary_parameters=yes` added to its query (`bundle.pulumi_url`), a parameter
+of the `lib/pq` driver behind Pulumi's Postgres backend; `psql` is given it
+as written, because libpq refuses that parameter; `pg_dump` and `pg_restore`
+are given it naming the pooler's session entry (`bundle.dump_url`). Held here
+for the Python side: every path that starts `pulumi` from a slot, and every
+tool `state` runs.
 `mise.toml`'s spelling of the same rule is `tests/test_mise_env.py`'s, and a
 real `pulumi` against the pinned Postgres through the URL it is given is
 `tests/test_state_roles.py`'s, whose `credentials` run against `github`
@@ -25,8 +27,8 @@ import pytest
 from root_credentials import fake
 
 from kluster.conventions import identity
-from kluster.lib import bundle, stack_environment
-from kluster.lib.state_backend import state
+from kluster.lib import bundle, pulumi_cli, stack_environment
+from kluster.lib.state_backend import settings, state
 from kluster.scripts.credentials import pulumi_config
 
 #: The connection string `state-backend bundle` writes.
@@ -62,10 +64,46 @@ def test_the_pulumi_url_is_the_bundles_with_binary_parameters_added(written: str
 
 
 @pytest.mark.parametrize('url', ['', 'file:///scratch/state?metadata=skip'], ids=['empty', 'file'])
-def test_a_url_that_is_no_postgres_backend_is_left_as_it_is(url: str) -> None:
-    # The parameter is the Postgres driver's: an empty URL names no backend,
-    # and a `file://` backend refuses a query parameter it does not know.
-    assert bundle.pulumi_url(url) == url
+@pytest.mark.parametrize('purpose', list(bundle.Purpose), ids=[purpose.value for purpose in bundle.Purpose])
+def test_a_url_that_is_no_postgres_backend_is_left_as_it_is(url: str, purpose: bundle.Purpose) -> None:
+    # The parameter and the entry are the Postgres backend's: an empty URL
+    # names no backend, and a `file://` backend refuses a query parameter it
+    # does not know.
+    assert bundle.form(url, purpose) == url
+
+
+@pytest.mark.parametrize('written', list(SHAPES.values()), ids=list(SHAPES))
+def test_the_dump_url_is_the_bundles_naming_the_session_entry(written: str) -> None:
+    given, original = urlsplit(bundle.dump_url(written)), urlsplit(written)
+
+    assert given.path == f'/{settings.SESSION_DATABASE}'
+    assert given._replace(path='') == original._replace(path='')
+
+
+@pytest.mark.parametrize('written', list(SHAPES.values()), ids=list(SHAPES))
+def test_a_url_in_the_pulumi_form_is_in_it_once(written: str) -> None:
+    # A caller handed the form already -- a run whose URL a reader formed --
+    # passes it on unchanged.
+    once = bundle.pulumi_url(written)
+
+    assert bundle.pulumi_url(once) == once
+
+
+@pytest.mark.parametrize('written', list(SHAPES.values()), ids=list(SHAPES))
+def test_the_reader_reads_the_one_stored_string_in_each_purposes_form(tmp_path: Path, written: str) -> None:
+    _ = (tmp_path / bundle.URL_FILE).write_text(written + '\n')
+
+    assert {purpose: bundle.read(tmp_path, purpose) for purpose in bundle.Purpose} == {
+        bundle.Purpose.PULUMI: bundle.pulumi_url(written),
+        bundle.Purpose.QUERY: written,
+        bundle.Purpose.DUMP: bundle.dump_url(written),
+    }
+
+
+def test_the_reader_tells_no_bundle_from_an_empty_one(tmp_path: Path) -> None:
+    assert bundle.read(tmp_path, bundle.Purpose.PULUMI) is None
+    _ = (tmp_path / bundle.URL_FILE).write_text('\n')
+    assert bundle.read(tmp_path, bundle.Purpose.PULUMI) == ''
 
 
 @pytest.mark.parametrize('stack', [CI_STACK, identity.STACK_NAMES.github])
@@ -130,12 +168,13 @@ class Tools:
 
 
 @pytest.mark.parametrize('written', list(SHAPES.values()), ids=list(SHAPES))
-def test_the_libpq_tools_are_handed_the_bundles_url_as_written(
+def test_each_libpq_tool_is_handed_the_form_its_purpose_reads(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, written: str
 ) -> None:
     # The slot a `pulumi` run's URL is formed from is the one a dump, a
-    # restore and the census read; each of the three tools is handed the URL
-    # as the slot holds it, which libpq accepts.
+    # restore and the census read; the census is handed the URL as the slot
+    # holds it, and the dump and the restore the form naming the session
+    # entry. libpq accepts both, and neither carries the driver's parameter.
     slot = tmp_path / 'state-backend'
     slot.mkdir()
     _ = (slot / bundle.URL_FILE).write_text(written + '\n')
@@ -148,8 +187,8 @@ def test_the_libpq_tools_are_handed_the_bundles_url_as_written(
     assert state.census(target) == []
 
     assert tools.dbnames() == {
-        Path(state.PG_DUMP).name: written,
-        Path(state.PG_RESTORE).name: written,
+        Path(state.PG_DUMP).name: bundle.dump_url(written),
+        Path(state.PG_RESTORE).name: bundle.dump_url(written),
         Path(state.PSQL).name: written,
     }
     assert not any(_carries_the_parameter(url) for url in tools.dbnames().values())
@@ -170,3 +209,21 @@ def test_the_pinned_libpq_refuses_the_url_pulumi_is_given_and_takes_the_bundles(
         _ = state.census(state.Connection(url=plain, env={}))
     assert 'invalid URI query parameter' not in str(unreached.value)
     assert '127.0.0.1' in str(unreached.value)
+
+
+def test_the_stacks_question_is_asked_through_the_pulumi_form(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # `state.stacks` runs `pulumi stack ls`, so it is a `pulumi` session like
+    # any other, and is handed the URL `pulumi` is.
+    slot = tmp_path / 'state-backend'
+    slot.mkdir()
+    _ = (slot / bundle.URL_FILE).write_text(URL + '\n')
+    given: list[str | None] = []
+
+    def run_pulumi(_args: Sequence[str], *, env: Mapping[str, str], **_options: Any) -> str:
+        given.append(env.get(stack_environment.BACKEND_URL_ENV))
+        return '[]'
+
+    monkeypatch.setattr(pulumi_cli, 'run_pulumi', run_pulumi)
+
+    assert state.stacks(state.connection(slot)) == []
+    assert given == [bundle.pulumi_url(URL)]

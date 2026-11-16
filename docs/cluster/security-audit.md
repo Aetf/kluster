@@ -176,10 +176,21 @@ micro whose database holds `machine_secrets` behind one passphrase.
 Password authentication on the open internet is a standing
 brute-force + Postgres-CVE surface, and the OS was left unspecified.
 
-**Fix.** The client certificate is the authentication: the server
-admits a remote connection only over TLS with a certificate it verifies in
-full, and offers no password method at all (the appliance's
-`pg_hba.conf`, in `src/kluster/lib/state_backend/machine/butane.yaml.j2`).
+**Fix.** The client certificate is the authentication: the box's one
+listener on the network, the pooler (`PgBouncer`) in front of Postgres, admits a
+connection only over TLS with a certificate it verifies against the CA,
+as the role the certificate names, and offers no password method at all
+(the pooler's `hba.conf`, in
+`src/kluster/lib/state_backend/machine/butane.yaml.j2`). Postgres itself
+has no network: it serves the pooler on a socket only the two containers
+share (state-backend.md §2). So the pre-authentication code the internet
+reaches is the pooler's TLS and startup handling, at a pinned image that
+moves monthly as Postgres's does. Through the pooler, Postgres is reached
+only as a client role the pooler has authenticated; the superuser's `trust`
+line on the server's Unix sockets is reachable from the pooler's container
+too, which already holds the server key and acts as both client roles, so it
+adds no access to the state (threat-model.md §4, clause 2, accepted)
+(*amended 2026-11-16*, kluster-ops#784).
 That verification is **mandatory** (not "available hardening") —
 *amended 2026-08-24*: the NSG-allowlist half
 of the fix was dropped as unimplementable (`api.github.com/meta` lists
@@ -189,8 +200,8 @@ deliberately the only wall (state-backend.md §4); the `pg_dump` is
 age-encrypted before upload (it
 carries every stack's ciphertext + salt). **OS: an immutable,
 auto-updating container OS fully provisioned at create time** (Fedora
-CoreOS, Ignition-provisioned, Postgres a plain unit running `podman run`
-— state-backend.md §§1, 2; the box is a
+CoreOS, Ignition-provisioned, Postgres and its pooler plain units running
+`podman run` — state-backend.md §§1, 2; the box is a
 zero-maintenance appliance, re-provisioned from config, carrying no
 state pg_dump+refresh can't rebuild). **OCI Container Instances were
 evaluated and rejected**: no persistent storage (15 GB ephemeral only)

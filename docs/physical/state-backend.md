@@ -295,35 +295,48 @@ oraclecloud`, x86_64), the qcow2 imports as a custom image
 
 ## 2. Postgres
 
--   A plain systemd unit, `pgstate.service`, whose `ExecStart` is
-    `podman run --replace …` — not a quadlet, so the box holds no
-    `.container` file — with the image pinned by digest: the major
+-   Two plain systemd units, each `ExecStart` a `podman run --replace …`
+    — not quadlets, so the box holds no `.container` file — and each
+    image pinned by digest: `pgstate.service` runs Postgres at the major
     line's tag and the digest it named when the pin last moved
     (`postgres:NN@sha256:…` — `POSTGRES_IMAGE` in
-    `kluster.lib.state_backend.settings`, rendered into the Butane file).
-    The box runs that image and nothing on it moves to another: the
-    container carries no auto-update label, and no auto-update timer
-    runs. A new digest — the tag rebuilt for a minor release or a new
-    base — reaches the box as a renovate pull request, taken monthly, and
-    the replacement that carries it (§7.2).
+    `kluster.lib.state_backend.settings`, rendered into the Butane file),
+    and `pgbouncer.service` runs the pooler, `PgBouncer`, in front of it
+    at a release's tag and digest (`PGBOUNCER_IMAGE`, built by the project
+    behind the cluster's Postgres operator). The box runs those images and
+    nothing on it moves to another:
+    the containers carry no auto-update label, and no auto-update timer
+    runs. A new digest — a tag rebuilt for a new base, or Postgres's for a
+    minor release — reaches the box as a renovate pull request, taken
+    monthly, and the replacement that carries it (§7.2); a new pooler
+    release, as a pull request of its own.
 -   **Major upgrades take the rebuild path** (§7.2): pin bump → a
     replacement, which dumps the old box, initdb's a fresh data
     directory under the new major and restores into it. At tens of MB of state, owning `pg_upgrade` machinery
     buys nothing. (The *in-cluster* CNPG databases are the opposite
     case — their major-upgrade policy is workloads.md §4.)
--   Config: TLS on, `pg_hba` requiring certificate auth over TCP
-    (§3); data directory on the boot volume, of which the state is a
-    small fraction (`state-backend census`, below, reports what it
-    holds).
+-   Config: the pooler holds the box's one listener and the certificate
+    check (§3), and Postgres has no network; data directory on the boot
+    volume, of which the state is a small fraction (`state-backend
+    census`, below, reports what it holds).
 -   **Roles.** The image's bootstrap superuser, `postgres`, is
-    reachable only on the container's local socket, where `pg_hba`
-    trusts it and asks for no certificate: nothing outside the
-    container reaches that socket, getting there is `podman exec` as
-    root on the box, and its users are the image's own initialization
-    and the dump timer (§5). Over TCP `pg_hba` admits the two client
-    roles, `ci` and `operator`, into `pulumi_state` and nothing else,
-    so a certificate the CA signs for any other name — the superuser's
-    included — is refused. Both client roles are `NOSUPERUSER`
+    reachable only on the server's Unix sockets, where `pg_hba` trusts
+    it and asks for no certificate: nothing outside the two containers
+    reaches them, getting there is `podman exec` as root on the box, and
+    its users are the image's own initialization and the dump timer
+    (§5). The superuser's `trust` line, like every `local` line,
+    matches each socket the server listens on, so `podman exec` and the
+    pooler's container both reach it. That container
+    already holds the server key and acts as both client roles, so the
+    superuser adds nothing to the state it can reach (threat-model.md
+    §4, clause 2, accepted). From the network the pooler's `hba.conf`
+    admits the two client roles, `ci` and `operator`, by the
+    certificate whose CN names the role, into `pulumi_state` and
+    nothing else, so a certificate the CA signs for any other name —
+    the superuser's included — is refused. Postgres's `pg_hba` admits
+    the same two roles, into `pulumi_state` alone, on the socket the
+    pooler reaches it through, which nothing but the two containers
+    enters (below). Both client roles are `NOSUPERUSER`
     members of `state_owner`, a role that cannot log in, and every
     session either opens acts as it (a per-role `role` setting in
     `pulumi_state`). What that role holds is exactly what Pulumi's
@@ -361,7 +374,129 @@ oraclecloud`, x86_64), the qcow2 imports as a custom image
     The server process serving such a statement holds several copies of
     the value until it ends, so the box's memory under load is the
     number of such statements running at once times the size of the
-    largest value they touch.
+    largest value they touch. The pooler bounds the first factor (below);
+    `state-backend census` reports the second.
+-   **The pooler is the box's one listener, and it caps what runs in
+    Postgres.** It is published on 5432 and presents the server
+    certificate. It asks each client for a certificate in the handshake
+    and verifies one a client presents against the CA there, ending the
+    handshake of a certificate another authority signed; its `hba.conf`
+    then admits a connection only by such a certificate, as the role the
+    CN names (above). It does not demand a certificate in the handshake
+    itself (`client_tls_sslmode = require`, not `verify-full`): a
+    handshake with no credential is how the expiry probe (§6) reads the
+    server certificate, and `verify-full` answers it with alert 116
+    after the client's side of it completes, so whether the probe's
+    `openssl s_client` exits 0 is a race and the probe would fail some
+    runs. `require` admits the same connections, since `hba.conf`
+    refuses one that presented none, and keeps the probe deterministic.
+    Postgres runs with no network at all
+    and serves the pooler on a Unix socket in a directory the two
+    containers share, owned by Postgres's user, with the pooler's group
+    and no access for anyone else. Its one TCP address is the
+    container's own `127.0.0.1`, which nothing outside the container
+    reaches and `pg_hba` admits no one on; it is how the pooler's unit
+    tells the serving Postgres from the image's initialization, whose
+    temporary server listens on its sockets alone. `pgbouncer.service`
+    starts once Postgres answers there, so the first handshake a new
+    box completes is one whose state already answers, which is what the
+    replacement's restore hook takes the readiness wait to mean.
+    -   **Two entries for the one database.** `pulumi_state`, the
+        database's own name, is pooled per transaction and carries every
+        `pulumi` session and every query, `ci`'s and `operator`'s alike:
+        a client holds a server process for one transaction, so a
+        connection a `pulumi` process keeps idle holds none.
+        `pulumi_state_session` (`settings.SESSION_DATABASE`) maps to the
+        same database, is pooled per session with one server process,
+        and admits `operator` alone; `pg_dump` and `pg_restore` connect
+        through it — `state-backend dump` and `restore`, and the
+        replacement's hooks. They set session state — among it an empty
+        `search_path`, which a restore sets for its whole session — that
+        the transaction entry would hand the next client it lends the
+        same server process, whose `pulumi` then cannot create its
+        table.
+    -   **Why neither deadlocks.** A `pulumi` statement runs on its
+        own, outside any transaction, in one round trip, so it holds a
+        server process for that alone; the one place `pulumi` holds a result while it uses a
+        second connection is a listing, and the pooler frees that server
+        process once the result has drained into the client's socket,
+        which the few keys a stack's listing returns do at once. A listing
+        of thousands of keys — `stack history` over a long history — can
+        hold its server process while it waits for another, and if every
+        one is held that way its clients fail at `query_wait_timeout`;
+        no CI path makes one. The session entry's clients each use one
+        connection, so a second dump waits for the first.
+    -   **One round trip per statement.** The transaction entry can lend
+        a server process to another client between two round trips of
+        one statement, and the second then executes whatever that
+        client parsed. `pulumi` is therefore given its URL with
+        `binary_parameters=yes`, which makes its driver send each
+        statement in one round trip (§7.5, "Connecting").
+    -   **The cap.** The transaction entry's pools, both roles', hold at
+        most `POOL_CAP` server processes between them
+        (`max_db_connections`), idle ones included, and an idle one of
+        one role's pool is closed for a client of the other's that is
+        waiting. A client beyond the cap waits in the pooler rather than
+        being refused, for up to the longest a dump or restore holds the
+        session entry (`state.TRANSFER_TIMEOUT`). The session entry adds
+        its one server process beside the cap. The pooler holds at most
+        `MAX_CLIENTS` client connections at once, Postgres's default
+        `max_connections`, and refuses the next.
+    -   **A session's settings reach the server process.** The pooler
+        tracks `default_transaction_read_only` from a client's startup to
+        every server process that serves the client, which is what keeps
+        a census session read-only through it, and refuses at the
+        startup a setting it does not track; the census case of
+        `tests/test_state_roles.py` fails on a release that stops
+        tracking it.
+    -   **The pooler streams.** `max_prepared_statements = 0`, since the
+        clients use unnamed statements, so the pooler holds no whole
+        message: its resident set is the same with a checkpoint write
+        streaming through it as idle.
+-   **The cap is derived, not chosen.** Every input is a measurement or
+    a setting of the box, in `settings.py` beside the derivation, and a
+    change to any of them moves the cap:
+
+        POOL_CAP = floor((A − S − B − D·R − (E·R + b) − (P + N·c)) / (W·R + b))
+
+    A is the box's available memory at idle, the lower of two readings
+    (kluster-ops#784), and S the swing between the two, which is the
+    margin. B is `shared_buffers`, counted whole. R is the largest row in
+    the state table: every row is one a statement through the pooler can
+    touch, since a listing sizes each key it finds, and one each dump
+    reads. The nightly dump reaches Postgres around the pooler, so its
+    reader is outside the cap: D·R is the Postgres container's peak while
+    `pg_dump -Fc` reads a row, per byte of the row, times R. E·R + b is
+    the session entry's one server process reading a row, for a dump or
+    a restore through the pooler. P is the pooler's resident set and c
+    what each of its N client connections adds. W·R + b is one write:
+    the server process's peak per byte of the value, times R, plus every
+    server process's baseline b. With the inputs as the settings hold
+    them, R being `physical`'s checkpoint, which is still stored
+    uncompressed, and with R at the 1.48 MB of the largest compressed
+    checkpoint, `k8s-base`'s:
+
+    | Term | `MiB`, R = 2.13 MB | `MiB`, R = 1.48 MB |
+    | --- | --- | --- |
+    | Available at idle, the lower reading (A) | 367 | 367 |
+    | Less the swing between readings (S) | 52 | 52 |
+    | Less `shared_buffers` (B) | 128 | 128 |
+    | Less the dump's reader: 3.4 × R (D·R) | 6.9 | 4.8 |
+    | Less the session entry: 2.1 × R + 3 (E·R + b) | 7.3 | 6.0 |
+    | Less the pooler: 17 + 100 clients × 0.044 (P + N·c) | 21.4 | 21.4 |
+    | Left for statements | 151.4 | 154.8 |
+    | One write: 5.8 × R + 3 (W·R + b) | 14.8 | 11.2 |
+    | Statements at once, rounded down | 10 | 13 |
+
+    The settings hold R as `state-backend census` last read the largest
+    row, a reading rather than a forecast, so the cap moves when the
+    census reads another. The second column is what the census reads
+    once three things hold: `physical`'s next `up` has stored its
+    checkpoint compressed, a re-run of `census --prune-superseded` has
+    taken `physical`'s plain `history/` and `backups/` copies, which stay
+    at the plain size until then, and `github`'s plain checkpoint is
+    under 1.48 MB. The settings refuse a cap below one, which the pooler
+    would read as no cap at all.
 -   **The stacks CI deploys keep their checkpoints compressed, and no
     `backups/` copy.** `mise.toml` sets `PULUMI_DIY_BACKEND_ZSTD` and
     `PULUMI_DIY_BACKEND_DISABLE_CHECKPOINT_BACKUPS` for every `pulumi`
@@ -540,12 +675,15 @@ earlier GitHub-Actions-ranges allowlist died on arithmetic —
 quota in the hundreds, so the "coarse pre-filter" cannot be
 expressed, aggregating it until it fits is theater, and a
 home-/32-only rule would simply break CI. What an arbitrary IP
-reaches is Postgres's TLS handshake rejecting certificate-less
-clients; brute force buys nothing against cert auth, a certificate
-gets no further than the role it names (§2), and the
-Postgres-CVE surface is bounded by the pinned image's monthly moves to
-the tag's newest build (§2) plus the replace-not-mutate posture — the
-same appliance logic as everything else on this box. (A scheduled workflow auto-editing
+reaches is the pooler's TLS handshake and its startup, refusing every
+connection without a certificate the CA signed for a client role;
+Postgres has no network at all (§2). Brute force buys nothing against
+cert auth, a certificate gets no further than the role it names (§2),
+and the pre-authentication surface is the pooler's, bounded by its
+pinned image's monthly moves to the tag's newest build (§2) plus the
+replace-not-mutate posture — the same appliance logic as everything
+else on this box. What a client role reaches past it is Postgres, with
+that role's grants. (A scheduled workflow auto-editing
 security rules was already rejected on standing-rent grounds; now
 there is nothing for it to edit.)
 
@@ -1153,7 +1291,7 @@ its design. The machine is the files in
 
 | Path | What |
 | --- | --- |
-| `butane.yaml.j2` (template) | The machine, whole: the Postgres unit — a plain systemd unit running `podman run` at the image pinned by digest, not a quadlet — PKI, `pg_hba` and the Postgres roles, the age recipients, the unit that installs the pinned `age`, the dump timer, the reboot window. |
+| `butane.yaml.j2` (template) | The machine, whole: the Postgres unit and the pooler's unit in front of it — plain systemd units running `podman run` at images pinned by digest, not quadlets — PKI, the pooler's configuration, both `hba` files and the Postgres roles, the age recipients, the unit that installs the pinned `age`, the dump timer, the reboot window. |
 | `state-dump.sh` | What that timer runs — `pg_dump` → `pg_restore`, refusing an archive that holds no stack → age → B2. Shell, because the box has no interpreter: it uses what the Fedora CoreOS image ships plus the `age` the template installs, and a test holds the template to that (§1). |
 | `operator-keys.txt` | SSH keys for diagnosis (`state-backend ssh`). The box is never configured by hand, and a key absent here means no access until the next replacement. |
 | `host-key.txt` | The box's SSH host key, public half. Written by `credentials derived state-backend-host-key generate` beside the private half it puts in the stack's configuration, and committed; `state-backend ssh` pins the box to it, and the stack refuses to plan while it is absent or names another key. |
@@ -1265,11 +1403,25 @@ integer, and the driver sends only a byte slice in binary
 ([`binaryEncode`](https://github.com/lib/pq/blob/v1.12.3/encode.go#L17-L24)),
 so the grouping is the only change on the wire. libpq refuses the parameter
 (`invalid URI query parameter`), so the bundle's file holds the string without
-it, and `psql`, `pg_dump` and `pg_restore` are given that. The parameter is
-added where a `pulumi` run's URL is formed from a slot: `mise.toml`, and
-`kluster.lib.bundle.pulumi_url` for the runs the `operator-stack` driver and
-the `credentials` commands start, the two held equal by a test. A
-`PULUMI_BACKEND_URL` a shell exported is passed on as it is.
+it.
+
+The bundle stores that one string, and each reader is given the form its
+purpose needs, formed from it rather than stored beside it
+(`kluster.lib.bundle.Purpose`, read through `bundle.read`):
+
+| Reader | Form |
+| --- | --- |
+| A `pulumi` run, `state`'s `pulumi stack ls` included | the string with `binary_parameters=yes` |
+| A query through `psql`: the census | the string as stored |
+| `pg_dump` and `pg_restore` | the string naming `pulumi_state_session`, the pooler's session entry (§2) |
+
+The forms differ only in what this repository's code decides, the session
+entry's name and the driver's parameter, so they follow the code and no
+bundle is reissued when either changes. `pulumi`'s form is made in two places:
+`mise.toml`, for every run it starts, and `kluster.lib.bundle` for the runs
+the `operator-stack` driver, the `credentials` commands and `state` start,
+the two held equal by a test. A `PULUMI_BACKEND_URL` a shell exported is
+passed on as it is.
 
 The three files travel beside it as `PGSSLROOTCERT`, `PGSSLCERT` and
 `PGSSLKEY`, resolved from the same slot the URL came from. That is the one
@@ -1288,9 +1440,9 @@ needs that one command and nothing else.
 The certificate's Common Name *is* the Postgres role: `operator` locally,
 `ci` in the pipeline. Neither is a superuser: both act as the role that owns
 the state, which holds what Pulumi's Postgres backend needs and nothing more,
-and the box admits no other role over TCP. The superuser answers only on the
-container's local socket, which is how the box's own initialization and its
-dump timer reach it (§2).
+and the box admits no other role from the network. The superuser answers only
+on the server's Unix sockets, which is how the box's own initialization and its
+dump timer reach it, and which the pooler's container reaches too (§2).
 
 #### Changing it
 

@@ -21,11 +21,14 @@ from __future__ import annotations
 import base64
 import dataclasses
 import datetime as dt
+import gzip
 import hashlib
 import importlib
 import inspect
 import ipaddress
+import json
 import lzma
+import shlex
 import socket
 import ssl
 import threading
@@ -35,6 +38,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from types import ModuleType
 from typing import Any, cast
+from urllib import parse as urllib_parse
 
 import pulumi
 import pulumi.dynamic as dynamic
@@ -56,7 +60,7 @@ from oci.exceptions import ServiceError  # pyright: ignore[reportMissingTypeStub
 from kluster import conventions
 from kluster.components import state_backend as component
 from kluster.components.state_backend import hooks
-from kluster.lib import stack_environment
+from kluster.lib import bundle, stack_environment
 from kluster.lib.state_backend import committed, permission, render, settings, state
 from kluster.providers import oci_objects, postgres_tls
 from kluster.scripts.credentials import derived, escrow, pki
@@ -730,6 +734,114 @@ def test_each_single_input_change_moves_exactly_its_own_digest(tmp_path: Path, f
 
 
 # --------------------------------------------------------------------------
+# The rendered box: what a client on the network can reach.
+# --------------------------------------------------------------------------
+
+
+def _containers(ignition: dict[str, Any]) -> dict[str, list[str]]:
+    """Each unit that runs a container, by name: its `ExecStart` as an argument vector."""
+    found: dict[str, list[str]] = {}
+    for unit in ignition['systemd']['units']:
+        lines = str(unit.get('contents', '')).replace('\\\n', ' ').splitlines()
+        for line in lines:
+            if line.startswith('ExecStart=/usr/bin/podman run '):
+                found[unit['name']] = shlex.split(line.removeprefix('ExecStart='))
+    return found
+
+
+def _options(argv: list[str], option: str) -> list[str]:
+    return [argv[at + 1] for at, arg in enumerate(argv) if arg == option]
+
+
+def _image(argv: list[str]) -> str:
+    (image,) = [arg for arg in argv if '@sha256:' in arg]
+    return image
+
+
+def _file(ignition: dict[str, Any], path: str) -> str:
+    (entry,) = [entry for entry in ignition['storage']['files'] if entry['path'] == path]
+    head, _, body = str(entry['contents']['source']).partition(',')
+    raw = base64.b64decode(body) if head.endswith(';base64') else urllib_parse.unquote_to_bytes(body)
+    return (gzip.decompress(raw) if entry['contents'].get('compression') == 'gzip' else raw).decode()
+
+
+def _host_path(argv: list[str], inside: str) -> str:
+    """The host path behind a path inside the container, through the unit's `--volume`s."""
+    for volume in _options(argv, '--volume'):
+        host, mounted, *_ = volume.split(':')
+        if inside.startswith(mounted.rstrip('/') + '/'):
+            return host + inside.removeprefix(mounted)
+    raise AssertionError(f'{inside} is under no volume of {argv}')
+
+
+def _rules(text: str) -> list[list[str]]:
+    return [line.split() for line in text.splitlines() if line.strip() and not line.lstrip().startswith('#')]
+
+
+@pytest.fixture(scope='module')
+def rendered(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Any]:
+    machine = _machine(tmp_path_factory.mktemp('rendered'))
+    return json.loads(render.render_ignition(_render_machine(machine.keys)))
+
+
+def test_the_network_reaches_the_pinned_pooler_alone(rendered: dict[str, Any]) -> None:
+    """One container is published, on the clients' port, and it runs the pooler's pin; Postgres has no network."""
+    containers = _containers(rendered)
+    published = {name: _options(argv, '--publish') for name, argv in containers.items() if '--publish' in argv}
+
+    assert len(published) == 1
+    ((pooler, ports),) = published.items()
+    assert ports == [f'{settings.PORT}:{settings.PORT}']
+    assert _image(containers[pooler]) == settings.PGBOUNCER_IMAGE
+    (postgres,) = [name for name, argv in containers.items() if _image(argv) == settings.POSTGRES_IMAGE]
+    assert _options(containers[postgres], '--network') == ['none']
+
+
+def test_postgres_admits_no_one_from_a_network(rendered: dict[str, Any]) -> None:
+    """Every line of the `pg_hba.conf` Postgres reads is for a local socket."""
+    (argv,) = [argv for argv in _containers(rendered).values() if _image(argv) == settings.POSTGRES_IMAGE]
+    (setting,) = [arg for arg in argv if arg.startswith('hba_file=')]
+    rules = _rules(_file(rendered, _host_path(argv, setting.removeprefix('hba_file='))))
+
+    assert rules
+    assert {rule[0] for rule in rules} == {'local'}
+
+
+def test_the_pooler_admits_the_client_roles_into_the_state_by_certificate_alone(rendered: dict[str, Any]) -> None:
+    """From the network, the pooler's `hba.conf` admits a client role, into the state's entries, by its certificate.
+
+    The session entry, which `pg_dump` and `pg_restore` use, admits `operator` alone.
+    """
+    (argv,) = [argv for argv in _containers(rendered).values() if _image(argv) == settings.PGBOUNCER_IMAGE]
+    config = _file(rendered, _host_path(argv, '/etc/pgbouncer/pgbouncer.ini'))
+    (hba,) = [line.split('=', 1)[1].strip() for line in config.splitlines() if line.startswith('auth_hba_file')]
+    network = [rule for rule in _rules(_file(rendered, _host_path(argv, hba))) if rule[0] != 'local']
+
+    admitted = {
+        settings.DATABASE: {settings.CI_ROLE, settings.OPERATOR_ROLE},
+        settings.SESSION_DATABASE: {settings.OPERATOR_ROLE},
+    }
+    assert {rule[1] for rule in network} == set(admitted)
+    for kind, database, users, _address, *method in network:
+        assert (kind, method) == ('hostssl', ['cert'])
+        assert set(users.split(',')) <= admitted[database]
+
+
+def test_the_socket_postgres_serves_the_pooler_on_is_the_pooler_groups_and_no_one_elses(
+    rendered: dict[str, Any],
+) -> None:
+    """The directory both containers mount is closed to every user but its owner and the pooler's group."""
+    first, *rest = [
+        {volume.split(':')[0] for volume in _options(argv, '--volume')} for argv in _containers(rendered).values()
+    ]
+    (shared,) = first.intersection(*rest)
+    (entry,) = [entry for entry in rendered['storage']['directories'] if entry['path'] == shared]
+
+    assert entry['mode'] & 0o007 == 0
+    assert (entry['user']['id'], entry['group']['id']) == (settings.POSTGRES_UID, settings.PGBOUNCER_GID)
+
+
+# --------------------------------------------------------------------------
 # The hooks, as functions.
 # --------------------------------------------------------------------------
 
@@ -746,6 +858,8 @@ class Tools:
     restore_lists_nothing: bool = False
     #: The bundle directory every connection was built from.
     bundles: list[Path] = dataclasses.field(default_factory=list[Path])
+    #: The form each dump reached the box in.
+    dumped_in: list[bundle.Purpose] = dataclasses.field(default_factory=list[bundle.Purpose])
 
 
 @pytest.fixture
@@ -756,8 +870,9 @@ def tools(monkeypatch: pytest.MonkeyPatch) -> Tools:
         found.bundles.append(bundle_dir)
         return state.Connection(url=f'postgres://box/{bundle_dir.name}', env={})
 
-    def pg_dump(_target: state.Connection, destination: Path) -> None:
+    def pg_dump(_target: state.Connection, destination: Path, *, purpose: bundle.Purpose = bundle.Purpose.DUMP) -> None:
         found.calls.append('pg_dump')
+        found.dumped_in.append(purpose)
         if found.dump_fails:
             raise state.StateError('pg_dump against postgres://box failed: connection refused')
         _ = destination.write_bytes(b'PGDMP the archive')
@@ -1016,6 +1131,68 @@ async def test_the_hook_that_dumps_runs_before_the_instance_goes_and_the_one_tha
         INSTANCE: {'before_create': [permitting], 'before_delete': [dumping]},
         READINESS: {'after_create': [restoring]},
     }
+
+
+#: The `state-backend` stack's committed checkpoint, which records the
+#: inputs of the box the stack last created.
+COMMITTED_CHECKPOINT = (
+    Path(__file__).parent.parent
+    / stack_environment.CHECKPOINTS
+    / '.pulumi'
+    / 'stacks'
+    / 'kluster-py'
+    / 'state-backend.json'
+)
+
+
+def _recorded_instance_inputs() -> dict[str, Any]:
+    """The inputs the committed checkpoint records for the box."""
+    resources = json.loads(COMMITTED_CHECKPOINT.read_text())['checkpoint']['latest']['resources']
+    (instance,) = [resource for resource in resources if resource['type'] == INSTANCE]
+    return instance['inputs']
+
+
+@pytest.mark.asyncio
+async def test_the_dump_hook_reaches_a_box_through_the_entry_its_recorded_bill_says_it_has(
+    wired: Wired, tools: Tools, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A box rendered with the pooler is dumped through its session entry; the recorded box, by the database's name.
+
+    The recorded box is the one the stack last created, as its committed
+    checkpoint holds its inputs: a box rendered before the pooler, whose
+    bill of materials names no pooler image. The bill this commit renders
+    does.
+    """
+    monkeypatch.setenv(permission.ENV, permission.GRANTED)
+    rendered = render.bill_of_materials(_render_machine(_machine(tmp_path).keys))
+    for bill in (rendered, _recorded_instance_inputs()['extendedMetadata']):
+        args = pulumi.ResourceHookArgs(
+            urn=f'urn:pulumi:{NAME}::kluster::{INSTANCE}::x',
+            id='x',
+            name='x',
+            type=INSTANCE,
+            old_inputs={'extendedMetadata': bill},
+        )
+        called = wired.run.hooks[f'{NAME}-dump'].callback(args)
+        if inspect.isawaitable(called):
+            await called
+        for dumped in wired.work.glob('*.dump.age'):
+            dumped.unlink()
+
+    assert tools.dumped_in == [bundle.Purpose.DUMP, bundle.Purpose.QUERY]
+
+
+def test_remove_the_transition_once_the_recorded_box_serves_through_the_pooler() -> None:
+    """The tripwire on `hooks`' transition block: red once the box the stack records carries the pooler.
+
+    The block dumps a box rendered before the pooler in the query form. Once
+    the committed checkpoint records a box whose bill of materials names the
+    pooler, no box without it is left to replace, and the block, this case
+    and the one above it go.
+    """
+    assert not hooks.serves_through_pooler(_recorded_instance_inputs()), (
+        "the recorded box serves through the pooler: remove `hooks`' transition block and these cases"
+    )
 
 
 # --------------------------------------------------------------------------

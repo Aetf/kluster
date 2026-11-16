@@ -31,7 +31,7 @@ import pytest
 from memory_kit import MemoryKit
 from state_dump_box import CHECKPOINT, CHECKPOINT_BAK, META, OPENED, SERVING, UNOPENED, rows
 
-from kluster.lib.bundle import CA_FILE, CERT_FILE, KEY_FILE, URL_FILE
+from kluster.lib.bundle import CA_FILE, CERT_FILE, KEY_FILE, URL_FILE, dump_url
 from kluster.lib.state_backend import render, settings, state
 from kluster.scripts.credentials import age, escrow
 from kluster.scripts.credentials.kdbx import PATH_ENV, KdbxStore
@@ -312,8 +312,9 @@ def test_a_dump_is_the_archive_encrypted_to_the_escrow(
     state.decrypt(output, opened, _identities(kit, registry))
     assert opened.read_bytes() == ARCHIVE
     # The dump is taken over the bundle's connection string, which is the
-    # same one `mise.toml` turns into PULUMI_BACKEND_URL.
-    assert f'--dbname={URL}' in tools.argv(state.PG_DUMP)
+    # same one `mise.toml` turns into PULUMI_BACKEND_URL, in the form that
+    # names the pooler's session entry.
+    assert f'--dbname={dump_url(URL)}' in tools.argv(state.PG_DUMP)
 
 
 def test_the_plaintext_archive_does_not_survive_the_command(
@@ -975,5 +976,5 @@ def test_a_url_that_still_carries_its_paths_works_and_says_what_to_re_run(
     with caplog.at_level(logging.WARNING):
         assert _dump(kit, registry, bundle, tmp_path / 'taken.dump.age') == 0
 
-    assert f'--dbname={LEGACY_URL}' in tools.argv(state.PG_DUMP)
+    assert f'--dbname={dump_url(LEGACY_URL)}' in tools.argv(state.PG_DUMP)
     assert any(_writes_the_operator_bundle(record.getMessage()) for record in caplog.records)

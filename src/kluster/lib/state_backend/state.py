@@ -185,10 +185,18 @@ class Connection:
     Pulumi's Postgres backend both read. Carried together so that no caller
     can pass one without the other: a URL on its own authenticates as nobody
     and is refused by the box.
+
+    `url` is the string as the bundle stores it, and no tool is handed it
+    as such: each function here hands its tool the form that tool's purpose
+    reads (`form`), so the caller that holds a connection never chooses one.
     """
 
     url: str
     env: dict[str, str]
+
+    def form(self, purpose: bundle.Purpose) -> str:
+        """The connection string in the form `purpose` reads (`bundle.form`)."""
+        return bundle.form(self.url, purpose)
 
 
 #: The connection-string parameters that name a file. A bundle written before
@@ -204,16 +212,17 @@ def connection(bundle_dir: Path) -> Connection:
 
     The URL is the same file `mise.toml` turns into `PULUMI_BACKEND_URL`, so a
     dump talks to the backend the operator's `pulumi` runs talk to, over the
-    same certificate. The variables are derived from the directory the URL
+    same certificate; it is held as stored, and formed for each tool where
+    the tool is run (`Connection.form`). The variables are derived from the directory the URL
     file sits in, which is the bundle directory the caller passed, so the URL
     and the certificates always come from the one bundle.
     """
     path = bundle.backend_url_file(bundle_dir)
-    if path is None:
+    url = bundle.read(bundle_dir, bundle.Purpose.QUERY)
+    if path is None or url is None:
         raise StateError(
             f'no {bundle_dir / bundle.URL_FILE}: `state-backend bundle operator --address <ip>` writes one'
         )
-    url = path.read_text().strip()
     if not url:
         raise StateError(f'{path} is empty; re-run `state-backend bundle operator --address <ip>`')
     if any(parameter in url for parameter in _FILE_PARAMETERS):
@@ -280,18 +289,20 @@ def _run(
     return proc.stdout
 
 
-def pg_dump(target: Connection, destination: Path) -> None:
+def pg_dump(target: Connection, destination: Path, *, purpose: bundle.Purpose = bundle.Purpose.DUMP) -> None:
     """`pg_dump -Fc` over the bundle's connection, into a local file.
 
     The custom format because that is what the appliance's own timer writes
-    and what `pg_restore` can list and reorder. The archive records whichever
+    and what `pg_restore` can list and reorder. Through the pooler's session
+    entry (`bundle.Purpose.DUMP`), unless `purpose` names another form: the
+    query form reaches a box that serves the database by its own name alone. The archive records whichever
     owner the box gave each object; nothing reads it back, because a restore
     hands every object to the owner the box itself names (`pg_restore`).
     """
     log.info(
         'running %s -Fc against %s — tens of MB over TLS, expect seconds to minutes',
         PG_DUMP,
-        endpoint(target.url),
+        endpoint(target.form(purpose)),
         extra={'step': Step.DUMP},
     )
     _ = _run(
@@ -302,9 +313,9 @@ def pg_dump(target: Connection, destination: Path) -> None:
             # password to type: the client certificate is the credential.
             '--no-password',
             f'--file={destination}',
-            f'--dbname={target.url}',
+            f'--dbname={target.form(purpose)}',
         ],
-        what=f'{PG_DUMP} against {endpoint(target.url)}',
+        what=f'{PG_DUMP} against {endpoint(target.form(purpose))}',
         timeout=TRANSFER_TIMEOUT,
         env=target.env,
     )
@@ -559,7 +570,7 @@ def _psql(target: Connection, sql: str, *, what: str, variables: Mapping[str, st
         '--no-align',
         '--set=ON_ERROR_STOP=1',
         *(f'--set={name}={value}' for name, value in variables.items()),
-        f'--dbname={target.url}',
+        f'--dbname={target.form(bundle.Purpose.QUERY)}',
     ]
     printed = _run(
         argv,
@@ -693,7 +704,7 @@ def pg_restore(target: Connection, archive: Path) -> None:
     """
     log.info(
         'restoring into %s — this writes the whole archive in one transaction',
-        endpoint(target.url),
+        endpoint(target.form(bundle.Purpose.DUMP)),
         extra={'step': Step.RESTORE},
     )
     _ = _run(
@@ -704,10 +715,10 @@ def pg_restore(target: Connection, archive: Path) -> None:
             '--if-exists',
             '--no-owner',
             '--no-password',
-            f'--dbname={target.url}',
+            f'--dbname={target.form(bundle.Purpose.DUMP)}',
             str(archive),
         ],
-        what=f'{PG_RESTORE} into {endpoint(target.url)}',
+        what=f'{PG_RESTORE} into {endpoint(target.form(bundle.Purpose.DUMP))}',
         timeout=TRANSFER_TIMEOUT,
         env=target.env,
     )
@@ -743,7 +754,11 @@ def stacks(target: Connection) -> list[str]:
         printed = pulumi_cli.run_pulumi(
             ['stack', 'ls', '--all', '--json'],
             cwd=pulumi_cli.project_dir(),
-            env={'PULUMI_BACKEND_URL': target.url, CONNECT_TIMEOUT_ENV: str(CONNECT_TIMEOUT), **target.env},
+            env={
+                'PULUMI_BACKEND_URL': target.form(bundle.Purpose.PULUMI),
+                CONNECT_TIMEOUT_ENV: str(CONNECT_TIMEOUT),
+                **target.env,
+            },
             stdin=None,
         )
     except pulumi_cli.PulumiRefused as exc:
@@ -889,18 +904,26 @@ def write_dump(destination: Path, *, bundle_dir: Path, recipients: Sequence[str]
         take_dump(destination, bundle_dir=bundle_dir, recipients=recipients, archive=Path(tmp) / 'state.dump')
 
 
-def take_dump(destination: Path, *, bundle_dir: Path, recipients: Sequence[str], archive: Path) -> None:
+def take_dump(
+    destination: Path,
+    *,
+    bundle_dir: Path,
+    recipients: Sequence[str],
+    archive: Path,
+    purpose: bundle.Purpose = bundle.Purpose.DUMP,
+) -> None:
     """`write_dump`, leaving the plaintext archive at `archive` for the caller.
 
     For the caller that restores what it dumped within its own run, the
     `state-backend` stack's hooks (rfc-006 §4.3): `archive` is in a directory
     that caller made private and removes, and the encrypted `destination` is
-    the dump that outlives the run.
+    the dump that outlives the run. `purpose` is the form the dump reaches
+    the box in (`pg_dump`).
     """
     refuse_to_overwrite(destination)
     target = connection(bundle_dir)
     log.info('dumping the live state over the client bundle in %s', bundle_dir)
-    pg_dump(target, archive)
+    pg_dump(target, archive, purpose=purpose)
     log.info('verifying the archive before calling it a dump')
     _ = verify_dump(archive)
     log.info('encrypting the dump')

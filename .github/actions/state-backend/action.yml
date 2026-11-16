@@ -40,7 +40,7 @@ runs:
           [ -n "${!name}" ] || missing+=("$name")
         done
         # Failing here rather than three steps later: a bundle with a hole in
-        # it reaches Postgres as a TLS handshake the box rejects, which reads
+        # it reaches the box's pooler as a TLS handshake it rejects, which reads
         # like an outage rather than like an unfilled Environment secret.
         if [ ${#missing[@]} -ne 0 ]; then
           echo "::error::the ci client bundle is incomplete (${missing[*]} empty): this Environment needs" \

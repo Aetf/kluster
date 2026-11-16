@@ -149,9 +149,10 @@
       // why): the container images and the Helm charts. Matched by data
       // source, so an image is one whichever manager reads it -- a
       // Containerfile's `FROM`, a `.conf` pin, a `versions:image-` pin in
-      // `Pulumi.yaml`, the appliance's Postgres. A self-built image's base is
-      // an image too, and exempt with the rest, though CI's image build runs
-      // its layers. A test holds this rule to these two data sources.
+      // `Pulumi.yaml`, the appliance's Postgres and PgBouncer. A self-built
+      // image's base is an image too, and exempt with the rest, though CI's
+      // image build runs its layers. A test holds this rule to these two data
+      // sources.
       matchDatasources: [
         'docker',
         'helm',
@@ -655,9 +656,9 @@
     },
     {
       // The appliance's pins change the box rather than a library: the
-      // Postgres line and the age release replace it, and the Fedora CoreOS
-      // release imports a new image that the next launch boots from, so they
-      // travel alone and get read.
+      // Postgres and PgBouncer images and the age release replace it, and the
+      // Fedora CoreOS release imports a new image that the next launch boots
+      // from, so they travel alone and get read.
       matchFileNames: [
         'src/kluster/lib/state_backend/settings.py',
         'src/kluster/lib/state_backend/machine/**',
@@ -680,6 +681,23 @@
       // nothing else in the repository names this image.
       matchDepNames: [
         'docker.io/library/postgres',
+      ],
+      matchUpdateTypes: [
+        'digest',
+      ],
+      schedule: [
+        '* 0-3 1 * *',
+      ],
+    },
+    {
+      // The appliance's PgBouncer image moving under its tag, for the
+      // Postgres image's reasons above: each move replaces the box, so the
+      // rebuilds of the release's tag on a new base are taken monthly, in the
+      // same window, and stay in the appliance's group. A new release is not
+      // held to the window. Matched by name alone: nothing else in the
+      // repository names this image.
+      matchDepNames: [
+        'ghcr.io/cloudnative-pg/pgbouncer',
       ],
       matchUpdateTypes: [
         'digest',
@@ -1065,6 +1083,21 @@
       ],
       matchStrings: [
         "POSTGRES_REPOSITORY = '(?<depName>[\\w./-]+)'\\nPOSTGRES_TAG = '(?<currentValue>[\\w.-]+)'\\nPOSTGRES_DIGEST = '(?<currentDigest>sha256:[0-9a-f]{64})'",
+      ],
+      datasourceTemplate: 'docker',
+      versioningTemplate: 'docker',
+    },
+    {
+      // The appliance's PgBouncer image, read the way the Postgres image is:
+      // the repository, the release's tag and the digest it is pinned at, so
+      // a bump moves the tag and its digest as one. A digest update is the
+      // tag rebuilt on a new base, and a version update a new release.
+      customType: 'regex',
+      managerFilePatterns: [
+        '/^src/kluster/lib/state_backend/settings\\.py$/',
+      ],
+      matchStrings: [
+        "PGBOUNCER_REPOSITORY = '(?<depName>[\\w./-]+)'\\nPGBOUNCER_TAG = '(?<currentValue>[\\w.-]+)'\\nPGBOUNCER_DIGEST = '(?<currentDigest>sha256:[0-9a-f]{64})'",
       ],
       datasourceTemplate: 'docker',
       versioningTemplate: 'docker',

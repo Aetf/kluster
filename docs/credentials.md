@@ -2162,7 +2162,13 @@ certificates are found through `PGSSLROOTCERT`, `PGSSLCERT` and
 location on every run. The environment is the channel a path can be
 carried on because it is the one libpq and the driver behind Pulumi's
 Postgres backend both read; a connection string expands nothing, which
-is why the paths are not in it (physical/state-backend.md §3).
+is why the paths are not in it (physical/state-backend.md §3). The one
+string is all the bundle stores of the appliance's address: each reader
+is given it in the form its purpose needs — `pulumi` with the driver's
+`binary_parameters=yes`, `pg_dump` and `pg_restore` naming the pooler's
+session entry, a query as stored — formed from it by
+`kluster.lib.bundle` (physical/state-backend.md §7.5), so a change to a
+form reissues no bundle and no Environment secret.
 
 Every slot is read where it is now and nowhere else. A copy of a slot at an older
 location — a client bundle under `~/.config/kluster/`, a

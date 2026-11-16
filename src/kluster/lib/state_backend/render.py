@@ -31,7 +31,7 @@ from kluster.lib import config as lib_config
 from kluster.lib import templates
 from kluster.lib.secret import Secret
 
-from . import settings
+from . import settings, state
 
 log = logging.getLogger(__name__)
 
@@ -116,7 +116,19 @@ class Machine:
     operator_keys: tuple[str, ...] = _digested()
     postgres_uid: int = _digested()
     postgres_image: str = _digested()
+    shared_buffers_mib: int = _digested()
+    pgbouncer_image: str = _digested()
+    pgbouncer_uid: int = _digested()
+    pgbouncer_gid: int = _digested()
+    #: The pooler's cap on the statements Postgres runs at once, the clients
+    #: it holds, and how long a client waits for a statement beyond the cap
+    #: before it is refused, in seconds.
+    pool_cap: int = _digested()
+    max_clients: int = _digested()
+    pool_wait_seconds: int = _digested()
+    port: int = _digested()
     database: str = _digested()
+    session_database: str = _digested()
     ci_role: str = _digested()
     operator_role: str = _digested()
     #: The CA's certificate; its private half stays in the escrow.
@@ -181,13 +193,25 @@ def machine(
 
     The certificates are PEM, the host key is OpenSSH's own private-key
     format, and the recipients are age's public halves. Every other value is
-    this commit's: the pins in `settings`, the operator keys and the dump
-    script in `machine/`.
+    this commit's: the pins and the pool cap in `settings`, the client tools'
+    transfer bound in `state`, the operator keys and the dump script in
+    `machine/`.
     """
     return Machine(
         operator_keys=operator_keys(),
         postgres_uid=settings.POSTGRES_UID,
         postgres_image=settings.POSTGRES_IMAGE,
+        shared_buffers_mib=settings.SHARED_BUFFERS_MIB,
+        pgbouncer_image=settings.PGBOUNCER_IMAGE,
+        pgbouncer_uid=settings.PGBOUNCER_UID,
+        pgbouncer_gid=settings.PGBOUNCER_GID,
+        pool_cap=settings.POOL_CAP,
+        max_clients=settings.MAX_CLIENTS,
+        # A client waits behind the longest session a healthy client holds,
+        # which is a dump or a restore, bounded by the client's own deadline.
+        pool_wait_seconds=state.TRANSFER_TIMEOUT,
+        port=settings.PORT,
+        session_database=settings.SESSION_DATABASE,
         database=settings.DATABASE,
         ci_role=settings.CI_ROLE,
         operator_role=settings.OPERATOR_ROLE,

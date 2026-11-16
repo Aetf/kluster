@@ -1121,7 +1121,7 @@ def build_parser() -> argparse.ArgumentParser:
         derived.STATE_BACKEND_SERVER_ROW,
         help="the state-backend appliance's TLS server key and certificate",
         description=(
-            "The key and certificate the appliance's Postgres serves TLS with, issued from the escrowed "
+            "The key and certificate the appliance's pooler serves TLS with, issued from the escrowed "
             'state-backend CA for the address clients dial, and the CA certificate beside them.'
         ),
     )

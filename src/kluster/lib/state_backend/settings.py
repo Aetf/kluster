@@ -68,19 +68,135 @@ POSTGRES_TAG = '17'
 POSTGRES_DIGEST = 'sha256:3b0cda93be7c8dba2ed484d19393d93845dc3dafb88973e248ba8e6d99d784e1'
 POSTGRES_IMAGE = f'{POSTGRES_REPOSITORY}:{POSTGRES_TAG}@{POSTGRES_DIGEST}'
 
-#: The uid the official image runs Postgres as; the server key is owned by it.
+#: The uid the official image runs Postgres as; the data directory, and the
+#: directory its socket is shared through, are owned by it.
 POSTGRES_UID = 999
 
+#: The box's pooler, PgBouncer, pinned the way the Postgres image is: the
+#: release's tag, and the digest it named when the pin last moved, which is
+#: what the box pulls and runs. The image is the CloudNativePG project's
+#: build, the project whose operator the cluster already runs. The tag is
+#: rebuilt for every new base, and renovate moves the digest by pull request,
+#: monthly, in the appliance's group, and the tag to a new release the same
+#: way. The three lines are one pair for renovate's manager, which reads them
+#: in this order.
+PGBOUNCER_REPOSITORY = 'ghcr.io/cloudnative-pg/pgbouncer'
+PGBOUNCER_TAG = '1.26.1'
+PGBOUNCER_DIGEST = 'sha256:6c91fd7383b8b098bc0c3b71dba4e98bd568c0d301b9fc66027fbc23259c6a7d'
+PGBOUNCER_IMAGE = f'{PGBOUNCER_REPOSITORY}:{PGBOUNCER_TAG}@{PGBOUNCER_DIGEST}'
+
+#: The uid and gid the pooler's image runs PgBouncer as. The server key is
+#: owned by the uid, and the gid is what reaches the directory Postgres's
+#: socket is shared through.
+PGBOUNCER_UID = 998
+PGBOUNCER_GID = 996
+
+#: The state's database, and the name of the pooler's transaction entry for
+#: it, which every `pulumi` session and every query is pooled through. The
+#: name is the database's because Pulumi's backend prefixes every key with
+#: the database its URL names.
 DATABASE = 'pulumi_state'
+#: The pooler's session entry for the same database: one server process,
+#: `operator`'s alone, which `pg_dump` and `pg_restore` connect through
+#: (`kluster.lib.bundle.Purpose.DUMP`).
+SESSION_DATABASE = f'{DATABASE}_session'
 
 #: The client roles: the Common Names the CA issues client certificates to,
-#: and the only roles the box admits over TCP. Neither is a superuser; both
-#: act as the role that owns the state (state-backend.md §2). That role and
-#: the superuser are named in the Butane template alone, since no client ever
-#: connects as either.
+#: and the only roles the pooler admits from the network. Neither is a
+#: superuser; both act as the role that owns the state (state-backend.md §2).
+#: That role and the superuser are named in the Butane template alone, since
+#: no client ever connects as either.
 CI_ROLE = 'ci'
 OPERATOR_ROLE = 'operator'
+#: The port clients reach the box on, where the pooler listens.
 PORT = 5432
+
+# --- How many statements Postgres runs at once ------------------------------
+#
+# The pooler's transaction entry admits at most `POOL_CAP` server
+# connections to the state, so at most that many `pulumi` statements and
+# queries run in Postgres at once, whatever the number of clients; a client
+# beyond it waits in the pooler (state-backend.md §2). The cap is derived from
+# what one statement costs and what the box has left for statements, never
+# chosen, so each input below is a measurement or a setting of the box, and a
+# change to any of them moves the cap through `_pool_cap`. Memory is in MiB,
+# which is what `free -m` reports.
+
+#: Available memory on the running box at idle: the lower of two readings
+#: (kluster-ops#784), the higher being `BOX_IDLE_AVAILABLE_MIB +
+#: BOX_IDLE_SWING_MIB`.
+BOX_IDLE_AVAILABLE_MIB = 367
+#: How far the idle readings moved between them, which is the margin the
+#: budget keeps: a budget closer to the edge than this is inside the box's
+#: own noise.
+BOX_IDLE_SWING_MIB = 52
+
+#: Postgres's `shared_buffers`, set on the box rather than left to the
+#: image's default so that the budget reads the value the box runs with. It
+#: is counted whole, as if none of it were resident at idle.
+SHARED_BUFFERS_MIB = 128
+
+#: The peak memory of the server process serving one write of a checkpoint,
+#: per byte of the value it writes, and the baseline of every server process
+#: (state-backend.md §2). Of the backend's statements the write costs most.
+WRITE_MULTIPLE = 5.8
+BACKEND_BASELINE_MIB = 3
+
+#: The largest row in the state table, in bytes, as `state-backend census`
+#: last read it: `physical`'s checkpoint, stored uncompressed. A reading, not
+#: a forecast: it moves when the census reads another largest row. Every row
+#: is one a statement through the pooler can touch -- a listing sizes each
+#: key it finds -- and one each dump reads, so the one value bounds all three.
+LARGEST_ROW_BYTES = 2_130_000
+
+#: The nightly dump reaches Postgres on the box's local socket, around the
+#: pooler, so its memory is outside the cap: the peak of the Postgres
+#: container while `pg_dump -Fc` reads a row, per byte of the row.
+DUMP_MULTIPLE = 3.4
+
+#: A dump or restore through the pooler's session entry, the one server
+#: process beside the cap: a read's peak, per byte of the row it reads.
+SESSION_MULTIPLE = 2.1
+
+#: The pooler's own memory: its resident set with no client, which a
+#: statement streaming through it does not move, and what each connected
+#: client adds to it.
+POOLER_BASE_MIB = 17
+POOLER_PER_CLIENT_MIB = 0.044
+#: How many client connections the pooler holds at once; the next is
+#: refused. It is what Postgres's own default `max_connections` admitted
+#: before the pooler, so the box refuses a client at no lower count than
+#: it did.
+MAX_CLIENTS = 100
+
+_MIB = 2**20
+
+
+def _pool_cap() -> int:
+    """How many statements may run in Postgres at once: the budget over what one statement costs, rounded down.
+
+    The budget is what the idle box has available, less the margin, less
+    `shared_buffers`, the nightly dump's reader, the session entry's server
+    process and the pooler at its client limit. Refused below one, because
+    the pooler reads a cap of zero as no cap at all.
+    """
+    row = LARGEST_ROW_BYTES / _MIB
+    budget = (
+        BOX_IDLE_AVAILABLE_MIB
+        - BOX_IDLE_SWING_MIB
+        - SHARED_BUFFERS_MIB
+        - DUMP_MULTIPLE * row
+        - (SESSION_MULTIPLE * row + BACKEND_BASELINE_MIB)
+        - (POOLER_BASE_MIB + MAX_CLIENTS * POOLER_PER_CLIENT_MIB)
+    )
+    statement = WRITE_MULTIPLE * row + BACKEND_BASELINE_MIB
+    cap = int(budget // statement)
+    if cap < 1:
+        raise ValueError(f'the box has {budget:.0f} MiB for statements and one costs {statement:.0f} MiB')
+    return cap
+
+
+POOL_CAP = _pool_cap()
 
 #: age, fetched once at first boot and verified against this hash.
 AGE_VERSION = 'v1.3.1'

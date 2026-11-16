@@ -13,12 +13,23 @@
 # in `settings.py`: no client ever connects as either, and a change to either
 # name is a change to this file, which the box's bill of materials digests whole.
 #   - `superuser` is the image's bootstrap superuser. It answers on the
-#     container's local socket and nowhere else (pg_hba below); its users are
-#     the image's own initialization and the dump timer.
+#     server's Unix sockets and nowhere else (pg_hba below): the container's
+#     own, and the one the pooler's container shares. Its users are the
+#     image's own initialization and the dump timer.
 #   - `owner` owns the state. It cannot log in: the two client roles are its
 #     members, and every session they open acts as it (00-roles.sql below).
+#
+# Two containers serve the state. PgBouncer is the only one the network
+# reaches: it holds the TLS listener and checks every client certificate, and
+# it runs at most `pool_cap` statements in Postgres at once, beside one dump or
+# restore, so a client beyond that waits in it rather than adding a server
+# process. Postgres has
+# no network at all. It serves the pooler on a Unix socket in `socket_dir`,
+# a directory the two containers share and nothing else on the box can enter.
 {%- set superuser = 'postgres' %}
 {%- set owner = 'state_owner' %}
+{%- set socket_dir = '/var/lib/pgstate-socket' %}
+{%- set socket_mount = '/run/pgstate-socket' %}
 variant: fcos
 version: 1.5.0
 
@@ -40,6 +51,20 @@ storage:
         id: {{ postgres_uid }}
     - path: /etc/kluster/pki
       mode: 0755
+    - path: /etc/kluster/pgstate
+      mode: 0755
+    - path: /etc/kluster/pgbouncer
+      mode: 0755
+    # Postgres's socket for the pooler. Postgres creates the socket, so the
+    # directory is its; the pooler enters it through the group; and no other
+    # user does, which is what keeps the trust pg_hba gives the client roles
+    # on that socket (below) from reaching past the pooler.
+    - path: {{ socket_dir }}
+      mode: 0750
+      user:
+        id: {{ postgres_uid }}
+      group:
+        id: {{ pgbouncer_gid }}
     - path: /etc/kluster/initdb
       mode: 0755
     - path: /opt/bin
@@ -61,18 +86,18 @@ storage:
     - path: /etc/kluster/pki/server.crt
       mode: 0644
       user:
-        id: {{ postgres_uid }}
+        id: {{ pgbouncer_uid }}
       group:
-        id: {{ postgres_uid }}
+        id: {{ pgbouncer_gid }}
       contents:
         inline: |
 {{ server_cert | indent(10, true) }}
     - path: /etc/kluster/pki/server.key
       mode: 0600
       user:
-        id: {{ postgres_uid }}
+        id: {{ pgbouncer_uid }}
       group:
-        id: {{ postgres_uid }}
+        id: {{ pgbouncer_gid }}
       contents:
         inline: |
 {{ server_key | indent(10, true) }}
@@ -102,16 +127,108 @@ storage:
         inline: |
           {{ ssh_host_key_pub }}
 
+    # --- The pooler: the box's one listener on the network ----------------
     # Who may connect, as whom, and how; a connection no line matches is
-    # refused. Over TCP a certificate is the only way in, a client
+    # refused. From the network a certificate is the only way in, a client
     # certificate's CN is the role it becomes, and only the two client roles
-    # may become one, into the state's database alone: the CA can sign any
-    # CN, and this is what makes a certificate naming the superuser worth
-    # nothing. The superuser is admitted on the container's local socket only,
-    # which nothing outside the container can reach -- getting there is
-    # `podman exec` as root on this box -- so it is trusted and carries no
-    # certificate.
-    - path: /etc/kluster/pki/pg_hba.conf
+    # may become one, into the state's two entries alone, the session entry
+    # `operator` alone. The CA can sign any CN, and this is what makes a
+    # certificate naming the superuser worth nothing. The statistics console
+    # is admitted on the pooler's own socket only, inside its container,
+    # which is `podman exec` as root on this box.
+    - path: /etc/kluster/pgbouncer/hba.conf
+      mode: 0644
+      contents:
+        inline: |
+          local    pgbouncer               pgbouncer                                 trust
+          hostssl  {{ database }}          {{ ci_role }},{{ operator_role }}  0.0.0.0/0  cert
+          hostssl  {{ database }}          {{ ci_role }},{{ operator_role }}  ::/0       cert
+          hostssl  {{ session_database }}  {{ operator_role }}                0.0.0.0/0  cert
+          hostssl  {{ session_database }}  {{ operator_role }}                ::/0       cert
+
+    # The users the pooler knows. It looks a user up here before any method
+    # applies, and none of these is a password: the methods above are the
+    # certificate and, inside the container, trust.
+    - path: /etc/kluster/pgbouncer/userlist.txt
+      mode: 0644
+      contents:
+        inline: |
+          "{{ ci_role }}" ""
+          "{{ operator_role }}" ""
+          "pgbouncer" ""
+
+    # The pooler itself (state-backend.md §2).
+    #   - TLS: a certificate a client presents is verified against the CA in
+    #     the handshake, and one from another authority ends it there; the
+    #     `cert` lines above then refuse a connection that presented none and
+    #     map a verified one's CN to a role. `require` rather than
+    #     `verify-full`: `verify-full` answers a handshake that presents no
+    #     certificate with alert 116 after the client's side of it
+    #     completes, so whether the expiry probe's `openssl s_client` exits 0
+    #     is a race, and the probe (`state-backend probe`) would fail some
+    #     runs. `require` admits the same connections and keeps the probe
+    #     deterministic.
+    #   - Two entries for the one database. The transaction entry, the
+    #     database's own name, carries every `pulumi` session and every
+    #     query, both roles': a client holds a server process for one
+    #     transaction, and `max_db_connections` holds the entry's pools,
+    #     both roles', to `pool_cap` server processes between them. The
+    #     session entry carries `pg_dump` and `pg_restore`, one session at a
+    #     time: they set session state -- `pg_restore`'s empty `search_path`,
+    #     which outlasts its transaction, among it -- that the transaction
+    #     entry would hand the next `pulumi` session.
+    #   - A client beyond an entry's cap waits up to `query_wait_timeout`, the
+    #     longest a dump or restore holds the session entry; `max_client_conn`
+    #     is the clients the pooler holds at once.
+    #   - `max_prepared_statements = 0`: the clients use unnamed statements,
+    #     and a pooler tracking prepared statements would hold a whole Parse
+    #     in memory rather than stream it.
+    #   - A setting a client opens its session with reaches every server
+    #     process that serves it only where PgBouncer tracks the setting, and
+    #     it refuses at the startup a client naming one it does not. It tracks
+    #     `default_transaction_read_only` by itself, which is what keeps a
+    #     census session read-only through it; the census case of
+    #     `tests/test_state_roles.py` fails on a release that does not.
+    - path: /etc/kluster/pgbouncer/pgbouncer.ini
+      mode: 0644
+      contents:
+        inline: |
+          [databases]
+          {{ database }} = host={{ socket_mount }} dbname={{ database }} pool_mode=transaction pool_size={{ pool_cap }} max_db_connections={{ pool_cap }}
+          {{ session_database }} = host={{ socket_mount }} dbname={{ database }} pool_mode=session pool_size=1 max_db_connections=1
+
+          [pgbouncer]
+          listen_addr = 0.0.0.0
+          listen_port = {{ port }}
+          unix_socket_dir = /tmp
+          auth_type = hba
+          auth_hba_file = /etc/pgbouncer/hba.conf
+          auth_file = /etc/pgbouncer/userlist.txt
+          client_tls_sslmode = require
+          client_tls_ca_file = /pki/ca.crt
+          client_tls_cert_file = /pki/server.crt
+          client_tls_key_file = /pki/server.key
+          max_client_conn = {{ max_clients }}
+          query_wait_timeout = {{ pool_wait_seconds }}
+          max_prepared_statements = 0
+          stats_users = pgbouncer
+
+    # --- Postgres ------------------------------------------------------------
+    # Who may connect, as whom, and how; a connection no line matches is
+    # refused. Every line is a local socket's, since Postgres has no network,
+    # and a `local` line matches both sockets the server listens on: the
+    # container's own and the one the pooler's container shares. So the
+    # superuser and the client roles, the latter into the state's database
+    # alone, are each reachable from the pooler's container as well as by
+    # `podman exec`; the pooler connects as a client role only once it has
+    # checked a certificate naming it. Neither socket is reachable from
+    # outside the two containers -- getting there is `podman exec` as root on
+    # this box -- so both are trusted and carry no credential. The pooler's
+    # container already holds the server key and connects as both client
+    # roles, so it already reaches the whole state; the superuser adds code
+    # execution beside the same data and no data it could not already
+    # reach (threat-model.md §4, clause 2, accepted).
+    - path: /etc/kluster/pgstate/pg_hba.conf
       mode: 0644
       user:
         id: {{ postgres_uid }}
@@ -120,8 +237,7 @@ storage:
       contents:
         inline: |
           local    all             {{ superuser }}                     trust
-          hostssl  {{ database }}  {{ ci_role }},{{ operator_role }}  0.0.0.0/0  cert clientcert=verify-full
-          hostssl  {{ database }}  {{ ci_role }},{{ operator_role }}  ::/0       cert clientcert=verify-full
+          local    {{ database }}  {{ ci_role }},{{ operator_role }}  trust
 
     # Run once, by the image's entrypoint, when it initializes an empty data
     # directory: as the superuser, connected to {{ database }}.
@@ -209,6 +325,15 @@ systemd:
     # `POSTGRES_HOST_AUTH_METHOD=trust` is what lets the image initialize a
     # superuser that has no password. The pg_hba.conf it writes into the data
     # directory to match is never read: `hba_file` names the one above.
+    #
+    # The container has no network, and the clients reach the server on the
+    # socket in the shared directory, the second of `unix_socket_directories`;
+    # the first is the image's own, where `podman exec` reaches it. The one TCP
+    # address is the container's loopback, which nothing outside it reaches
+    # and pg_hba admits no one on: it is how the pooler's unit tells the
+    # serving Postgres from the image's initialization, whose temporary server
+    # listens on the sockets alone. The shared directory is labelled `z`,
+    # shared, since both containers mount it.
     - name: pgstate.service
       enabled: true
       contents: |
@@ -222,23 +347,54 @@ systemd:
         RestartSec=10
         ExecStartPre=-/usr/bin/podman rm -f pgstate
         ExecStart=/usr/bin/podman run --replace --name pgstate \
-          --publish 5432:5432 \
+          --network none \
           --shm-size 128m \
           --env POSTGRES_DB={{ database }} \
           --env POSTGRES_USER={{ superuser }} \
           --env POSTGRES_HOST_AUTH_METHOD=trust \
           --volume /var/lib/pgstate:/var/lib/postgresql/data:Z \
-          --volume /etc/kluster/pki:/pki:ro,Z \
+          --volume /etc/kluster/pgstate:/config:ro,Z \
           --volume /etc/kluster/initdb:/docker-entrypoint-initdb.d:ro,Z \
+          --volume {{ socket_dir }}:{{ socket_mount }}:z \
           {{ postgres_image }} \
           postgres \
-            -c listen_addresses=* \
-            -c ssl=on \
-            -c ssl_cert_file=/pki/server.crt \
-            -c ssl_key_file=/pki/server.key \
-            -c ssl_ca_file=/pki/ca.crt \
-            -c hba_file=/pki/pg_hba.conf
+            -c listen_addresses=127.0.0.1 \
+            -c unix_socket_directories=/var/run/postgresql,{{ socket_mount }} \
+            -c shared_buffers={{ shared_buffers_mib }}MB \
+            -c hba_file=/config/pg_hba.conf
         ExecStop=/usr/bin/podman stop -t 30 pgstate
+
+        [Install]
+        WantedBy=multi-user.target
+
+    # PgBouncer, at the image `settings.PGBOUNCER_IMAGE` pins by digest, run by
+    # the image's own entrypoint against the configuration above. It starts
+    # once Postgres serves -- the server answering on its loopback, which the
+    # image's initialization never does -- so the first TLS handshake the box
+    # completes is one whose client the state already answers; a box's first
+    # boot pulls both images and initializes the data directory before that.
+    - name: pgbouncer.service
+      enabled: true
+      contents: |
+        [Unit]
+        Description=Pulumi state PgBouncer
+        Requires=pgstate.service
+        After=pgstate.service network-online.target
+        Wants=network-online.target
+
+        [Service]
+        Restart=always
+        RestartSec=10
+        TimeoutStartSec=15min
+        ExecStartPre=/usr/bin/bash -c 'until /usr/bin/podman exec pgstate pg_isready --quiet --host=127.0.0.1; do sleep 2; done'
+        ExecStartPre=-/usr/bin/podman rm -f pgbouncer
+        ExecStart=/usr/bin/podman run --replace --name pgbouncer \
+          --publish {{ port }}:{{ port }} \
+          --volume /etc/kluster/pki:/pki:ro,Z \
+          --volume /etc/kluster/pgbouncer:/etc/pgbouncer:ro,Z \
+          --volume {{ socket_dir }}:{{ socket_mount }}:z \
+          {{ pgbouncer_image }}
+        ExecStop=/usr/bin/podman stop -t 30 pgbouncer
 
         [Install]
         WantedBy=multi-user.target

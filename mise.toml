@@ -236,8 +236,9 @@ PULUMI_CONFIG_PASSPHRASE = """
 {{- env.PULUMI_CONFIG_PASSPHRASE | default(value="") -}}
 {%- endif -%}
 """
-# The URL in the slot is the bundle's connection string, which `psql`,
-# `pg_dump` and `pg_restore` read as it is written. What `pulumi` is given
+# The URL in the slot is the bundle's connection string: `psql` reads it as
+# it is written, and `pg_dump` and `pg_restore` with the pooler's session
+# entry as its database (`kluster.lib.bundle.Purpose`). What `pulumi` is given
 # has `binary_parameters=yes` added to its query: the `lib/pq` driver behind
 # Pulumi's Postgres backend then sends each statement in one round trip, which
 # a transaction-pooling pooler needs, and libpq refuses the parameter, which
