@@ -312,8 +312,9 @@ oraclecloud`, x86_64), the qcow2 imports as a custom image
     buys nothing. (The *in-cluster* CNPG databases are the opposite
     case — their major-upgrade policy is workloads.md §4.)
 -   Config: TLS on, `pg_hba` requiring certificate auth over TCP
-    (§3); data directory on the boot volume (the DB is four orders of
-    magnitude smaller than the disk).
+    (§3); data directory on the boot volume, of which the state is a
+    small fraction (`state-backend census`, below, reports what it
+    holds).
 -   **Roles.** The image's bootstrap superuser, `postgres`, is
     reachable only on the container's local socket, where `pg_hba`
     trusts it and asks for no certificate: nothing outside the
@@ -349,6 +350,51 @@ oraclecloud`, x86_64), the qcow2 imports as a custom image
     initialization, from a script the Butane file delivers, so they
     exist from a fresh data directory's first start and change only
     by a replacement.
+-   **What one statement costs is a multiple of the value it touches.**
+    Pulumi's Postgres backend (`pkg/backend/diy/postgres` at the pinned
+    CLI) keeps every object in one table, `pulumi_state (key, data json,
+    updated_at)`, as `{"data":"<base64 of the bytes>"}`, and moves it
+    whole: a read is one `SELECT` of the value, a write one
+    `INSERT … ON CONFLICT` of it, and the backend's size check, which it
+    runs for every `Exists` and for every key a listing returns, is
+    `octet_length((data->>'data')::text)`, which parses the whole value.
+    The server process serving such a statement holds several copies of
+    the value until it ends, so the box's memory under load is the
+    number of such statements running at once times the size of the
+    largest value they touch.
+-   **The stacks CI deploys keep their checkpoints compressed, and no
+    `backups/` copy.** `mise.toml` sets `PULUMI_DIY_BACKEND_ZSTD` and
+    `PULUMI_DIY_BACKEND_DISABLE_CHECKPOINT_BACKUPS` for every `pulumi`
+    run it starts, and every CI job runs `pulumi` through it, as a
+    workstation does. So a stack's checkpoint is the key
+    `<stack>.json.zst`, written by every save with the `.bak` beside it,
+    and a writing operation adds one copy of it under `history/`, which
+    no switch turns off, and none under `backups/`. A reader needs
+    neither variable: the backend finds a stack's checkpoint under
+    whichever suffix it has and reads the compression off its first
+    bytes. A writer without `PULUMI_DIY_BACKEND_ZSTD` writes the
+    checkpoint back as `<stack>.json`, which every reader reads as well.
+    No operator stack's run is given either: the `operator-stack`
+    driver and a `credentials` command's run against an operator stack
+    both start `pulumi` without their caller's `PULUMI_` variables, so
+    `github`'s checkpoint here stays `github.json`
+    (framework/pulumi.md §3.3).
+-   **A change of suffix leaves a `.bak` nothing replaces.** A save that
+    writes the checkpoint under a new suffix copies the old checkpoint to
+    its own `.bak` and deletes it, and every later save backs up the new
+    key instead (`saveCheckpoint` in `pkg/backend/diy/state.go`). The
+    old `.bak` — the full-size uncompressed copy, for a stack that has
+    turned compression on — stays, and lies under the prefix every
+    listing of that stack sizes. `state-backend census` counts the
+    table by kind of key, with each value's stored size read through
+    `pg_column_size`, which never reads an out-of-line value; with
+    `--prune-superseded` it lists each `.bak` whose stack has a
+    checkpoint and none under the suffix that `.bak` carries, and with
+    `--yes` beside it deletes them. The delete re-checks every key
+    against the table as of the statement's snapshot, and takes only a
+    `.bak` whose own checkpoint is not in it, so it deletes no checkpoint
+    and no copy of one it sees. A stack with no checkpoint keeps its `.bak`, which is all
+    that is left of a removed stack.
 
 ## 3. PKI: a tiny offline CA
 
@@ -1104,7 +1150,7 @@ The code that renders them, dumps and restores the state and reads the
 committed files is `kluster.lib.state_backend`, beside them; the stack
 that declares the appliance is `kluster.components.state_backend`,
 built by the `state-backend` stack program; and the code that renders a
-scratch box, logs in, writes bundles and probes is
+scratch box, logs in, writes bundles, probes and counts the state table is
 `src/kluster/scripts/state_backend/`, exposed as the `state-backend`
 console script.
 
@@ -1161,6 +1207,9 @@ state-backend bundle ci --address <ip>  # the CI client certificate and its URL
 state-backend pins                    # verify the pinned digests (CI runs this)
 state-backend dump                    # a dump of the live state, encrypted like the nightly one
 state-backend restore <dump>          # feed a dump into a box that serves no stack
+state-backend census                  # the state table's rows and stored bytes by kind of key, and each checkpoint's size
+state-backend census --prune-superseded        # also list the `.bak` rows a change of suffix left (§2)
+state-backend census --prune-superseded --yes  # and delete them
 state-backend probe                   # the scheduled checks, run by the ops repository
 state-backend ssh                     # a diagnostic login; the box is never configured by hand
 ```

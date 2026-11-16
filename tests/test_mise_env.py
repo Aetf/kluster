@@ -33,11 +33,13 @@ import json
 import re
 import shutil
 import tomllib
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from pathlib import Path
+from typing import Any
 
 import process_sessions
 import pytest
+import yaml
 
 from kluster.conventions import identity
 from kluster.lib import bundle as bundle_files
@@ -49,6 +51,10 @@ MISE = shutil.which('mise')
 needs_mise = pytest.mark.skipif(MISE is None, reason='mise is not on PATH')
 
 MISE_TOML = Path(__file__).resolve().parents[1] / 'mise.toml'
+WORKFLOWS = Path(__file__).resolve().parents[1] / '.github' / 'workflows'
+#: The repository's composite actions, each an `action.yml` whose steps run
+#: inside the job that uses it.
+ACTIONS = Path(__file__).resolve().parents[1] / '.github' / 'actions'
 
 #: What the caller exported: a scratch backend and passphrases of its own.
 EXPORTED = {
@@ -59,12 +65,27 @@ EXPORTED = {
     'PGSSLKEY': '/exported/client.key',
 }
 
+
 #: The connection string a filled `state-backend/` slot holds.
 SLOT_URL = 'postgres://operator@192.0.2.10:5432/pulumi_state'
 
 
+def _state_switches() -> dict[str, str]:
+    """The `PULUMI_` variables `mise.toml`'s `[env]` sets to a literal value: how every run it starts writes a stack's state.
+
+    Which switch is which, and what the pinned `pulumi` writes under them, is
+    `tests/test_state_roles.py`'s, which reads the same entries.
+    """
+    table: dict[str, str] = tomllib.loads(MISE_TOML.read_text())['env']
+    return {
+        name: value
+        for name, value in table.items()
+        if name.startswith('PULUMI_') and '{{' not in value and '{%' not in value
+    }
+
+
 def _checkout(checkout: Path) -> Path:
-    """`checkout`, created, holding the templates of `mise.toml`'s `[env]` table."""
+    """`checkout`, created, holding `mise.toml`'s `[env]` table: its templates and its literal values."""
     config = tomllib.loads(MISE_TOML.read_text())
     table = config['env']
     assert all(isinstance(value, str) for value in table.values()), '[env] holds a value that is not a string'
@@ -74,9 +95,9 @@ def _checkout(checkout: Path) -> Path:
     templates = {name: value for name, value in table.items() if '{{' in value or '{%' in value}
     assert set(templates) == EXPORTED.keys(), f'[env] templates {sorted(templates)} are not EXPORTED'
     lines = ['[env]']
-    for name, template in templates.items():
+    for name, value in table.items():
         # A JSON string is a valid TOML basic string.
-        lines.append(f'{name} = {json.dumps(template)}')
+        lines.append(f'{name} = {json.dumps(value)}')
     checkout.mkdir(parents=True)
     _ = (checkout / 'mise.toml').write_text('\n'.join(lines) + '\n')
     return checkout
@@ -107,8 +128,9 @@ def _resolve(
     *,
     trusted: Path | None = None,
     extra: Mapping[str, str] | None = None,
+    names: Collection[str] = EXPORTED.keys(),
 ) -> dict[str, str]:
-    """What a process `mise x` starts in `cwd` sees, given `EXPORTED`.
+    """What a process `mise x` starts in `cwd` sees of `names`, given `EXPORTED`.
 
     `trusted` is the directory whose configuration mise may render, `cwd`
     unless named; `extra` joins the environment mise itself is started in.
@@ -132,7 +154,7 @@ def _resolve(
         timeout=20,
     )
     pairs = (entry.split('=', 1) for entry in result.stdout.split('\0') if '=' in entry)
-    return {name: value for name, value in pairs if name in EXPORTED}
+    return {name: value for name, value in pairs if name in names}
 
 
 @needs_mise
@@ -224,6 +246,118 @@ def test_a_sibling_whose_name_extends_the_checkouts_is_not_under_it(tmp_path: Pa
     )
 
     assert resolved == slots
+
+
+@needs_mise
+@pytest.mark.parametrize('layout', ['checkout without slots', 'checkout with slots', 'workspace under .claude'])
+def test_every_run_mise_starts_writes_the_state_compressed_and_without_backups(tmp_path: Path, layout: str) -> None:
+    # In each layout a `pulumi` run is started from -- CI's checkout, which
+    # holds the slots it materializes, a workstation's, and a `jj` workspace
+    # under one, where two `mise.toml` render -- the process is given every
+    # switch `mise.toml` sets, as it sets it, and a caller's own setting of
+    # one does not turn it off.
+    primary = _checkout(tmp_path / 'kluster')
+    cwd = primary
+    if layout != 'checkout without slots':
+        _ = _fill_slots(primary)
+    if layout == 'workspace under .claude':
+        cwd = _checkout(primary / '.claude' / 'workspaces' / 'w')
+    expected = _state_switches()
+    assert expected, 'mise.toml sets no literal PULUMI_ variable, so nothing would be checked'
+    caller = dict.fromkeys(expected, 'false')
+
+    resolved = _resolve(cwd, tmp_path / 'home', trusted=primary, extra=caller, names=expected.keys())
+
+    assert resolved == expected
+
+
+#: Where a command word stands in a line of shell: at its start, or after
+#: whitespace -- not inside a quoted string, such as a commit message naming
+#: `pulumi install`.
+PULUMI_COMMAND = re.compile(r'(?:^|(?<=\s))pulumi(?=\s|$)')
+#: What has to come right before it: `mise x`, with any tools it is handed.
+THROUGH_MISE = re.compile(r'mise x(?: [\w:/.@-]+)* -- $')
+
+
+def _bare_pulumi(script: str) -> list[str]:
+    """The lines of a step's script that start `pulumi` other than through `mise x`; comments are not commands."""
+    return [
+        line.strip()
+        for line in script.splitlines()
+        if not line.lstrip().startswith('#')
+        for found in PULUMI_COMMAND.finditer(line)
+        if not THROUGH_MISE.search(line[: found.start()])
+    ]
+
+
+def test_the_bare_pulumi_predicate_finds_each_way_to_start_one() -> None:
+    """The check below can only pass if it can fail: a `pulumi` started outside `mise x` is found."""
+    for bare in (
+        'pulumi up --stack dns --yes',
+        'PULUMI_DIY_BACKEND_ZSTD=false pulumi preview --stack apps',
+        'set -e; pulumi refresh --stack k8s-base',
+        'mise x -- env -u PULUMI_DIY_BACKEND_ZSTD pulumi up --stack dns',
+        'mise x -- uv run python && pulumi stack ls',
+    ):
+        assert _bare_pulumi(bare) == [bare], bare
+    for through in (
+        'mise x -- pulumi up --stack dns --yes --diff',
+        'mise x uv -- pulumi preview --stack apps',
+        '# pulumi preview is what this step runs',
+        "-m 'pulumi install, from the Pulumi.yaml this branch carries'",
+    ):
+        assert _bare_pulumi(through) == [], through
+
+
+def _steps(name: str, document: Mapping[str, Any]) -> list[tuple[str, Mapping[str, Any]]]:
+    """Every step of a workflow's jobs, or of a composite action, with where it is."""
+    if 'runs' in document:
+        return [(name, step) for step in document['runs'].get('steps', [])]
+    return [
+        (f'{name} {job_name}', step)
+        for job_name, job in document.get('jobs', {}).items()
+        for step in job.get('steps', [])
+    ]
+
+
+def _outside_mise(name: str, document: Mapping[str, Any]) -> list[str]:
+    """The steps of `document` that start `pulumi` other than through `mise x`, or use an action that runs it."""
+    found: list[str] = []
+    for where, step in _steps(name, document):
+        if 'pulumi' in str(step.get('uses', '')).lower():
+            found.append(f'{where}: {step["uses"]}')
+        found += [f'{where}: {line}' for line in _bare_pulumi(str(step.get('run', '')))]
+    return found
+
+
+def test_the_step_walk_finds_a_bare_pulumi_in_a_workflow_and_in_a_composite_action() -> None:
+    """The check below can only pass if it can fail: both shapes of document are walked."""
+    bare = {'run': 'pulumi up --stack dns --yes'}
+    action = {'uses': 'pulumi/actions@v6'}
+    workflow = {'jobs': {'deploy': {'steps': [{'run': 'mise x -- pulumi up --stack dns'}, bare, action]}}}
+    composite = {'runs': {'using': 'composite', 'steps': [{'shell': 'bash', **bare}, action]}}
+
+    assert len(_outside_mise('workflow.yml', workflow)) == 2
+    assert len(_outside_mise('action.yml', composite)) == 2
+
+
+def test_every_workflow_starts_pulumi_through_mise() -> None:
+    """Every job that runs `pulumi` runs it under `mise.toml`'s `[env]`, so every writer CI has carries the switches.
+
+    A step running `pulumi` itself is the one way a job could reach a stack
+    without them, and a step using an action that runs it is the other. A
+    composite action's steps run inside the job that uses it, so they are
+    read too.
+    """
+    documents = [
+        *((path.name, path) for path in sorted(WORKFLOWS.glob('*.yml'))),
+        *((path.parent.name, path) for path in sorted(ACTIONS.glob('*/action.yml'))),
+    ]
+    assert any(path.parent == ACTIONS / name for name, path in documents), 'no composite action was read'
+
+    outside = [line for name, path in documents for line in _outside_mise(name, yaml.safe_load(path.read_text()))]
+
+    assert outside == [], outside
 
 
 def _runs_an_operator_stack(task: object) -> bool:

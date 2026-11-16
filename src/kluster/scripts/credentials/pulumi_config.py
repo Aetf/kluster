@@ -21,6 +21,7 @@ from __future__ import annotations
 import enum
 import json
 import logging
+import os
 import re
 import shutil
 import tempfile
@@ -32,7 +33,7 @@ from typing import Annotated, Any, cast
 from ruamel.yaml import YAML
 
 from kluster.conventions import identity
-from kluster.lib import pulumi_cli, stack_environment
+from kluster.lib import bundle, pulumi_cli, stack_environment
 from kluster.lib.pulumi_cli import Runner
 from kluster.lib.secret import Secret
 
@@ -252,6 +253,12 @@ class BackendEnvironment:
     #: Marked for `passphrase`'s reason.
     physical: Annotated[Callable[[], str] | None, Secret] = field(default=None, repr=False, compare=False)
 
+    #: The client bundle directory `url` was read from, whose three files a
+    #: run against an operator stack in the estate's backend is handed
+    #: (`bundle.ssl_env`), as the `operator-stack` driver hands them: such a
+    #: run keeps none of its caller's libpq variables. None hands it none.
+    bundle_dir: Path | None = None
+
     def __post_init__(self) -> None:
         if self.url is not None and self.no_backend is not None:
             raise ValueError('a backend environment holds a URL or the reason it has none, not both')
@@ -274,8 +281,11 @@ class BackendEnvironment:
         values: dict[str, str] = {}
         if chosen is not None:
             values[PASSPHRASE_ENV] = chosen
-        if checkout is None and stack_environment.home(stack) is identity.StateHome.COMMITTED:
+        home = stack_environment.home(stack)
+        if checkout is None and home is identity.StateHome.COMMITTED:
             checkout = project_dir()
+        if home is identity.StateHome.BACKEND and self.url is not None and self.bundle_dir is not None:
+            values |= bundle.ssl_env(self.bundle_dir)
         return values | stack_environment.backend_variables(stack, checkout=checkout, estate_url=self.url)
 
     def stack_passphrase(self) -> str | None:
@@ -394,9 +404,19 @@ class Stack:
 
         So no run starts without the backend check (`_started_with`), the
         runs `re_encrypt` makes under a passphrase other than the stack's own
-        included.
+        included. A run against an operator stack starts from the
+        environment the `operator-stack` driver starts
+        (`stack_environment.process`): the caller's own, less every variable
+        that can steer `pulumi` or its backend, plus the stack's. So it
+        writes the stack's state as the driver does, whatever `mise.toml` or
+        a shell exports. A run against any other stack is laid over the
+        caller's environment, from which it takes the compression `mise.toml`
+        sets and, for a stack in the estate's backend, the bundle's files.
         """
-        return self.run([*args], cwd=self.directory, env=self._started_with(passphrase), stdin=stdin)
+        env = self._started_with(passphrase)
+        if stack_environment.home(self.name) is not None:
+            env = stack_environment.process(os.environ, env)
+        return self.run([*args], cwd=self.directory, env=env, stdin=stdin)
 
     def exists(self) -> bool:
         return self.name in self._stack_names(self._pulumi('stack', 'ls', '--json'))
