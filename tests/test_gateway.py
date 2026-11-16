@@ -125,7 +125,12 @@ async def test_the_machine_carrying_the_session_actuates_after_every_other_child
     )
     expected = {str(await resource.urn.future()) for resource in elsewhere}
 
-    for name in (f'{NAME}-zerotier-nspawn', f'{NAME}-zerotier-image'):
+    # Every piece of that machine whose landing restarts it: the files it
+    # mounts are in its content stamp as much as its settings and its tree are.
+    mounted = tuple(gateway.overlay_daemon.mounted_files.values())
+    assert mounted, 'the overlay machine mounts its settings on the network'
+    for resource in (*mounted, gateway.overlay_daemon.settings, gateway.overlay_daemon.image):
+        name = str(await resource.urn.future()).split('::')[-1]
         assert expected <= set(monitor.depends_on(name)), name
 
     # And a workload that carries no session waits for none of it: the firewall
@@ -221,6 +226,74 @@ def test_the_gateway_declares_one_machine_per_service_and_nothing_else(monitor: 
 
     assert trees == {nspawn.rootfs_path(service.name) for service in conventions.gateway.SERVICES}
     assert written == {service.name for service in conventions.gateway.SERVICES}
+
+
+def daemon_settings(text: str) -> dict[str, str]:
+    """A ZeroTier settings file read the way the daemon's dictionary type reads it.
+
+    One `name=value` per line, split at the first `=`; the first line for a
+    name is the one a lookup finds.
+    """
+    settings: dict[str, str] = {}
+    for line in text.splitlines():
+        name, separator, value = line.partition('=')
+        if separator:
+            _ = settings.setdefault(name, value)
+    return settings
+
+
+def daemon_boolean(value: str) -> bool:
+    """A setting as the daemon reads a boolean: by its first character alone."""
+    return value[:1] in {'1', 't', 'T'}
+
+
+def test_the_gateways_daemon_admits_global_addresses_and_never_the_default_route(monitor: Controller) -> None:
+    """The gateway's overlay daemon reads settings that let it hold a global address and the route with it.
+
+    The daemon reads `networks.d/<network id>.local.conf` under its home when
+    the network comes up, the id written as sixteen lowercase hex digits, and
+    takes its defaults when the file is absent: `allowGlobal` off, which
+    refuses every global-scope address and route the network assigns it, the
+    gateway's own included. So what is held here is the path from the
+    declaration to that read. The machine's settings bind a file at that path
+    inside the daemon's home, read-only so that the daemon's own writes cannot
+    replace it. The file is delivered directly into the machine's directory,
+    where the content stamp covers it, so a change to it restarts the daemon
+    that reads it. And its content, read as the daemon reads it, turns
+    `allowGlobal` on, keeps the private-scope managed addresses (the gateway's
+    overlay address is one) as a boolean rather than as a whitelist, and
+    keeps the default route the gateway is the next hop of refused.
+    """
+    machine = conventions.gateway.OVERLAY.name
+    directives = str(monitor.inputs_of(f'{NAME}-{machine}-nspawn')['content']).splitlines()
+
+    def binds(directive: str) -> dict[str, str]:
+        """Each bind's target to its source; a bind that names one path binds it at itself."""
+        found: dict[str, str] = {}
+        for line in directives:
+            if line.startswith(f'{directive}='):
+                source, _, target = line.removeprefix(f'{directive}=').partition(':')
+                found[target or source] = source
+        return found
+
+    # The daemon's home inside the machine is where its state is bound.
+    homes = [target for target, source in binds('Bind').items() if source == nspawn.state_path(machine)]
+    assert len(homes) == 1, directives
+    read_at = f'{homes[0]}/networks.d/{int(conventions.overlay.NETWORK_ID, 16):016x}.local.conf'
+
+    delivered = binds('BindReadOnly')[read_at]
+    assert os.path.dirname(delivered) == nspawn.machine_path(machine)
+    (file,) = (
+        declaration
+        for declaration in monitor.of_type(DEVICE_FILE)
+        if declaration.name.startswith(f'{NAME}-') and declaration.inputs.get('path') == delivered
+    )
+    settings = daemon_settings(str(file.inputs['content']))
+
+    assert daemon_boolean(settings['allowGlobal'])
+    assert len(settings['allowManaged']) <= 5 and daemon_boolean(settings['allowManaged'])
+    assert not daemon_boolean(settings['allowDefault'])
+    assert not daemon_boolean(settings['allowDNS'])
 
 
 def test_the_health_reading_reads_every_machine_and_every_unit_the_program_delivers(

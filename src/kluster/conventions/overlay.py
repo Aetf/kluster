@@ -24,10 +24,14 @@ from kluster.conventions.gateway import RESOLVERS
 #: changing it means adopting a different network. It is not a secret either —
 #: joining takes an authorized member, not knowledge of the id — so the
 #: administration token beside it stays configuration and this does not
-#: (rfc-002 §11). The gateway's daemon is given it once, as an initial state
-#: (`OverlayDaemon` in `components/gateway/container.py`): a daemon that has
-#: already run does not follow a change, and is moved onto the new network by
-#: hand.
+#: (rfc-002 §11). The gateway's daemon is given it in two places
+#: (`OverlayDaemon` in `components/gateway/container.py`): as its initial
+#: state, the network it joins, placed only into a state directory that holds
+#: nothing; and as the name of the settings file it is given on every
+#: deployment. So a daemon that has already run does not follow a change: it
+#: stays on the network it joined, the settings it is given then name a
+#: network it is not a member of, so the one it is on runs on the daemon's
+#: defaults, and it is moved onto the new network by hand.
 NETWORK_ID = '83048a0632b6ba9b'
 
 SUBNET = IPv4Network('10.144.0.0/16')
