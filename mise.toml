@@ -236,12 +236,29 @@ PULUMI_CONFIG_PASSPHRASE = """
 {{- env.PULUMI_CONFIG_PASSPHRASE | default(value="") -}}
 {%- endif -%}
 """
+# The URL in the slot is the bundle's connection string, which `psql`,
+# `pg_dump` and `pg_restore` read as it is written. What `pulumi` is given
+# has `binary_parameters=yes` added to its query: the `lib/pq` driver behind
+# Pulumi's Postgres backend then sends each statement in one round trip, which
+# a transaction-pooling pooler needs, and libpq refuses the parameter, which
+# is why it is added here rather than written into the slot. The Python side
+# forms the same value (`kluster.lib.bundle.pulumi_url`), and
+# `tests/test_mise_env.py` holds the two equal. The parameter is that
+# driver's, so a URL of another scheme is passed on as the slot holds it, and
+# so is a value from the environment: whoever exported it formed it.
 PULUMI_BACKEND_URL = """
 {%- set slot = [config_root, '.credentials/state-backend/backend-url'] | join_path -%}
 {%- set claude = [config_root, '.claude'] | join_path ~ '/' -%}
 {%- set nested = (cwd ~ '/') | split(pat=claude) | first == '' -%}
 {%- if slot is file and not nested -%}
-{{- read_file(path=slot) | trim -}}
+{%- set url = read_file(path=slot) | trim -%}
+{%- if url is not starting_with(pat='postgres://') -%}
+{{- url -}}
+{%- elif '?' in url -%}
+{{- url ~ '&binary_parameters=yes' -}}
+{%- else -%}
+{{- url ~ '?binary_parameters=yes' -}}
+{%- endif -%}
 {%- else -%}
 {{- env.PULUMI_BACKEND_URL | default(value="") -}}
 {%- endif -%}

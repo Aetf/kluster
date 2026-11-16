@@ -177,14 +177,16 @@ def backend_variables(stack: str, *, checkout: Path | None, estate_url: str | No
     """The backend a run against `stack` is pointed at: the committed one, or the estate's.
 
     `estate_url` is the appliance's connection string where the caller has
-    one; a stack whose state is committed ignores it, and needs `checkout`
-    instead, since its backend is a directory there.
+    one, as its client bundle holds it, and the run is given the form meant
+    for `pulumi` alone (`bundle.pulumi_url`); a stack whose state is committed
+    ignores it, and needs `checkout` instead, since its backend is a
+    directory there.
     """
     if home(stack) is identity.StateHome.COMMITTED:
         if checkout is None:
             raise EnvironmentRefused(f'the {stack} stack keeps its state in a checkout, and none was named')
         return {BACKEND_URL_ENV: committed_url(checkout), DISABLE_BACKUPS_ENV: 'true'}
-    return {} if estate_url is None else {BACKEND_URL_ENV: estate_url}
+    return {} if estate_url is None else {BACKEND_URL_ENV: bundle.pulumi_url(estate_url)}
 
 
 #: How the chain's last layer asks: the question in, the answer out, or None
@@ -260,7 +262,11 @@ def operator_variables(stack: str, checkout: Path) -> dict[str, str]:
             f'no client bundle in {slot}, so there is no backend to reach the {stack} stack in: '
             '`state-backend bundle operator` writes it'
         )
-    return variables | {BACKEND_URL_ENV: url.read_text().strip()} | bundle.ssl_env(slot)
+    return (
+        variables
+        | backend_variables(stack, checkout=checkout, estate_url=url.read_text().strip())
+        | bundle.ssl_env(slot)
+    )
 
 
 def process(base: Mapping[str, str], variables: Mapping[str, str]) -> pulumi_cli.WholeEnvironment:

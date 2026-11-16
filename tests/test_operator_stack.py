@@ -345,7 +345,9 @@ def test_the_estate_backend_stack_runs_under_its_slots_and_nothing_its_caller_ca
     slot = workstation.slots(checkout) / stack_environment.BUNDLE_SLOT
     for env in fake.envs:
         assert env['PULUMI_CONFIG_PASSPHRASE'] == OPERATOR_PASSPHRASE
-        assert env['PULUMI_BACKEND_URL'] == SLOT_URL
+        # The bundle's URL with the parameter the driver behind `pulumi`'s
+        # backend reads, which no libpq tool is handed (`bundle.pulumi_url`).
+        assert env['PULUMI_BACKEND_URL'] == f'{SLOT_URL}?binary_parameters=yes'
         assert {name: env[name] for name in (bundle.CA_ENV, bundle.CERT_ENV, bundle.KEY_ENV)} == bundle.ssl_env(slot)
         # Of the caller's variables that steer `pulumi` or its backend, only
         # the allowed ones reach the process.
