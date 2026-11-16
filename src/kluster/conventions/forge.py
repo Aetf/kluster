@@ -12,7 +12,7 @@ branches may deploy into a cell, and whether a reviewer stands in front of it �
 and the switches a workflow branches on are the same kind of fact about what a
 repository *is* here: the labels it reads, the identities it tests the
 author of a pull request against, the variables it reads, the Apps whose
-tokens may push to it, and whether a workflow merges its pull requests with no
+tokens may act on it, and whether a workflow merges its pull requests with no
 human on them. What stays in the `github` stack is the
 upstream object's own settings, which are no part of any entry: the required
 check names, the repository descriptions, and the posture every repository
@@ -31,7 +31,7 @@ file. Without the entry the two drift with nothing to notice.
 **The Apps are here rather than in `conventions.providers`** because they are
 not accounts this program declares into: an App is an actor on the forge, its
 installation is a fact about a repository row, and the one place its client
-id reaches is a variable of that row. `providers` holds the identifiers of the
+id reaches is a repository variable. `providers` holds the identifiers of the
 clouds the stacks push to; the forge's own identifiers -- the account, the
 Apps -- sit with the forge.
 
@@ -224,11 +224,15 @@ class Repository:
     #: its own, because these are this repository's workflows and no other's.
     authors: tuple[Author, ...] = ()
     #: The Apps installed on this repository, which is what decides whose
-    #: installation token can push to it (credentials.md §3). Console state
+    #: installation token can act on it (credentials.md §3). Console state
     #: recorded rather than declared (framework/github.md §4), and on the row
-    #: because a variable below that hands an App's client id to a mint is a
-    #: mint that fails unless the App is installed here -- a relation between
-    #: two fields of one row, which a test holds.
+    #: of the repository a token is minted *for*: a mint resolves the App's
+    #: installation on the repositories it asks for, so it fails unless the
+    #: App is installed on each of them. Which repository a mint asks for is
+    #: the workflow's, and it need not be the one the client id's variable
+    #: sits on -- that is the repository the workflow runs in (`variables`).
+    #: The test that holds the two together reads the mints of this
+    #: repository's own workflows.
     apps: tuple[App, ...] = ()
     #: The repository variables its workflows read. Declared as resources like
     #: the labels, and for the same reason: a workflow reading a variable that
@@ -293,6 +297,21 @@ DISPATCH_APP = App(slug='kluster-dispatch', client_id='Iv23liR3WBm3bxvOVqch')
 #: `alert.yml` read it from.
 DISPATCH_APP_CLIENT_ID = Variable('DISPATCH_APP_CLIENT_ID', DISPATCH_APP.client_id)
 
+#: The App whose installation token starts runs where nothing else may: the
+#: ops repository's weekly `drift-trigger.yml` fires this repository's
+#: `drift.yml` with it, because this repository carries no `schedule:` trigger
+#: (ci.md §3). Installed on the deployment repository alone, with Actions:
+#: write and nothing else, so it starts runs and never pushes code. Its key is
+#: the `github-trigger-key` register row; its client id is what the variable
+#: below carries.
+TRIGGER_APP = App(slug='kluster-trigger', client_id='Iv23liflQawEpjIjpzcW')
+
+#: How the drift trigger learns which App its key belongs to. A variable of
+#: the ops repository rather than of the deployment one, though the token it
+#: mints acts on the deployment repository: the workflow that reads it runs
+#: in the ops repository.
+TRIGGER_APP_CLIENT_ID = Variable('TRIGGER_APP_CLIENT_ID', TRIGGER_APP.client_id)
+
 #: The label the ops repository's dispatch handler puts on every `actionable`
 #: alert issue it opens, and the one it lists open issues by to find the issue
 #: an alert's `key` already has (operations.md §4). Declared rather than made by
@@ -329,7 +348,7 @@ DEPLOYMENT = Repository(
     ),
     labels=(EXPECT_CHANGES,),
     authors=(RENOVATE,),
-    apps=(DISPATCH_APP,),
+    apps=(DISPATCH_APP, TRIGGER_APP),
     variables=(DISPATCH_APP_CLIENT_ID,),
     unattended_merges='noop-automerge merges dependency bumps into this repository without a human (ci.md §3)',
 )
@@ -345,9 +364,12 @@ OPS = Repository(
     labels=(ALERT,),
     # Installed for the alert producer, whose token dispatches into this
     # repository (credentials.md §3). The producer runs in `kluster` and reads
-    # the client id from that repository's variable, so this row declares
-    # none: a variable belongs to the repository whose workflow reads it.
+    # the client id from that repository's variable: a variable belongs to the
+    # repository whose workflow reads it.
     apps=(DISPATCH_APP,),
+    # The drift trigger runs here and mints for `kluster`, so the variable is
+    # this row's and the installation is the deployment row's.
+    variables=(TRIGGER_APP_CLIENT_ID,),
 )
 
 #: Every repository the forge declares, which is every repository of this
