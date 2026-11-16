@@ -2210,7 +2210,7 @@ on, the `dns` stack is what writes every zone, and Aetf/dns, retired
 and archived, writes none (note N1 there). The stack runs under the
 stack passphrase that `mise.toml` hands every run, so it needs no
 wrapper, and it refuses until step 5 has published the anchors'
-addresses (`stacks/dns.py`, `_usable_address`).
+addresses (`_anchor_addresses` in `stacks/dns.py`).
 
 **First, the records already gone live leave state.** The records
 Aetf/dns removed after `e865032`, a class of sources-of-truth.md note

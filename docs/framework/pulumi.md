@@ -344,7 +344,7 @@ different things:
     on unchecked, an absence becomes text — `str(None)` is `"None"` —
     so a reader that hands an output to a resource checks it at the read
     and refuses anything but a usable value by name, unknowns included
-    (the `dns` stack's anchors, `_address` in `stacks/dns.py`). The
+    (`kluster.lib.stack_addresses`, for an address). The
     mechanism, and the rule that nothing may read such an output until
     the rest of the producer is applied, are §1.4's "When an awaited
     value is unknown".

@@ -173,8 +173,8 @@ the read as well (`kluster.lib.k8s.kubeconfig_from`).
 and the program carries it on as one, so it is for an output whose
 absence the reader handles itself. For an address that check is
 `kluster.lib.stack_addresses`, which refuses an absent, an unknown or an
-elided output by name, in a preview as in an update; the `dns` stack's
-anchors run a copy of it of their own (`_address` in `stacks/dns.py`).
+elided output by name, in a preview as in an update, and an address one
+stack reads out of another is read through it.
 
 ## Data: conventions, configuration, censuses
 

@@ -90,6 +90,17 @@ def test_anything_but_a_mapping_of_addresses_is_refused_naming_the_output_and_wh
     assert MARKER not in str(refused.value)
 
 
+@pytest.mark.parametrize('family', [4, 6])
+@pytest.mark.parametrize('mapping', [False, True], ids=['address', 'mapping'])
+def test_a_refusal_carries_the_output_and_the_family_it_was_read_for(mapping: bool, family: Family) -> None:
+    """A program tells refusals apart by their fields, not by their message: which output, which family."""
+    with pytest.raises(UnusableAddressOutput) as refused:
+        _ = usable_addresses('the_output', family, None) if mapping else usable_address('the_output', family, None)
+
+    assert refused.value.output == 'the_output'
+    assert refused.value.family == family
+
+
 def test_a_mapping_of_addresses_of_its_family_is_handed_on_as_it_is() -> None:
     nodes = {'node-a': '2001:db8::1', 'node-b': '2001:db8::2'}
 
