@@ -21,33 +21,29 @@ Talos pin, the Image Factory schematic and the nspawn rootfs
 references, so those rows apply through a deploy of that stack. The
 node-by-node upgrade that follows is run by hand: no task wraps
 `talosctl upgrade` or `upgrade-k8s`. The state-backend pins apply through
-a run of the `state-backend` stack, `operator-stack state-backend up`. **The rest wait on the `k8s-base` stack**,
-the dependency bumps included; the UDM firmware row waits on nothing,
-being the vendor's, the row of renovate's `toolchain` and `mise release`
-groups on nothing either, its merge being its apply path, and the gateway's dash row on
-nothing: its pin is an edit to `mise.toml`, and the declared base that
-moves with it reaches the device through a deploy of the `physical`
-stack.
+a run of the `state-backend` stack, `operator-stack state-backend up`.
+The rows whose apply path is the CI chain apply through a merge, as far
+as a stack's program reads their pin: the Cilium and k8s-base charts,
+the Gateway API definitions and the images of the platform through
+`up-k8s-base`. **A pin no wired component reads waits for its
+application to land in `apps`** — an application's image, the blog
+image git-sync would deliver (cluster/migration.md §2). The UDM
+firmware row waits on nothing, being the vendor's, the row of
+renovate's `toolchain` and `mise release` groups on nothing either, its
+merge being its apply path, and the gateway's dash row on nothing: its
+pin is an edit to `mise.toml`, and the declared base that moves with it
+reaches the device through a deploy of the `physical` stack.
 
-For the rows whose apply path is the CI chain — the Cilium and
-k8s-base charts, the cluster images, the blog image git-sync would
-deliver — a merge deploys none of them: the chain stalls in front of
-their stacks, and the deploy-failure alert the images row names as its
-safety valve, which is built and is the interim Home Assistant webhook
-(ci.md §3), fires on every merge alike, so it singles out nothing. The
-dependency bumps wait one step further back. The noop-automerge
-workflow is built, and it merges a bump only when every path the bump
-changes is on its allow-list — `uv.lock`, and renovate's bump of
-`Pulumi.yaml`'s `packages:` block with the `sdks/` it regenerates
-(ci.md §3). A bump that also edits
-`pyproject.toml`, a workflow file, `mise.toml` or an image's `.conf`
-waits for a human outright. One that stays on the list proves itself
-with a preview of `k8s-base` and `apps` among others, and both stacks
-fail that preview until they hold a copy of the kubeconfig, which
-waits for the second milestone's first step (§2.5) — so the proof
-errors rather than passing. The whole account, the other facts
-behind that error included, is ci.md §5. Every bump therefore merges
-the way the waiting rows do: as a reviewed pull request.
+The deploy-failure alert the images row names as its safety valve is
+built, and is the interim Home Assistant webhook (ci.md §3): it fires on
+the merge whose chain fails. The noop-automerge workflow is built, and
+it merges a bump only when every path the bump changes is on its
+allow-list — `uv.lock`, and renovate's bump of `Pulumi.yaml`'s
+`packages:` block with the `sdks/` it regenerates (ci.md §3) — and its
+preview of `dns`, `k8s-base` and `apps` is proven empty. A bump that
+also edits `pyproject.toml`, a workflow file, `mise.toml` or an image's
+`.conf` waits for a human outright, and one whose preview finds a diff
+is reviewed like any other pull request.
 
 **A release CI executes waits out a week; one the cluster only pulls
 does not.** Renovate proposes a release on a route whose release CI
@@ -108,7 +104,7 @@ from an HTTP repository, which offers nothing to check a download against
 | blog image / built branch | blog repo CI | git-sync | Automatic — content, not code |
 | nspawn rootfs (caddy, AdGuard, ZeroTier) | renovate here — docker datasource, reading whole references off the `versions:image-gateway-…` pins | `physical` stack: the device pulls the pinned manifest itself and unpacks it beside the tree it is running, then the boot chain's machine script restarts what changed | Reviewed; the run-number tag reads as a major bump, so every one waits on dashboard approval |
 | State-backend pins: the Fedora CoreOS release the image is imported from, with its artifact's digest (`settings.FCOS_RELEASE`, `settings.FCOS_ARTIFACT_SHA256`); the Postgres image, its major line's tag with the digest the box runs (`settings.POSTGRES_IMAGE`, rendered into the Butane file); the age release (`settings.AGE_VERSION`) | Zincati (periodic window) for the running OS; renovate for the three settings, one custom manager each on `state_backend/settings.py` — the release and its digest captured together, read off the stream's own metadata through a custom data source; the Postgres tag and digest captured together, the digest's moves taken monthly | Zincati: auto. Nothing on the box moves Postgres. A release bump: `operator-stack state-backend up`, which imports a new image and replaces nothing. A Postgres digest or major, or an age bump: `operator-stack state-backend up --force`, which dumps the box, replaces it and restores into the new one (state-backend.md §7.2) | Reviewed, grouped apart from everything else because each bump changes the box, and all but the release replace it. An age bump is one pull request moving `settings.AGE_VERSION` and the `age` pin in `mise.toml` together: renovate's mise manager reads that pin too, and a rule takes it out of the `toolchain` group into this one, because `tests/test_age.py` holds the two pins equal. The pull request is finished by hand: `AGE_SHA256` beside `settings.AGE_VERSION` is a digest renovate cannot recompute, and the `checks` workflow's `state-backend pins` refuses it stale. state-backend.md §1–2, and §7 for the age pin |
-| Pulumi SDK + providers, Python deps, Actions versions, `jdx/mise-action` excepted (the row of the `toolchain` and `mise release` groups) | renovate | **noop-automerge workflow** — merges a bump that changes nothing but paths on its allow-list (`uv.lock`, the `packages:` block with the `sdks/` it regenerates) once the preview is proven empty (the zero-diff rule, ci.md); that proof previews stacks that do not exist yet, so nothing takes this path today (paragraph above) | Automerged when on the list and diff-free; a bump that edits any other path — `pyproject.toml`, an action pin in a workflow — or that produces a real diff is human review; major behind dashboard approval |
+| Pulumi SDK + providers, Python deps, Actions versions, `jdx/mise-action` excepted (the row of the `toolchain` and `mise release` groups) | renovate | **noop-automerge workflow** — merges a bump that changes nothing but paths on its allow-list (`uv.lock`, the `packages:` block with the `sdks/` it regenerates) once the preview is proven empty (the zero-diff rule, ci.md) | Automerged when on the list and diff-free; a bump that edits any other path — `pyproject.toml`, an action pin in a workflow — or that produces a real diff is human review; major behind dashboard approval |
 | Every tool `mise.toml` pins under `[tools]`, with uv's second pin (`renovate.json5`'s `constraints.uv`) and mise itself (the `jdx/mise-action` pins in the workflows with the `version:` input they pass it, `deploy/cloud-session/toolchain.sh`'s `mise_version`, and `renovate.json5`'s `constraints.mise`), but a pin a rule after the `toolchain` rule takes into another group, today `talosctl` (the Talos row), `age` (the state-backend row) and `kubeseal` (the k8s-base charts row), and `http:dash`, which renovate does not read (the gateway's dash row) | renovate — its `toolchain` group: the mise manager's dependencies and the `renovate-config` manager's `uv`, read from the releases the `mise.toml` pin is read from. mise under its three names, `jdx/mise-action`, `jdx/mise` and the `renovate-config` manager's `mise`, is a group of its own, `mise release`. Rules after the `toolchain` rule take pins out of the group, today `talosctl`, `age` and `kubeseal`, and with them a major release of the local `postgres` client, which goes into the state-backend appliance group because a test holds its major equal to the appliance image's. `kubeseal` goes into the `in-cluster` group, the k8s-base charts row's, because a test holds it equal to the sealed-secrets chart's `appVersion` | the merge: every CI job that runs a `mise` command installs mise at the workflows' pin and the tools from `mise.toml` and `mise.lock`, and a cloud session does the same at its start, through `deploy/cloud-session/toolchain.sh`, whose `mise_version` a test holds equal to the workflows'; a workstation takes the tools at its next `mise install` | Reviewed — every file either group edits, `mise.toml` and the workflows among them, is off noop-automerge's allow-list, so a person merges it; each group travels alone because a pulumi, uv or mise bump changes how every other check runs; major behind dashboard approval. A bump of a `mise.toml` pin is finished by the `mise lock` that moves its entry in `mise.lock` (the paragraph on recorded bytes above): renovate runs it on the branch with the mise `constraints.mise` names, which a test holds equal to the workflows' pin. Renovate reads that constraint from `main`, so it is the mise a branch's install runs on every branch but the one moving mise, and that is why `mise release` travels apart from the `toolchain` group: it moves no `mise.toml` pin, so it writes no lock, and its pins of mise need none, since they have no entry there and name a version alone (threat-model.md §2.6). Every `mise.lock` change renovate writes is therefore written by the mise that installs it. The `mise release` pull request is where a new mise first reads entries earlier ones wrote, `main`'s lock under its `checks`, and a refusal there is answered by `mise lock` with the new mise onto that branch. A run that fails marks `renovate/artifacts` red and leaves the entry unmoved. Without the host's allow-list, a run whose `mise version` probe fails is skipped: the pull request arrives without the entry and without that mark, and `checks` refuses it at the install. Either way a person runs `mise lock <tool>` onto the branch. The `gawk` pin stays on the appliance's line, within which renovate offers nothing: the appliance's Fedora CoreOS major moves it, by the re-check its comment in `mise.toml` describes, which renovate's pull request for that major asks for in its body |
 | The gateway's dash (`mise.toml`'s `http:dash`, the shell the suite runs the device's `#!/bin/sh` templates under) | `gateway-health`'s reading of the device's base, in place of a pull request: no dash release makes the pin stale; a UniFi firmware that changes the gateway's base or its `/bin/sh` does, and the vendor applies firmware on its own schedule (the UDM firmware row). The reading compares the device's Debian release and what its `/bin/sh` resolves to with the base `Gateway` declares, and the daily run of `check-gateway` mails a mismatch (physical/gateway.md §1.6), naming the playbook "The device's base moved" in physical/gateway.md §3, which is the trigger to move the pin | a person, from that playbook: for another Debian release, the pin moved to that release's dash, its URL and sha256 with it, then `mise lock`; for a `/bin/sh` other than dash, the suite's shell for the device's `#!/bin/sh` templates replaced (`tests/device_shell.py`), with the pin that installs it; then `Gateway`'s declared base moved to what the device reads, which a `physical` push delivers and which clears the finding | Reviewed, with no preview to read: no stack reads the pin, so what the reviewer reads is the suite's run of the device templates' cases under the new pin. The pin follows the device's base rather than dash's newest release (`mise.toml` says why beside it) |
 | UDM firmware | **vendor-controlled** (auto-update schedule; outage history on record) | — | Not ours to pin; the device's services self-heal via on_boot.d, overlay recovery runbook gateway.md §3. A firmware that changes the device's base or its `/bin/sh` is the gateway's dash row's trigger |
@@ -185,15 +181,14 @@ from an HTTP repository, which offers nothing to check a download against
     `physical` apply runs within its renewal window of the certificate's
     expiry — 720 hours by default, and `physical` sets none — so a CI
     `up-physical` re-issues it; replacing the cluster's PKI changes it
-    too. Cadence: the first copy is the first step of the second
-    milestone (`kluster-ops#77`), and from then on after every
-    `physical` `up`, and at least monthly, which no 30-day window can
-    slip past. `physical`'s first `up`, in the first milestone, is
-    followed by no copy: the commit of both stack files is an `up` of
-    `k8s-base` and `apps`, whose Environments take no reviewer, and the
-    bring-up's checks that need no network plugin run before Cilium
-    exists (physical/gateway-cutover.md §8.1). Gist: `credentials derived sync
-    --only kubeconfig` from the checkout that holds the kit, then commit
+    too. Cadence: after every `physical` `up`, and at least monthly,
+    which no 30-day window can slip past. In a bring-up the first copy
+    waits for stage 4 of physical/bring-up.md §2 rather than following
+    `physical`'s first `up`: the commit of both stack files is an `up`
+    of `k8s-base` and `apps`, whose Environments take no reviewer, and
+    the bring-up's checks that need no network plugin run before Cilium
+    exists (physical/gateway-cutover.md §8.1). Gist: `credentials
+    derived sync --only kubeconfig` from the checkout that holds the kit, then commit
     `Pulumi.k8s-base.yaml` and `Pulumi.apps.yaml`, whose copies the two
     stacks open their Kubernetes provider with (credentials.md §3). A
     stack already holding the current value as a secret is left alone,

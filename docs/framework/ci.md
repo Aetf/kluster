@@ -353,7 +353,11 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     an upstream layer has a diff, downstream previews are computed
     against the *current* StackReference outputs and may be off — accepted
     and annotated on the PR; the serial `needs` order of the up jobs is
-    what guarantees correctness at apply time.
+    what guarantees correctness at apply time. `preview` lets every
+    entry finish, and `prove` is `fail-fast: true`: an entry that fails
+    first can cancel the other two, so which names a red `prove` reports
+    failed and which canceled varies between runs and carries no
+    information.
 -   **Path-filter skipping is a setup-cost optimization, not a
     correctness mechanism**, and **selection is all-or-nothing**: a
     change that reaches no stack skips the matrix entirely (saving
@@ -770,7 +774,8 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     stack. Its log ends either in `--expect-no-changes` refusing the
     changes the refreshed preview found — a diff — or in an error
     before the comparison (the ZeroTier join, the state backend, a
-    provider credential; §5 names those standing today), which is
+    provider credential; the credential partition below says how a
+    blank secret shows), which is
     re-run once its cause is gone and is not drift. A diff means
     something changed behind Pulumi's back, the device files and the
     OCI console being the realistic sources. Review it by hand, then
@@ -1015,6 +1020,36 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     Environments and the stack passphrase in every other,
     `ZEROTIER_IDENTITY` only in the Environments of the stack it
     belongs to (physical/gateway.md §2.6).
+-   **A blank secret shows in which step fails, and the step headers
+    show blanks that are not.** The `state-backend` action checks the
+    four `PULUMI_BACKEND_*` secrets before anything else runs: an empty
+    one aborts the job in *Write the bundle into the checkout's slot*
+    with `the ci client bundle is incomplete`, naming the variables that
+    came through blank. The passphrase has no such guard — the `pulumi`
+    step reads it directly — so a blank one fails every stack whose file
+    carries an `encryptionsalt` before the program runs, with
+    `error: getting stack configuration: get stack secrets manager:
+    incorrect passphrase`. A job that reached a `pulumi` command
+    therefore had a complete bundle. Every stack the matrices name
+    exists in the backend, so `no stack named` names a backend that is
+    not the appliance, or state that is gone, and a bundle that resolves
+    but cannot reach the appliance fails with `unable to open bucket
+    ...: failed to ping PostgreSQL` instead. The runner prints each
+    step's inherited environment, and in it `PULUMI_BACKEND_URL`,
+    `PULUMI_CONFIG_PASSPHRASE` and the three `PGSSL*` variables are
+    blank in every job, the ones that reach the backend included. That
+    listing is a snapshot `mise-action` took before the bundle was
+    materialized, frozen into the job's environment; `mise x`
+    re-resolves them from the checkout's `.credentials/state-backend/`
+    slot at the moment the command runs (physical/state-backend.md §3),
+    and a step that sets one explicitly overrides it, which is why
+    `PULUMI_CONFIG_PASSPHRASE` reads `***` in the `pulumi` steps and
+    blank in every other. In the ZeroTier step that blank passphrase is
+    the line directly above `IDENTITY:`, which the workflow interpolates
+    from `${{ secrets.ZEROTIER_IDENTITY }}` at that moment, so it reads
+    `***` where the Environment holds the identity and blank there is a
+    genuine absence, the state the way back of
+    physical/gateway-cutover.md §8.3 leaves.
 -   **Two ways a row fills, and which one applies is a property of the
     credential.** *Synced* rows are copies of a value whose truth lives
     elsewhere, and `credentials derived sync` re-reads and re-pushes
@@ -1220,27 +1255,19 @@ branch + git-sync).
 ## 5. Red before the installation exists
 
 The pipeline above is complete; the installation it drives is not.
-`dns` and `physical` are applied: `dns` has written every zone since
-its first `up` (sources-of-truth.md, row R1), and `physical` has held
-what its runs created since physical/gateway-cutover.md §5 and
-publishes its outputs. `github` and `state-backend` have resources
-behind them too, as operator stacks that no job runs
-(framework/pulumi.md §3.3). `k8s-base` and `apps` exist and have never
-been updated — `k8s-base` declares Cilium and its operators, `apps`
-nothing beyond its providers — so the checks that reach those two fail,
-on `main` and on every pull request that touches code, and that red is
-a property of the phase rather than a fault to report. What follows is
-how to tell it apart from a real one. The milestones named below are
-the ops repository's roadmap phases (dispatch.md §4); the `M1`/`M2` of
-cluster/security-audit.md are audit findings and unrelated.
-
-`drift` runs only when started by hand (§3). Its `k8s-base` and `apps`
-entries fail for the reason below. Its `dns` entry fails in its
-*Refresh and compare* step, with the `status` of a `ZoneDnssec` read
-back as `pending` against the declared `active` as its only diff, until
-physical/gateway-cutover.md §8.4 has run for every zone, and
-physical/gateway-cutover.md §8.3 says how that red is told from one at
-the join.
+Every stack the matrices name is applied: `dns` has written every zone
+since its first `up` (sources-of-truth.md, row R1), and `physical` has
+held what its runs created since physical/gateway-cutover.md §5 and
+publishes its outputs. `k8s-base` and `apps` were first applied by the
+merge that committed the copy of the cluster credential into their
+configuration (operations.md §2.5), and every merge applies them since;
+`k8s-base` declares the platform of declarative/cluster-infra.md §1, and
+`apps` nothing beyond its providers, since no application's component
+is wired yet (sources-of-truth.md §3). `github` and `state-backend` have
+resources behind them too, as operator stacks that no job runs
+(framework/pulumi.md §3.3). What follows is the one red that is a
+property of the phase rather than a fault to report, and how to tell it
+apart from a real one.
 
 **A merge is gated on `checks` and `changes`, and on nothing else.**
 `main` requires exactly those two contexts on an up-to-date branch,
@@ -1248,115 +1275,13 @@ with `enforce_admins` on and no reviewer requirement (§3); `preview`,
 `noop-automerge`'s `prove`, `deploy` and `drift` are unrequired, so a
 pull request whose `checks` and `changes` are green is mergeable while
 the rest of the matrix is red. That much is standing and does not
-retire. What is phase-bound is the reading of the `k8s-base` and `apps`
-entries: today a red one says something about the installation and
-nothing about the change, so it is not a review finding. A red
-`preview` of `dns` or `physical` on a code change is a review finding,
-as every red `preview` is once the stacks exist. Each finding below
-names the condition that deletes it, and the section goes with the last
-of them.
+retire. A red `preview` of any stack on a code change is a review
+finding. The finding below names the condition that deletes it, and the
+rest of the section goes with it.
 
-**`k8s-base` and `apps` preview red until they hold a kubeconfig they
-can open.** Both stacks exist, with their stack files committed, and
-each program opens its Kubernetes provider with the kubeconfig in its
-own configuration (rfc-007 §3.1). The value is generated in `physical`'s
-state, which is under a passphrase of its own, and a StackReference
-elides a secret across that split, so `credentials derived sync --only
-kubeconfig` copies it into both stacks' configuration from a
-workstation (credentials.md §3). Neither stack's configuration holds a
-copy, and `physical`'s first `up` makes none: the first copy is the
-second milestone's first step (operations.md §2.5). So the read fails
-the run naming the key it lacks and the command that fills it — the
-program's traceback ends in
-
-```
-kluster.lib.k8s.UnusableKubeconfig: this stack's configuration holds no 'kubeconfig', so no Kubernetes provider is opened; `credentials derived sync --only kubeconfig` copies it in from the physical stack's state once physical has been applied
-```
-
-A push to `main` meets it at `deploy`'s `up-k8s-base`, which runs once
-`physical`'s jobs have passed and fails there; `up-apps`, which needs it
-to succeed, is skipped, and `notify-failure`, the Home Assistant alert
-of §3, runs on every merge. Every pull request that touches code runs
-both entries. `prove` is
-`fail-fast: true`, so an entry that fails first can cancel the other
-two: which names are reported failed and which canceled varies
-between runs and carries no information. A pull request that touches
-only documentation, `.vscode/`, `.gitignore` or `checkpoints/` runs no
-`preview` at all — `changes` selects an empty set and the matrix job stands down.
-It runs no `prove` either: none of those paths is on noop-automerge's
-allow-list, and `sdks/` is on it only beside renovate's bump of
-`Pulumi.yaml`, so such a pull request is merged by hand (§3). A candidate the list does
-admit runs `prove` against stacks whose previews fail, and is merged
-by hand as well. The refusal also hides the zones token's absence: `apps`
-reads the kubeconfig first, so the run stops there ahead of the
-program's own `Missing required configuration variable` for the token,
-and whether `apps` holds the token is checked on the workstation, with
-`pulumi config get cloudflareApiToken --stack apps`, rather than read
-off this preview. **Retires when these stacks hold a kubeconfig they
-can open**: at the second milestone's first step (`kluster-ops#77`),
-the first copy and the commit of both stack files (operations.md §2.5),
-which the first milestone's `physical` `up` does not make; from then on
-the preview reaches the cluster through the balancer's 6443 (§2), as
-rfc-007 §3.3 lists.
-
-**That is not a secret-availability problem, and the tell is
-which step fails, and then what the message names.** All five
-Environments hold the four `PULUMI_BACKEND_*` secrets and the
-passphrase, and the `state-backend` action checks the four before
-anything else runs: an empty one aborts the job in *Write the bundle
-into the checkout's slot* with `the ci client bundle is incomplete`,
-naming the variables that came through blank. The passphrase has no
-such guard — the `pulumi` step reads it directly. A blank one fails
-every stack whose file carries an `encryptionsalt`, `k8s-base` and
-`apps` included, before the program runs:
-
-```
-error: getting stack configuration: get stack secrets manager: incorrect passphrase
-```
-
-A job that reached a `pulumi` command therefore had a complete bundle,
-and a job that got as far as the `UnusableKubeconfig` had the passphrase too. Whether `pulumi` was
-pointed at the appliance turns on `mise.toml` resolving the slot under
-`config_root`, which no line of the log settles either way. What
-`pulumi` does with no URL at all is left out here on purpose — it
-depends on the version and on whether the session is judged
-interactive, and nothing below rests on it. The `UnusableKubeconfig`
-above is the one red in this phase that does settle it: the run that
-raises it has loaded its own stack out of the appliance, so the box
-answered.
-
-**The message is the test.** `no stack named` is never expected:
-every stack the matrices name exists in the backend, so
-`no stack named 'k8s-base'`, or naming
-any other of them, means `pulumi` was pointed at a backend that is not
-the appliance, or that the state is gone, and is a regression on
-either reading. A bundle that resolves but cannot reach
-the appliance fails differently again, with
-`unable to open bucket ...: failed to ping PostgreSQL`.
-
-One artifact of the logs invites a blank secret where there is none.
-The runner prints each step's inherited environment, and in it
-`PULUMI_BACKEND_URL`, `PULUMI_CONFIG_PASSPHRASE` and the three
-`PGSSL*` variables are all blank — in every job, including
-the ones that go on to reach the backend. That listing is a snapshot
-`mise-action` took before the bundle was materialized, frozen into the
-job's environment; `mise x` re-resolves them from the checkout's
-`.credentials/state-backend/` slot at the moment the command runs
-(physical/state-backend.md §3), and a step that sets one explicitly
-overrides it, which is why `PULUMI_CONFIG_PASSPHRASE` reads `***` in
-the `pulumi` steps and blank in every other.
-
-The pair that actually misleads is in the ZeroTier step, where that
-blank passphrase is the line directly above `IDENTITY:`. Those two
-look identical and mean opposite things: the passphrase is the
-snapshot artifact, while `IDENTITY` is
-`${{ secrets.ZEROTIER_IDENTITY }}` interpolated by the workflow at
-that moment, so it reads `***` where the Environment holds the identity
-and blank there is a genuine absence, the state the way back of
-physical/gateway-cutover.md §8.3 leaves. **Retires with the `k8s-base`
-and `apps` finding above**, since a green matrix
-leaves nothing to misread — but the parts of it that are not phase
-state should survive the deletion beside the credential partition they
-belong to in §3: the `state-backend` action rejects an incomplete
-bundle by name, the passphrase is not covered by that check, and the
-step headers go on showing blanks after every stack exists.
+`drift` runs only when started by hand (§3). Its `dns` entry fails in
+its *Refresh and compare* step, with the `status` of a `ZoneDnssec` read
+back as `pending` against the declared `active` as its only diff, until
+physical/gateway-cutover.md §8.4 has run for every zone, and
+physical/gateway-cutover.md §8.3 says how that red is told from one at
+the join.
