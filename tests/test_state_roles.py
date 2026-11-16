@@ -56,7 +56,7 @@ import uuid
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Any, cast
 from urllib import parse as urllib_parse
 
 import process_sessions
@@ -617,8 +617,8 @@ def _up(target: state.Connection, project: Path, stack: str, env: dict[str, str]
     _pulumi(target, project, ['up', '--yes', '--skip-preview', '--stack', stack], env)
 
 
-def _pulumi(target: state.Connection, project: Path, args: list[str], env: dict[str, str] | None) -> None:
-    _ = pulumi_config.run_pulumi(
+def _pulumi(target: state.Connection, project: Path, args: list[str], env: dict[str, str] | None) -> str:
+    return pulumi_config.run_pulumi(
         args,
         cwd=project,
         env={
@@ -1078,7 +1078,19 @@ def test_a_run_under_mises_environment_keeps_a_compressed_checkpoint_and_no_back
     assert [key for key in keys if state.kind(key, settings.DATABASE) is state.Kind.BACKUPS] == []
 
 
-def test_a_switch_to_compression_leaves_the_plain_bak_and_the_prune_takes_that_alone(
+def _copies(keys: set[str], stack: str, *, layout: str) -> set[str]:
+    """The keys among `keys` that are `stack`'s `history/` and `backups/` copies, records excluded."""
+    history = f'{layout}history/project/{stack}/{stack}-'
+    backups = f'{layout}backups/project/{stack}/{stack}.'
+    return {key for key in keys if (key.startswith(history) and '.checkpoint.' in key) or key.startswith(backups)}
+
+
+def _history(target: state.Connection, project: Path, stack: str) -> object:
+    """`pulumi stack history` of `stack`, as the pinned `pulumi` prints it."""
+    return json.loads(_pulumi(target, project, ['stack', 'history', '--json', '--stack', stack], None))
+
+
+def test_a_switch_to_compression_leaves_plain_copies_and_the_prune_takes_those_alone(
     start: Start,
     ignition: dict[str, Any],
     roots: config.Roots,
@@ -1086,16 +1098,20 @@ def test_a_switch_to_compression_leaves_the_plain_bak_and_the_prune_takes_that_a
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The row `--prune-superseded` exists for, as the pinned `pulumi` leaves it, and the prune of it.
+    """The rows `--prune-superseded` exists for, as the pinned `pulumi` leaves them, and the prune of them.
 
-    A stack written uncompressed and then updated under `mise.toml`'s
-    variables keeps `<stack>.json.bak` beside its compressed checkpoint, and
-    nothing the backend does will replace or remove it. A neighbour written
-    uncompressed throughout -- an operator stack's state, which the driver
-    writes so -- keeps a `.bak` that is its live checkpoint's copy. The
-    census without `--yes` deletes nothing; with it, the one superseded row
-    goes and every other row stays. Asked by name, the statement deletes
-    neither a live checkpoint nor the copy of one.
+    A stack updated uncompressed and then twice under `mise.toml`'s
+    variables keeps, beside its compressed checkpoint and that checkpoint's
+    own `.bak`, `<stack>.json.bak` and the
+    uncompressed `history/` and `backups/` copies its first update wrote,
+    and nothing the backend does replaces or removes any of them. A
+    neighbour written uncompressed throughout -- an operator stack's
+    state, which the driver writes so -- keeps the same kinds of copy, in
+    the format its checkpoint is still stored in. The census without
+    `--yes` deletes nothing; with it, exactly the first stack's
+    uncompressed copies go, and `pulumi stack history` prints what it
+    printed before. Asked by name, the statement deletes no checkpoint, no
+    copy in its stack's format, and no update record.
     """
     for variable in STATE_SWITCHES_ENV:
         monkeypatch.delenv(variable, raising=False)
@@ -1106,26 +1122,77 @@ def test_a_switch_to_compression_leaves_the_plain_bak_and_the_prune_takes_that_a
     for stack in (STACK, neighbour):
         _stack_init(operator, project, stack)
         _up(operator, project, stack)
-    _up(operator, project, STACK, _mise_switches())
-    stacks = f'{settings.DATABASE}/{BACKEND_STACKS}{project.name}/'
-    stale = f'{stacks}{STACK}.json.bak'
+    plain = _keys(box)
+    for _ in range(2):
+        _up(operator, project, STACK, _mise_switches())
+    layout = f'{settings.DATABASE}/.pulumi/'
+    stacks = f'{layout}stacks/{project.name}/'
     before = _keys(box)
-    assert {stale, f'{stacks}{STACK}.json.zst', f'{stacks}{neighbour}.json', f'{stacks}{neighbour}.json.bak'} <= before
+    stale = {f'{stacks}{STACK}.json.bak', *_copies(plain, STACK, layout=layout)}
+    kept_copies = _copies(before, neighbour, layout=layout) | (_copies(before, STACK, layout=layout) - stale)
+    records = {key for key in before if '.history.json' in key}
+    assert {key for key in stale if '/history/' in key}
+    assert {key for key in stale if '/backups/' in key}
+    assert {key for key in kept_copies if key.endswith('.checkpoint.json.zst')}
+    assert {key for key in kept_copies if '/history/' in key and neighbour in key}
+    assert {key for key in kept_copies if '/backups/' in key and neighbour in key}
+    current = {f'{stacks}{STACK}.json.zst', f'{stacks}{STACK}.json.zst.bak', f'{stacks}{neighbour}.json'}
+    current |= {f'{stacks}{neighbour}.json.bak'}
+    assert stale | current <= before
     assert f'{stacks}{STACK}.json' not in before
+    history = _history(operator, project, STACK)
+    assert isinstance(history, list)
+    assert len(cast('list[object]', history)) == 3
 
     listed = io.StringIO()
     assert census.run(operator, prune=True, yes=False, out=listed) == 0
     assert _keys(box) == before
-    assert f'  {stale} ' in listed.getvalue()
-    assert f'{stacks}{STACK}.json.zst ' in listed.getvalue()
+    listing = listed.getvalue().split('superseded copies:', 1)[1]
+    assert {line.split()[0] for line in listing.splitlines()[1:] if line.strip()} == stale
 
-    assert state.prune(operator, [f'{stacks}{STACK}.json.zst', f'{stacks}{neighbour}.json.bak']) == []
+    assert state.prune(operator, sorted(current | kept_copies | records)) == []
     assert _keys(box) == before
 
     pruned = io.StringIO()
     assert census.run(operator, prune=True, yes=True, out=pruned) == 0
-    assert _keys(box) == before - {stale}
-    assert f'deleted  {stale}' in pruned.getvalue()
+    assert _keys(box) == before - stale
+    assert all(f'deleted  {key}' in pruned.getvalue() for key in stale)
+    assert _history(operator, project, STACK) == history
+
+
+def test_a_copy_its_stack_is_written_in_again_is_kept_by_the_delete_listed_before(
+    start: Start,
+    ignition: dict[str, Any],
+    roots: config.Roots,
+    clients: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The delete reads the table again rather than trusting the listing it is handed.
+
+    The listing names the uncompressed copies of a compressed stack; a
+    writer without compression then saves the stack, which moves its
+    checkpoint back to `<stack>.json`. The delete of that listing, run
+    after, takes none of them, because each is in the format its stack is
+    stored in again.
+    """
+    for variable in STATE_SWITCHES_ENV:
+        monkeypatch.delenv(variable, raising=False)
+    box = _appliance(start, ignition)
+    operator = _bundle(roots, box, clients, settings.OPERATOR_ROLE)
+    project = tmp_path / 'project'
+    _stack_init(operator, project, STACK)
+    _up(operator, project, STACK)
+    _up(operator, project, STACK, _mise_switches())
+    listing = [row.key for row in state.superseded(state.census(operator), settings.DATABASE)]
+    assert listing
+
+    _up(operator, project, STACK)
+    after = _keys(box)
+    assert f'{settings.DATABASE}/{BACKEND_STACKS}{project.name}/{STACK}.json' in after
+
+    assert state.prune(operator, listing) == []
+    assert _keys(box) == after
 
 
 def test_a_credentials_run_against_an_operator_stack_in_the_box_reaches_it_with_its_bundles_files(
@@ -1185,33 +1252,151 @@ def test_census_yes_is_refused_without_prune_superseded(capsys: pytest.CaptureFi
     assert '--prune-superseded' in capsys.readouterr().err
 
 
-#: A stack's keys under `<database>/.pulumi/stacks/<project>/`, and which of
-#: them are superseded. Each group is one stack.
+#: A stack's keys under `<database>/.pulumi/`, and which of them are
+#: superseded. Each group is one stack.
 SUPERSEDED: list[tuple[str, list[str], list[str]]] = [
-    ('compressed after plain', ['a.json.zst', 'a.json.zst.bak', 'a.json.bak'], ['a.json.bak']),
-    ('zstd after gzip', ['b.json.zst', 'b.json.gz.bak'], ['b.json.gz.bak']),
-    ('plain after zstd: writers that disagree', ['c.json', 'c.json.zst.bak'], ['c.json.zst.bak']),
-    ('a removed stack: the .bak is all there is', ['d.json.bak'], []),
-    ('two live suffixes: each .bak is its own checkpoint copy', ['e.json', 'e.json.zst', 'e.json.bak'], []),
-    ('plain throughout', ['f.json', 'f.json.bak'], []),
-    ('compressed throughout', ['g.json.zst', 'g.json.zst.bak'], []),
+    (
+        'compressed after plain',
+        ['stacks/p/a.json.zst', 'stacks/p/a.json.zst.bak', 'stacks/p/a.json.bak'],
+        ['stacks/p/a.json.bak'],
+    ),
+    ('zstd after gzip', ['stacks/p/b.json.zst', 'stacks/p/b.json.gz.bak'], ['stacks/p/b.json.gz.bak']),
+    (
+        'plain after zstd: writers that disagree',
+        [
+            'stacks/p/c.json',
+            'stacks/p/c.json.zst.bak',
+            'history/p/c/c-1.checkpoint.json.zst',
+            'backups/p/c/c.1.json.zst',
+        ],
+        ['stacks/p/c.json.zst.bak', 'history/p/c/c-1.checkpoint.json.zst', 'backups/p/c/c.1.json.zst'],
+    ),
+    (
+        'a removed stack: its copies are all there is',
+        ['stacks/p/d.json.bak', 'history/p/d/d-1.checkpoint.json', 'backups/p/d/d.1.json'],
+        [],
+    ),
+    (
+        'two live suffixes: a copy in either is its checkpoint copy',
+        [
+            'stacks/p/e.json',
+            'stacks/p/e.json.zst',
+            'stacks/p/e.json.bak',
+            'history/p/e/e-1.checkpoint.json',
+            'backups/p/e/e.1.json',
+        ],
+        [],
+    ),
+    (
+        'plain throughout',
+        [
+            'stacks/p/f.json',
+            'stacks/p/f.json.bak',
+            'history/p/f/f-1.history.json',
+            'history/p/f/f-1.checkpoint.json',
+            'backups/p/f/f.1.json',
+        ],
+        [],
+    ),
+    (
+        'compressed throughout',
+        [
+            'stacks/p/g.json.zst',
+            'stacks/p/g.json.zst.bak',
+            'history/p/g/g-1.history.json.zst',
+            'history/p/g/g-1.checkpoint.json.zst',
+        ],
+        [],
+    ),
+    (
+        'compressed after plain: the history and backups copies, and no update record',
+        [
+            'stacks/p/h.json.zst',
+            'history/p/h/h-1.history.json',
+            'history/p/h/h-1.checkpoint.json',
+            'history/p/h/h-2.history.json.gz',
+            'history/p/h/h-2.checkpoint.json.gz',
+            'history/p/h/h-3.history.json.zst',
+            'history/p/h/h-3.checkpoint.json.zst',
+            'backups/p/h/h.1.json',
+            'backups/p/h/h.2.json.gz',
+        ],
+        [
+            'history/p/h/h-1.checkpoint.json',
+            'history/p/h/h-2.checkpoint.json.gz',
+            'backups/p/h/h.1.json',
+            'backups/p/h/h.2.json.gz',
+        ],
+    ),
+    (
+        "the backend's project-less layout",
+        ['stacks/i.json.zst', 'stacks/i.json.bak', 'history/i/i-1.checkpoint.json', 'backups/i/i.1.json'],
+        ['stacks/i.json.bak', 'history/i/i-1.checkpoint.json', 'backups/i/i.1.json'],
+    ),
+    (
+        'a name with dots and dashes',
+        ['stacks/p/k-8s.x.json.zst', 'history/p/k-8s.x/k-8s.x-17.checkpoint.json', 'backups/p/k-8s.x/k-8s.x.17.json'],
+        ['history/p/k-8s.x/k-8s.x-17.checkpoint.json', 'backups/p/k-8s.x/k-8s.x.17.json'],
+    ),
+    (
+        'names the backend does not write',
+        [
+            'stacks/p/j.json.zst',
+            'history/p/j/k-1.checkpoint.json',
+            'history/p/j/j-1.checkpoint.json.bak',
+            'history/p/j-1.checkpoint.json',
+            'backups/p/j/j.json',
+            'backups/p/j/k.1.json',
+            'backups/p/j/j.1.json.bak',
+            'stacks/p/j.json.1790591454000000000',
+        ],
+        [],
+    ),
 ]
 
 
+def _superseded_rows(keys: list[str]) -> list[state.Row]:
+    """`keys` under the database's own prefix, and the same names under another database's, which nothing selects."""
+    layout = f'{settings.DATABASE}/.pulumi/'
+    return [
+        state.Row(key=key, size=1)
+        for key in [*(layout + key for key in keys), *(f'other/.pulumi/{key}' for key in keys)]
+    ]
+
+
 @pytest.mark.parametrize(('keys', 'stale'), [case[1:] for case in SUPERSEDED], ids=[case[0] for case in SUPERSEDED])
-def test_a_bak_is_superseded_when_its_stack_has_a_checkpoint_and_none_under_its_suffix(
+def test_a_copy_is_superseded_when_its_stack_has_a_checkpoint_and_none_under_its_suffix(
     keys: list[str], stale: list[str]
 ) -> None:
-    stacks = f'{settings.DATABASE}/{BACKEND_STACKS}project/'
-    beside = [
-        # The same names elsewhere: under another database's prefix, and as
-        # copies outside `stacks/`, none of which is a stack's `.bak`.
-        *(f'other/{BACKEND_STACKS}project/{key}' for key in keys),
-        f'{settings.DATABASE}/.pulumi/backups/project/a/a.1790591454000000000.json.bak',
-    ]
-    rows = [state.Row(key=key, size=1) for key in [*(stacks + key for key in keys), *beside]]
+    layout = f'{settings.DATABASE}/.pulumi/'
 
-    assert [row.key for row in state.superseded(rows, settings.DATABASE)] == [stacks + key for key in stale]
+    assert sorted(row.key for row in state.superseded(_superseded_rows(keys), settings.DATABASE)) == sorted(
+        layout + key for key in stale
+    )
+
+
+def test_the_delete_takes_what_the_listing_selects_and_nothing_else_it_is_handed(
+    start: Start,
+    ignition: dict[str, Any],
+    roots: config.Roots,
+    clients: Path,
+    tmp_path: Path,
+) -> None:
+    """`PRUNE_STATEMENT` reads `superseded`'s definition in Postgres's dialect, and agrees with it on every case above.
+
+    Every group's keys go into one table, and the delete is handed all of
+    them: what it deletes is what `superseded` selects from the same rows.
+    """
+    box = _appliance(start, ignition)
+    operator = _bundle(roots, box, clients, settings.OPERATOR_ROLE)
+    _stack_init(operator, tmp_path / 'project', STACK)
+    rows = _superseded_rows([key for case in SUPERSEDED for key in case[1]])
+    values = ', '.join(f'(\'{row.key}\', \'{{"data":""}}\')' for row in rows)
+    _ = box.local(f'INSERT INTO {BACKEND_TABLE} (key, data) VALUES {values}')
+    selected = sorted(row.key for row in state.superseded(rows, settings.DATABASE))
+    assert selected
+
+    assert sorted(state.prune(operator, [row.key for row in rows])) == selected
 
 
 @pytest.mark.parametrize(

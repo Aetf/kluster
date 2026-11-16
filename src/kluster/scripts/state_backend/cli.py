@@ -111,14 +111,14 @@ def build_parser() -> argparse.ArgumentParser:
     # Needs no offline database: the client bundle is the whole credential.
     counting = actions.add_parser(
         'census',
-        help='count the state table by kind of key, and prune the .bak rows nothing reads',
+        help='count the state table by kind of key, and prune the checkpoint copies nothing reads',
         description=census.__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     _ = counting.add_argument(
         '--prune-superseded',
         action='store_true',
-        help="also list each .bak row whose stack's checkpoint now lives under another suffix",
+        help='also list each .bak, history/ and backups/ copy stored in a format its stack no longer writes',
     )
     _ = counting.add_argument(
         '--yes',

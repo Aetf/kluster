@@ -87,17 +87,16 @@ ARCHIVE_MAGIC = b'PGDMP'
 STATE_TABLE = 'pulumi_state'
 STACKS = '.pulumi/stacks/'
 
+#: The suffix after `.json` that names the format a key's value was written
+#: in, for each compression the backend writes (`PULUMI_DIY_BACKEND_GZIP`,
+#: `PULUMI_DIY_BACKEND_ZSTD`); a value written plain has none.
+COMPRESSED = ('.gz', '.zst')
+_FORMAT = '(' + '|'.join(re.escape(suffix) for suffix in COMPRESSED) + ')?'
+
 #: What follows `STACKS` in a checkpoint's key: `<project>/<name>.json`, or
-#: `.json.gz` or `.json.zst` when the backend compresses
-#: (`PULUMI_DIY_BACKEND_GZIP`, `PULUMI_DIY_BACKEND_ZSTD`). The `.bak` beside
-#: each is not one.
-CHECKPOINT = re.compile(r'.+\.json(\.gz|\.zst)?')
-#: What follows `STACKS` in the key of a checkpoint's `.bak`: the copy every
-#: save makes of the checkpoint it is about to replace (`backupTarget` in the
-#: backend's `state.go`). Its first group is the stack's plain checkpoint key
-#: less `STACKS`, `<project>/<stack>.json`; its second the compression suffix
-#: the copied checkpoint carried, if any.
-PREVIOUS = re.compile(r'(.+\.json)(\.gz|\.zst)?\.bak')
+#: that and a suffix of `COMPRESSED` when the backend compresses. The `.bak`
+#: beside each is not one.
+CHECKPOINT = re.compile(rf'.+\.json{_FORMAT}')
 
 #: The client tool the state table is read and pruned with, from the same
 #: `postgres` pin as the dump's.
@@ -360,8 +359,8 @@ class Kind(enum.Enum):
 
     #: A stack's checkpoint: `CHECKPOINT` under `STACKS`.
     CHECKPOINT = 'checkpoint'
-    #: The copy of a checkpoint every save makes before it replaces one:
-    #: `PREVIOUS` under `STACKS`.
+    #: The copy of a checkpoint every save makes before it replaces one
+    #: (`COPIES`).
     PREVIOUS = 'checkpoint .bak'
     #: One copy of the checkpoint per writing operation (`backupStack`), which
     #: `PULUMI_DIY_BACKEND_DISABLE_CHECKPOINT_BACKUPS` turns off.
@@ -380,6 +379,36 @@ class Kind(enum.Enum):
 
 #: The directories under `BOOKKEEPING` whose every key is one kind.
 _DIRECTORIES = (Kind.BACKUPS, Kind.HISTORY, Kind.LOCKS)
+
+#: A stack's directory under `history/` or `backups/`, as the backend names
+#: it (`HistoryDir` and `BackupDir` in `pkg/backend/diy/store.go`):
+#: `<project>/<stack>`, or `<stack>` alone in its project-less layout. The
+#: first group is the whole, which is the stack's path under `STACKS` less
+#: `.json`; the second is its last element, the stack's name.
+_STACK_DIRECTORY = r'((?:[^/]+/)*([^/]+))'
+
+#: The copies the backend keeps of a stack's checkpoint, each a pattern the
+#: path of the copy's key under `<database>/` + `BOOKKEEPING` matches whole,
+#: as `pkg/backend/diy/state.go` at the pinned CLI names them. In each, the
+#: first group is the stack's path under `STACKS` less `.json`, and the last
+#: is the suffix of `COMPRESSED` naming the format the copy was written in,
+#: or nothing for a plain one. Two dialects read them, Python's and
+#: Postgres's (`PRUNE_STATEMENT`), so they are written in what the two read
+#: alike, and no key matches one of them in two ways.
+COPIES: dict[Kind, str] = {
+    # `<checkpoint>.bak` (`backupTarget`), in the format of the checkpoint it
+    # copied.
+    Kind.PREVIOUS: rf'{STACKS.removeprefix(BOOKKEEPING)}(.+)\.json{_FORMAT}\.bak',
+    # `<stack>-<unix nanoseconds>.checkpoint.json` (`addToHistory`), in the
+    # format its writer was set to write. The `.history.json` record beside
+    # it is the update's own, not a copy, and is what `pulumi stack history`
+    # reads (`getHistory`).
+    Kind.HISTORY: rf'{Kind.HISTORY.value}{_STACK_DIRECTORY}/\2-[0-9]+\.checkpoint\.json{_FORMAT}',
+    # `<stack>.<unix nanoseconds>.json` (`backupStack`), in the format of the
+    # checkpoint it copied.
+    Kind.BACKUPS: rf'{Kind.BACKUPS.value}{_STACK_DIRECTORY}/\2\.[0-9]+\.json{_FORMAT}',
+}
+_COPIES = tuple(re.compile(pattern) for pattern in COPIES.values())
 
 
 @dataclass(frozen=True)
@@ -405,45 +434,58 @@ def kind(key: str, database: str) -> Kind:
         return Kind.META
     stacks = STACKS.removeprefix(BOOKKEEPING)
     if rest.startswith(stacks):
-        path = rest.removeprefix(stacks)
-        if CHECKPOINT.fullmatch(path):
+        if CHECKPOINT.fullmatch(rest.removeprefix(stacks)):
             return Kind.CHECKPOINT
-        if PREVIOUS.fullmatch(path):
+        if re.fullmatch(COPIES[Kind.PREVIOUS], rest):
             return Kind.PREVIOUS
         return Kind.OTHER
     return next((member for member in _DIRECTORIES if rest.startswith(member.value)), Kind.OTHER)
 
 
+def _copy_of(path: str) -> tuple[str, str] | None:
+    """The stack whose checkpoint the key at `path` is a copy of, and the format it is in; `None` for no copy."""
+    for pattern in _COPIES:
+        if found := pattern.fullmatch(path):
+            return found.group(1), found.group(pattern.groups) or ''
+    return None
+
+
 def superseded(rows: Sequence[Row], database: str) -> list[Row]:
-    """The `.bak` rows whose stack's checkpoint now lives under another suffix.
+    """The copies of a checkpoint stored in a format their stack no longer writes.
 
-    A save that changes the checkpoint's compression copies the old
-    checkpoint to its own `.bak` and deletes it, and every later save backs
-    up the new key instead (`saveCheckpoint` in the backend's `state.go`): so
-    a stack whose writers turned compression on keeps `<stack>.json.bak`, a
-    full-size uncompressed copy, beside `<stack>.json.zst` and its `.bak`,
-    and nothing ever replaces or removes it. The same holds whichever way the
-    suffix changed, and for a stack whose writers disagree.
+    A stack's checkpoint is one key, `<stack>.json` and the suffix of the
+    format its last save wrote, and a save that changes the format writes
+    the new key and deletes the old (`saveCheckpoint` in the backend's
+    `state.go`). Every copy the backend makes carries a suffix too
+    (`COPIES`), and nothing it does ever replaces or removes one written in
+    the old format: a stack whose writers turned compression on keeps
+    `<stack>.json.bak` and every `history/` and `backups/` copy written
+    before, all full-size uncompressed values. Nothing reads them back.
+    `pulumi stack history` reads the `.history.json` records alone
+    (`getHistory`), and no command reads `backups/`.
 
-    A definition rather than a list: a `.bak` is superseded when its stack
-    has a checkpoint and none under the suffix the `.bak` carries. A stack
-    with no checkpoint keeps its `.bak`, which is all that is left of a
-    removed stack; and a `.bak` whose own checkpoint is still there is that
-    checkpoint's copy, however many suffixes the stack has.
+    A definition rather than a list: a copy is superseded when its stack
+    has a checkpoint and none under the suffix the copy carries. A stack
+    with no checkpoint keeps its copies, which are all that is left of a
+    removed stack; a copy in a format some checkpoint of its stack is
+    stored in is kept, however many suffixes the stack has; and the
+    update records under `history/` are no copies.
     """
-    prefix = f'{database}/{STACKS}'
+    prefix = f'{database}/{BOOKKEEPING}'
+    stacks = STACKS.removeprefix(BOOKKEEPING)
     live: dict[str, set[str]] = {}
-    previous: list[tuple[Row, str, str]] = []
+    copies: list[tuple[Row, str, str]] = []
     for row in rows:
         if not row.key.startswith(prefix):
             continue
         path = row.key.removeprefix(prefix)
-        if found := CHECKPOINT.fullmatch(path):
+        checkpoint = path.removeprefix(stacks)
+        if checkpoint != path and (found := CHECKPOINT.fullmatch(checkpoint)):
             suffix = found.group(1) or ''
-            live.setdefault(path.removesuffix(suffix), set()).add(suffix)
-        elif found := PREVIOUS.fullmatch(path):
-            previous.append((row, found.group(1), found.group(2) or ''))
-    return [row for row, stack, suffix in previous if stack in live and suffix not in live[stack]]
+            live.setdefault(checkpoint.removesuffix(f'.json{suffix}'), set()).add(suffix)
+        elif copied := _copy_of(path):
+            copies.append((row, *copied))
+    return [row for row, stack, suffix in copies if stack in live and suffix not in live[stack]]
 
 
 #: Every key of the state table and its stored size, as one JSON document.
@@ -452,16 +494,43 @@ CENSUS_QUERY = (
 )
 
 #: The delete of the keys in the `keys` variable, a JSON array, answering with
-#: the keys it deleted. It deletes only a `.bak` whose own checkpoint is not
-#: in the table as of the statement's snapshot, so neither a checkpoint nor
-#: the copy of one the statement sees is ever among them, whatever the list
-#: says and whatever a writer committed since the list was read.
+#: the keys it deleted. It applies `superseded`'s definition again, to the
+#: table as of the statement's snapshot, from the same patterns and suffixes
+#: (`COPIES`, `COMPRESSED`), which `prune` hands it as variables beside the
+#: prefixes they are read under. So it deletes only a copy of a checkpoint
+#: whose stack has a checkpoint and none in the copy's format: never a
+#: checkpoint, never a key that is no copy, and never a copy in a format its
+#: stack is stored in, whatever the list says and whatever a writer
+#: committed since the list was read.
 PRUNE_STATEMENT = f"""
-WITH gone AS (
+WITH asked AS (
+    SELECT listed.key, substr(listed.key, length(:'layout') + 1) AS path
+    FROM json_array_elements_text(:'keys'::json) AS listed (key)
+    WHERE starts_with(listed.key, :'layout')
+),
+copies AS (
+    SELECT asked.key,
+           :'layout' || :'stacks' || parsed.parts[1] || '.json' AS checkpoint,
+           coalesce(parsed.parts[cardinality(parsed.parts)], '') AS format
+    FROM asked
+    CROSS JOIN LATERAL (
+        SELECT matched.parts
+        FROM json_array_elements_text(:'copies'::json) AS copy (pattern),
+             regexp_match(asked.path, '^(?:' || copy.pattern || ')$') AS matched (parts)
+        WHERE matched.parts IS NOT NULL
+        LIMIT 1
+    ) AS parsed
+),
+gone AS (
     DELETE FROM {STATE_TABLE} AS stale
-    WHERE stale.key IN (SELECT json_array_elements_text(:'keys'::json))
-      AND stale.key LIKE '%.bak'
-      AND NOT EXISTS (SELECT 1 FROM {STATE_TABLE} AS live WHERE live.key = left(stale.key, -4))
+    USING copies
+    WHERE stale.key = copies.key
+      AND EXISTS (
+          SELECT 1
+          FROM {STATE_TABLE} AS live, json_array_elements_text(:'formats'::json) AS stored (format)
+          WHERE live.key = copies.checkpoint || stored.format
+      )
+      AND NOT EXISTS (SELECT 1 FROM {STATE_TABLE} AS live WHERE live.key = copies.checkpoint || copies.format)
     RETURNING stale.key
 )
 SELECT coalesce(json_agg(key ORDER BY key), '[]') FROM gone;
@@ -532,20 +601,25 @@ def census(target: Connection) -> list[Row]:
 
 
 def prune(target: Connection, keys: Sequence[str]) -> list[str]:
-    """Delete the `.bak` rows named, returning the keys deleted.
+    """Delete the superseded copies named, returning the keys deleted.
 
-    A key is deleted only where its own checkpoint is absent as of the
-    statement's snapshot (`PRUNE_STATEMENT`), so a
-    key the statement passes over is a row a writer has made current again,
-    or one already gone; the caller compares what it asked for with what
-    came back.
+    A key is deleted only where it is a copy of a checkpoint superseded as
+    of the statement's snapshot (`PRUNE_STATEMENT`), so a key the statement
+    passes over is a row a writer has made current again, one whose stack
+    has gone, one already gone, or no copy at all; the caller compares what
+    it asked for with what came back.
     """
     if not keys:
         return []
     log.info('deleting %d superseded row(s) from %s', len(keys), endpoint(target.url))
-    deleted = _psql(
-        target, PRUNE_STATEMENT, what=f'the prune of {STATE_TABLE}', variables={'keys': json.dumps(list(keys))}, env={}
-    )
+    variables = {
+        'keys': json.dumps(list(keys)),
+        'layout': f'{settings.DATABASE}/{BOOKKEEPING}',
+        'stacks': STACKS.removeprefix(BOOKKEEPING),
+        'copies': json.dumps(list(COPIES.values())),
+        'formats': json.dumps(['', *COMPRESSED]),
+    }
+    deleted = _psql(target, PRUNE_STATEMENT, what=f'the prune of {STATE_TABLE}', variables=variables, env={})
     if not isinstance(deleted, list) or not all(isinstance(key, str) for key in cast('list[object]', deleted)):
         raise StateError(f'the prune of {STATE_TABLE} answered something other than the keys it deleted: {deleted!r}')
     return cast('list[str]', deleted)
