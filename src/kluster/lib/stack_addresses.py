@@ -82,13 +82,15 @@ class Held(enum.Enum):
 class UnusableAddressOutput(ValueError):
     """A stack output read for an address holds something that is not one.
 
-    `output` names it, `held` says what it held, and `entry` is the name of the
-    mapping entry at fault, or `None` where the output as a whole is.
+    `output` names it, `family` is the IP version read from it, `held` says
+    what it held, and `entry` is the name of the mapping entry at fault, or
+    `None` where the output as a whole is.
     """
 
-    def __init__(self, message: str, *, output: str, held: Held, entry: str | None = None) -> None:
+    def __init__(self, message: str, *, output: str, family: Family, held: Held, entry: str | None = None) -> None:
         super().__init__(message)
         self.output: str = output
+        self.family: Family = family
         self.held: Held = held
         self.entry: str | None = entry
 
@@ -117,6 +119,7 @@ def usable_address(output: str, family: Family, value: object) -> str:
         f'the {output!r} output is {said}; an IPv{family} address is read from it, and nothing is declared with '
         'what it holds',
         output=output,
+        family=family,
         held=held,
     )
 
@@ -143,6 +146,7 @@ def usable_addresses(output: str, family: Family, value: object) -> dict[str, st
         f'the {output!r} output is {said}; a name-to-IPv{family}-address mapping is read from it, and nothing is '
         'declared with what it holds',
         output=output,
+        family=family,
         held=held,
         entry=at,
     )
