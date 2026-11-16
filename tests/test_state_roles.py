@@ -51,6 +51,7 @@ import shutil
 import socket
 import subprocess as sp
 import tarfile
+import tomllib
 import uuid
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
@@ -63,11 +64,12 @@ import pytest
 from root_credentials import fake
 from scratch_projects import cli_directories
 
-from kluster.lib import pulumi_cli
+from kluster.conventions import identity
+from kluster.lib import pulumi_cli, stack_environment
 from kluster.lib.bundle import CA_ENV, CERT_ENV, KEY_ENV, ssl_env
 from kluster.lib.state_backend import render, settings, state
 from kluster.scripts.credentials import pki, pulumi_config
-from kluster.scripts.state_backend import config
+from kluster.scripts.state_backend import census, cli, config
 
 ADDRESS = '127.0.0.1'
 IMAGE = settings.POSTGRES_IMAGE
@@ -109,6 +111,12 @@ LABEL = f'kluster-test={Path(__file__).stem}'
 #: `test_every_container_ends_by_itself_and_mounts_no_volume` holds this to
 #: the image.
 IMAGE_VOLUMES = (PurePosixPath('/var/lib/postgresql/data'),)
+
+#: The variables a client tool is handed from the case's environment, where it
+#: has them: the bundle's three files, which every connection reads, and the
+#: two `state` adds to a connection of its own -- the bound on opening it, and
+#: the settings a census session is opened with.
+TOOL_ENV = (CA_ENV, CERT_ENV, KEY_ENV, state.CONNECT_TIMEOUT_ENV, state.SESSION_OPTIONS_ENV)
 
 #: The unit whose `podman run` this repeats.
 UNIT = 'pgstate.service'
@@ -539,12 +547,12 @@ def tools(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Path]:
     _ = _podman(*_client(name))
     try:
         _ = _podman('exec', name, 'mkdir', '-p', str(directory))
-        for tool in ('psql', state.PG_RESTORE):
+        for tool in (state.PSQL, state.PG_RESTORE):
             script = directory / tool
             _ = script.write_text(
                 '#!/bin/sh\n'
                 f'podman cp {shlex.quote(f"{directory}/.")} {shlex.quote(f"{name}:{directory}")} || exit 1\n'
-                f'exec podman exec --interactive --env PGSSLROOTCERT --env PGSSLCERT --env PGSSLKEY {name} {tool} "$@"\n'
+                f'exec podman exec --interactive {" ".join(f"--env {variable}" for variable in TOOL_ENV)} {name} {tool} "$@"\n'
             )
             script.chmod(0o755)
         yield directory
@@ -556,7 +564,7 @@ def tools(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Path]:
 def clients(tools: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Where a case keeps its bundles and archives, with `state` and `pulumi` pointed there.
 
-    `state` runs the image's `pg_restore`. `pulumi` gets a home of its own,
+    `state` runs the image's `pg_restore` and `psql`. `pulumi` gets a home of its own,
     and none of the operator's `PGSSL*` variables: a case names its bundle's
     files or connects without TLS, never through what the operator's shell
     happened to hold. Each command either one starts is bounded by
@@ -564,6 +572,7 @@ def clients(tools: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Pat
     a transfer over the network and, for `state`'s, sits above the run's.
     """
     monkeypatch.setattr(state, 'PG_RESTORE', str(tools / state.PG_RESTORE))
+    monkeypatch.setattr(state, 'PSQL', str(tools / state.PSQL))
     monkeypatch.setattr(pulumi_cli, 'TIMEOUT', COMMAND_TIMEOUT)
     monkeypatch.setattr(state, 'LISTING_TIMEOUT', COMMAND_TIMEOUT)
     monkeypatch.setattr(state, 'TRANSFER_TIMEOUT', COMMAND_TIMEOUT)
@@ -600,8 +609,17 @@ def _stack_init(target: state.Connection, project: Path, stack: str, env: dict[s
     """Write a stack into the backend: what `pulumi` does with it, not a row. `env` is overlaid on the run's."""
     project.mkdir(parents=True, exist_ok=True)
     _ = (project / 'Pulumi.yaml').write_text(f'name: {project.name}\nruntime: yaml\n')
+    _pulumi(target, project, ['stack', 'init', stack], env)
+
+
+def _up(target: state.Connection, project: Path, stack: str, env: dict[str, str] | None = None) -> None:
+    """An update of a stack `_stack_init` wrote, whose program declares nothing: a writing operation, whole."""
+    _pulumi(target, project, ['up', '--yes', '--skip-preview', '--stack', stack], env)
+
+
+def _pulumi(target: state.Connection, project: Path, args: list[str], env: dict[str, str] | None) -> None:
     _ = pulumi_config.run_pulumi(
-        ['stack', 'init', stack],
+        args,
         cwd=project,
         env={
             pulumi_config.BACKEND_URL_ENV: target.url,
@@ -987,3 +1005,233 @@ def test_both_copies_of_the_checkpoint_grammar_count_what_pulumi_writes(
     serving = _nightly(box, clients, env, 'serving')
     assert _box_count(box, serving, env) == 1
     assert state.verify_dump(serving) == [f'{env["PG_DATABASE"]}/{BACKEND_STACKS}project/{STACK}{suffix}']
+
+
+#: The checkout's `mise.toml`, whose `[env]` every `mise x -- pulumi` run is
+#: started with -- every CI job's and a workstation's (tests/test_mise_env.py).
+MISE_TOML = Path(__file__).resolve().parents[1] / 'mise.toml'
+
+#: Every variable, under each of its names, that changes which keys a save
+#: writes: compression, the `backups/` copy, a retained copy. Cleared before a
+#: case that names its own, so the operator's shell -- or the suite's own
+#: `mise x` -- decides nothing there.
+STATE_SWITCHES_ENV = (
+    *COMPRESSION_ENV,
+    'PULUMI_DIY_BACKEND_DISABLE_CHECKPOINT_BACKUPS',
+    'PULUMI_DISABLE_CHECKPOINT_BACKUPS',
+    'PULUMI_DIY_BACKEND_RETAIN_CHECKPOINTS',
+    'PULUMI_RETAIN_CHECKPOINTS',
+)
+
+
+def _mise_switches() -> dict[str, str]:
+    """The `PULUMI_` variables `mise.toml`'s `[env]` sets to a literal value, as it sets them.
+
+    A literal renders to itself, so these are what a `pulumi` run under
+    `mise x` is given; the templates beside them are the backend and its
+    passphrase, which a case names for itself.
+    """
+    table: dict[str, str] = tomllib.loads(MISE_TOML.read_text())['env']
+    return {
+        name: value
+        for name, value in table.items()
+        if name.startswith('PULUMI_') and '{{' not in value and '{%' not in value
+    }
+
+
+def _keys(box: Box) -> set[str]:
+    """Every key of the box's state table, read on the local socket."""
+    return set(box.local(f'SELECT key FROM {BACKEND_TABLE}').splitlines())
+
+
+def test_a_run_under_mises_environment_keeps_a_compressed_checkpoint_and_no_backup_copy(
+    start: Start,
+    ignition: dict[str, Any],
+    roots: config.Roots,
+    clients: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """What `mise.toml` makes of every writer of a stack CI deploys, held against the pinned `pulumi`.
+
+    The stack is created and then updated the way a deploy updates one,
+    under the variables `mise.toml` sets and no others: its checkpoint is
+    stored compressed, and the update writes no copy under `backups/`. The
+    update's own `history/` record is what shows that a writing operation
+    finished, which is where the `backups/` copy would have been written.
+    """
+    for variable in STATE_SWITCHES_ENV:
+        monkeypatch.delenv(variable, raising=False)
+    switches = _mise_switches()
+    box = _appliance(start, ignition)
+    ci = _bundle(roots, box, clients, settings.CI_ROLE)
+    project = tmp_path / 'project'
+
+    _stack_init(ci, project, STACK, switches)
+    _up(ci, project, STACK, switches)
+
+    keys = _keys(box)
+    stacks = f'{settings.DATABASE}/{BACKEND_STACKS}{project.name}/'
+    checkpoints = {key for key in keys if state.kind(key, settings.DATABASE) is state.Kind.CHECKPOINT}
+    assert checkpoints == {f'{stacks}{STACK}.json.zst'}
+    assert [key for key in keys if state.kind(key, settings.DATABASE) is state.Kind.HISTORY]
+    assert [key for key in keys if state.kind(key, settings.DATABASE) is state.Kind.BACKUPS] == []
+
+
+def test_a_switch_to_compression_leaves_the_plain_bak_and_the_prune_takes_that_alone(
+    start: Start,
+    ignition: dict[str, Any],
+    roots: config.Roots,
+    clients: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The row `--prune-superseded` exists for, as the pinned `pulumi` leaves it, and the prune of it.
+
+    A stack written uncompressed and then updated under `mise.toml`'s
+    variables keeps `<stack>.json.bak` beside its compressed checkpoint, and
+    nothing the backend does will replace or remove it. A neighbour written
+    uncompressed throughout -- an operator stack's state, which the driver
+    writes so -- keeps a `.bak` that is its live checkpoint's copy. The
+    census without `--yes` deletes nothing; with it, the one superseded row
+    goes and every other row stays. Asked by name, the statement deletes
+    neither a live checkpoint nor the copy of one.
+    """
+    for variable in STATE_SWITCHES_ENV:
+        monkeypatch.delenv(variable, raising=False)
+    box = _appliance(start, ignition)
+    operator = _bundle(roots, box, clients, settings.OPERATOR_ROLE)
+    project = tmp_path / 'project'
+    neighbour = f'{STACK}-plain'
+    for stack in (STACK, neighbour):
+        _stack_init(operator, project, stack)
+        _up(operator, project, stack)
+    _up(operator, project, STACK, _mise_switches())
+    stacks = f'{settings.DATABASE}/{BACKEND_STACKS}{project.name}/'
+    stale = f'{stacks}{STACK}.json.bak'
+    before = _keys(box)
+    assert {stale, f'{stacks}{STACK}.json.zst', f'{stacks}{neighbour}.json', f'{stacks}{neighbour}.json.bak'} <= before
+    assert f'{stacks}{STACK}.json' not in before
+
+    listed = io.StringIO()
+    assert census.run(operator, prune=True, yes=False, out=listed) == 0
+    assert _keys(box) == before
+    assert f'  {stale} ' in listed.getvalue()
+    assert f'{stacks}{STACK}.json.zst ' in listed.getvalue()
+
+    assert state.prune(operator, [f'{stacks}{STACK}.json.zst', f'{stacks}{neighbour}.json.bak']) == []
+    assert _keys(box) == before
+
+    pruned = io.StringIO()
+    assert census.run(operator, prune=True, yes=True, out=pruned) == 0
+    assert _keys(box) == before - {stale}
+    assert f'deleted  {stale}' in pruned.getvalue()
+
+
+def test_a_credentials_run_against_an_operator_stack_in_the_box_reaches_it_with_its_bundles_files(
+    start: Start,
+    ignition: dict[str, Any],
+    roots: config.Roots,
+    clients: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`github`'s state is in the estate's backend, and a `credentials` run keeps none of its caller's libpq variables.
+
+    So the run is handed the three files of the bundle its URL was read from,
+    as the `operator-stack` driver hands them, and reaches the box with them
+    while the caller's own name files that do not exist.
+    """
+    stack = identity.STACK_NAMES.github
+    assert stack_environment.home(stack) is identity.StateHome.BACKEND
+    box = _appliance(start, ignition)
+    operator = _bundle(roots, box, clients, settings.OPERATOR_ROLE)
+    for variable in (CA_ENV, CERT_ENV, KEY_ENV):
+        monkeypatch.setenv(variable, str(tmp_path / 'elsewhere' / variable))
+    project = tmp_path / 'project'
+    project.mkdir()
+    _ = (project / 'Pulumi.yaml').write_text(f'name: {project.name}\nruntime: yaml\n')
+    environment = pulumi_config.BackendEnvironment(
+        operator=lambda: fake(pulumi_config.PASSPHRASE_ENV),
+        url=operator.url,
+        bundle_dir=clients / settings.OPERATOR_ROLE,
+    )
+    slot = pulumi_config.Stack(name=stack, directory=project, environment=environment)
+
+    assert not slot.exists()
+    slot.ensure()
+    assert slot.exists()
+
+
+def test_the_census_reads_in_a_session_that_cannot_write(
+    box: Box, roots: config.Roots, clients: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The census's statement replaced by a write: the server refuses it,
+    # because the session was opened read-only, not because of what the
+    # census's own statement happens to be.
+    target = _bundle(roots, box, clients, settings.OPERATOR_ROLE)
+    monkeypatch.setattr(state, 'CENSUS_QUERY', 'CREATE TABLE census_wrote (x int)')
+
+    with pytest.raises(state.StateError, match='read-only transaction'):
+        _ = state.census(target)
+    assert box.local("SELECT to_regclass('census_wrote') IS NULL") == 't'
+
+
+def test_census_yes_is_refused_without_prune_superseded(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit) as refused:
+        _ = cli.main(['census', '--yes'])
+
+    assert refused.value.code == 2
+    assert '--prune-superseded' in capsys.readouterr().err
+
+
+#: A stack's keys under `<database>/.pulumi/stacks/<project>/`, and which of
+#: them are superseded. Each group is one stack.
+SUPERSEDED: list[tuple[str, list[str], list[str]]] = [
+    ('compressed after plain', ['a.json.zst', 'a.json.zst.bak', 'a.json.bak'], ['a.json.bak']),
+    ('zstd after gzip', ['b.json.zst', 'b.json.gz.bak'], ['b.json.gz.bak']),
+    ('plain after zstd: writers that disagree', ['c.json', 'c.json.zst.bak'], ['c.json.zst.bak']),
+    ('a removed stack: the .bak is all there is', ['d.json.bak'], []),
+    ('two live suffixes: each .bak is its own checkpoint copy', ['e.json', 'e.json.zst', 'e.json.bak'], []),
+    ('plain throughout', ['f.json', 'f.json.bak'], []),
+    ('compressed throughout', ['g.json.zst', 'g.json.zst.bak'], []),
+]
+
+
+@pytest.mark.parametrize(('keys', 'stale'), [case[1:] for case in SUPERSEDED], ids=[case[0] for case in SUPERSEDED])
+def test_a_bak_is_superseded_when_its_stack_has_a_checkpoint_and_none_under_its_suffix(
+    keys: list[str], stale: list[str]
+) -> None:
+    stacks = f'{settings.DATABASE}/{BACKEND_STACKS}project/'
+    beside = [
+        # The same names elsewhere: under another database's prefix, and as
+        # copies outside `stacks/`, none of which is a stack's `.bak`.
+        *(f'other/{BACKEND_STACKS}project/{key}' for key in keys),
+        f'{settings.DATABASE}/.pulumi/backups/project/a/a.1790591454000000000.json.bak',
+    ]
+    rows = [state.Row(key=key, size=1) for key in [*(stacks + key for key in keys), *beside]]
+
+    assert [row.key for row in state.superseded(rows, settings.DATABASE)] == [stacks + key for key in stale]
+
+
+@pytest.mark.parametrize(
+    ('path', 'kind'),
+    [
+        ('.pulumi/meta.yaml', state.Kind.META),
+        ('.pulumi/stacks/project/a.json', state.Kind.CHECKPOINT),
+        ('.pulumi/stacks/project/a.json.gz', state.Kind.CHECKPOINT),
+        ('.pulumi/stacks/project/a.json.zst', state.Kind.CHECKPOINT),
+        ('.pulumi/stacks/project/a.json.bak', state.Kind.PREVIOUS),
+        ('.pulumi/stacks/project/a.json.zst.bak', state.Kind.PREVIOUS),
+        ('.pulumi/stacks/project/a.pulumi-tags', state.Kind.OTHER),
+        ('.pulumi/stacks/project/a.json.1790591454000000000', state.Kind.OTHER),
+        ('.pulumi/backups/project/a/a.1790591454000000000.json', state.Kind.BACKUPS),
+        ('.pulumi/history/project/a/a-1790591454000000000.history.json', state.Kind.HISTORY),
+        ('.pulumi/history/project/a/a-1790591454000000000.checkpoint.json.zst', state.Kind.HISTORY),
+        ('.pulumi/locks/organization/project/a/id.json', state.Kind.LOCKS),
+        ('elsewhere', state.Kind.OTHER),
+    ],
+)
+def test_a_key_is_the_kind_its_place_in_the_layout_says(path: str, kind: state.Kind) -> None:
+    assert state.kind(f'{settings.DATABASE}/{path}', settings.DATABASE) is kind
+    assert state.kind(f'other/{path}', settings.DATABASE) is state.Kind.OTHER

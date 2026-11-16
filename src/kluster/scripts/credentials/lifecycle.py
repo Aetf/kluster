@@ -314,6 +314,7 @@ def environment(
         passphrase=functools.cache(lambda: vault().recover(escrow.PASSPHRASE)),
         url=url,
         no_backend=no_backend,
+        bundle_dir=bundle_dir,
         # Once per command: every `pulumi` call a command makes against an
         # operator stack builds its environment again, and a chain that ends
         # at a prompt would ask on each of them.

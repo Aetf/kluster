@@ -1419,3 +1419,97 @@ def test_a_stack_file_left_between_its_two_saves_is_refused_naming_the_recovery(
 
     with pytest.raises(pulumi_config.SlotRefused, match=re.escape(_recovery(project))):
         _ = moving.re_encrypt(former=[FORMER])
+
+
+def _scratch_cli(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caller: Mapping[str, str]) -> Path:
+    """A checkout holding `Pulumi.yaml` and an empty `checkpoints/`, for the pinned CLI under `caller`'s variables."""
+    if shutil.which('pulumi') is None:
+        pytest.skip('the pinned pulumi CLI is not on PATH')
+    for variable, directory in cli_directories(tmp_path).items():
+        monkeypatch.setenv(variable, directory)
+    monkeypatch.setenv('PULUMI_SKIP_UPDATE_CHECK', 'true')
+    for variable, value in caller.items():
+        monkeypatch.setenv(variable, value)
+    checkout = tmp_path / 'checkout'
+    (checkout / stack_environment.CHECKPOINTS).mkdir(parents=True)
+    _ = (checkout / 'Pulumi.yaml').write_text(f'name: {PROJECT}\nruntime: yaml\n')
+    return checkout
+
+
+def _committed_files(checkout: Path, stack: str) -> list[str]:
+    """The files a `file://` backend under `checkout` holds for `stack` in its `stacks/` directory."""
+    stacks = checkout / stack_environment.CHECKPOINTS / '.pulumi' / 'stacks'
+    return sorted(path.name for path in stacks.rglob(f'{stack}.*'))
+
+
+#: The operator stack whose state is committed, and the environment a
+#: `credentials` run against it is given on a workstation holding the operator
+#: passphrase.
+COMMITTED_OPERATOR_STACK = identity.STACK_NAMES.state_backend
+OPERATOR_ENVIRONMENT = pulumi_config.BackendEnvironment(operator=lambda: 'probe-operator-passphrase')
+
+
+@real_cli
+@pytest.mark.parametrize(
+    'switch',
+    [
+        {'PULUMI_DIY_BACKEND_ZSTD': 'true'},
+        {'PULUMI_SELF_MANAGED_STATE_GZIP': 'true'},
+        {'PULUMI_DIY_BACKEND_RETAIN_CHECKPOINTS': 'true'},
+    ],
+)
+def test_a_credentials_run_against_an_operator_stack_writes_its_checkpoint_without_the_callers_switches(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, switch: dict[str, str]
+) -> None:
+    # `mise.toml` exports the compression switch to every process it starts,
+    # a `credentials` run included, and that run overlays the stack's own
+    # variables on its caller's environment. `stack init` of a committed
+    # operator stack under it still writes the one checkpoint the checks read,
+    # where the switch alone would have compressed it or kept a copy beside it.
+    stack = COMMITTED_OPERATOR_STACK
+    assert stack_environment.home(stack) is identity.StateHome.COMMITTED
+    checkout = _scratch_cli(tmp_path, monkeypatch, switch)
+
+    pulumi_config.Stack(name=stack, directory=checkout, environment=OPERATOR_ENVIRONMENT).ensure()
+
+    assert _committed_files(checkout, stack) == [f'{stack}.json', f'{stack}.json.bak']
+
+
+@real_cli
+def test_a_credentials_run_against_an_operator_stack_keeps_none_of_the_callers_cli_variables(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The caller's variables are taken out of the run, not set empty: the CLI
+    # reads some of its variables by presence, and `PULUMI_OPTION_<flag>` is a
+    # flag's value, so an empty one is a flag set to nothing (`unsupported
+    # color option`). With it removed the run is the one the
+    # `operator-stack` driver starts, and works.
+    stack = COMMITTED_OPERATOR_STACK
+    checkout = _scratch_cli(tmp_path, monkeypatch, {'PULUMI_OPTION_COLOR': 'never'})
+
+    pulumi_config.Stack(name=stack, directory=checkout, environment=OPERATOR_ENVIRONMENT).ensure()
+
+    assert _committed_files(checkout, stack) == [f'{stack}.json', f'{stack}.json.bak']
+
+
+@real_cli
+def test_a_credentials_run_against_a_stack_ci_deploys_keeps_the_callers_compression(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The strip is an operator stack's alone. A `credentials` run against a
+    # stack CI deploys -- a re-encryption after a passphrase rotation writes
+    # its checkpoint -- is laid over its caller's environment, so it writes
+    # the checkpoint compressed as every other writer of that stack does,
+    # rather than back uncompressed beside a superseded `.json.zst.bak`.
+    stack = identity.STACK_NAMES.dns
+    assert stack_environment.home(stack) is None
+    checkout = _scratch_cli(tmp_path, monkeypatch, {'PULUMI_DIY_BACKEND_ZSTD': 'true'})
+    state = tmp_path / 'state'
+    state.mkdir()
+    environment = pulumi_config.BackendEnvironment(passphrase=lambda: 'probe-passphrase', url=state.as_uri())
+
+    pulumi_config.Stack(name=stack, directory=checkout, environment=environment).ensure()
+
+    written = sorted(path.name for path in (state / '.pulumi' / 'stacks').rglob(f'{stack}.*'))
+    assert f'{stack}.json.zst' in written
+    assert f'{stack}.json' not in written

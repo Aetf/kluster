@@ -26,6 +26,12 @@ steer `pulumi` or its backend (`steers`), plus the stack's. The ambient
 `PULUMI_DIY_BACKEND_GZIP` would move a committed checkpoint to a file the
 checks never read; none of them may reach an operator stack's run, and none
 can once it is removed rather than overridden.
+
+**The `credentials` commands start the same environment** for a run against
+an operator stack (`kluster.scripts.credentials.pulumi_config`), a
+`pulumi_cli.WholeEnvironment` that the runner does not lay over its caller's,
+so a switch `mise.toml` or a shell exports reaches such a run by neither
+path.
 """
 
 from __future__ import annotations
@@ -257,6 +263,8 @@ def operator_variables(stack: str, checkout: Path) -> dict[str, str]:
     return variables | {BACKEND_URL_ENV: url.read_text().strip()} | bundle.ssl_env(slot)
 
 
-def process(base: Mapping[str, str], variables: Mapping[str, str]) -> dict[str, str]:
+def process(base: Mapping[str, str], variables: Mapping[str, str]) -> pulumi_cli.WholeEnvironment:
     """The environment a run starts with: `base` less every variable that steers `pulumi`, plus `variables`."""
-    return {name: value for name, value in base.items() if not steers(name)} | dict(variables)
+    return pulumi_cli.WholeEnvironment(
+        {name: value for name, value in base.items() if not steers(name)} | dict(variables)
+    )

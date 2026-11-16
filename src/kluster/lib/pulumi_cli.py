@@ -54,6 +54,17 @@ class StoppedAtBound(PulumiRefused):
     """
 
 
+class WholeEnvironment(dict[str, str]):
+    """An environment a `pulumi` run starts with as it stands, rather than laid over its caller's.
+
+    What a run against an operator stack is given (`stack_environment.process`):
+    its caller's variables that could steer `pulumi` or its backend are absent
+    from it, and a run that laid it over the caller's environment would bring
+    them back. A type rather than a flag, so the environment says which it is
+    wherever it travels, a recorded runner in a test included.
+    """
+
+
 class Runner(Protocol):
     """How a `pulumi` invocation is made. Substituted in tests."""
 
@@ -68,6 +79,8 @@ def run_pulumi(
     `env` is overlaid on the caller's environment rather than replacing it:
     `pulumi` needs a home directory and a PATH like any other tool, and what
     the caller adds is the backend URL and the passphrase that open the state.
+    A `WholeEnvironment` is the exception, and is the run's environment as it
+    stands: it already carries what it keeps of the caller's.
     A secret value travels on `stdin`: an argument would put it in the process
     table of a shared machine.
 
@@ -80,7 +93,7 @@ def run_pulumi(
     """
     bound = TIMEOUT if timeout is None else timeout
     command = f'`pulumi {" ".join(args)}`'
-    environment = {**os.environ, **env}
+    environment = dict(env) if isinstance(env, WholeEnvironment) else {**os.environ, **env}
     backend = backend_named(environment.get(BACKEND_URL_ENV))
     log.info('running %s against %s, stopped if it has not finished in %gs', command, backend, bound)
     try:

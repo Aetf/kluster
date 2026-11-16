@@ -92,6 +92,16 @@ STACKS = '.pulumi/stacks/'
 #: (`PULUMI_DIY_BACKEND_GZIP`, `PULUMI_DIY_BACKEND_ZSTD`). The `.bak` beside
 #: each is not one.
 CHECKPOINT = re.compile(r'.+\.json(\.gz|\.zst)?')
+#: What follows `STACKS` in the key of a checkpoint's `.bak`: the copy every
+#: save makes of the checkpoint it is about to replace (`backupTarget` in the
+#: backend's `state.go`). Its first group is the stack's plain checkpoint key
+#: less `STACKS`, `<project>/<stack>.json`; its second the compression suffix
+#: the copied checkpoint carried, if any.
+PREVIOUS = re.compile(r'(.+\.json)(\.gz|\.zst)?\.bak')
+
+#: The client tool the state table is read and pruned with, from the same
+#: `postgres` pin as the dump's.
+PSQL = 'psql'
 
 
 class StateError(RuntimeError):
@@ -257,7 +267,7 @@ def _run(
         )
     except FileNotFoundError as exc:
         raise StateError(
-            f'{argv[0]} is not on PATH: {PG_DUMP} and {PG_RESTORE} are the `postgres` pin in mise.toml, '
+            f'{argv[0]} is not on PATH: {PG_DUMP}, {PG_RESTORE} and {PSQL} are the `postgres` pin in mise.toml, '
             f'and {age.BINARY} the `age` pin (`mise x -- ...`)'
         ) from exc
     except sp.TimeoutExpired as exc:
@@ -334,6 +344,211 @@ def checkpoints(rows: str, database: str) -> list[str]:
         if len(words) >= 2 and words[0] == 'COPY' and words[-1] == 'stdin;':
             inside = words[1].rsplit('.', 1)[-1] == STATE_TABLE
     return sorted(found)
+
+
+#: The directory, under the database's own prefix, that every key the backend
+#: writes lies under; `STACKS` is one of its directories.
+BOOKKEEPING = '.pulumi/'
+
+
+class Kind(enum.Enum):
+    """What a key of the state table is, read off its path under `<database>/` + `BOOKKEEPING`.
+
+    The layout is the backend's (`pkg/backend/diy` at the pinned CLI), and
+    each member's value is how a census prints it.
+    """
+
+    #: A stack's checkpoint: `CHECKPOINT` under `STACKS`.
+    CHECKPOINT = 'checkpoint'
+    #: The copy of a checkpoint every save makes before it replaces one:
+    #: `PREVIOUS` under `STACKS`.
+    PREVIOUS = 'checkpoint .bak'
+    #: One copy of the checkpoint per writing operation (`backupStack`), which
+    #: `PULUMI_DIY_BACKEND_DISABLE_CHECKPOINT_BACKUPS` turns off.
+    BACKUPS = 'backups/'
+    #: Two files per writing operation, the update's record and a copy of the
+    #: checkpoint (`addToHistory`), which no switch turns off.
+    HISTORY = 'history/'
+    #: One per operation that holds a stack's lock, while it holds it.
+    LOCKS = 'locks/'
+    #: The layout's version.
+    META = 'meta.yaml'
+    #: Anything else: a tags file, a retained checkpoint, a key outside the
+    #: layout.
+    OTHER = 'other'
+
+
+#: The directories under `BOOKKEEPING` whose every key is one kind.
+_DIRECTORIES = (Kind.BACKUPS, Kind.HISTORY, Kind.LOCKS)
+
+
+@dataclass(frozen=True)
+class Row:
+    """One key of the state table, and the size its value is stored at.
+
+    `size` is `pg_column_size` of the value: the bytes Postgres stores,
+    after its own compression where it applied any, and read without
+    fetching an out-of-line value, so a census costs the backend nothing a
+    statement over the value itself would.
+    """
+
+    key: str
+    size: int
+
+
+def kind(key: str, database: str) -> Kind:
+    """What `key` is, in the backend's layout under `database`'s prefix."""
+    rest = key.removeprefix(f'{database}/{BOOKKEEPING}')
+    if rest == key:
+        return Kind.OTHER
+    if rest == Kind.META.value:
+        return Kind.META
+    stacks = STACKS.removeprefix(BOOKKEEPING)
+    if rest.startswith(stacks):
+        path = rest.removeprefix(stacks)
+        if CHECKPOINT.fullmatch(path):
+            return Kind.CHECKPOINT
+        if PREVIOUS.fullmatch(path):
+            return Kind.PREVIOUS
+        return Kind.OTHER
+    return next((member for member in _DIRECTORIES if rest.startswith(member.value)), Kind.OTHER)
+
+
+def superseded(rows: Sequence[Row], database: str) -> list[Row]:
+    """The `.bak` rows whose stack's checkpoint now lives under another suffix.
+
+    A save that changes the checkpoint's compression copies the old
+    checkpoint to its own `.bak` and deletes it, and every later save backs
+    up the new key instead (`saveCheckpoint` in the backend's `state.go`): so
+    a stack whose writers turned compression on keeps `<stack>.json.bak`, a
+    full-size uncompressed copy, beside `<stack>.json.zst` and its `.bak`,
+    and nothing ever replaces or removes it. The same holds whichever way the
+    suffix changed, and for a stack whose writers disagree.
+
+    A definition rather than a list: a `.bak` is superseded when its stack
+    has a checkpoint and none under the suffix the `.bak` carries. A stack
+    with no checkpoint keeps its `.bak`, which is all that is left of a
+    removed stack; and a `.bak` whose own checkpoint is still there is that
+    checkpoint's copy, however many suffixes the stack has.
+    """
+    prefix = f'{database}/{STACKS}'
+    live: dict[str, set[str]] = {}
+    previous: list[tuple[Row, str, str]] = []
+    for row in rows:
+        if not row.key.startswith(prefix):
+            continue
+        path = row.key.removeprefix(prefix)
+        if found := CHECKPOINT.fullmatch(path):
+            suffix = found.group(1) or ''
+            live.setdefault(path.removesuffix(suffix), set()).add(suffix)
+        elif found := PREVIOUS.fullmatch(path):
+            previous.append((row, found.group(1), found.group(2) or ''))
+    return [row for row, stack, suffix in previous if stack in live and suffix not in live[stack]]
+
+
+#: Every key of the state table and its stored size, as one JSON document.
+CENSUS_QUERY = (
+    f"SELECT coalesce(json_agg(json_build_array(key, pg_column_size(data)) ORDER BY key), '[]') FROM {STATE_TABLE}"
+)
+
+#: The delete of the keys in the `keys` variable, a JSON array, answering with
+#: the keys it deleted. It deletes only a `.bak` whose own checkpoint is not
+#: in the table as of the statement's snapshot, so neither a checkpoint nor
+#: the copy of one the statement sees is ever among them, whatever the list
+#: says and whatever a writer committed since the list was read.
+PRUNE_STATEMENT = f"""
+WITH gone AS (
+    DELETE FROM {STATE_TABLE} AS stale
+    WHERE stale.key IN (SELECT json_array_elements_text(:'keys'::json))
+      AND stale.key LIKE '%.bak'
+      AND NOT EXISTS (SELECT 1 FROM {STATE_TABLE} AS live WHERE live.key = left(stale.key, -4))
+    RETURNING stale.key
+)
+SELECT coalesce(json_agg(key ORDER BY key), '[]') FROM gone;
+"""
+
+#: The variable libpq hands the server a session's settings in, and what a
+#: census session is opened with: it may not write, whatever its statements
+#: say.
+SESSION_OPTIONS_ENV = 'PGOPTIONS'
+_READ_ONLY = {SESSION_OPTIONS_ENV: '-c default_transaction_read_only=on'}
+
+
+def _psql(target: Connection, sql: str, *, what: str, variables: Mapping[str, str], env: Mapping[str, str]) -> object:
+    """One script through `psql` over the bundle's connection, its one value read back as JSON.
+
+    The script travels on standard input, which is where `psql` interpolates
+    `variables` -- quoted as literals, `:'name'` -- so no key is spliced into
+    SQL text here.
+    """
+    argv = [
+        PSQL,
+        '--no-psqlrc',
+        '--no-password',
+        '--quiet',
+        '--tuples-only',
+        '--no-align',
+        '--set=ON_ERROR_STOP=1',
+        *(f'--set={name}={value}' for name, value in variables.items()),
+        f'--dbname={target.url}',
+    ]
+    printed = _run(
+        argv,
+        what=what,
+        timeout=LISTING_TIMEOUT,
+        stdin=sql,
+        env={**target.env, CONNECT_TIMEOUT_ENV: str(CONNECT_TIMEOUT), **env},
+    )
+    try:
+        return json.loads(printed)
+    except ValueError as exc:
+        raise StateError(f'{what} printed something other than JSON: {printed[:120]!r}') from exc
+
+
+def census(target: Connection) -> list[Row]:
+    """Every key of the state table and the size its value is stored at, in key order.
+
+    Read in a session the server holds read-only, and with `pg_column_size`,
+    never with an expression over the value: the backend's own size check,
+    `octet_length((data->>'data')::text)`, parses the whole value in the
+    serving backend (physical/state-backend.md §2).
+    """
+    log.info(
+        'reading every key of %s and its stored size from %s',
+        STATE_TABLE,
+        endpoint(target.url),
+    )
+    what = f'the census of {STATE_TABLE}'
+    listing = _psql(target, CENSUS_QUERY, what=what, variables={}, env=_READ_ONLY)
+    if not isinstance(listing, list):
+        raise StateError(f'{what} printed a {type(listing).__name__}, not a list of keys')
+    found: list[Row] = []
+    for entry in cast('list[object]', listing):
+        pair = cast('list[object]', entry) if isinstance(entry, list) else []
+        if len(pair) != 2 or not isinstance(pair[0], str) or not isinstance(pair[1], int):
+            raise StateError(f'{what} printed an entry that is no key and size: {entry!r}')
+        found.append(Row(key=pair[0], size=pair[1]))
+    return found
+
+
+def prune(target: Connection, keys: Sequence[str]) -> list[str]:
+    """Delete the `.bak` rows named, returning the keys deleted.
+
+    A key is deleted only where its own checkpoint is absent as of the
+    statement's snapshot (`PRUNE_STATEMENT`), so a
+    key the statement passes over is a row a writer has made current again,
+    or one already gone; the caller compares what it asked for with what
+    came back.
+    """
+    if not keys:
+        return []
+    log.info('deleting %d superseded row(s) from %s', len(keys), endpoint(target.url))
+    deleted = _psql(
+        target, PRUNE_STATEMENT, what=f'the prune of {STATE_TABLE}', variables={'keys': json.dumps(list(keys))}, env={}
+    )
+    if not isinstance(deleted, list) or not all(isinstance(key, str) for key in cast('list[object]', deleted)):
+        raise StateError(f'the prune of {STATE_TABLE} answered something other than the keys it deleted: {deleted!r}')
+    return cast('list[str]', deleted)
 
 
 def verify_dump(archive: Path) -> list[str]:

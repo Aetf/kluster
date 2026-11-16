@@ -324,6 +324,19 @@ Which stacks exist, what each one owns, and where the boundaries
 between them fall are design decisions rather than mechanism:
 [declarative/README.md](../declarative/README.md) §1.
 
+**Every stack CI deploys keeps its state compressed in the appliance's
+backend.** `mise.toml`'s `[env]` sets `PULUMI_DIY_BACKEND_ZSTD` and
+`PULUMI_DIY_BACKEND_DISABLE_CHECKPOINT_BACKUPS` for every `pulumi` run
+started through `mise x`, which is how every CI job and every workstation
+runs one (`tests/test_mise_env.py`): the checkpoint is
+`<stack>.json.zst`, and a writing operation leaves no copy under
+`backups/`. Reading needs neither variable. The backend moves each value
+whole, so the value's size is what every statement against the state
+costs the appliance; why, and the census and prune of the rows a change
+of suffix leaves behind, are
+[physical/state-backend.md](../physical/state-backend.md) §2. An
+operator stack keeps the uncompressed checkpoint its checks read (§3.3).
+
 ### 3.1 Cross-stack data
 
 A value reaches another stack by one of three routes, and they carry
@@ -525,11 +538,16 @@ through `mise.toml`'s `[env]`, and no `mise` task runs one
     or its backend: nothing under `PULUMI_`, libpq's `PG`, or the
     cloud-bucket backends' credentials (`AWS_`, `AZURE_STORAGE_`,
     `GOOGLE_APPLICATION_CREDENTIALS`), but `PULUMI_HOME` and
-    `PULUMI_SKIP_UPDATE_CHECK`, which hold nothing of the stack's. So the
-    stack passphrase `mise.toml` exports never reaches it, a backend a
-    shell exported does not either, and neither does a switch that would
-    compress the checkpoint or keep copies of it where the checks do not
-    look — including one a later CLI release adds.
+    `PULUMI_SKIP_UPDATE_CHECK`, which hold nothing of the stack's. So
+    neither the stack passphrase nor the compression switch `mise.toml`
+    exports ever reaches it, a backend a shell exported does not either,
+    and neither does any other switch that would compress the checkpoint
+    or keep copies of it where the checks do not look — including one a
+    later CLI release adds. A `credentials` command's run against an
+    operator stack starts from the same environment, which its runner
+    takes whole rather than laying it over the caller's
+    (`pulumi_cli.WholeEnvironment`), and for `github` it carries the
+    three files of the bundle its URL was read from.
 -   **The stack is the driver's first argument, never a flag it passes
     through.** A `--stack`, an `-s`, or a single-dash cluster holding an
     `s` ahead of a `--` is refused rather than overridden, since a caller

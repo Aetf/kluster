@@ -88,8 +88,11 @@ UNMASKED_PATHS = frozenset({'PGSSLROOTCERT', 'PGSSLCERT', 'PGSSLKEY', 'KLUSTER_K
 #: Variables that carry a tool's setting, neither a credential nor a path to
 #: one, and are left in place for the same reason as the paths: so that every
 #: key `mise.toml` sets has a verdict. `JAVA_OPTS` is the stack the prose
-#: checker's server runs on (`mise.toml`, kluster-ops#465).
-UNMASKED_SETTINGS = frozenset({'JAVA_OPTS'})
+#: checker's server runs on (`mise.toml`, kluster-ops#465); the two
+#: `PULUMI_DIY_BACKEND_` switches are how every `pulumi` run writes a stack's
+#: state, compressed and with no `backups/` copy (physical/state-backend.md
+#: §2), which a case here that runs `pulumi` sets or clears for itself.
+UNMASKED_SETTINGS = frozenset({'JAVA_OPTS', 'PULUMI_DIY_BACKEND_ZSTD', 'PULUMI_DIY_BACKEND_DISABLE_CHECKPOINT_BACKUPS'})
 
 
 def strip(environment: MutableMapping[str, str]) -> None:
