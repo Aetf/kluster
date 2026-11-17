@@ -578,22 +578,24 @@ them for day-2 once v0.12 is stable *and* has reached the Pulumi bridge.
     the provider uploads into the pool over the same connection it
     defines the domains through — so the first boot follows from an
     apply rather than from an operator writing an image by hand. The
-    declaration states no disk size: the provider refuses `size` beside
-    `source` and takes the volume's capacity from the source file's
-    length. That file is the image followed by the room Talos boots into
-    (`components/talos/image.py`, `HOMELAB_DISK_ROOM`), sized so that
-    EPHEMERAL clears the floor of day 1's health gate: the run that
-    creates the worker passes its gate on the disk as created, and the
-    provider, which uploads every byte of the file, zeros included,
-    writes no more on the host than that run needs. That makes every
-    size the disk has after its creation — the bootstrap one included —
-    the host-side `truncate` + `virsh blockresize` of
-    homelab-host.md §1. Both `size` and `source` are then ignored on
+    disk is created at the capacity `conventions.HOMELAB_DISK_GIB`
+    declares, which `HomelabHost` takes as `disk_gib`. The provider
+    refuses `size` beside `source` and sets the capacity from the source
+    file's length, so the capacity is stated in the disk's stylesheet
+    instead (below), with an allocation of zero: libvirt creates a sparse
+    file of the declared length, and the provider uploads the image's
+    bytes into its head. The run that creates the worker passes day 1's
+    health gate on the disk as created, and the growth of a running disk
+    is the host-side `truncate` + `virsh blockresize` of
+    homelab-host.md §1. `size`, `source` and `xml` are then ignored on
     that resource, because a libvirt volume has no update path at all
     and any field that diverged — a file the host has grown, an image a
-    Talos self-upgrade has replaced, a room the program has resized —
-    would otherwise propose
-    destroying the worker's disk. The volume's name is stated, so it is
+    Talos self-upgrade has replaced, a capacity or a mode the program
+    has restated — would otherwise propose destroying the worker's disk.
+    A replacement is still created from the run's own values of all
+    three, the declared capacity among them. Where the `size` read back
+    is not the declared capacity, `HomelabHost` warns, naming both and
+    the one a replacement would create. The volume's name is stated, so it is
     deleted before it is replaced: creating a volume, the provider
     adopts an existing volume of the same name and uploads into it, so a
     replacement made before the delete would write the new image into
@@ -663,8 +665,13 @@ them for day-2 once v0.12 is stable *and* has reached the Pulumi bridge.
     applied when the domain and the volumes are created: the data
     disk's `cache=none` and `discard=unmap` (homelab-host.md §1), the
     seed's read-only flag, a domain with no display — the provider adds
-    a SPICE display, and the host's QEMU has none — and a volume's mode,
-    `0600` where the provider writes `0644`. The directory above the
+    a SPICE display, and the host's QEMU has none — a volume's mode,
+    `0600` where the provider writes `0644`, and the disk's capacity
+    beside its source, with an allocation of zero, since libvirt
+    allocates a volume that states no allocation in full on the host.
+    The disk has a stylesheet of its own for the last: the seed's is
+    unchanged by it, and a seed whose stylesheet moved would be
+    replaced, and the domain with it. The directory above the
     volumes keeps the host's mode, with the search bit for others that
     QEMU needs: the system instance runs QEMU as `libvirt-qemu`, not as
     root, and libvirt's QEMU driver hands a domain's disk images to that
@@ -679,11 +686,13 @@ them for day-2 once v0.12 is stable *and* has reached the Pulumi bridge.
     `PROVIDER_VOLUME_XML` in `tests/test_homelab.py` — with the cases
     over them, one of which fails when the installed provider is not
     the transcript's release. It goes when the pinned provider declares
-    those four and its SSH transport offers only the configured identity
-    (homelab-host.md §6 rules out one that offers an agent's keys
-    first). The v0.9 line declares the four — a volume's mode as
-    `target.permissions.mode` in v0.9.9's `docs/resources/volume.md` —
-    and its transport offers the agent's keys first.
+    each of them and its SSH transport offers only the configured
+    identity (homelab-host.md §6 rules out one that offers an agent's
+    keys first). The v0.9 line declares them — a volume's mode as
+    `target.permissions.mode` in v0.9.9's `docs/resources/volume.md`,
+    and a `capacity` that may be larger than the source image, with an
+    `allocation` beside it, in its `internal/provider/volume_resource.go`
+    — and its transport offers the agent's keys first.
 -   **GPU hostdev**: the Arc A380, not present at bootstrap (the
     two-phase plan, homelab-host.md §3); when the Wave C cutover adds it,
     pulumi-libvirt's hostdev support is thin — a template in the

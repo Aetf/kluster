@@ -60,14 +60,23 @@ NAS_EXPORT = '/mnt/nas'
 #: `memory` replace the domain, which is a stop, an undefine, a define and a
 #: start with the disk — a separate resource — surviving, so the cost is a
 #: drained window rather than a rebuild.
-#:
-#: The disk is not among them and has no constant here. A libvirt volume has
-#: no update path — every field replaces it, `size` included — so the
-#: declaration states no size at all and ignores the one it reads back; the
-#: disk grows on the host instead, `truncate` plus `virsh blockresize`
-#: (physical/homelab-host.md §1).
 HOMELAB_VCPUS = 12
 HOMELAB_MEMORY_GIB = 10
+
+#: The worker disk's capacity, in GiB: the size the disk has when the program
+#: creates it, and the size the growth of a running disk keeps it at. The
+#: file is sparse, so this is a ceiling the guest can fill rather than space
+#: the host sets aside.
+#:
+#: **Raising it is the second half of a growth, never the first.** A libvirt
+#: volume has no update path, so the running disk is grown on the host —
+#: `truncate`, `virsh blockresize` and a reboot of the worker — and this
+#: constant is raised after it, in the same sitting, so the declaration never
+#: states more than the file has (physical/homelab-host.md §1). An edit here
+#: plans nothing on the running disk: the disk ignores the stylesheet that
+#: carries the number, and the next replacement creates the disk at it. Where
+#: the two disagree, `HomelabHost` warns, naming both.
+HOMELAB_DISK_GIB = 60
 
 #: The host bridge the worker's tap joins, which bridges the cluster VLAN's
 #: tagged subinterface. A second bridge on purpose: the existing `kvmbr0`

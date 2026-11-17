@@ -378,6 +378,7 @@ async def main() -> None:
         mac=conventions.HOMELAB_NODE_MAC,
         vcpus=conventions.HOMELAB_VCPUS,
         memory_gib=conventions.HOMELAB_MEMORY_GIB,
+        disk_gib=conventions.HOMELAB_DISK_GIB,
         image_path=worker_image.path,
     )
 
