@@ -734,7 +734,7 @@ from an HTTP repository, which offers nothing to check a download against
         anchors() { for n in kluster.hosts vip1.hosts; do for t in A AAAA; do echo "$n $t $(mise x -- doggo --short "$n.unlimited-code.works" "$t" @1.1.1.1 | sort | tr '\n' ' ')"; done; done; }
         sealing() { mise x -- kubeseal --kubeconfig ~/.kube/kluster --fetch-cert \
             $(mise x uv -- uv run python -c 'from kluster import conventions as c; print("--controller-namespace", c.SEALING_NAMESPACE, "--controller-name", c.SEALING_CONTROLLER)'); }
-        history() { kubectl --kubeconfig ~/.kube/kluster get --raw "/api/v1/namespaces/monitoring/services/vmsingle-history:http/proxy/$1"; }
+        history() { mise x -- kubectl --kubeconfig ~/.kube/kluster get --raw "/api/v1/namespaces/monitoring/services/vmsingle-history:http/proxy/$1"; }
         metrics() { history metrics | awk '/^vm_rows\{type="storage\// { n += $2 } END { printf "rows %.0f\n", n }'
             history 'api/v1/query?query=min(tfirst_over_time(node_load1%5B100y%5D))' | mise x -- jq -r '"earliest \(.data.result[0].value[1])"'; }
 
@@ -771,7 +771,7 @@ from an HTTP repository, which offers nothing to check a download against
         physical stack export > "$D/export.json"
         protected > "$D/protected"; outside > "$D/outside"; anchors > "$D/anchors"; ids > "$D/ids"; sealing > "$D/sealing.pem"
         metrics > "$D/metrics"
-        k() { kubectl --kubeconfig ~/.kube/kluster -n monitoring "$@"; }
+        k() { mise x -- kubectl --kubeconfig ~/.kube/kluster -n monitoring "$@"; }
         k patch cronjob vmbackup-recent vmbackup-history -p '{"spec":{"suspend":true}}'
         until active=$(k get jobs -o jsonpath='{.items[?(@.status.active)].metadata.name}') && [ -z "$active" ]; do sleep 10; done
         k create job drill-history --from=cronjob/vmbackup-history

@@ -2232,7 +2232,7 @@ configuration:
 
 ```sh
 L=$(mise x uv -- uv run python -c 'from kluster import conventions as c; print(c.NODE_VOLUME_LABEL)')
-kubectl --kubeconfig ~/.kube/kluster get nodes -o wide -L "$L"
+mise x -- kubectl --kubeconfig ~/.kube/kluster get nodes -o wide -L "$L"
 physical stack output node_private_ips --json
 ```
 
