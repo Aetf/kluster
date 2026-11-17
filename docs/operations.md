@@ -779,7 +779,7 @@ from an HTTP repository, which offers nothing to check a download against
     nothing for the stack as it stands, which protects resources of its
     own. An empty one, in a baseline or in a reading taken against one,
     is taken again. `anchors` prints `no reading` in place of the
-    addresses of a query `doggo` could not send, and on any other answer
+    addresses of a query `doggo` got no answer to, and on any other answer
     what `doggo` printed, which for a name with no record of the type is
     nothing; so its reading is judged by which of its lines name an
     address, as step 0 does below.
@@ -821,7 +821,9 @@ from an HTTP repository, which offers nothing to check a download against
     whole.** The `protected` count is not zero, and `outside` is a
     digest. Three of the four `anchors` lines name an address, every one
     but `vip1.hosts AAAA`, a name that is IPv4 only, and none says `no
-    reading`. `ids` prints `1 found` and the partition's line. After
+    reading`. `ids` prints `1 found` and the partition's line, whose
+    `uuid` may print `null` on the boot that provisioned the volume
+    (physical/gateway-cutover.md §8.1). After
     stage 9, `metrics` prints a `rows` line and an `earliest` line. Each
     of the four outputs has a value, and the certificate count is `1`.
     A baseline that is not whole is taken again before the go, because
@@ -941,9 +943,37 @@ from an HTTP repository, which offers nothing to check a download against
     reaches the internet in each family, taken directly and never
     through an HTTP proxy, the IPv4 address under the cluster's CA and
     the IPv6 address with verification off; the node volume's first
-    item passes, `ids` printing what `$D/ids` holds; `u-storage` is ready on every
-    node; and the node label sits on `cp1`. The volume's other items ran
-    at bring-up and are not repeated.
+    item passes, its `ids` compared with `$D/ids` by the block below;
+    `u-storage` is ready on every node; and the node label sits on
+    `cp1`. The volume's other items ran at bring-up and are not
+    repeated.
+
+        ids > "$D/ids.rebuilt"; cat "$D/ids.rebuilt"
+        awk 'function f(k, l) { if (!match(l, " " k "=[^ ]*")) return ""; l = substr(l, RSTART + length(k) + 2, RLENGTH - length(k) - 2); return l == "null" ? "" : l }
+            FNR == 1 { c[++i] = $0 }; FNR == 2 { u[i] = f("uuid", $0); p[i] = f("partition_uuid", $0) }
+            END { ok = i == 2 && c[1] == "1 found" && c[2] == "1 found" && p[1] != "" && p[2] == p[1] && u[2] != "" && (u[1] == "" || u[2] == u[1]); print "ids " (ok ? "pass" : "fail") }' "$D/ids" "$D/ids.rebuilt"
+
+    It prints `ids pass` where both readings print `1 found` and the
+    same partition UUID, and the rebuilt node holds a filesystem UUID,
+    the same one as the baseline wherever the baseline holds one;
+    anything else prints `ids fail`. The partition UUID is the
+    partition's GPT GUID, which a partition provisioned anew would draw
+    afresh, so with the count it tells the volume's own partition from
+    another. A baseline with no filesystem UUID was read on the boot
+    that provisioned the volume, before discovery probed the partition
+    again, while the rebuilt node finds a partition it did not provision
+    and reads one. A rebuilt node that reads none has a partition its
+    discovery found empty, and Talos formats a partition it finds empty
+    in place, keeping the partition and its GUID; the count and the
+    partition alone would pass a volume formatted afresh. Where the
+    baseline holds no filesystem UUID, the comparison holds the rebuilt
+    node to the partition, the count and a filesystem UUID of its own; a
+    format that discovery has since probed again reads as a UUID like
+    any other, and such a baseline cannot tell it from the original.
+    physical/gateway-cutover.md §8.1 meets the same empty reading by
+    taking item 4's reading as item 5's baseline; the rebuild has no
+    later reading of the old node to take. A read that failed prints no
+    count, and compares as a failure.
 
     **Step 8: `k8s-base` and `apps` from empty.**
 
@@ -979,8 +1009,8 @@ from an HTTP repository, which offers nothing to check a download against
     1.  Step 5's `up` exits 0 behind the health gate with no reboot of
         the worker, the worker's EPHEMERAL reads as step 5 says, and
         step 6's readings hold.
-    2.  Step 7's readings hold, the volume's two UUIDs those of the
-        baseline.
+    2.  Step 7's readings hold, its comparison of the volume's `ids`
+        with the baseline printing `ids pass`.
     3.  Bring-up stage 5's gate holds on the rebuilt cluster, each
         of `up-k8s-base` and `up-apps` converged in its one run, and no
         node reports `DiskPressure` through either of them.
