@@ -115,14 +115,52 @@ def test_a_rule_listing_the_update_in_mixed_quotes_is_not_cleared() -> None:
 
 @pytest.mark.parametrize(
     'listing',
-    [r"['/^TALOSCTL$/i']", r"['/^talos\\.?ctl$/']", "['TalosCtl']", "['{talosctl,kubectl}']"],
-    ids=['regex-with-i', 'escaped-regex', 'glob-in-another-case', 'brace-glob'],
+    [
+        r"['/^TALOSCTL$/i']",
+        r"['/^talos\\.?ctl$/']",
+        "['TalosCtl']",
+        "['{talosctl,kubectl}']",
+        '["/^TALOSCTL$/i"]',
+    ],
+    ids=['regex-with-i', 'escaped-regex', 'glob-in-another-case', 'brace-glob', 'double-quoted-regex-with-i'],
 )
 def test_a_rule_reaching_the_update_by_renovates_reading_is_not_cleared(listing: str) -> None:
     rule = f"""  {{
     matchDepNames: {listing},
     groupName: 'tools',
   }}"""
+    assert reaches(rule, {'matchDepNames': ('talosctl',)})
+
+
+def test_an_entry_holding_a_bracket_is_read() -> None:
+    """A character class holds a `]`, and the list around it is read whole, so a rule it misses is cleared."""
+    rule = """  {
+    matchFileNames: ['/^docker/[^/]+$/', "Pulumi.[jy]aml"],
+  }"""
+    assert listed(rule, 'matchFileNames') == ['/^docker/[^/]+$/', 'Pulumi.[jy]aml']
+    assert reaches(rule, {'matchFileNames': ('docker/talos',)})
+    assert not reaches(rule, {'matchFileNames': ('mise.toml',)})
+
+
+def test_a_comment_among_the_entries_is_no_entry() -> None:
+    rule = """  {
+    matchDepNames: [
+      'kubectl', // not 'talosctl', which has a rule of its own
+      /* nor 'helm' */ 'cmctl',
+    ],
+  }"""
+    assert listed(rule, 'matchDepNames') == ['kubectl', 'cmctl']
+
+
+def test_a_bracket_ending_a_comment_does_not_close_the_list() -> None:
+    """A `//` comment runs to the end of its line, so a list is read whole or not at all."""
+    rule = """  {
+    matchDepNames: [
+      'kubectl', // not ['helm'],
+      'talosctl',
+    ], // a close the scan does not read
+  }"""
+    assert listed(rule, 'matchDepNames') == []
     assert reaches(rule, {'matchDepNames': ('talosctl',)})
 
 
@@ -137,7 +175,8 @@ def test_only_a_matcher_that_provably_misses_clears_a_rule() -> None:
     assert reaches(rule, {'matchDepNames': ('talosctl',), 'excludeDepNames': ('talosctl',)})
     assert not reaches(rule, {'matchDepNames': ('kubectl',)})
     unreadable = """  {
-    matchFileNames: ['/^docker/[^/]+$/'],
+    matchFileNames: ['docker/\\
+Containerfile'],
   }"""
     assert listed(unreadable, 'matchFileNames') == []
     assert reaches(unreadable, {'matchFileNames': ('Pulumi.yaml',)})
