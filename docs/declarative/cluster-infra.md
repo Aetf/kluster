@@ -118,8 +118,23 @@ classes its objects fall into (§1.2):
     posts to Home Assistant at Home Assistant's own address, which only
     the worker reaches ([rfc-008](../rfc/rfc-008-workload-migration.md)
     §4.1), and the rest goes with it for the worker's memory and local
-    disk. The database's volume is `local-path`, named rather than left
-    to the default class, and unbacked: monitoring is rebuilt fresh
+    disk. **Its memory there is budgeted at 0.7 GiB** (nodes.md §4.4),
+    which rfc-008 §6.1 reserves as a request. Every container the
+    component runs on the worker takes its request, and its limit where
+    its chart offers one, from one table,
+    `components/monitoring/memory.py`, which charges each container to
+    its line of nodes.md §4.4: the stack's containers to the monitoring
+    line, and metrics-server to the line for the rest of kube-system,
+    where that table counts it. A test holds the requests charged to the
+    monitoring line to the budget: 0.65 GiB of them, leaving 49 Mi,
+    against the 0.9 GiB of working set the stack measured on 2026-11-17
+    under the charts' and the operator's defaults, Grafana's pod 0.3 GiB
+    of it. Grafana fits by reading the
+    data sources the stack renders when it starts, and starting again
+    whenever what renders them changes, rather than through a second
+    sidecar, and by downloading no plugin at start. The database's
+    volume is `local-path`, named rather than left to the default class,
+    and unbacked: monitoring is rebuilt fresh
     (migration.md §3). Grafana is reached by a port-forward until its
     name moves (§3). The namespace is `privileged`, for the node
     exporter (§0). **What the chart would add is off**: the sync job,
@@ -169,9 +184,9 @@ classes its objects fall into (§1.2):
     flag in every node's machine configuration, which is `physical`'s,
     and a certificate approver on the closed list. **Alert
     delivery**: vmalert needs an Alertmanager-compatible sink — one
-    small alertmanager instance stays in the stack (~70 Mi, earns its
-    rent as the alerting spine). This is the **in-cluster half of the
-    unified alert channel** (architecture.md §4.3): the tiers and the
+    small alertmanager instance stays in the stack (a 28 Mi request with
+    its config reloader, earns its rent as the alerting spine). This is
+    the **in-cluster half of the unified alert channel** (architecture.md §4.3): the tiers and the
     playbook convention of the CI-origin alerts, every rule carrying a
     `tier` label from `conventions.alert.Tier` and `summary` and
     `playbook` annotations, which a test resolves for every rule the

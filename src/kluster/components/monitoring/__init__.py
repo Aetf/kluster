@@ -65,6 +65,22 @@ Grafana's depends on a draw or on what the cluster holds. The password guards
 nothing that outlives the pod, since Grafana keeps no volume here, so it is
 escrowed nowhere.
 
+**Its memory on the worker is held to nodes.md §4.4's budget** by the requests
+of `memory.WORKER_CONTAINERS` charged to monitoring's line of that table, the
+stack's containers; every container the component runs takes its memory from
+there, metrics-server too, which is charged to the line for the rest of
+kube-system. Grafana is trimmed to fit it. Its datasources are
+the chart's own ConfigMap, mounted where Grafana provisions them from at start
+(`grafana_datasources_mount`), rather than watched by a second sidecar, a
+Python process as large as the dashboards' one: a datasource changes only when
+the chart or its values do, and the pod template carries a digest of both
+(`DATASOURCES_DIGEST_ENV`), so a change rolls Grafana and it reads them again.
+The dashboards' sidecar stays, since dashboards are declared by the components
+that own them, under the `grafana_dashboard` label (workloads.md §1). Grafana
+installs no plugin at start: by default it downloads a set from grafana.com on
+every start, into its pod's disk, so that what runs would depend on the day it
+started, and none of them reads a datasource this cluster has.
+
 **The alert leg** is alertmanager's one receiver, Home Assistant's webhook for
 alertmanager, an automation apart from the one the operations repository posts
 to, because alertmanager's body is fixed (rfc-007 §7.3). The webhook's address
@@ -92,6 +108,8 @@ The namespace is `privileged`, for the node exporter (rfc-007 §8).
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
+import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -103,7 +121,7 @@ import pulumi_random as random
 from kluster import conventions
 from kluster.components import cilium
 from kluster.components.cilium.bgp import CONTROL_PLANE_LABEL
-from kluster.components.monitoring import rules
+from kluster.components.monitoring import memory, rules
 from kluster.components.monitoring.operator_objects import operator_object
 from kluster.components.talos import ETCD_METRICS_PORT
 from kluster.conventions import backup
@@ -117,6 +135,7 @@ __all__ = (
     'AUTH_KEYS',
     'AUTH_KEYS_SECRET',
     'CILIUM_SCRAPES',
+    'DATASOURCES_DIGEST_ENV',
     'ETCD_DROPPED',
     'ETCD_JOB',
     'GRAFANA_ADMIN_SECRET',
@@ -130,8 +149,10 @@ __all__ = (
     'CiliumScrape',
     'Monitoring',
     'etcd_scrape_spec',
+    'grafana_datasources_mount',
     'metrics_server_values',
     'receiver_spec',
+    'stack_fullname',
     'stack_values',
 )
 
@@ -232,9 +253,58 @@ AUTH_KEYS_SECRET = 'vmsingle-auth-keys'
 #: `secrets`, under the Secret's name.
 _SECRETS_DIR = '/etc/vm/secrets'
 
+#: Where Grafana provisions its datasources from at start.
+GRAFANA_DATASOURCES_DIR = '/etc/grafana/provisioning/datasources'
 
-def stack_values() -> dict[str, object]:
-    """The VictoriaMetrics stack chart's values: placed on the worker, the chart's extras off, Grafana's admin given."""
+#: The environment variable on Grafana's container that carries the digest of
+#: what its datasources are rendered from. Grafana reads only `GF_`-prefixed
+#: variables as configuration, so this one changes the pod template and
+#: nothing else.
+DATASOURCES_DIGEST_ENV = 'KLUSTER_DATASOURCES_DIGEST'
+
+
+def stack_fullname(release: str, chart: str) -> str:
+    """The name the stack chart gives its objects at this release: `vm.fullname`, with no override set.
+
+    victoria-metrics-common's `_helpers.tpl` L51-73 at stack chart 0.91.2: the
+    release's name where it already holds the chart's, the two joined
+    otherwise, cut to 63 characters with a trailing hyphen dropped.
+    """
+    fullname = release if chart in release else f'{release}-{chart}'
+    return fullname[:63].removesuffix('-')
+
+
+def grafana_datasources_mount(release: str, chart: str) -> dict[str, object]:
+    """Grafana's mount of the stack's datasources ConfigMap, at the directory it provisions datasources from.
+
+    The stack renders the ConfigMap as `<fullname>-grafana-ds`
+    (`templates/grafana/datasource.yaml` at 0.91.2), with the sidecar off only
+    while `forceDeployDatasource` holds.
+    """
+    return {
+        'name': 'datasources',
+        'mountPath': GRAFANA_DATASOURCES_DIR,
+        'configMap': f'{stack_fullname(release, chart)}-grafana-ds',
+        'readOnly': True,
+    }
+
+
+def stack_values(release: str, chart: ChartPin) -> dict[str, object]:
+    """The VictoriaMetrics stack chart's values, installed as `release` from `chart`.
+
+    Placed on the worker, the chart's extras off, Grafana's admin given, every
+    container's memory from `memory.WORKER_CONTAINERS`, and Grafana trimmed
+    to fit it. The last value is the digest of everything else and the chart,
+    on Grafana's container, since the datasources it reads at start are
+    rendered from them.
+    """
+    values = memory.merged(_stack_values(release, chart), memory.chart_values(memory.STACK_CHART))
+    rendered_from = json.dumps({'chart': [chart.reference, chart.version], 'values': values}, sort_keys=True)
+    digest = hashlib.sha256(rendered_from.encode()).hexdigest()
+    return memory.merged(values, {'grafana': {'env': {DATASOURCES_DIGEST_ENV: digest}}})
+
+
+def _stack_values(release: str, chart: ChartPin) -> dict[str, object]:
     return {
         # Fetches rules and dashboards at install time, and is a hook.
         'syncJob': {'enabled': False},
@@ -313,13 +383,22 @@ def stack_values() -> dict[str, object]:
                 'userKey': GRAFANA_USER_KEY,
                 'passwordKey': GRAFANA_PASSWORD_KEY,
             },
+            # The datasources are read from the chart's ConfigMap at start,
+            # which the chart renders with its sidecar off only when forced.
+            'sidecar': {'datasources': {'enabled': False}},
+            'forceDeployDatasource': True,
+            'extraConfigmapMounts': [grafana_datasources_mount(release, chart.name)],
+            'env': {
+                'GF_PLUGINS_PREINSTALL_DISABLED': 'true',
+                'GOGC': str(memory.GRAFANA_GOGC),
+            },
         },
         'kube-state-metrics': {'affinity': WORKER_AFFINITY},
     }
 
 
 def metrics_server_values() -> dict[str, object]:
-    """metrics-server's values: on the worker, and reading each kubelet over the TLS it serves.
+    """metrics-server's values: on the worker, with its memory, and reading each kubelet over the TLS it serves.
 
     Talos' kubelet serves a self-signed certificate, which no cluster authority
     signs, so metrics-server is told not to verify it; the stack's own kubelet
@@ -327,7 +406,10 @@ def metrics_server_values() -> dict[str, object]:
     acceptance, its actor and the clause it fails, are recorded in
     item 6 of declarative/cluster-infra.md §1.
     """
-    return {'args': ['--kubelet-insecure-tls'], 'affinity': WORKER_AFFINITY}
+    return memory.merged(
+        {'args': ['--kubelet-insecure-tls'], 'affinity': WORKER_AFFINITY},
+        memory.chart_values(memory.METRICS_SERVER_CHART),
+    )
 
 
 @dataclass(frozen=True)
@@ -418,7 +500,7 @@ class Monitoring(Component, pulumi_type='kluster:monitoring:Monitoring'):
             name,
             pin=stack_chart,
             namespace=self.namespace.metadata.name,
-            values=stack_values(),
+            values=stack_values(name, stack_chart),
             # Behind Grafana's Secret, which its pod reads at start, and the
             # store's keys, which vmsingle mounts and does not start without.
             opts=self.child_opts(depends_on=[*after, self.grafana_admin, self.auth_keys]),
