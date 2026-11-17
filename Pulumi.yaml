@@ -50,6 +50,25 @@ config:
   versions:image-local-path-provisioner: docker.io/rancher/local-path-provisioner:v0.0.37@sha256:e757967a5ec338f6a9b371c5a9688bedaa8c3578ea3dd4db329ea0084be0a86f
   versions:image-local-path-helper: docker.io/library/busybox:1.38.0@sha256:fd7dc98638c8e305f4dc34e979f1c0fdfdcaeb0fbf8fcff77ae834b6da3d7e6e
 
+  # The monitoring component's own VictoriaMetrics images, beside the stack
+  # chart's (declarative/cluster-infra.md §1 item 6): the history store, which
+  # the operator would otherwise run at its own default release rather than
+  # the chart's; `vmbackup`, which copies each store to the backup bucket; and
+  # `vmrestore`, which restores an empty store before it starts. All three are
+  # the release the chart runs the recent store at, its `appVersion`, which
+  # `update_crds` records beside the bundle, and a test holds them to it. They
+  # travel with the chart in a renovate group of their own: VictoriaMetrics
+  # publishes its images before the chart takes the release, so that group's
+  # pull request is red until a chart release records it, and holds back
+  # these four alone. Each digest is the image index's.
+  versions:image-metrics-history: docker.io/victoriametrics/victoria-metrics:v1.150.0@sha256:54467c7764a3e6579199af1914bb779f01ce32265cd552eb5ae0d4f8a2b80a97
+  versions:image-metrics-backup: docker.io/victoriametrics/vmbackup:v1.150.0@sha256:43dc2cb6e36e265ac5f5197c831cf29eed3078f1610f3b04961361a1bc4159db
+  versions:image-metrics-restore: docker.io/victoriametrics/vmrestore:v1.150.0@sha256:7d684cfce7c6ab904611582ce6a4ae3929efee5a268bef495771b71f31aac8e0
+  # The client the stores' backups and restores reach B2's native API with,
+  # which reads the headers carrying the writer key from a file. Its shell is
+  # the busybox `mise.toml` pins for the suite to run the scripts under.
+  versions:image-metrics-bucket: docker.io/curlimages/curl:8.23.0@sha256:3fb7e13e5d179a845c97d78204f3f1064d1907037f26a3ebf91710571151fd93
+
   # The images the applications' components run, `apps` and the shapes it
   # builds them from (rfc-008 §4 and §5): one pin per container a component
   # declares, keyed by the component and the container's role in it rather

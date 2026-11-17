@@ -4,7 +4,8 @@ The bucket lives on Backblaze B2 rather than beside the cluster, and that is
 the whole point: a backup kept at the provider whose loss it insures is not a
 backup, and tenancy termination is an enumerated risk (storage.md §4,
 nodes.md §3.1). Everything the cluster's durability rests on lands here —
-etcd snapshots, VolSync's restic repositories, CNPG's barman archives
+etcd snapshots, VolSync's restic repositories, CNPG's barman archives, and
+the `vmbackup` copies of the monitoring stack's VictoriaMetrics stores
 (storage.md §5).
 
 **Backups are the HA mechanism, so their deletability is a threat.** A
@@ -14,7 +15,8 @@ only work together (storage.md §4, backup-integrity rules):
 
 -   **No key in automation carries `deleteFiles`.** A writer key is
     `listFiles + readFiles + writeFiles` — list and read included because
-    restic and barman cannot *back up* without reading their own index, so a
+    restic and barman cannot *back up* without reading their own index, and
+    `vmbackup` lists the destination to upload only the parts it lacks, so a
     literally write-only key is not an option. Without the delete capability
     a B2 deletion degrades to a **hide**: the version stops being current and
     stays recoverable.
@@ -26,8 +28,8 @@ only work together (storage.md §4, backup-integrity rules):
     automation can destroy a version before its time.
 
 **Each key reaches one prefix.** An app's restic key sees
-`volsync/<its-namespace>/` and nothing else; barman and the etcd snapshots
-likewise. The prefixes are not restated here — they come from the one bucket
+`volsync/<its-namespace>/` and nothing else; barman's `cnpg/<namespace>/`,
+`vmbackup`'s `vm/<namespace>/` and the etcd snapshots likewise. The prefixes are not restated here — they come from the one bucket
 layout in `conventions`, so the inventory of what is backed up stays derivable
 from the program rather than from a key list.
 
@@ -49,12 +51,13 @@ import pulumi
 import pulumi_b2 as b2
 
 from kluster import conventions
-from kluster.conventions.backup import BackupFamily, writer_scope
+from kluster.conventions.backup import BackupFamily, metrics_repo_path, writer_scope
 from putils import Component, own_provider_opts, with_provider
 
 #: What a backup mover needs, and nothing beyond it. `readFiles` and
 #: `listFiles` are not generosity: restic and barman read their own index
-#: before every write, so a key without them cannot take a backup at all.
+#: before every write, and `vmbackup` lists what the destination holds, so a
+#: key without them cannot take a backup at all.
 WRITER_CAPABILITIES: tuple[str, ...] = ('listFiles', 'readFiles', 'writeFiles')
 
 #: Unfinished large files are the invisible half of an object-storage bill: a
@@ -130,6 +133,11 @@ def volsync_scope(namespace: str) -> Scope:
 def barman_scope(namespace: str) -> Scope:
     """One namespace's database archives, base backups and WAL alike, under its family's scope (`writer_scope`)."""
     return Scope(name=writer_scope(namespace, BackupFamily.BARMAN), prefix=conventions.barman_repo_path(namespace, ''))
+
+
+def metrics_scope(namespace: str) -> Scope:
+    """One namespace's `vmbackup` copies, every VictoriaMetrics store it holds, under its family's scope."""
+    return Scope(name=writer_scope(namespace, BackupFamily.VM), prefix=metrics_repo_path(namespace, ''))
 
 
 class BackupBucket(Component, pulumi_type='kluster:backup:BackupBucket'):

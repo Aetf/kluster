@@ -532,9 +532,9 @@ Per nodes.md §5, durability = declarative rebuild + backups + drills:
     each copied hourly and incrementally by `vmbackup` to
     `b2://…/vm/monitoring/<store>/` (`conventions.backup.metrics_repo_path`)
     under the `vm` family's writer key, which `credentials` seals into
-    `k8s-base`, the stack that declares the monitoring stack. The key is
-    declared, and the backup jobs and the restore are not
-    (Aetf/kluster-ops#790), so none runs. `vmbackup` copies from an
+    `k8s-base`, the stack that declares the monitoring stack; until the
+    key is sealed in, neither the backup jobs nor the restore are
+    declared. `vmbackup` copies from an
     instant snapshot of hard links to immutable parts, because a
     file-by-file copy such as VolSync's is not consistent for a store
     that merges and deletes its parts while the copy runs. The restore

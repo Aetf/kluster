@@ -10,10 +10,24 @@ runs on every node it reports on. Alertmanager has to: it posts to Home
 Assistant at Home Assistant's own address, which only the worker has a route
 to (rfc-008 §4.1, operations.md §4). The rest goes with it because the worker
 has the memory and the local disk, and the cloud nodes share their cores with
-etcd. The database's volume is `local-path` and unbacked: monitoring is
-rebuilt fresh rather than migrated (migration.md §3), so losing it costs its
-history and nothing else. Grafana is reached by a port-forward until its name
-moves (rfc-007 §7.4).
+etcd. Grafana is reached by a port-forward until its name moves (rfc-007
+§7.4).
+
+**Two stores keep what is scraped** (`stores`): the chart's vmsingle, the
+recent store, every series for a month; and the history store, a vmsingle the
+component declares, the series that measure what the cluster consumes and how
+long its control plane takes, for good, so that every period compares with
+every other. vmagent writes the history's class to it through a second
+remote write, and vmalert writes its recording rules through vmagent, so they
+reach both stores the same way. Grafana reads the history as a datasource of
+its own. Each store's volume is `local-path`, on the worker. **Each store is
+backed up hourly to the backup bucket and restores itself before it starts**
+(`stores`), under the monitoring namespace's writer key on the bucket
+(`conventions.sealed.writer_key`), which `k8s-base` holds sealed. While the
+stack's configuration holds no ciphertext for it, no SealedSecret is declared
+for it, and neither the backup jobs nor the restore are declared: the stores
+then start empty and are copied nowhere (physical/bring-up.md §1). A backup
+older than its period allows raises `MetricsBackupStale` (`rules`).
 
 **What the chart would install that this cluster does not** is switched off
 (`stack_values`): the sync job, a Helm hook that fetches rules and dashboards
@@ -26,23 +40,23 @@ a service of the host; and the operator's pre-delete cleanup, a second hook.
 `helm.v4.Chart` drops hooks, so each is off rather than left to vanish
 (cluster-infra.md §1.2).
 
-**What vmagent scrapes** is held to what the store keeps. Every job is
+**What vmagent scrapes** is held to what the stores keep. Every job is
 scraped at one interval, `SCRAPE_INTERVAL`. The chart's kubelet scrapes, the
 kubelet's own metrics and cAdvisor's among them, label a series with its
 node's name and none of the node's labels (`KUBELET_RELABELING`): copied
-onto every series, a node's labels take it past the 40 labels the store
+onto every series, a node's labels take it past the 40 labels a store
 accepts, and the store ignores the whole row. The API server's scrape drops
 the buckets of the histogram families no reading needs
 (`APISERVER_DROPPED_HISTOGRAMS`). etcd is scraped on its metrics listener on
 each control plane by a node scrape of the component's own
-(`etcd_scrape_spec`), from the worker, over KubeSpan. A row the store
+(`etcd_scrape_spec`), from the worker, over KubeSpan. A row a store
 ignores for any reason raises `MetricsDropped` (`rules`).
 
-**The store's mutating endpoints take keys** (`AUTH_KEYS`): deleting series,
+**Each store's mutating endpoints take keys** (`AUTH_KEYS`): deleting series,
 taking snapshots and forcing merges are otherwise open to any pod that
 reaches the store's Service. Each key is generated into the stack's state
-and reaches vmsingle as a file of a Secret it mounts, so no rendered object
-carries one.
+and reaches each vmsingle as a file of a Secret it mounts, so no rendered
+object carries one; the backup jobs read the snapshot key from it.
 
 **The operator's webhook certificate is generated at render time and stays
 put** across runs. The provider renders with a server-side dry run, which lets
@@ -120,20 +134,24 @@ import pulumi_random as random
 
 from kluster import conventions
 from kluster.components import cilium
+from kluster.components.backup import s3_endpoint
 from kluster.components.cilium.bgp import CONTROL_PLANE_LABEL
-from kluster.components.monitoring import memory, rules
+from kluster.components.monitoring import memory, rules, stores
 from kluster.components.monitoring.operator_objects import operator_object
+from kluster.components.monitoring.stores import Store, stack_fullname
 from kluster.components.talos import ETCD_METRICS_PORT
 from kluster.conventions import backup
 from kluster.conventions.alert import Tier
+from kluster.conventions.backup import BackupFamily
 from kluster.lib.k8s import LooserLevel, PodSecurity, helm_chart, namespace, sealed_value
-from kluster.lib.versions import ChartPin
+from kluster.lib.versions import ChartPin, ImagePin
 from putils import Component
 
 __all__ = (
     'APISERVER_DROPPED_HISTOGRAMS',
     'AUTH_KEYS',
     'AUTH_KEYS_SECRET',
+    'BACKUP_DEADLINE',
     'CILIUM_SCRAPES',
     'DATASOURCES_DIGEST_ENV',
     'ETCD_DROPPED',
@@ -142,14 +160,18 @@ __all__ = (
     'GRAFANA_PASSWORD_KEY',
     'GRAFANA_USER_KEY',
     'HEARTBEAT_GROUP_INTERVAL',
+    'HISTORY_DATASOURCE',
+    'HISTORY_SIZE',
     'KUBELET_RELABELING',
     'RECEIVER',
     'SCRAPE_INTERVAL',
+    'SNAPSHOTS_MAX_AGE',
     'WORKER_AFFINITY',
     'CiliumScrape',
     'Monitoring',
     'etcd_scrape_spec',
     'grafana_datasources_mount',
+    'history_store_spec',
     'metrics_server_values',
     'receiver_spec',
     'stack_fullname',
@@ -262,16 +284,22 @@ GRAFANA_DATASOURCES_DIR = '/etc/grafana/provisioning/datasources'
 #: nothing else.
 DATASOURCES_DIGEST_ENV = 'KLUSTER_DATASOURCES_DIGEST'
 
+#: The history store's claim, a budget line on the worker's disk rather than
+#: a limit, which `local-path` does not enforce: the class grows by 3 to 6 GB a
+#: year (Aetf/kluster-ops#790), and this is about two years of it.
+HISTORY_SIZE = '10Gi'
 
-def stack_fullname(release: str, chart: str) -> str:
-    """The name the stack chart gives its objects at this release: `vm.fullname`, with no override set.
+#: How long a backup run may take before it is cut off: inside the hour, so a
+#: hung run does not hold the next one back.
+BACKUP_DEADLINE = dt.timedelta(minutes=55)
 
-    victoria-metrics-common's `_helpers.tpl` L51-73 at stack chart 0.91.2: the
-    release's name where it already holds the chart's, the two joined
-    otherwise, cut to 63 characters with a trailing hyphen dropped.
-    """
-    fullname = release if chart in release else f'{release}-{chart}'
-    return fullname[:63].removesuffix('-')
+#: How long a store keeps a snapshot before deleting it: well past any backup
+#: run's deadline, so no run loses the snapshot it is copying.
+SNAPSHOTS_MAX_AGE = dt.timedelta(days=1)
+
+#: The history store as Grafana's datasource, beside the chart's own for the
+#: recent store.
+HISTORY_DATASOURCE = 'VictoriaMetrics history'
 
 
 def grafana_datasources_mount(release: str, chart: str) -> dict[str, object]:
@@ -289,22 +317,50 @@ def grafana_datasources_mount(release: str, chart: str) -> dict[str, object]:
     }
 
 
-def stack_values(release: str, chart: ChartPin) -> dict[str, object]:
+def _store_keys() -> dict[str, object]:
+    """What a vmsingle reads its mutating endpoints' keys from, a file per flag of the mounted Secret, and its snapshots' age.
+
+    A snapshot a backup cut off at its deadline leaves behind holds its parts'
+    hard links, and so keeps every part merged away since on disk;
+    `-snapshotsMaxAge` deletes it once `SNAPSHOTS_MAX_AGE` has passed.
+    """
+    return {
+        'secrets': [AUTH_KEYS_SECRET],
+        'extraArgs': {
+            **{flag: f'file://{_SECRETS_DIR}/{AUTH_KEYS_SECRET}/{flag}' for flag in AUTH_KEYS},
+            'snapshotsMaxAge': backup.duration(SNAPSHOTS_MAX_AGE),
+        },
+    }
+
+
+def _restore(restore: Sequence[Mapping[str, Any]] | None) -> dict[str, object]:
+    """A vmsingle's restore: its init containers, and the volumes they mount beside its data; nothing where it has none."""
+    if restore is None:
+        return {}
+    return {'initContainers': [dict(it) for it in restore], 'volumes': stores.restore_volumes()}
+
+
+def stack_values(
+    release: str, chart: ChartPin, *, restore: Sequence[Mapping[str, Any]] | None = None
+) -> dict[str, object]:
     """The VictoriaMetrics stack chart's values, installed as `release` from `chart`.
 
     Placed on the worker, the chart's extras off, Grafana's admin given, every
-    container's memory from `memory.WORKER_CONTAINERS`, and Grafana trimmed
-    to fit it. The last value is the digest of everything else and the chart,
-    on Grafana's container, since the datasources it reads at start are
-    rendered from them.
+    container's memory from `memory.WORKER_CONTAINERS`, Grafana trimmed to fit
+    it, the recent store's retention and keys, and the history store written
+    to and read. `restore` holds the recent store's restore containers, `None`
+    while the writer key is not sealed in. The last value is the digest of
+    everything else and the chart, on Grafana's container, since the
+    datasources it reads at start are rendered from them.
     """
-    values = memory.merged(_stack_values(release, chart), memory.chart_values(memory.STACK_CHART))
+    values = memory.merged(_stack_values(release, chart, restore), memory.chart_values(memory.STACK_CHART))
     rendered_from = json.dumps({'chart': [chart.reference, chart.version], 'values': values}, sort_keys=True)
     digest = hashlib.sha256(rendered_from.encode()).hexdigest()
     return memory.merged(values, {'grafana': {'env': {DATASOURCES_DIGEST_ENV: digest}}})
 
 
-def _stack_values(release: str, chart: ChartPin) -> dict[str, object]:
+def _stack_values(release: str, chart: ChartPin, restore: Sequence[Mapping[str, Any]] | None) -> dict[str, object]:
+    _, history = stores.stores(release, chart.name)
     return {
         # Fetches rules and dashboards at install time, and is a hook.
         'syncJob': {'enabled': False},
@@ -356,14 +412,32 @@ def _stack_values(release: str, chart: ChartPin) -> dict[str, object]:
                 # claim made before any class is the default would be made with
                 # none, and never bind.
                 'storage': {'storageClassName': conventions.SC_LOCAL_PATH},
+                'retentionPeriod': backup.duration(stores.RECENT_RETENTION),
                 # Each key read from its file at start, so none is in the
                 # object the operator renders the store's arguments from.
-                'secrets': [AUTH_KEYS_SECRET],
-                'extraArgs': {flag: f'file://{_SECRETS_DIR}/{AUTH_KEYS_SECRET}/{flag}' for flag in AUTH_KEYS},
+                **_store_keys(),
+                **_restore(restore),
             },
         },
-        'vmagent': {'spec': {'affinity': WORKER_AFFINITY, 'scrapeInterval': backup.duration(SCRAPE_INTERVAL)}},
-        'vmalert': {'spec': {'affinity': WORKER_AFFINITY}},
+        'vmagent': {
+            'spec': {'affinity': WORKER_AFFINITY, 'scrapeInterval': backup.duration(SCRAPE_INTERVAL)},
+            'additionalRemoteWrites': [stores.history_remote_write(history)],
+        },
+        # The recording rules reach the stores through vmagent, so the history
+        # keeps those of its class as it keeps scraped series.
+        'vmalert': {'spec': {'affinity': WORKER_AFFINITY}, 'remoteWriteVMAgent': True},
+        'defaultDatasources': {
+            'extra': [
+                {
+                    'name': HISTORY_DATASOURCE,
+                    'uid': stores.HISTORY_STORE,
+                    'type': 'prometheus',
+                    'access': 'proxy',
+                    'url': history.url,
+                    'isDefault': False,
+                }
+            ]
+        },
         'alertmanager': {
             'spec': {
                 'affinity': WORKER_AFFINITY,
@@ -435,10 +509,17 @@ CILIUM_SCRAPES: tuple[CiliumScrape, ...] = (
 
 
 class Monitoring(Component, pulumi_type='kluster:monitoring:Monitoring'):
-    """The VictoriaMetrics stack and metrics-server, the rules, alertmanager's receiver, and the scrape objects.
+    """The VictoriaMetrics stack and metrics-server, the history store, the rules, the receiver and the scrape objects.
 
-    The scrape objects are Cilium's and etcd's. The store's keys are a Secret
-    beside the stack, declared ahead of it, since vmsingle mounts it.
+    The scrape objects are Cilium's and etcd's. The stores' keys are a Secret
+    beside the stack, declared ahead of it, since each vmsingle mounts it.
+
+    `writer_key` is the ciphertext the stack's configuration holds for the
+    namespace's writer key on the backup bucket, `None` while it holds none;
+    until it holds one, neither the stores' backups nor their restores are
+    declared. `history_image`, `backup_image`, `restore_image` and
+    `bucket_image` are the pins the history store, `vmbackup`, `vmrestore`
+    and the bucket's client run.
 
     `after` is what the stack is installed behind: Cilium, and the sealing
     controller, whose chart defines the receiver's SealedSecret. It is stated
@@ -458,10 +539,16 @@ class Monitoring(Component, pulumi_type='kluster:monitoring:Monitoring'):
         metrics_server_chart: ChartPin,
         after: Sequence[pulumi.Resource],
         alert_webhook: Mapping[str, str] | None,
+        writer_key: Mapping[str, str] | None,
+        history_image: ImagePin,
+        backup_image: ImagePin,
+        restore_image: ImagePin,
+        bucket_image: ImagePin,
         opts: pulumi.ResourceOptions | None = None,
     ) -> None:
         super().__init__(name, opts=opts)
         behind = self.child_opts(depends_on=list(after))
+        recent, history = stores.stores(name, stack_chart.name)
 
         self.namespace = namespace(
             f'{name}-namespace',
@@ -496,14 +583,52 @@ class Monitoring(Component, pulumi_type='kluster:monitoring:Monitoring'):
             string_data={flag: key.result for flag, key in keys.items()},
             opts=self.child_opts(depends_on=[self.namespace]),
         )
+        # Behind the sealing controller, whose chart defines the kind, and the
+        # namespace the key is sealed to.
+        writer = conventions.sealed.writer_key(conventions.MONITORING_NAMESPACE, BackupFamily.VM)
+        self.writer_key = sealed_value(
+            f'{name}-writer-key',
+            writer,
+            ciphertext=writer_key,
+            opts=self.child_opts(depends_on=[*after, self.namespace]),
+        )
+        backups = (
+            _Backups(
+                images=stores.Images(backup=str(backup_image), restore=str(restore_image), bucket=str(bucket_image)),
+                bucket=stores.Bucket(
+                    # The SealedSecret's name is the row's, and so is the Secret's.
+                    writer_secret=writer.name,
+                    endpoint=s3_endpoint(conventions.B2_ACCOUNT.region),
+                    region=conventions.B2_ACCOUNT.region,
+                ),
+            )
+            if self.writer_key is not None
+            else None
+        )
+        self.shell = (
+            k8s.core.v1.ConfigMap(
+                f'{name}-backup-shell',
+                metadata=k8s.meta.v1.ObjectMetaArgs(
+                    name=stores.SHELL_CONFIGMAP, namespace=self.namespace.metadata.name
+                ),
+                data=dict(stores.SHELL),
+                opts=self.child_opts(depends_on=[self.namespace]),
+            )
+            if backups is not None
+            else None
+        )
+        # What a store's pod mounts or reads before it starts: the restore's
+        # scripts and key, where it has a restore.
+        restored = [it for it in (self.shell, self.writer_key) if it is not None]
         self.chart = helm_chart(
             name,
             pin=stack_chart,
             namespace=self.namespace.metadata.name,
-            values=stack_values(name, stack_chart),
+            values=stack_values(name, stack_chart, restore=backups.restore(recent) if backups is not None else None),
             # Behind Grafana's Secret, which its pod reads at start, and the
-            # store's keys, which vmsingle mounts and does not start without.
-            opts=self.child_opts(depends_on=[*after, self.grafana_admin, self.auth_keys]),
+            # stores' keys, which vmsingle mounts and does not start without, and
+            # the recent store's restore, where it has one.
+            opts=self.child_opts(depends_on=[*after, self.grafana_admin, self.auth_keys, *restored]),
         )
         self.metrics_server = helm_chart(
             f'{name}-metrics-server',
@@ -562,8 +687,94 @@ class Monitoring(Component, pulumi_type='kluster:monitoring:Monitoring'):
             spec=etcd_scrape_spec(),
             opts=after_the_chart,
         )
+        self.history = operator_object(
+            f'{name}-history',
+            kind='VMSingle',
+            # Named, since vmagent's remote write and Grafana's datasource
+            # address the Service the operator names after it.
+            metadata=k8s.meta.v1.ObjectMetaArgs(name=history.vmsingle, namespace=self.namespace.metadata.name),
+            spec=history_store_spec(
+                image=history_image, restore=backups.restore(history) if backups is not None else None
+            ),
+            opts=self.child_opts(depends_on=[self.chart, self.auth_keys, *restored]),
+        )
+        self.backups = (
+            [
+                k8s.batch.v1.CronJob(
+                    f'{name}-{store.backup_job}',
+                    metadata=k8s.meta.v1.ObjectMetaArgs(name=store.backup_job, namespace=self.namespace.metadata.name),
+                    spec=backups.cronjob(store),
+                    opts=self.child_opts(depends_on=[self.chart, self.history, *restored]),
+                )
+                for store in (recent, history)
+            ]
+            if backups is not None
+            else []
+        )
 
         self.register_outputs({})
+
+
+@dataclass(frozen=True)
+class _Backups:
+    """What the stores' backups and restores are declared from, once the writer key is sealed in."""
+
+    images: stores.Images
+    bucket: stores.Bucket
+
+    def restore(self, store: Store) -> list[dict[str, Any]]:
+        return stores.restore_containers(store, images=self.images, bucket=self.bucket)
+
+    def cronjob(self, store: Store) -> k8s.batch.v1.CronJobSpecArgs:
+        """The store's backup every hour at its minute, one run at a time, cut off before the next is due.
+
+        A failed run is left to the next hour's. A run that hangs is cut off
+        at `BACKUP_DEADLINE`, which `Forbid` would otherwise let hold every
+        later run back until `MetricsBackupStale` fires.
+        """
+        return k8s.batch.v1.CronJobSpecArgs(
+            schedule=store.schedule,
+            concurrency_policy='Forbid',
+            job_template=k8s.batch.v1.JobTemplateSpecArgs(
+                spec=k8s.batch.v1.JobSpecArgs(
+                    backoff_limit=0,
+                    active_deadline_seconds=int(BACKUP_DEADLINE.total_seconds()),
+                    template=k8s.core.v1.PodTemplateSpecArgs(
+                        spec=stores.backup_pod(
+                            store,
+                            images=self.images,
+                            bucket=self.bucket,
+                            snapshot_key=(AUTH_KEYS_SECRET, 'snapshotAuthKey'),
+                        ),
+                    ),
+                ),
+            ),
+        )
+
+
+def history_store_spec(*, image: ImagePin, restore: Sequence[Mapping[str, Any]] | None) -> dict[str, object]:
+    """The history store's vmsingle: its pinned release, for good, on the worker, its own memory and claim, the keys.
+
+    The release is pinned by the component, since the operator otherwise runs
+    a vmsingle at its own default rather than at the chart's; a tag carrying
+    the digest is pulled as tag and digest (`Image.Reference`,
+    `api/operator/v1beta1/vmextra_types.go` L1738-1743 at operator v0.74.0).
+    `restore` holds its restore containers, `None` while the writer key is not
+    sealed in.
+    """
+    return {
+        'image': {'repository': image.repository, 'tag': f'{image.tag}@{image.digest}'},
+        'retentionPeriod': stores.HISTORY_RETENTION,
+        'affinity': WORKER_AFFINITY,
+        'resources': memory.HISTORY_STORE.memory.resources(),
+        'storage': {
+            'storageClassName': conventions.SC_LOCAL_PATH,
+            'accessModes': ['ReadWriteOnce'],
+            'resources': {'requests': {'storage': HISTORY_SIZE}},
+        },
+        **_store_keys(),
+        **_restore(restore),
+    }
 
 
 def etcd_scrape_spec() -> dict[str, object]:

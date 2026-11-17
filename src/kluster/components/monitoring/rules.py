@@ -25,7 +25,8 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from types import MappingProxyType
 
-from kluster.conventions import backup
+from kluster.components.monitoring import stores
+from kluster.conventions import MONITORING_NAMESPACE, backup
 from kluster.conventions.alert import Tier
 
 __all__ = (
@@ -34,6 +35,7 @@ __all__ = (
     'HEARTBEAT',
     'HEARTBEAT_REPEAT',
     'HEARTBEAT_TIMER',
+    'METRICS_BACKUP_STALE',
     'RULE_GROUPS',
     'TIER_LABEL',
     'AlertRule',
@@ -120,6 +122,11 @@ HEARTBEAT = AlertRule(
 )
 
 
+def _backup_jobs() -> str:
+    """The matchers selecting the metrics stores' backup CronJobs."""
+    return f'namespace="{MONITORING_NAMESPACE}", cronjob=~"{stores.BACKUP_JOB_PREFIX}.*"'
+
+
 def _freshness(retention: backup.RetentionClass) -> AlertRule:
     """The backup-freshness rule for one retention class: a source whose last sync is older than the class allows."""
     return AlertRule(
@@ -134,6 +141,24 @@ def _freshness(retention: backup.RetentionClass) -> AlertRule:
         labels={CLASS_LABEL: retention.name},
     )
 
+
+#: The metrics stores' backups going stale: a backup CronJob whose last
+#: success, or its creation where it has not succeeded yet, is older than the
+#: one rule for stale allows over its period. kube-state-metrics publishes both
+#: times per CronJob, under the same labels, so the creation stands in only
+#: for a job with no success on record, and a job that never succeeds is
+#: reported as one that stopped succeeding is.
+METRICS_BACKUP_STALE = AlertRule(
+    alert='MetricsBackupStale',
+    expr=(
+        f'time() - max by (cronjob) ('
+        f'kube_cronjob_status_last_successful_time{{{_backup_jobs()}}} or kube_cronjob_created{{{_backup_jobs()}}}'
+        f') > {backup.duration(backup.max_age(stores.BACKUP_PERIOD))}'
+    ),
+    tier=Tier.ACTIONABLE,
+    summary="A metrics store's backup is older than its period allows",
+    playbook=Playbook('docs/operations.md', '6.2'),
+)
 
 #: Every rule the component declares, by group (rfc-007 §7.2).
 RULE_GROUPS: Sequence[RuleGroup] = (
@@ -184,6 +209,7 @@ RULE_GROUPS: Sequence[RuleGroup] = (
                 summary='The metrics store is ignoring rows it is sent',
                 playbook=Playbook('docs/operations.md', '6.1'),
             ),
+            METRICS_BACKUP_STALE,
         ),
     ),
 )

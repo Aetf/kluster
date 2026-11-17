@@ -58,6 +58,18 @@
     reads off the gateway, so the output is present from the first
     apply and the pinhole with it
     ([physical/gateway.md](../physical/gateway.md) §4.2).
+*   **Updated:** 2026-11-17. §6.1's table gains a row for monitoring's
+    history store, 0.15 GiB of requests, a line of its own beside
+    monitoring's 0.7 GiB, as the operator ruled on
+    [Aetf/kluster-ops#790](https://github.com/Aetf/kluster-ops/issues/790)
+    (declarative/cluster-infra.md §1 item 6, nodes.md §4.4); the total
+    of requests stays about 6.5 GiB. And the sentences of §4.6 and of
+    §10.1 slice 6 that `credentials` seals each writer key into the
+    configuration of `apps` hold for an application's namespace: a namespace the platform holds gets its key
+    in the configuration of `k8s-base`, which declares what reads it,
+    the monitoring stack's backups and restores
+    (`conventions.sealed.WRITER_KEY_STACKS`,
+    declarative/cluster-infra.md §1.1).
 *   **Authority:** AGENTS.md,
     [framework/dispatch.md](../framework/dispatch.md),
     [framework/rfc.md](../framework/rfc.md) and the style rules
@@ -2193,6 +2205,7 @@ host, where the rest of the table replaces what legacy releases.
 | What runs on the worker | Today, peak | Request | Limit |
 | --- | --- | --- | --- |
 | Monitoring, from M2 | | 0.7 GiB | |
+| Monitoring's history store | | 0.15 GiB | |
 | exim, and Wave B's applications | | 0.3 GiB | |
 | immich's server | 1.0, 4.2 GiB | 2 GiB | 5 GiB |
 | immich's machine learning | 0.1, 4.1 GiB | 1 GiB | 5 GiB |

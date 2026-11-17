@@ -106,6 +106,17 @@
     reach or the namespace's API clients, declared with the reason, are
     carved out of it (declarative/cluster-infra.md §2,
     declarative/workloads.md §1).
+*   **Updated:** 2026-11-17 — §7.1, as
+    [Aetf/kluster-ops#790](https://github.com/Aetf/kluster-ops/issues/790)
+    built it: the database's volume is no longer unbacked, and
+    monitoring is no longer rebuilt fresh. The operator required on
+    2026-11-17 that the cluster's performance history persist so that
+    every period compares with every other. The chart's vmsingle keeps
+    every series for 31 days, and a second vmsingle the component
+    declares keeps the series that measure what the cluster consumes
+    for good. Both are backed up hourly to the backup bucket by
+    `vmbackup` and restore themselves before they start
+    (declarative/cluster-infra.md §1 item 6).
 *   **Authority:** AGENTS.md,
     [framework/dispatch.md](../framework/dispatch.md),
     [framework/rfc.md](../framework/rfc.md) and the style rules

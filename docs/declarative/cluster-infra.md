@@ -132,11 +132,66 @@ classes its objects fall into (§1.2):
     of it. Grafana fits by reading the
     data sources the stack renders when it starts, and starting again
     whenever what renders them changes, rather than through a second
-    sidecar, and by downloading no plugin at start. The database's
-    volume is `local-path`, named rather than left to the default class,
-    and unbacked: monitoring is rebuilt fresh
-    (migration.md §3). Grafana is reached by a port-forward until its
-    name moves (§3). The namespace is `privileged`, for the node
+    sidecar, and by downloading no plugin at start. **Two stores keep what is scraped**, so that every period
+    compares with every other
+    ([Aetf/kluster-ops#790](https://github.com/Aetf/kluster-ops/issues/790)).
+    The chart's vmsingle is the *recent* store: every series, kept 31
+    days. The *history* store is a second vmsingle the component
+    declares, kept for good, and written only the series that measure
+    what a node, etcd or a container consumes and how long an operation
+    of etcd or the API server takes, beside the recording rules under
+    `kluster:` and OCI's block-volume series. vmagent writes that class
+    to it through a second remote write, and vmalert writes its
+    recording rules through vmagent, so they reach both stores the same
+    way. The history keeps inputs rather than results: a reading defined
+    later is computed over every period on record. VictoriaMetrics'
+    open-source release has one retention per instance and no
+    downsampling, so a subset kept for good needs an instance of its
+    own. Grafana reads the history as a datasource of its own. The
+    history store runs at the release the chart runs the recent store
+    at, pinned beside its backup and restore images
+    (`versions:image-metrics-*`). Its memory, a 150 Mi request, is a line
+    of its own in the same table, beside the monitoring line (nodes.md
+    §4.4), and a test holds it to that line's 150 Mi. Each store's volume
+    is `local-path` on the worker, named rather than left to the default
+    class. **Each store is backed up hourly to the backup bucket** by
+    `vmbackup`, under `vm/monitoring/<store>/` and the monitoring
+    namespace's writer key, which `k8s-base` holds sealed (§1.1): one
+    CronJob per store, the two half an hour apart, mounting the store's
+    claim read-only. `vmbackup` copies an instant snapshot of hard links
+    to the store's immutable parts, where a file-by-file copy such as
+    VolSync's would catch a store merging and deleting its parts
+    mid-copy. **The history's backup refuses to shrink**: it reads the
+    rows the store holds and the count its last successful backup
+    recorded beside the backup, and backs up nothing where the store
+    holds fewer, since a store that keeps every row and holds fewer
+    started without its history and would overwrite it. **Each store
+    restores itself before it starts**: a container its pod runs first restores the
+    backup into an empty data directory, starts an empty store only
+    where the bucket holds no backup, which is the first install, and
+    fails where the backup cannot be read, so a store never starts empty
+    over a history that exists. What `vmbackup` and `vmrestore` do not
+    do themselves, whether a prefix holds a backup at all and the
+    history's row count beside its backup, is B2's native API, called
+    from containers of their own in curl's image: shell, since the
+    images carry no other interpreter. **No credential is a process's
+    argument**: `curl` reads the headers carrying the writer key and
+    B2's tokens from files in the pod's memory, and `vmbackup` and
+    `vmrestore` read the key, and `vmbackup` the snapshot key, from
+    their environment. A process's arguments are readable by every
+    process that sees its PID, the node exporter among them, which runs
+    in the host's PID namespace
+    ([threat-model.md](../threat-model.md) §2.6); its environment and
+    the pod's files are its own user's. What the node exporter still
+    sees of these pods is their commands: the scripts' paths, the store's
+    address and the bucket's, and the variable `vmbackup` expands into
+    the snapshot address, none of them secret.
+    Until the key is sealed in, neither the backups nor the restores are
+    declared, and the stores start empty (physical/bring-up.md §1). A
+    backup older than an hour and a half raises `MetricsBackupStale`
+    ([operations.md](../operations.md) §6.2), and the whole-cluster
+    rebuild is the history's restore drill (operations.md §3.5).
+    Grafana is reached by a port-forward until its name moves (§3). The namespace is `privileged`, for the node
     exporter (§0). **What the chart would add is off**: the sync job,
     which fetches rules and dashboards off upstream default branches at
     install time and is a hook; the default rules and dashboards it
@@ -165,11 +220,11 @@ classes its objects fall into (§1.2):
     opening; that holds while vmagent never runs on a control plane,
     which a test holds beside alertmanager's placement. **A row the
     store ignores raises an alert**, `MetricsDropped`
-    ([operations.md](../operations.md) §6.1). **The store's mutating
+    ([operations.md](../operations.md) §6.1). **Each store's mutating
     endpoints take keys**: deleting series, taking snapshots and
     forcing a merge each take a key generated into `k8s-base`'s state,
-    which vmsingle reads from a Secret it mounts, so no rendered object
-    carries one. Without them, code in any pod that reaches the store's
+    which each vmsingle reads from a Secret it mounts, so no rendered
+    object carries one; the backup jobs read the snapshot key from it. Without them, code in any pod that reaches the store's
     Service, which includes code the installation runs and did not
     write ([threat-model.md](../threat-model.md) §2.6), can delete the
     cluster's metrics. metrics-server reads each
@@ -308,11 +363,15 @@ Two channels, chosen by who consumes the secret:
         `conventions.backup.BACKED_NAMESPACES` names and keeps it in its
         state, under its own passphrase, which no other stack holds;
         `credentials derived b2-writer seal` reads each there and seals it
-        into the `apps` stack's `sealedSecrets`. They are the one value
+        into the `sealedSecrets` of the stack that declares what reads it:
+        `k8s-base` for a namespace the platform holds, the monitoring
+        stack's, and `apps` for every application's
+        (`conventions.sealed.WRITER_KEY_STACKS`). They are the one value
         `credentials` seals **namespace-wide**: every repository Secret of
         a namespace carries its key under that Secret's own name, beside
         the repository's password, so one ciphertext serves them all
-        (workloads.md §3). A key never becomes a configuration secret,
+        (workloads.md §3); the monitoring stack's backups and restores read
+        theirs under the row's own name. A key never becomes a configuration secret,
         which would put it in every pull request's preview.
     -   **A ported ciphertext is not a row.** A legacy SealedSecret an
         application keeps is copied as it is into `Pulumi.apps.yaml`'s

@@ -256,9 +256,12 @@ runbook, from the gateway window to a verified, empty cluster.
     -   **The writer keys are sealed**, once the certificate is
         confirmed: `credentials` reads each namespace's key from
         `physical`'s state under that stack's passphrase and seals it
-        namespace-wide into the `apps` stack's `sealedSecrets`, one
-        ciphertext serving every repository Secret in its namespace. It
-        is one operator step for every namespace at once.
+        namespace-wide into the `sealedSecrets` of the stack that
+        declares what reads it, one ciphertext serving every consumer in
+        its namespace: `apps` for an application's namespace, and
+        `k8s-base` for the monitoring stack's, whose stores' backups and
+        restores read it (`conventions.sealed.WRITER_KEY_STACKS`). It is
+        one operator step for every namespace at once.
 
 ## 2. Waves
 

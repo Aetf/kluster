@@ -541,6 +541,15 @@ SCHEMES = {
     'ghcr.io/aetf/homelab-containers/zerotier': Scheme(('15', '16')),
     'docker.io/rancher/local-path-provisioner': Scheme(('v0.0.36', 'v0.0.37'), ('v0.0.x-head-arm64',)),
     'docker.io/library/busybox': Scheme(('1.37.0', '1.38.0')),
+    'docker.io/victoriametrics/victoria-metrics': Scheme(
+        ('v1.149.0', 'v1.150.0'), ('v1.150.0-scratch', 'v1.150.0-enterprise', 'v1.150.0-rc0')
+    ),
+    'docker.io/victoriametrics/vmbackup': Scheme(
+        ('v1.149.0', 'v1.150.0'), ('v1.150.0-scratch', 'v1.150.0-enterprise', 'v1.150.0-rc0')
+    ),
+    'docker.io/victoriametrics/vmrestore': Scheme(
+        ('v1.149.0', 'v1.150.0'), ('v1.150.0-scratch', 'v1.150.0-enterprise', 'v1.150.0-rc0')
+    ),
     'docker.io/devture/exim-relay': Scheme(('4.97.1-r0-1', '4.98-r0-0'), ('4.96-r1-0-arm64v8',)),
     'ghcr.io/authelia/authelia': Scheme(('4.38.19', '4.39.0')),
     'docker.io/curlimages/curl': Scheme(('8.22.0', '8.23.0')),
