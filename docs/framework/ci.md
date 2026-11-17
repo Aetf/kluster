@@ -1252,10 +1252,11 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
 ## 4. Self-built images (decided 2026-08-22: they live in this repo)
 
 The cluster-consumed custom images — the CNPG operands (pg_cron,
-vchord/pgvecto-rs), emailproxy, golinks — stay **in the kluster repo**
-(`docker/` + an `images.yml` workflow ported from kluster-code), not in
-homelab-containers: ownership follows the consumer (the same
-co-location principle as DNS records and firewall rules), and the
+vchord/pgvecto-rs), emailproxy, golinks, `oci-sdk` — stay **in the
+kluster repo** (`docker/` + an `images.yml` workflow ported from
+kluster-code), not in homelab-containers: ownership follows the
+consumer (the same co-location principle as DNS records and firewall
+rules), and the
 proven single-repo loop is kept intact — a `.conf` version file per
 image, renovate's comment-driven regex managers bumping it, a person
 merging the bump (a `.conf` is not on noop-automerge's allow-list,
@@ -1371,6 +1372,31 @@ without capturing it, such as
 `regex:^(?<major>\d+)\.(?<minor>\d+)\.(?<patch>\d+)-[0-9a-f]{12}$` for
 emailproxy. A refresh under an unchanged version compares equal under
 such a pattern, so it reaches a consumer by hand.
+
+**An image that runs this repository's Python carries the interpreter
+line `.python-version` names, and a release of each package it installs
+for that code inside the range `pyproject.toml` declares.**
+The gate type-checks and tests that code at that line and against those
+ranges, and sees no other interpreter or release. `oci-sdk` is such an
+image: `python` at the line, slim and pinned by digest, and the `oci`
+SDK at the release its conf pins under a `pypi` hint. It carries no code
+of this repository, since `tests/test_images.py` refuses any read from
+the build context, which the fingerprint does not cover; a consumer
+supplies its program at run time. That test holds both relations, for
+every image whose conf pins a package `pyproject.toml` declares; an
+image that runs this repository's code on the standard library alone
+installs none of them, so it is outside that census and held by review.
+A renovate `allowedVersions` bound keeps such an image's `python` base
+on its line, and the test holds the bound to the base's tag. The
+pull request that moves `.python-version` to another line moves the base
+and the bound by hand, and the test holds it red until both have moved.
+Renovate offers the conf's packages in the monthly window of the base
+refreshes: the `oci` SDK releases about weekly, and each release is a
+conf pull request and then a deploy pull request. Equality with
+`uv.lock` is deliberately not the rule. Lock maintenance moves a package
+inside its range, and each move would turn the test red until an image
+was rebuilt, so a job can run a release other than the one the tests
+ran, inside the range.
 
 The blog is deliberately **not** an image (workloads.md §4: built
 branch + git-sync).

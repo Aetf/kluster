@@ -1,7 +1,7 @@
 name: images
 
-# Builds (PRs) and publishes (main) the self-built images in docker/ — the CNPG
-# operands, emailproxy, golinks (framework/ci.md §4). The loop around it: a
+# Builds (PRs) and publishes (main) the self-built images in docker/
+# (framework/ci.md §4). The loop around it: a
 # `.conf` per image holds its build args and its tag, renovate bumps the
 # version in that file, a person merges the bump (a `.conf` is not on
 # noop-automerge's allow-list), this workflow publishes the ghcr tag, and a

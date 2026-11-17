@@ -13,6 +13,10 @@ and the cases below hold both (framework/ci.md §4):
   comment edit does not; and a push run whose tag the registry already serves
   pushes nothing for that image.
 
+An image that runs this repository's Python is held besides to the
+interpreter line and the package ranges that code is checked against, and
+renovate to offering it nothing past them: the last section below.
+
 The action's step is bash in YAML, and the cases run it as it is written, with
 the one command that reaches the network -- `skopeo` -- replaced by a fake that
 answers the way the registry does.
@@ -24,6 +28,7 @@ import json
 import os
 import re
 import shutil
+import tomllib
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -32,7 +37,9 @@ from typing import Any, cast
 import process_sessions
 import pytest
 import yaml
-from renovate_text import as_python_spells_it, as_renovate_spells_it
+from packaging.requirements import Requirement
+from packaging.utils import canonicalize_name
+from renovate_text import as_python_spells_it, as_renovate_spells_it, listed, package_rules, scalar
 
 ROOT = Path(__file__).parent.parent
 DOCKER = ROOT / 'docker'
@@ -690,3 +697,185 @@ def test_a_reference_pin_names_a_versioning_its_tag_reads_under(image: str) -> N
         versioning = found.group('versioning') or ''
         assert versioning.startswith('regex:'), f'{found.group("currentValue")} names no regex versioning'
         assert as_python_spells_it(versioning.removeprefix('regex:')).fullmatch(found.group('currentValue')), versioning
+
+
+# --------------------------------------------------------------------------
+# An image that runs this repository's Python.
+#
+# It carries the interpreter line `.python-version` names and, of each package
+# it installs for that code, a release inside the range `pyproject.toml`
+# declares (framework/ci.md §4). The census is every image whose conf pins,
+# under a `pypi` hint, a package `pyproject.toml` declares: a package of this
+# repository's is installed for this repository's code. Equality with
+# `uv.lock` is not the rule, because lock maintenance moves a package inside
+# its range and the image would have to be rebuilt after every move. An image
+# that runs this repository's code on the standard library alone installs none
+# of the declared packages, so it is outside the census and held by review.
+
+#: The base an image takes its interpreter from, by the name the dockerfile
+#: manager reads it under, and so the name renovate's rules match.
+PYTHON_IMAGE = 'docker.io/library/python'
+
+
+@dataclass(frozen=True)
+class PypiPin:
+    package: str
+    version: str
+
+
+def _pypi_pins(conf_text: str) -> list[PypiPin]:
+    """The conf's `pypi` pins, read with the pattern renovate reads them with."""
+    return [
+        PypiPin(found.group('depName'), found.group('currentValue'))
+        for found in as_python_spells_it(CONF_VERSION_MATCH_STRING).finditer(conf_text)
+        if found.group('datasource') == 'pypi'
+    ]
+
+
+def _declared() -> dict[str, Requirement]:
+    """`pyproject.toml`'s `[project] dependencies`, by canonical name."""
+    pyproject = tomllib.loads((ROOT / 'pyproject.toml').read_text())
+    held = [Requirement(line) for line in cast(list[str], pyproject['project']['dependencies'])]
+    return {canonicalize_name(requirement.name): requirement for requirement in held}
+
+
+def _python_images() -> list[str]:
+    declared = _declared()
+    return [
+        image
+        for image in _images()
+        if any(canonicalize_name(pin.package) in declared for pin in _pypi_pins((DOCKER / f'{image}.conf').read_text()))
+    ]
+
+
+def _python_line() -> str:
+    """The `<major>.<minor>` of the interpreter `.python-version` pins."""
+    major, minor = (ROOT / '.python-version').read_text().strip().split('.')[:2]
+    return f'{major}.{minor}'
+
+
+def _off_the_line(bases: list[str], line: str) -> list[str]:
+    """What keeps `bases` from carrying the interpreter `line`: every base but one `python` tag on it."""
+    pythons = [base for base in bases if base.split('@', 1)[0].rsplit(':', 1)[0] == PYTHON_IMAGE]
+    if len(pythons) != 1:
+        return [f'{len(pythons)} {PYTHON_IMAGE} bases among {bases}']
+    tag = pythons[0].split('@', 1)[0].rsplit(':', 1)[1]
+    return [] if re.match(rf'{re.escape(line)}(?![\d])', tag) else [f'{tag} is not on {line}']
+
+
+def _outside_the_range(pins: list[PypiPin], declared: dict[str, Requirement]) -> list[str]:
+    """Each pin `pyproject.toml` does not declare, or whose release its range refuses."""
+    found: list[str] = []
+    for pin in pins:
+        requirement = declared.get(canonicalize_name(pin.package))
+        if requirement is None:
+            found.append(f'{pin.package} is not a dependency pyproject.toml declares')
+        elif not requirement.specifier.contains(pin.version, prereleases=True):
+            found.append(f'{pin.package}=={pin.version} is outside {requirement.specifier}')
+    return found
+
+
+def test_the_census_finds_an_image_running_this_repositorys_python() -> None:
+    """Not vacuous: the OCI SDK runtime is one today, so an empty census is a census that broke."""
+    assert _python_images()
+
+
+@pytest.mark.parametrize('image', _python_images())
+def test_an_image_running_this_repositorys_python_is_on_its_line(image: str, tmp_path: Path) -> None:
+    """The base carries the line the gate type-checks and tests at, on every architecture built."""
+    recipe = (DOCKER / f'{image}.Containerfile').read_text()
+    for arch in _architectures():
+        conf = _run_conf(ROOT, tmp_path / arch, image, arch=arch)
+        assert conf.returncode == 0, conf.stderr
+        assert _off_the_line(_bases(recipe, {**conf.args, 'TARGETARCH': arch}), _python_line()) == []
+
+
+@pytest.mark.parametrize('image', _python_images())
+def test_an_image_running_this_repositorys_python_installs_inside_its_ranges(image: str) -> None:
+    pins = _pypi_pins((DOCKER / f'{image}.conf').read_text())
+    assert _outside_the_range(pins, _declared()) == []
+
+
+PYTHON_BASE = f'{PYTHON_IMAGE}:{{}}@{PINNED_DIGEST}'
+
+#: Bases, each with whether it carries the line 3.12.
+LINE_CASES = {
+    'the line': ([PYTHON_BASE.format('3.12-slim')], True),
+    'a release of the line': ([PYTHON_BASE.format('3.12.15-slim')], True),
+    'the next line': ([PYTHON_BASE.format('3.13-slim')], False),
+    'a line the pinned one is a prefix of': ([PYTHON_BASE.format('3.120-slim')], False),
+    'another image': ([f'docker.io/library/debian:13-slim@{PINNED_DIGEST}'], False),
+    'two interpreters': ([PYTHON_BASE.format('3.12-slim'), PYTHON_BASE.format('3.13-slim')], False),
+}
+
+
+@pytest.mark.parametrize('case', LINE_CASES)
+def test_a_base_carries_the_line_only_on_its_tag(case: str) -> None:
+    bases, on = LINE_CASES[case]
+    assert (_off_the_line(bases, '3.12') == []) == on
+
+
+#: Pins, each with whether `oci>=2.184.2,<3` admits it.
+RANGE_CASES = {
+    'a release inside the range': ([PypiPin('oci', '2.191.0')], True),
+    'the next major': ([PypiPin('oci', '3.0.0')], False),
+    'below the floor': ([PypiPin('oci', '2.184.1')], False),
+    'a package pyproject.toml does not declare': ([PypiPin('oci-cli', '3.70.0')], False),
+    'a name spelled otherwise': ([PypiPin('OCI', '2.191.0')], True),
+}
+
+
+@pytest.mark.parametrize('case', RANGE_CASES)
+def test_a_pin_is_held_to_the_declared_range(case: str) -> None:
+    pins, inside = RANGE_CASES[case]
+    assert (_outside_the_range(pins, {'oci': Requirement('oci>=2.184.2,<3')}) == []) == inside
+
+
+def _python_tag(bases: list[str]) -> str:
+    """The tag of the one `python` base among `bases`."""
+    (base,) = [base for base in bases if base.split('@', 1)[0].rsplit(':', 1)[0] == PYTHON_IMAGE]
+    return base.split('@', 1)[0].rsplit(':', 1)[1]
+
+
+def _next_line(tag: str) -> str:
+    """The first tag of the line after `tag`'s, in its form: its next minor."""
+    found = re.match(r'(\d+)\.(\d+)(\.\d+)?(.*)$', tag)
+    assert found is not None, f'{tag} is not a version tag'
+    return f'{found[1]}.{int(found[2]) + 1}{".0" if found[3] else ""}{found[4]}'
+
+
+@pytest.mark.parametrize(
+    ('tag', 'following'), [('3.12-slim', '3.13-slim'), ('3.12.15-slim', '3.13.0-slim'), ('3.9-slim', '3.10-slim')]
+)
+def test_the_next_line_of_a_tag_is_its_next_minor(tag: str, following: str) -> None:
+    assert _next_line(tag) == following
+
+
+def _bound(path: str) -> re.Pattern[str]:
+    """The `allowedVersions` of the one rule naming the `python` base of `path`, as a regular expression."""
+    named = [
+        written
+        for rule in package_rules((ROOT / 'renovate.json5').read_text())
+        if listed(rule, 'matchFileNames') == [path]
+        and listed(rule, 'matchDepNames') == [PYTHON_IMAGE]
+        and (written := scalar(rule, 'allowedVersions')) is not None
+    ]
+    assert len(named) == 1, f'{len(named)} rules bound the base of {path}; renovate needs one'
+    unescaped = named[0].replace('\\\\', '\\')
+    assert unescaped.startswith('/') and unescaped.endswith('/'), f'allowedVersions {named[0]} is not a pattern'
+    return re.compile(unescaped[1:-1])
+
+
+@pytest.mark.parametrize('image', _python_images())
+def test_renovate_bounds_the_base_to_its_line(image: str, tmp_path: Path) -> None:
+    """The bound admits the base's tag and not the next line's, so renovate offers the base no move off its line.
+
+    The tag is held to `.python-version` by the line test above, so the bound
+    is held to the line through it.
+    """
+    conf = _run_conf(ROOT, tmp_path, image)
+    assert conf.returncode == 0, conf.stderr
+    tag = _python_tag(_bases((DOCKER / f'{image}.Containerfile').read_text(), conf.args))
+    line = _bound(f'docker/{image}.Containerfile')
+    assert line.search(tag), f'{image}: the bound {line.pattern} refuses the base {tag}'
+    assert not line.search(_next_line(tag)), f'{image}: the bound {line.pattern} admits {_next_line(tag)}'
