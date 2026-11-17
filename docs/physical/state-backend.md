@@ -1412,7 +1412,7 @@ purpose needs, formed from it rather than stored beside it
 | Reader | Form |
 | --- | --- |
 | A `pulumi` run, `state`'s `pulumi stack ls` included | the string with `binary_parameters=yes` |
-| A query through `psql`: the census | the string as stored |
+| A query through `psql`: the census and `release-lock` | the string as stored |
 | `pg_dump` and `pg_restore` | the string naming `pulumi_state_session`, the pooler's session entry (§2) |
 
 The forms differ only in what this repository's code decides, the session

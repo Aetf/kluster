@@ -836,10 +836,14 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     `notify-failure` fires (the step-bound bullet above). A deploy an
     actor cancels mid-apply ends `cancelled` and raises no alert, and
     needs the same procedure. GitHub stops a timed-out step the way it
-    cancels a job: it signals the step's process, and seconds later it
-    kills that process and every child. The apply stops wherever it
-    was, so the resource operations in flight at that moment stay
-    pending in the state, and the stack's lock can stay behind. First
+    cancels a job, and what it signals is the step's shell alone: SIGINT,
+    then SIGTERM, then a kill, seconds apart (`ProcessInvoker.cs` at
+    runner v2.338.2). `pulumi`, a child of that shell, receives none of
+    them and goes on applying until the job ends, when the runner kills
+    every process the job left (`Cleaning up orphan processes` in the
+    job's log). The apply stops wherever it was at that kill, so the
+    resource operations in flight then stay pending in the state, and
+    the stack's lock stays behind. First
     find what the apply was waiting on — the last resource its log
     names — because re-running into the same hang repeats it. Then,
     from the checkout that holds `.credentials/` (the workstation form
@@ -918,6 +922,41 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
         queued behind the stopped one the moment it ends — so it
         would apply the older code over stacks a newer run already
         brought forward.
+
+    **A lock left by a `pulumi up` that exited by itself is the deploy's
+    to clear, not this procedure's.** `pulumi` deletes its lock on the
+    way out, and reports a delete that failed — the backend not
+    answering at the end of the run — as the diagnostic `there was a
+    problem deleting the lock at <key>`, leaving its exit status as the
+    update made it, a success included. So every `Up` step in
+    `deploy.yml` runs `state-backend release-lock` once its `pulumi up`
+    has exited by itself, failed or not. The proof that a lock is the
+    run's own is what `pulumi` writes into it, the PID, the hostname and
+    the time of the process that took it (`lockContent` in
+    `pkg/backend/diy/lock.go` at the pinned CLI). The step records the
+    PID of the `pulumi` it starts and the time before it started, and a
+    lock naming that PID and the runner's hostname, taken no earlier
+    than that time, is that process's: a hosted runner runs one job, the
+    `up` is the one command of a deploy job that takes a lock, and a
+    lock an earlier run left on a machine that happened to share both
+    names was taken before this run started. The command waits a
+    bounded time for the backend to answer,
+    then deletes that one row and no other. It does not run `pulumi
+    cancel`, which deletes every lock the stack holds: a process taking
+    the lock at that moment could lose its own row to it and go on
+    unlocked. Any other lock is named in the step's log and left. When
+    the backend did not answer in time, the step fails with an
+    annotation naming the stack, and that stack's lock is this
+    procedure's from step 1. So is the lock of a killed `pulumi`, which
+    the step leaves alone. An `Up` step that timed out or was cancelled
+    runs nothing more. While its step lives, `pulumi` traps SIGINT and
+    SIGTERM during an update, cancels and exits by itself, and its lock
+    is released like any other; a status above 128 is a signal it does
+    not trap, in practice SIGKILL, and leaves the lock to this
+    procedure — every such status but 255, which the CLI's exit-code
+    table keeps for an internal error. A killed apply never tried its
+    own delete, may have stopped where the next one would stop again,
+    and finding where is the first thing this procedure does.
 -   **Enforceable because the repo is public** (2026-08-25). Branch
     protection and rulesets return `403` on a private repository
     under this account's plan, and an Environment's reviewer gate is

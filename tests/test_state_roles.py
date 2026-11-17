@@ -62,7 +62,6 @@ import struct
 import subprocess as sp
 import tarfile
 import time
-import tomllib
 import uuid
 from collections.abc import Callable, Iterator
 from contextlib import ExitStack
@@ -74,7 +73,7 @@ from urllib import parse as urllib_parse
 import process_sessions
 import pytest
 from root_credentials import fake
-from scratch_projects import cli_directories
+from scratch_projects import cli_directories, mise_switches
 
 from kluster.conventions import identity
 from kluster.lib import bundle, pulumi_cli, stack_environment
@@ -1241,10 +1240,6 @@ def test_both_copies_of_the_checkpoint_grammar_count_what_pulumi_writes(
     assert state.verify_dump(serving) == [f'{env["PG_DATABASE"]}/{BACKEND_STACKS}project/{STACK}{suffix}']
 
 
-#: The checkout's `mise.toml`, whose `[env]` every `mise x -- pulumi` run is
-#: started with -- every CI job's and a workstation's (tests/test_mise_env.py).
-MISE_TOML = Path(__file__).resolve().parents[1] / 'mise.toml'
-
 #: Every variable, under each of its names, that changes which keys a save
 #: writes: compression, the `backups/` copy, a retained copy. Cleared before a
 #: case that names its own, so the operator's shell -- or the suite's own
@@ -1256,21 +1251,6 @@ STATE_SWITCHES_ENV = (
     'PULUMI_DIY_BACKEND_RETAIN_CHECKPOINTS',
     'PULUMI_RETAIN_CHECKPOINTS',
 )
-
-
-def _mise_switches() -> dict[str, str]:
-    """The `PULUMI_` variables `mise.toml`'s `[env]` sets to a literal value, as it sets them.
-
-    A literal renders to itself, so these are what a `pulumi` run under
-    `mise x` is given; the templates beside them are the backend and its
-    passphrase, which a case names for itself.
-    """
-    table: dict[str, str] = tomllib.loads(MISE_TOML.read_text())['env']
-    return {
-        name: value
-        for name, value in table.items()
-        if name.startswith('PULUMI_') and '{{' not in value and '{%' not in value
-    }
 
 
 def _keys(box: Box) -> set[str]:
@@ -1296,7 +1276,7 @@ def test_a_run_under_mises_environment_keeps_a_compressed_checkpoint_and_no_back
     """
     for variable in STATE_SWITCHES_ENV:
         monkeypatch.delenv(variable, raising=False)
-    switches = _mise_switches()
+    switches = mise_switches()
     box = _appliance(start, ignition)
     ci = _bundle(roots, box, clients, settings.CI_ROLE)
     project = tmp_path / 'project'
@@ -1358,7 +1338,7 @@ def test_a_switch_to_compression_leaves_plain_copies_and_the_prune_takes_those_a
         _up(operator, project, stack)
     plain = _keys(box)
     for _ in range(2):
-        _up(operator, project, STACK, _mise_switches())
+        _up(operator, project, STACK, mise_switches())
     layout = f'{settings.DATABASE}/.pulumi/'
     stacks = f'{layout}stacks/{project.name}/'
     before = _keys(box)
@@ -1417,7 +1397,7 @@ def test_a_copy_its_stack_is_written_in_again_is_kept_by_the_delete_listed_befor
     project = tmp_path / 'project'
     _stack_init(operator, project, STACK)
     _up(operator, project, STACK)
-    _up(operator, project, STACK, _mise_switches())
+    _up(operator, project, STACK, mise_switches())
     listing = [row.key for row in state.superseded(state.census(operator), settings.DATABASE)]
     assert listing
 
