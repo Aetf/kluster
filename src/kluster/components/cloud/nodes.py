@@ -410,11 +410,6 @@ class CloudNodes(Component, pulumi_type='kluster:cloud:CloudNodes'):
                 # that reads it gone (declarative/physical.md §1). An update
                 # in place, a resize, passes. `test_node_loss_engine` holds
                 # both against the pinned CLI.
-                #
-                # A replacement run once the state's protection is lifted by
-                # name is created from the program's current values all the
-                # same: the engine checks the program's inputs afresh for it,
-                # which `test_state_backend_engine` holds.
                 opts=self.child_opts(protect=True, ignore_changes=['metadata.user_data', 'sourceDetails.sourceId']),
             )
 

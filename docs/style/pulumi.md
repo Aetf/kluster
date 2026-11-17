@@ -525,11 +525,11 @@ for it, or an earlier run left it pending replacement, and in an
 update it stops at that step, before it creates the replacement. An
 update in place
 passes, and a refresh drops the resource when it reads back without an
-ID, whatever its `protect`. So the operation runs outside the program
-and the resource leaves the state through that refresh; a runbook that
-replaces it through the program instead lifts the state's protection
-first, by name, with `state unprotect`. The refusal needs the state's
-protection as well as the program's, and a change to `protect` alone
+ID, whatever its `protect`. So the operation runs outside the program:
+the resource leaves the state through that refresh, and the next `up`
+creates it again, protected as the program declares it. The refusal
+needs the state's protection as well as the program's, and a change to
+`protect` alone
 plans nothing: a preview reads the resource as unchanged, and the next
 `up` that runs writes the flag into the state. What the option makes
 the engine do is held by an engine case

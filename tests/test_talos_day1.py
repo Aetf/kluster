@@ -521,10 +521,11 @@ def hostnames_in(patches: list[dict[str, Any]]) -> list[str]:
 async def test_every_node_is_named_what_the_declaration_names_it(fake: Talos) -> None:
     """Each node's configuration names it as the rolls do, in both of its renderings.
 
-    The name is otherwise the platform's: the hostname OCI's VCN hands a
-    replacement whose predecessor still holds the label, or one Talos
-    generates. Nodes of one name evict each other's etcd member, so a
-    rendering that gave one node's name to another would be that failure.
+    The name is otherwise the platform's: the hostname OCI's VCN hands an
+    instance whose label another instance still holds, or one Talos
+    generates. A control plane joining with an empty etcd data directory
+    removes the member of its own name, a live one included, so a rendering
+    that gave one node's name to another would take that node out of etcd.
     The rolls are the declaration's own, and the dedicated-VIP node is
     rendered twice, once to boot with and once to be applied.
     """

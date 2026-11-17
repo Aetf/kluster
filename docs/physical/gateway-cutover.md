@@ -1439,19 +1439,24 @@ state. What is left is the property that one node carrying the SAN is
 enough to reach every node, by its private address. This recovery is
 for a cluster that has not been bootstrapped, which is the only state
 that fault leaves behind, since nothing past the first apply is
-created. It is two runs, because the node that is given the SAN is a
-replaced instance, and its predecessor keeps running, with valid
-cluster secrets, until the run that replaces it deletes it at its end.
-A control plane joining etcd with an empty data directory first removes
-any member that carries its own hostname, and which hostname each of
-the two carries depends on the rendering it booted. The predecessor
-here booted a rendering that states no hostname, so it carries the
-VCN's, `kluster-cp3`, while the replacement boots the current
-rendering and takes the declared `cp3` (declarative/physical.md §2).
-Between two instances that both booted a rendering stating it, the
-name is shared, and bootstrapping while both exist would leave two
-nodes named `cp3` removing each other. The second run therefore starts
-only once the state holds no pending delete.
+created. It is two runs: the first gives `cp3` a new instance, which
+boots the current rendering and so carries the SAN, and the second
+bootstraps through it. The replacement is delete-first, as every
+deliberate replacement of a control plane is (operations.md §3.1):
+the old instance is terminated before the new one launches, so two
+instances of the name `cp3` never run at once. Between two instances
+that both booted a rendering stating the name, the name is shared.
+Before the bootstrap neither holds etcd data, so each would join with
+an empty data directory and remove the other's member, and
+bootstrapping while both exist would leave two nodes named `cp3`
+removing each other. On a bootstrapped cluster the removal runs one
+way, the joining node removing its data-holding predecessor
+(declarative/physical.md §1). The A1 quotas hold exactly the fleet
+(`components/cloud/guardrails.py`), so a launch beside the old
+instance would be refused in any case. **No etcd step comes before
+the termination**, as one does on a bootstrapped cluster
+(operations.md §3.1): with no data in etcd there is no leadership to
+forfeit, no snapshot worth taking, and no Node object to delete.
 
 **The operator gives a go before each run**, and each `up` is
 confirmed only after its own preview has been read. **The gateway stop
@@ -1459,59 +1464,74 @@ holds for both**: the preview shows no operation on anything under
 `kluster:gateway:Gateway` and none of a `unifi:` type, and if it shows
 one, the run is not confirmed and the preview is reported.
 
-*Run 1 replaces `cp3`'s instance, and nothing else.* `cp3` because
-`cp1` holds the dedicated VIP and the attached volume and is the node
-the bootstrap names, and between `cp2` and `cp3` the declaration makes
-no difference. The regional A1 quota allows the fleet plus one node in
-flight (`components/cloud/guardrails.py`), and a replacement is created
-before its predecessor is deleted, so one instance is all a run can
-replace.
+*Run 1 terminates `cp3`'s instance and creates it again, and writes
+nothing else.* `cp3` because `cp1` holds the dedicated VIP and the
+attached volume and is the node the bootstrap names, and between `cp2`
+and `cp3` the declaration makes no difference. The capacity reading of
+operations.md §3.4, for `cp3`'s AD at the declared size, passes in the
+hour before the termination. A launch the AD refuses after it leaves
+`cp3` missing until a retry finds capacity, which before the bootstrap
+costs calendar time and nothing else.
 
-It is a targeted run: the instance, and every resource in the state
-that names it. Those are the instance's balancer backends, one per
-port the balancer forwards on each family, and nothing else, since
-`cp3` carries no volume (`conventions.NODE_VOLUMES`). Talos day 1
-names the instance too, and is in no state yet, so a run that does not
-target it leaves it uncreated. Targeted, the run writes nothing it
-does not name, so the gateway, the overlay and Talos are out of it by
+It is operations.md §3.1's lost-node block, from its `read` on, with
+its `up` targeted: the instance, and every resource in the state that
+names it. Those are the instance's balancer backends, one per port the
+balancer forwards on each family, and nothing else, since `cp3`
+carries no volume (`conventions.NODE_VOLUMES`). Talos day 1 names the
+instance too, and is in no state yet, so a run that does not target it
+leaves it uncreated. Targeted, the run writes nothing it does not
+name, so the gateway, the overlay and Talos are out of it by
 construction rather than by an exclusion. An exclusion is not the
 form: with `--exclude-dependents`, the engine forbids every delete in
-the run, the replaced original included, and the original then stays
-in the state as a pending delete that no later preview shows.
+the run, the backends' replaced originals included, and those then
+stay in the state as pending deletes that no later preview shows.
 
 ```sh
-TARGETS=($(physical stack --show-urns | sed -n \
-    -e 's/.*URN: \(urn:pulumi:.*Instance::kluster-cp3\)$/--target \1/p' \
-    -e 's/.*URN: \(urn:pulumi:.*Backend::kluster-nlb-.*-cp3\)$/--target \1/p'))
-CP3=$(physical stack --show-urns | sed -n 's/.*URN: \(urn:pulumi:.*Instance::kluster-cp3\)$/\1/p')
-printf '%s\n' "$CP3"             # exactly one line, an oci:Core/instance:Instance URN
-printf '%s\n' "${TARGETS[@]}"    # --target, then a URN: the instance and each backend named for cp3
+ocid() { physical stack export | jq -r --arg t "$1" --arg n "$2" '.deployment.resources[] | select(.type == $t and .outputs.displayName == $n) | .id'; }
+urns() { physical stack --show-urns | sed -n 's|.*URN: \(urn:.*\)$|\1|p' | grep -E "$1"; }
+S=$(urns '\$oci:NetworkLoadBalancer/backendSet:BackendSet::' | wc -l); echo "$S"    # the number of backend sets
+T=($(urns '::kluster:cloud:CloudNodes\$oci:(Core/instance:Instance::kluster-cp3|NetworkLoadBalancer/backend:Backend::kluster-nlb-.*-cp3)$'))
+printf '%s\n' "${T[@]}"          # the instance, and its backend in each backend set
+I=($(ocid oci:Core/instance:Instance kluster-cp3)); printf '%s\n' "${I[@]}"    # one identifier
+mkdir -p .claude; printf '%s\n' "${T[@]}" > .claude/cp3.urns
 
-physical state unprotect "$CP3"
-physical up "${TARGETS[@]}" --replace "$CP3"
+[ "$S" -gt 0 ] && [ ${#T[@]} -eq $((1 + S)) ] && [ ${#I[@]} -eq 1 ] && credentials derived oci-physical terminate "${I[@]}"
+credentials derived oci-physical read "${I[@]}"
+[ "$S" -gt 0 ] && [ ${#T[@]} -eq $((1 + S)) ] && physical refresh --run-program "${T[@]/#/--target=}"
+[ "$S" -gt 0 ] && [ ${#T[@]} -eq $((1 + S)) ] && physical up "${T[@]/#/--target=}"
 ```
 
-Every node's instance is protected, so the engine refuses its
-replacement before it creates anything (declarative/physical.md §1).
-`state unprotect` lifts that for `$CP3` alone, in the state, and the
-replacement is created protected, from the program. An `up` that is
-not confirmed leaves the original unprotected in the state until the
-next `up` that runs, which writes the program's protection back.
+`ocid` and `urns` are the helpers of operations.md §3.1. The
+termination, the refresh and the `up` each run only at the count the
+step knows, as there, and the termination waits until both lists hold
+theirs. `terminate` deletes the
+instance with its boot volume and prints both once they read
+`TERMINATED`, and `read` prints `TERMINATED` again. The refresh drops
+the instance, which reads back without an ID, protected as it is
+(declarative/physical.md §1), and keeps the backends, which OCI keeps
+for a terminated instance. The `up` creates the instance from the
+program, protected, and moves each backend to it. `T` holds what the
+state named before the refresh, which takes the instance out of the
+state, so the `T` line run again after the refresh would miss it: the
+list is written to `.claude/cp3.urns` before the termination, a retry
+reads it back with `T=($(cat .claude/cp3.urns))` and runs `S` and the
+gated `up` again, and the file is deleted once run 1 has passed.
 
-The preview reads one replacement of `kluster-cp3`'s instance, a
+The preview reads one create, of `kluster-cp3`'s instance, a
 replacement or an update of each balancer backend named for `cp3`, and
 nothing else: no `talos:` resource, nothing under
 `kluster:gateway:Gateway`, and no other instance. The cluster's
 secrets (`talos:machine/secrets:Secrets`) are unchanged. **Stop,
-before confirming**, on any of these: `$CP3` empty or more than one
-line; a backend named for `cp3` in `physical stack --show-urns` that
-`$TARGETS` lacks; the gateway stop; any operation on a `talos:`
-resource; a replacement or a delete of anything but `cp3`'s instance
-and the backends named for `cp3`. After confirming, the run's output
-carries a `deleted original` line for the instance. A launch refused
-for capacity or quota leaves the old instance serving and nothing
-lost: it is reported, and the same command, on a fresh go, is the next
-run. Any other failure is reported, not retried.
+before the termination**, if `S`, `T` or `I` does not print what its
+comment says, or if a backend named for `cp3` in
+`physical stack --show-urns` is missing from `T`. **Stop, before
+confirming the `up`**, on the gateway stop, any operation on a `talos:`
+resource, or a replacement or a delete of anything but the backends
+named for `cp3`. A launch refused for capacity, or refused on the A1
+quota while OCI still counts the terminated instance (operations.md
+§3.1), leaves `cp3` missing and the other two nodes as they were: it
+is reported, and the retry above, on a fresh go, is the next run. Any
+other failure is reported, not retried.
 
 **Run 2 waits until the state holds no pending delete**, which this
 read, of the URNs alone, shows:

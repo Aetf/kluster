@@ -1207,30 +1207,33 @@ def engine_urns(registrations: dict[str, Any]) -> dict[str, str]:
 
 #: What stands in for `physical` when a case runs a runbook block over the
 #: program's URNs: `stack --show-urns` lists them as the CLI does, one
-#: `URN:` line each, and `up` records its arguments instead of running.
+#: `URN:` line each, `stack export` prints a state that holds nothing, and
+#: `refresh` and `up` each record their arguments instead of running. The
+#: cloud's own tools, `credentials`, do nothing.
 PHYSICAL_STAND_IN = """\
 physical() {
     case "$1" in
-        stack) sed 's/^/    URN: /' "$URNS" ;;
+        stack) if [ "$2" = export ]; then echo '{}'; else sed 's/^/    URN: /' "$URNS"; fi ;;
+        refresh) shift; printf '%s\\n' "$@" > "$REFRESHED" ;;
         up) shift; printf '%s\\n' "$@" > "$ARGS" ;;
     esac
 }
+credentials() { :; }
 """
 
 
 def test_the_recoverys_first_run_targets_cp3s_instance_and_everything_in_state_that_names_it(
     ran: Run, tmp_path: Path
 ) -> None:
-    """Run 1's block, run over the program's own URNs, targets the replaced instance and its every dependent but Talos.
+    """Run 1's block, run over the program's own URNs, targets the instance and its every dependent but Talos.
 
-    A dependent left out of a targeted replacement keeps naming the original
-    instance, and the engine refuses to delete an original that an
-    untargeted resource in the state still depends on. Talos day 1 depends
-    on the instance as well, and is the one dependent run 1 leaves out: it
-    is in no state when the recovery runs, so leaving it untargeted leaves
-    it uncreated. The dependents are read off the run, transitively, so a
-    backend on a new port or a volume attached to the node is one the block
-    has to select too. `tests/test_node_replacement_engine.py` holds what
+    A dependent left out of the targeted refresh and `up` that re-create the
+    instance keeps naming the terminated one, and is never moved to the new
+    instance. Talos day 1 depends on the instance as well, and is the one
+    dependent run 1 leaves out: it is in no state when the recovery runs, so
+    leaving it untargeted leaves it uncreated. The dependents are read off
+    the run, transitively, so a backend on a new port or a volume attached
+    to the node is one the block has to select too. `tests/test_node_replacement_engine.py` holds what
     the engine then does with these flags.
     """
     registrations = ran.recorded.registrations
@@ -1260,18 +1263,21 @@ def test_the_recoverys_first_run_targets_cp3s_instance_and_everything_in_state_t
     (block,) = [
         block
         for block in re.findall(r'```sh\n(.*?)```', RUNBOOK.read_text(), re.DOTALL)
-        if 'physical up' in block and '--replace' in block
+        if 'physical up' in block and 'Instance::kluster-cp3' in block
     ]
     urns = tmp_path / 'urns'
     _ = urns.write_text(''.join(f'{urn}\n' for urn in engine.values()))
+    refreshed = tmp_path / 'refreshed'
     arguments = tmp_path / 'arguments'
-    locations = f"URNS='{urns}' ARGS='{arguments}'\n"
-    _ = process_sessions.run(['bash', '-c', locations + PHYSICAL_STAND_IN + block], timeout=60, check=True)
-    passed = arguments.read_text().splitlines()
-    flags = list(zip(passed[::2], passed[1::2], strict=True))
-    assert {flag for flag, _ in flags} == {'--target', '--replace'}, passed
-    assert [value for flag, value in flags if flag == '--replace'] == [engine[instance]]
-    assert {value for flag, value in flags if flag == '--target'} == cloud
+    locations = f"URNS='{urns}' REFRESHED='{refreshed}' ARGS='{arguments}'\n"
+    # In a directory of its own: the block writes its list under `.claude/`.
+    _ = process_sessions.run(
+        ['bash', '-c', locations + PHYSICAL_STAND_IN + block], timeout=60, cwd=tmp_path, check=True
+    )
+    for ran_with in (arguments, refreshed):
+        assert ran_with.exists(), f'the block ran no step that wrote {ran_with.name}'
+        passed = ran_with.read_text().splitlines()
+        assert {argument.removeprefix('--target=') for argument in passed if argument.startswith('--target=')} == cloud
 
 
 def test_each_component_the_runbook_excludes_is_excluded_whole_and_alone(ran: Run) -> None:

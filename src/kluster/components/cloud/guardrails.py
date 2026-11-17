@@ -14,28 +14,24 @@ watch, and only one of them can actually refuse anything:
     the costs quotas cannot express — egress, request counts, a price change.
 
 **A1 is bounded twice, per availability domain and per region**, and an
-instance is created only where both admit it. Both bounds leave room for one
-node more than the fleet holds, because replacing a node is the operation the
-design depends on being available (nodes.md §3.1, the capacity hunt), and a
-replacement exists beside the node it replaces: Pulumi creates the replacing
-resource before it deletes the old one, an order the nodes component leaves at
-its default. A bound equal to the fleet would therefore refuse every
-replacement while the old node still runs.
+instance is created only where both admit it. Both bounds hold exactly the
+fleet, so the cloud refuses a node beyond it whoever asks: a replacement
+launched beside the node it replaces, which would take a live member out of
+etcd (declarative/physical.md §1), a fat-fingered node count, a stray
+instance. A node is replaced by terminating it first and creating it again
+(operations.md §3.1), so no replacement needs room beside the fleet.
 
--   **Per AD**, the bound is two nodes' worth: the fleet is one node per AD
-    (nodes.md §5), so the second is the room a replacement takes there, and a
-    bound tight enough to forbid a second node in an AD would also forbid
-    replacing the first. Block storage is scoped per AD the same way.
--   **Per region**, the bound is the fleet plus one node, the fleet being
-    what `conventions.CLOUD_NODES`, `NODE_OCPUS` and `NODE_MEMORY_GB`
-    declare. That is the compartment's ceiling: one replacement in
-    flight at a time, which is all the design asks for (never create more than
-    one node at once, nodes.md §3.2). The per-AD numbers multiplied by the
-    region's ADs would admit more, and the regional quota is what stops it.
+-   **Per AD**, the bound is one node's worth: the fleet is one node per AD
+    (nodes.md §5), so a second node in an AD is refused there. Block storage
+    is scoped per AD the same way.
+-   **Per region**, the bound is the fleet, what `conventions.CLOUD_NODES`,
+    `NODE_OCPUS` and `NODE_MEMORY_GB` declare. That is the compartment's
+    ceiling: in a region with more ADs than the fleet has nodes, the per-AD
+    numbers admit a node in each AD the fleet leaves empty, and the regional
+    quota is what refuses it.
 
-Both are looser than the free envelope, and deliberately so: the fleet itself
-bills past it (nodes.md §3.2), and so does the replacement in flight, for as
-long as it runs beside the node it replaces.
+The regional bound is looser than the free envelope, and deliberately so: the
+fleet itself bills past it (nodes.md §3.2).
 
 **Statement order is load-bearing.** Within one policy, a later statement
 supersedes an earlier one for the same quota, so the wildcard `zero` comes
@@ -54,26 +50,23 @@ import pulumi_oci as oci
 
 from putils import Component, async_output, resolve
 
-#: Per AD. Two nodes' worth: one node is 2 OCPU / 8 GB, the fleet puts one in
-#: each AD, and the second is the room the replacement takes beside it.
-A1_CORES_PER_AD = 4
-A1_MEMORY_GB_PER_AD = 16
+#: Per AD. One node's worth: one node is 2 OCPU / 8 GB, and the fleet puts one
+#: in each AD.
+A1_CORES_PER_AD = 2
+A1_MEMORY_GB_PER_AD = 8
 
-#: Regional. The fleet plus one node: three nodes of 2 OCPU / 8 GB
-#: (`conventions.CLOUD_NODES`, `NODE_OCPUS`, `NODE_MEMORY_GB`) and the
-#: replacement that runs beside one of them, because the replacement is created
-#: before the node it replaces is deleted and a bound of the fleet alone would
-#: refuse it. A literal like the others, not a number computed from those
-#: conventions: a bound that followed the fleet's declaration would follow a
-#: fat-fingered node count or size along with it, which is the mistake it is
-#: here to refuse. The suite compares the two instead.
-A1_CORES_REGIONAL = 8
-A1_MEMORY_GB_REGIONAL = 32
+#: Regional. The fleet: three nodes of 2 OCPU / 8 GB (`conventions.CLOUD_NODES`,
+#: `NODE_OCPUS`, `NODE_MEMORY_GB`). A literal like the others, not a number
+#: computed from those conventions: a bound that followed the fleet's
+#: declaration would follow a fat-fingered node count or size along with it,
+#: which is the mistake it is here to refuse. The suite compares the two
+#: instead.
+A1_CORES_REGIONAL = 6
+A1_MEMORY_GB_REGIONAL = 24
 
 #: Per AD. A node's boot volume is 50 GB and a node may carry one attached
 #: volume of 55 GB (`conventions.NODE_VOLUMES`); the remainder is room to
-#: restore such a volume beside the one it replaces, 50 + 55 + 55, and it holds
-#: a replacement node's boot volume beside the old one as well.
+#: restore such a volume beside the one it replaces, 50 + 55 + 55.
 BLOCK_STORAGE_GB_PER_AD = 160
 
 #: The free allowance is five volume backups, and nothing in the design takes
@@ -96,11 +89,9 @@ OBJECT_STORAGE_GB = 250
 #: currency: the A1 fleet past the free allowance of 1,500 OCPU-hours and
 #: 9,000 GB-hours, plus the block storage past 200 GB, over the longest month
 #: of 744 hours -- about 44.3 (nodes.md §3.2) -- rounded up to 50. The rest is
-#: what a month adds beyond the fleet as declared, and the design's one such
-#: cost is the replacement in flight: billed for as long as it runs beside the
-#: node it replaces, at about 0.77 a day for one node, it is covered for about
-#: a week. Alerts fire against this. Not a parameter: there is one tenancy and
-#: no caller has a second opinion about what its month costs.
+#: room for what a month adds beyond the fleet as declared, the costs the
+#: quotas cannot bound. Alerts fire against this. Not a parameter: there is one
+#: tenancy and no caller has a second opinion about what its month costs.
 BUDGET_AMOUNT = 50
 
 
