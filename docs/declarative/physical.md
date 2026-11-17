@@ -945,6 +945,20 @@ out of state, `--force` because the attachment is protected
 Any other plan is a diff nobody expected, and nothing is applied until
 it has been read.
 
+**The drill detaches the volume with `physical`'s own OCI credential**,
+from the same checkout and with the same `physical` function:
+
+```sh
+VID=$(physical stack export | jq -r --arg n "kluster-$V" '.deployment.resources[] | select(.type == "oci:Core/volume:Volume" and .outputs.displayName == $n) | .id')
+credentials derived oci-physical detach "$VID"
+```
+
+`detach` reads the user and key out of the stack's configuration, under
+the passphrase in the slot the function names, detaches the volume from
+the node it is attached to, waits for the attachment to read `DETACHED`,
+and prints the volume with `attached-to=-`. A volume already detached is
+read and left.
+
 **The etcd fsync item** has two halves, a reading and a tripwire. The
 reading is taken off etcd's `etcd_disk_wal_fsync_duration_seconds`
 histogram, which every control plane serves on its metrics listener (§2), through the API server's

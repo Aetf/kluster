@@ -98,6 +98,10 @@ def expected(path: list[str]) -> str | None:
             return 'escrow.check'
         case ['derived', 'sync']:
             return 'slots.sync'
+        case ['derived', cli.derived.OCI_PHYSICAL_ROW, verb] if verb in cli.oci_recovery.VERBS:
+            # The OCI calls a recovery procedure makes, signed with this row's
+            # credential: one function per verb in `oci_recovery.py`.
+            return f'oci_recovery.{verb}'
         case ['derived', row, 'mint']:
             # The row name is the function's identifier with `-` for `_`, which
             # is the whole of the convention tying the tree to `derived.py`.
@@ -289,6 +293,13 @@ class Dispatch:
             # the writer is stubbed: a dispatch test must not leave a
             # placeholder passphrase where mise would then read it.
             (cli.workstation, 'write', Path('placeholder')),
+            # The OCI calls of a recovery procedure, and the clients they sign
+            # with, whose key is read out of `physical`'s configuration.
+            (cli.oci_recovery, 'physical_stack', None),
+            (cli.oci_recovery, 'open_session', None),
+            (cli.oci_recovery, 'terminate', []),
+            (cli.oci_recovery, 'read', []),
+            (cli.oci_recovery, 'detach', []),
         )
         for module, attribute, result in handlers:
             name = f'{module.__name__.rsplit(".", 1)[-1]}.{attribute}'

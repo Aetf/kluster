@@ -294,6 +294,27 @@ def environment(
     # the kit for a command whose stacks take neither the stack passphrase
     # nor `physical`'s.
     vault = functools.cache(lambda: escrow.Vault.open(kit, registry))
+    url, no_backend = backend(bundle_dir)
+    return pulumi_config.BackendEnvironment(
+        passphrase=functools.cache(lambda: vault().recover(escrow.PASSPHRASE)),
+        url=url,
+        no_backend=no_backend,
+        bundle_dir=bundle_dir,
+        # Once per command: every `pulumi` call a command makes against an
+        # operator stack builds its environment again, and a chain that ends
+        # at a prompt would ask on each of them.
+        operator=functools.cache(_operator_passphrase),
+        physical=functools.cache(functools.partial(_physical_passphrase, vault)),
+    )
+
+
+def backend(bundle_dir: Path) -> tuple[str | None, str | None]:
+    """The backend URL the client bundle in `bundle_dir` names, or why there is none.
+
+    The two halves of `pulumi_config.BackendEnvironment`'s one fact: a URL, in
+    the form `pulumi` is given (`bundle.Purpose.PULUMI`), and None beside it;
+    or None and the reason, naming the command that writes the bundle.
+    """
     found = bundle.backend_url_file(bundle_dir)
     # An empty file names no backend, so it is no bundle rather than a URL:
     # handed on, it would be a `PULUMI_BACKEND_URL` that is set and says nothing.
@@ -311,17 +332,7 @@ def environment(
         )
     if no_backend is not None:
         log.warning('no state backend for a stack whose state is in it: %s', no_backend)
-    return pulumi_config.BackendEnvironment(
-        passphrase=functools.cache(lambda: vault().recover(escrow.PASSPHRASE)),
-        url=url,
-        no_backend=no_backend,
-        bundle_dir=bundle_dir,
-        # Once per command: every `pulumi` call a command makes against an
-        # operator stack builds its environment again, and a chain that ends
-        # at a prompt would ask on each of them.
-        operator=functools.cache(_operator_passphrase),
-        physical=functools.cache(functools.partial(_physical_passphrase, vault)),
-    )
+    return url, no_backend
 
 
 def _physical_passphrase(vault: Callable[[], escrow.Vault]) -> str:
