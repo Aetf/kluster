@@ -52,10 +52,10 @@ HOMELAB_HOST_LEG_IPV4 = IPv4Address('192.168.70.2')
 #: squashes every client to its anonymous user, which is who a pod writes as.
 NAS_EXPORT = '/mnt/nas'
 
-#: Bootstrap sizing, deliberately below the end state of 12–16 vCPU, 100+ GB
-#: of disk and the RAM the decommission decides (nodes.md §4.2): the legacy
-#: cluster still holds that RAM and that disk, so the RAM grows in one drained
-#: window, Wave C's, and the disk as legacy data is deleted (migration.md §0.4).
+#: Bootstrap sizing, deliberately below the end state of 12–16 vCPU and the
+#: RAM the decommission decides (nodes.md §4.2): the legacy cluster still holds
+#: that RAM, so it grows in one drained window, Wave C's (migration.md §0.4).
+#: The disk's size is the one its file has, `HOMELAB_DISK_GIB` below.
 #: Growing *these two* is an edit here and a previewed apply: `vcpu` and
 #: `memory` replace the domain, which is a stop, an undefine, a define and a
 #: start with the disk — a separate resource — surviving, so the cost is a

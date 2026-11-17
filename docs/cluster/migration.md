@@ -95,14 +95,13 @@ owns sequencing, data movement, and teardown.
     made before the flip: [sources-of-truth.md](../sources-of-truth.md).
     What the gw-config commit covers, piece by piece, and what holds
     each piece instead: physical/gateway-cutover.md §7.
-4.  **NVMe space *and* RAM are interleaved, and the worker grows to
-    fit** (nodes.md §4.2). While both clusters coexist, ~85 GB of NVMe
-    is free and legacy k3s holds its share of the host's memory, so the
-    worker VM starts at ~60 GB disk and **10 GiB RAM**. The disk is
-    created at that size (`HOMELAB_DISK_GIB` in
-    `kluster.conventions.homelab`) and grows on the host as legacy data
-    is deleted, the constant raised after each growth
-    (physical/homelab-host.md §1).
+4.  **RAM is interleaved, and the worker grows to fit** (nodes.md
+    §4.2). While both clusters coexist, legacy k3s holds its share of
+    the host's memory, so the worker VM boots at **10 GiB RAM**. Its
+    disk is created at 60 GiB (`HOMELAB_DISK_GIB` in
+    `kluster.conventions.homelab`) and grown on the host to its target
+    in Wave C's window, under the bound physical/homelab-host.md §1
+    sets on the disk file's length.
     -   **A window grows the worker by what the next wave's requests
         and their headroom need, capped by what legacy has released.**
         Whatever legacy releases beyond that stays with the host, so the
@@ -123,10 +122,12 @@ owns sequencing, data movement, and teardown.
         removed in kluster-code, not merely stopped, so nothing can start
         it again; the host's available memory, read with the ZFS cache
         at its floor and the legacy CI runners at the load they will
-        carry through the wave, covers the growth with a margin; and the
+        carry through the wave, covers the growth with a margin; the
         worker's requests after Wave C's land, and its peaks, leave the
-        headroom against the allocatable the growth gives. Where they do
-        not, the wave waits, and the operator rules on the worker's size
+        headroom against the allocatable the growth gives; and the root
+        filesystem covers the disk file at its new length, read as
+        physical/homelab-host.md §1 states. Where they do not, the wave
+        waits, and the operator rules on the worker's size
         (rfc-008 §11.2).
     -   **A rollback across a growth is the window reversed.** A growth
         spends memory a legacy application needs to start again, so the
@@ -428,7 +429,7 @@ git history.
 **Retained-PV census** (storage.md §3.3): while touching each legacy
 app, its retained-PV directories are identified and either mapped to
 the migration or deleted — the one-time cleanup of the `Retain`-era
-orphans, finishing with the disk-reclaim that feeds rule 0.4.
+orphans.
 
 ## 4. Wave F — decommission checklist
 
@@ -453,8 +454,7 @@ waves leave it:
 2.  Homelab host: the legacy cluster stopped and k3s uninstalled after
     Waves C/D, its retained-volume census finished. **The CI runners a
     neighboring project runs on the legacy cluster need a home before
-    the uninstall.** Freed NVMe grows the worker VM's disk to its
-    100+ GB target, and the worker's final memory size is decided here,
+    the uninstall.** The worker's final memory size is decided here,
     against what the host keeps for what the operator runs beside the
     cluster (nodes.md §4.2); JuiceFS redis/mount residue gone with k3s;
     `lan.ucw.phd` entries emptied (dns.md §4).

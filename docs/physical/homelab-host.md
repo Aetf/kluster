@@ -54,26 +54,43 @@ rational:
     of the disk, a whole-cluster rebuild's included, is created the same
     way.
 -   **Growing a running disk** is `truncate` on the file +
-    `virsh blockresize`, the 100+ GB end state reached interleaved with
-    reclamation (migration.md §0.4). A `truncate` lengthens the file and
-    writes nothing. Talos grows its EPHEMERAL partition into the new
-    space on its own, but only at boot: a volume grows on its way to
-    being mounted, and Talos does not take up a mounted one again. So
-    every growth of the file is followed by a reboot of the worker,
-    `talosctl -n <worker> reboot`, and the partition has its new size
-    once the node is back. `HOMELAB_DISK_GIB` is raised to the new size
-    in the same sitting, **after** the host, so the declaration never
-    states more than the file has; between the two, a replacement would
-    create the disk at the earlier size. The disk ignores the capacity
-    it reads back and the stylesheet that states the declared one, so
-    raising the constant plans nothing on the running disk, and the
-    next replacement creates the disk at it. Where the two disagree, the
-    `physical` run warns, naming both, as fresh as the last refresh.
+    `virsh blockresize`. **The file's length is a commitment the root
+    filesystem must cover in full**: the file is sparse, so a growth
+    allocates nothing, and the guest may then write every block of it.
+    Before a growth, the root filesystem is read with
+    `btrfs filesystem usage /`, and its free space covers the part of
+    the file at its new length that is not yet allocated — the new
+    length less the disk usage `du` reports for the file — and, while a
+    copy of the image made with `cp --reflink` is kept, the whole of the
+    new length, with a margin for the host's own writes. The reading is
+    recorded on the issue of the window that grows the disk. It is held
+    to no threshold figure: the filesystem's other writers change what
+    is free, and nothing would enforce one. The disk reaches its 100+ GB
+    target in Wave C's window, which replaces the domain and so already
+    pays the reboot a growth ends in (migration.md §0 rule 4). Nothing
+    but the reading and that reboot gates an earlier growth, so a worker
+    whose image filesystem nears its eviction threshold sooner is grown
+    then, the same way. The decommission sizes no disk: what the legacy
+    uninstall frees on the root filesystem stays with the host.
+
+    A `truncate` lengthens the file and writes nothing. Talos grows its
+    EPHEMERAL partition into the new space on its own, but only at boot:
+    a volume grows on its way to being mounted, and Talos does not take
+    up a mounted one again. So every growth of the file is followed by a
+    reboot of the worker, `talosctl -n <worker> reboot`, and the
+    partition has its new size once the node is back. `HOMELAB_DISK_GIB`
+    is raised to the new size in the same sitting, **after** the host,
+    so the declaration never states more than the file has; between the
+    two, a replacement would create the disk at the earlier size. The
+    disk ignores the capacity it reads back and the stylesheet that
+    states the declared one, so raising the constant plans nothing on
+    the running disk, and the next replacement creates the disk at it.
+    Where the two disagree, the `physical` run warns, naming both, as
+    fresh as the last refresh.
 -   **virtio-blk with `discard=unmap`, `cache=none`**: in-guest TRIM
     punches holes back out of the sparse file, so NVMe space actually
-    returns to the host when the guest deletes data — load-bearing
-    for the interleaved migration. `cache=none` avoids double-caching
-    guest I/O through the host page cache.
+    returns to the host when the guest deletes data. `cache=none`
+    avoids double-caching guest I/O through the host page cache.
 -   **What btrfs still contributes**: an offline `cp --reflink` of
     the image is a free instant copy before risky day-2 surgery
     (Talos upgrades are already A/B; this is belt-and-suspenders).

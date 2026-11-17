@@ -331,12 +331,12 @@ def domain_xslt(*, disk_volume: str, seed_volume: str) -> str:
     -   The data disk, matched by its volume's name, is driven `cache=none`
         and `discard=unmap`. Both are load-bearing (homelab-host.md §1):
         `discard=unmap` is what lets in-guest TRIM punch holes back out of the
-        sparse image, so deleting data in the cluster returns NVMe to the host
-        during the interleaved migration, and `cache=none` keeps guest I/O
-        from being cached a second time in the host's page cache. The driver
-        element is written rather than patched, so the result does not depend
-        on which attributes the provider happened to emit, and it names the
-        format the volume is created in.
+        sparse image, so deleting data in the cluster returns NVMe to the host,
+        and `cache=none` keeps guest I/O from being cached a second time in
+        the host's page cache. The driver element is written rather than
+        patched, so the result does not depend on which attributes the
+        provider happened to emit, and it names the format the volume is
+        created in.
     -   The seed, matched by its volume's name, is read-only to the guest.
         Talos leaves a read-only disk out of provisioning, and a writable seed
         would be a candidate for a node volume whose selector finds its disk

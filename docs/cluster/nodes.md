@@ -709,28 +709,28 @@ migration.md Wave C the window).
     **The worker grows to fit, not to absorb**: a drained window grows
     it by what the next wave's requests and their headroom need, capped
     by what legacy has released, and whatever legacy releases beyond
-    that stays with the host (migration.md §0 rule 4 — RAM is
-    interleaved like the NVMe below). One window does it, Wave C's, from
-    10 GiB to about 16. The workload set fits under the transitional
-    ceiling because requests are sized from what each application runs
-    at, and limits from its 30-day peak (rfc-008 §6.1): the requests
-    take less than half of the allocatable, and every peak at once
-    comes to about the allocatable itself. **A RAM upgrade remains the
-    relief valve** (board verified: ROG Maximus Z690 Hero, DDR5,
-    4×DIMM up to 128 GB), and the choice between it and tighter limits
-    is the operator's if Wave C's reading departs from that sizing.
+    that stays with the host (migration.md §0 rule 4). One window does
+    it, Wave C's, from 10 GiB to about 16. The workload set fits under
+    the transitional ceiling because requests are sized from what each
+    application runs at, and limits from its 30-day peak (rfc-008 §6.1):
+    the requests take less than half of the allocatable, and every peak
+    at once comes to about the allocatable itself. **A RAM upgrade
+    remains the relief valve** (board verified: ROG Maximus Z690 Hero,
+    DDR5, 4×DIMM up to 128 GB), and the choice between it and tighter
+    limits is the operator's if Wave C's reading departs from that
+    sizing.
 -   **Addressing**: the worker sits on the **dedicated cluster VLAN**
     (id 7, `192.168.70.0/24`) rather than the host's untagged server
     LAN, at the static address **`192.168.70.10`** — the network shape
     and the reasons for it are physical/homelab-host.md §2.
--   **Disk**: target 100+ GB on NVMe (concrete shape — raw sparse file
-    on a nodatacow subvolume, virtio-blk — physical/homelab-host.md §1),
-    from the ~60 GB it starts at; the free space it grows into is §4.1's
-    reading. migration.md §0 rule 4 interleaves that growth with
-    reclaiming legacy data, on a premise that reading does not bear out:
-    the legacy `local-path` volumes are on `fast`, not on this disk.
-    Whether the rule stands awaits a ruling (Aetf/kluster-ops#804). (No
-    etcd on this VM; its disk constraint is ordinary workload I/O.)
+-   **Disk**: target 100+ GB, a sparse file on the root btrfs
+    (concrete shape — raw, on a nodatacow subvolume, virtio-blk —
+    physical/homelab-host.md §1). It stays at the 60 GiB it is created
+    at until Wave C's window grows it to the target. Its length is
+    bounded by what the root filesystem can back in full: §4.1
+    inventories that filesystem, and physical/homelab-host.md §1 states
+    the reading a growth is checked against. (No etcd on this VM; its
+    disk constraint is ordinary workload I/O.)
 -   **Optional second worker VM** (2–4 vCPU / 8 GB): **not in the
     initial build**, deferred with criteria in §4.3. RAM is why it
     waits: the end-state ceiling above is already the whole of what
