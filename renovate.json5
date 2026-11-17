@@ -570,14 +570,25 @@
       versioning: 'regex:^(?<major>\\d+)\\.(?<minor>\\d+)-\\d+-(?<compatibility>\\d+\\.\\d+\\.\\d+)-[0-9a-f]{12}$',
     },
     {
-      // The patches of emailproxy and golinks, re-enabled: a release on
-      // emailproxy's calendar within a month, a golinks commit within a
-      // month. Each is a new version, published once its conf's bump merges,
-      // and a pin that waited for the next minor would leave that image
-      // unrun. The operands' versionings read no patch.
+      // The OCI SDK runtime, tagged with the `oci` release it installs, a
+      // semantic version. Its base's moves are rebuilds under that version,
+      // which compare equal and are moved to by hand.
+      matchDepNames: [
+        'ghcr.io/aetf/oci-sdk',
+      ],
+      versioning: 'regex:^(?<major>\\d+)\\.(?<minor>\\d+)\\.(?<patch>\\d+)-[0-9a-f]{12}$',
+    },
+    {
+      // The patches of emailproxy, golinks and the OCI SDK runtime,
+      // re-enabled: a release on emailproxy's calendar within a month, a
+      // golinks commit within a month, an `oci` patch release. Each is a new
+      // version, published once its conf's bump merges, and a pin that waited
+      // for the next minor would leave that image unrun. The operands'
+      // versionings read no patch.
       matchDepNames: [
         'ghcr.io/aetf/emailproxy',
         'ghcr.io/aetf/golinks',
+        'ghcr.io/aetf/oci-sdk',
       ],
       matchUpdateTypes: [
         'patch',
@@ -968,6 +979,42 @@
       ],
       groupName: 'self-built image bases',
       groupSlug: 'image-bases',
+      schedule: [
+        '* 0-3 1 * *',
+      ],
+    },
+    {
+      // An image that runs this repository's Python carries the interpreter
+      // line `.python-version` names (ci.md §4). The `python` image's newest
+      // tag is on a later line, so the line bounds what renovate may offer
+      // the base, as gawk's rule above bounds gawk's, and a test holds the
+      // bound to the base's tag and the tag to `.python-version`. Within the
+      // bound the only tag of the base's form is its own, so what reaches it
+      // is the digest refreshes of the monthly group above. The pull request that
+      // moves `.python-version` to another line moves the base and this bound
+      // by hand, and that test holds it red until both have moved. Matched by
+      // file, since emailproxy builds from the same image on a line of its
+      // own.
+      matchFileNames: [
+        'docker/oci-sdk.Containerfile',
+      ],
+      matchDepNames: [
+        'docker.io/library/python',
+      ],
+      allowedVersions: '/^3\\.12[.-]/',
+    },
+    {
+      // The OCI SDK the runtime image installs, which releases about weekly:
+      // each release would be a conf pull request and then a deploy pull
+      // request, so it is offered once a month, in the base refreshes' window
+      // above. `pyproject.toml`'s `oci` is a different dependency of the same
+      // name, read by the pep621 manager, and matching by file leaves it out.
+      matchFileNames: [
+        'docker/oci-sdk.conf',
+      ],
+      matchDepNames: [
+        'oci',
+      ],
       schedule: [
         '* 0-3 1 * *',
       ],
