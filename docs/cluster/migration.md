@@ -136,6 +136,43 @@ owns sequencing, data movement, and teardown.
     is ported (§1 item 5); it is regenerated, and the legacy key
     deleted at decommission (§4, Wave F) — carry-for-continuity,
     rotate-for-hygiene.
+6.  **Rule: every wave passes a gate on the control planes before the
+    next one starts**, judged against the budget of nodes.md §1.1–1.2.
+    -   **The window** runs from the wave's cut to the end of its soak
+        (rfc-008 §5.9), less the peak windows the wave's issue records:
+        the land's image pulls, a claim streamed through the API server,
+        hath's warm copy. Each reading over it is recorded beside the
+        previous soak's value. Wave A1's baseline is 24 hours of the
+        empty cluster after the bring-up's gate (§1 item 4).
+    -   **A wave moves on only when, on every control plane:**
+        1.  **etcd**: WAL fsync p99 under 10 ms in every 5 minutes, and
+            no fsync over 1 s; backend commit p99 under 25 ms; mean
+            apply at most 100 ms; no leader change; heartbeat send
+            failures not increasing.
+        2.  **Disk**: OCI's throttled I/O is 0 on every boot volume;
+            writes other than etcd's within 300 IOPS and 2.4 MB/s,
+            hourly; I/O pressure (some) at most 10 % in every 10
+            minutes.
+        3.  **CPU**: CPU pressure (some) at most 20 % in every 10
+            minutes and at most 10 % over the window; the class's CPU
+            limits on the node sum to at most 0.5 core.
+        4.  **Memory**: available memory at least 1 GiB at its lowest;
+            no memory pressure (full); the class's memory limits on the
+            node sum to at most 3.5 GiB.
+        5.  **Network**: public and KubeSpan traffic at most 62.5 MB/s
+            at the 99th percentile of 5-minute rates; no KubeSpan peer
+            down.
+    -   **Every peak inside the wave**, the excluded windows included,
+        holds on every member: no leader change, and no fsync and no
+        apply over 1 s.
+    -   **A breach stops the next wave** and goes to the operator with
+        the reading. A reading that moved but stays inside the budget is
+        reported beside its baseline and decides nothing.
+    -   The readings come from the control-plane series the monitoring
+        component keeps (Aetf/kluster-ops#790) and from OCI's
+        block-volume series for throttling. The command that evaluates
+        a window against this rule is not built
+        (Aetf/kluster-ops#785).
 
 ## 1. Phase 0 — foundations (before any app moves)
 

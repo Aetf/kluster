@@ -14,8 +14,8 @@ baseline to beat is the legacy Vultr VPS at $30/mo all-in.
 > commit. Both pools are declared in code — the node names and
 > OCPU/RAM/boot-volume numbers of §3.1 live in `kluster.conventions` and
 > the `physical` stack builds instances from them, and the same stack
-> declares the homelab VM of §4 (`HomelabHost`, `components/homelab`) —
-> but no node has been provisioned.
+> declares the homelab VM of §4 (`HomelabHost`, `components/homelab`),
+> and every node of both pools runs.
 > (Decision history: AWS →
 > GCP (2026-04) → tentatively Hetzner (2026-08-21, voided by its
 > 2026-06-15 US price hike) → OCI.)
@@ -30,8 +30,9 @@ KubeSpan endpoints, hath (pinned to one node), and the internet-pool
 workloads. This means the cloud pool needs:
 
 -   **Per node**: ~2–2.5 GB for etcd+apiserver+controllers, ~1.5 GB
-    platform floor (Talos/kubelet/Cilium/Envoy), leaving ~4 GB of an
-    8 GB node for workloads. **Two dedicated Ampere cores (2 OCPU) per
+    platform floor (Talos/kubelet/Cilium), leaving ~4 GB of an 8 GB
+    node for Envoy, hath and the workloads — the budget of §1.1, per
+    load class and per resource. **Two dedicated Ampere cores (2 OCPU) per
     node**: the fewest Talos documents for a control plane, two cores
     minimum and four recommended
     ([system requirements](https://docs.siderolabs.com/talos/v1.13/getting-started/system-requirements)),
@@ -45,8 +46,8 @@ workloads. This means the cloud pool needs:
     member logged `slow fdatasync` warnings, requests that took too
     long and leader changes, until requests timed out
     (Aetf/kluster-ops#780). Workload CPU limits keep bursts away from
-    etcd (architecture.md §6.5 for why this budget, honestly kept,
-    avoids the legacy CP-starvation failure).
+    etcd, capped per node by §1.1 (architecture.md §6.5 for why this
+    budget, honestly kept, avoids the legacy CP-starvation failure).
 -   **Stable public dual-stack IPs** per node (their on-the-wire forms —
     the v4 *private* primaries behind OCI's 1:1 NAT, plus the v6 GUAs —
     double as the `internet` pool VIPs, architecture.md §3.2) plus the
@@ -57,9 +58,180 @@ workloads. This means the cloud pool needs:
 -   **Disk**: ~50 GB boot per node, plus one attached block volume on
     the node holding the dedicated VIP (hath's cache). That overflows
     the 200 GB free block allowance by 55 GB, about $1.40 a month
-    (§3.2). etcd lives on the boot volume:
-    **verify fsync latency <10 ms at bootstrap** (OCI Balanced block
-    volumes are typically ~1–2 ms; this is a check, not an assumption).
+    (§3.2). etcd lives on the boot volume, beside the images, the logs
+    and every cloud-pool claim, so the boot volume carries a budget of
+    its own (§1.2), and the bring-up reads etcd's fsync latency against
+    it before any application moves (declarative/physical.md §6).
+
+### 1.1 The budget, per load class
+
+**A control plane's resources are budgeted per load class.** The
+budget comes from the sizing above. The readings below support it or
+contradict it, and a reading that contradicts it goes to the operator
+rather than moving the budget.
+
+| Class | Members | Where its consumption is read |
+| --- | --- | --- |
+| Control-plane slice | etcd (a Talos service, not a pod), `kube-apiserver`, `kube-controller-manager`, `kube-scheduler` | etcd's own `process_*` series on its metrics listener, since `cAdvisor` reports no control group for it on Talos; the three pods by name |
+| Platform | Talos (`machined`, `apid`, `trustd`, `udevd`), the kubelet, containerd, the Cilium agent, the node exporter, the node-feature-discovery worker, `coredns`, and any controller scheduled there | the node's totals less the other classes; each DaemonSet by namespace |
+| Front and workloads | Envoy (`cilium-envoy`, which answers `internet-gw`), hath (on the node holding the dedicated VIP), and the internet-pool workloads | `cAdvisor`, per pod |
+
+**The internet-pool workloads** are what migration.md §2 and rfc-008
+§5 place on the cloud pool: the blog's static site, more than one
+replica spread across the cloud nodes (rfc-008 §4.5); splitpro's server
+and its database (rfc-008 §5.3, §4.3); matrix; stdiscosrv; and hath,
+after Wave A2 has soaked (rfc-008 §5.4). authelia, whose pool neither
+document sets, is counted in the class, which is the conservative
+reading.
+
+**The peaks the classes meet**: a bring-up or a rebuild, in which every
+image is pulled and every object created at once; a Talos or Kubernetes
+upgrade, one node at a time; a wave's land, with its images and a claim
+streamed through the API server (rfc-008 §5); hath's 50 GiB warm copy;
+and VolSync's movers at 03:00.
+
+**The node** is A1.Flex at 2 OCPU (two Ampere cores), 8 GB and a 50 GB
+boot volume. The kubelet reserves 200m of CPU and 0.5 GiB of memory
+(`SYSTEM_RESERVED`, `components.talos`), and a control plane reports
+1.8 cores and 7.11 GiB allocatable.
+
+**CPU.**
+
+-   **Rule: the CPU limits of the front-and-workloads class on one node
+    sum to at most 0.5 core**, so the control-plane slice and the
+    platform keep at least 1.5 cores at every moment. Envoy is a
+    platform DaemonSet without a limit: its share is read, not capped,
+    and the sum is over every other member of the class.
+-   Evidence: the legacy counterparts of the class (the table below)
+    have 30-day peaks of 5-minute rates that sum to 0.49 core across
+    the whole legacy pool, which the cloud pool spreads over three
+    nodes.
+
+**Memory.** The sizing above gives about 2–2.5 GiB to the
+control-plane slice, about 1.5 GiB of platform floor, and about 4 GiB
+of the 8 GB node to Envoy, hath and the workloads.
+
+-   **Rule: the memory limits of the front-and-workloads class on one
+    node sum to at most 3.5 GiB**, the 4 GiB less the 0.5 GiB the
+    kubelet reserves, Envoy excepted as for CPU; **and the node's
+    available memory never falls under 1 GiB.**
+-   Evidence: on the empty cluster, which does not count toward sizing,
+    nodes' working sets read 1.9–2.1 GiB, kube-apiserver 1.05–1.2 GiB,
+    etcd's resident set 0.13 GiB, the Cilium agent 0.33–0.6 GiB and
+    Envoy 0.1 GiB (2026-11-17). Nothing contradicts the floors.
+-   Evidence: the class's legacy counterparts have 30-day peaks that
+    sum to 2.1 GiB across the legacy pool, traefik included.
+
+**Disk.** §1.2.
+
+**Network.** A1.Flex has a gigabit a second of network per OCPU, two a node (OCI's
+[Block Volume performance](https://docs.oracle.com/en-us/iaas/Content/Block/Concepts/blockvolumeperformance.htm)
+page, VM shapes).
+
+-   **Rule: public and KubeSpan traffic together stay under a quarter
+    of that, 62.5 MB/s, at the 99th percentile of 5-minute rates.** A
+    request to a home backend crosses a cloud node twice, in from the
+    internet and out over KubeSpan, so it counts twice.
+-   Evidence: traefik's busiest 5 minutes in 30 days moved 7.3 MB/s,
+    hath's 0.43 MB/s; doubled, that is under a tenth of the line.
+
+**The legacy counterparts**, from the legacy cluster's Prometheus over
+the 30 days to 2026-11-17, `cAdvisor` rates over 5 minutes: CPU in cores,
+memory as working set in GiB, network on the pod's interface.
+
+| Workload (new home) | CPU mean / p99 / max | Memory mean / max | Sent / received in 30 days | Busiest 5 min sent | Disk |
+| --- | --- | --- | --- | --- | --- |
+| traefik (Envoy) | 0.005 / 0.020 / 0.091 | 0.07 / 0.16 | 91.2 / 94.5 GB | 7.3 MB/s | none |
+| hath | 0.032 / 0.065 / 0.200 | 0.31 / 0.50 | 114.7 / 40.8 GB | 0.43 MB/s | its cache, on its own volume |
+| splitpro and its database | 0.011 / 0.014 / 0.036 | 0.37 / 0.82 | 11.0 / 12.0 GB | 0.13 MB/s | 0.16 GB of writes |
+| matrix | 0.000 / 0.000 / 0.003 | 0.13 / 0.19 | 0.26 / 0.23 GB | 0.01 MB/s | 0.04 GB of writes |
+| legacy nginx (the blog; an upper bound, since it also serves other sites) | 0.000 / 0.001 / 0.050 | 0.01 / 0.01 | 3.4 / 0.4 GB | 0.45 MB/s | none |
+| stdiscosrv | 0.001 / 0.001 / 0.003 | 0.02 / 0.03 | 1.4 / 1.1 GB | 0.01 MB/s | 0.7 GB of writes |
+| authelia and its Redis | 0.031 / 0.050 / 0.108 | 0.07 / 0.40 | 1.9 / 1.5 GB | 0.02 MB/s | none |
+
+-   **Every one of them writes a few kilobytes a second in the steady
+    state**, so the claims bound for the cloud pool are negligible
+    beside the boot volume's 24 MB/s (§1.2). What the disk has to
+    answer for is the peaks.
+-   **hath's 30-day peak is 0.50 GiB**, against a mean of 0.31. Limits
+    come from the 30-day peak (rfc-008 §6.1), so hath's memory limit is
+    at least 0.5 GiB, which fits the class.
+
+### 1.2 The boot volume's disk budget
+
+**What OCI documents for the boot volume**
+([Block Volume performance](https://docs.oracle.com/en-us/iaas/Content/Block/Concepts/blockvolumeperformance.htm)):
+
+-   **Balanced, 10 VPU per GB, is a boot volume's default level**, and
+    Lower Cost is not offered for one. `components.cloud.nodes`
+    declares no level, so every control plane's boot volume is
+    Balanced.
+-   **Balanced gives 60 IOPS/GB, up to 25,000 a volume, and 480 KB/s
+    per GB, up to 480 MB/s**; the formulas are IOPS/GB = 1.5 × VPU/GB +
+    45 and KBPS/GB = 12 × VPU/GB + 360. **A 50 GB boot volume gives
+    3,000 IOPS and 24 MB/s.**
+-   **The volume binds, not the instance**: A1.Flex allows 20,000 IOPS
+    and 120 MB/s of block volume throughput per gigabit a second of its
+    network bandwidth, 40,000 IOPS and 240 MB/s at 2 OCPU.
+-   OCI's IOPS SLA covers a Balanced volume on a `paravirtualized`
+    attachment only on VMs of 8 cores or more, so on a 2-OCPU node the
+    3,000 IOPS are a guarantee over iSCSI and a figure otherwise. Which
+    attachment the boot volumes have is not established.
+-   **hath's cache volume is Lower Cost** (`NODE_VOLUME_VPUS = 0`):
+    2 IOPS and 240 KB/s per GB, 110 IOPS and 13.2 MB/s at 55 GB. Its I/O
+    is outside the boot volume's budget, and the 50 GiB warm copy takes
+    over an hour at that rate.
+
+**What shares the boot volume**: one XFS filesystem, `sda4`, holds
+etcd's write-ahead log and database, containerd's content and
+snapshots, the kubelet's and Talos' logs, every cloud-pool claim
+(`/var/mnt/storage`) and VolSync's caches.
+
+**The budget:**
+
+1.  **Rule: etcd's latency binds, at every moment, peaks included.**
+    WAL fsync p99 under 10 ms and backend commit p99 under 25 ms over
+    every 5 minutes, the targets of etcd's
+    [FAQ](https://etcd.io/docs/v3.6/faq/), and no WAL fsync over 1 s.
+2.  **Rule: steady writers other than etcd** — logs, claims, VolSync's
+    movers — **stay under a tenth of the volume**: 300 IOPS and
+    2.4 MB/s, averaged over an hour.
+3.  **Rule: peaks run under the volume's throttle.** OCI's
+    `VolumeThrottledIOs`, which OCI emits for every boot volume
+    ([Block Volume metrics](https://docs.oracle.com/en-us/iaas/Content/Block/References/volumemetrics-reference.htm)),
+    stays 0. What holds a peak there is how many images the kubelet
+    pulls at once and how many objects an apply creates at once. The
+    kubelet pulls without a bound today (`maxParallelImagePulls` unset,
+    Talos' default), and the deploy chain applies at the CLI's default
+    parallelism; setting both is Aetf/kluster-ops#785.
+4.  **hath's cache I/O is on its own volume**, outside this budget.
+
+**What the readings show** (2026-11-17, on the cluster a from-scratch
+rebuild brought up):
+
+-   **Steady state**: about 29 write IOPS, 33–37 in the busiest minute,
+    and 0.13–0.22 MB/s per control plane, every writer included; a
+    write completes in 0.84 ms on average.
+-   **The bring-up**, from boot to the end of `k8s-base`'s first apply,
+    86 minutes: 3.3–3.7 GB written per control plane in about 100,000
+    writes, at 39–52 ms a write on average, with 60–72 requests in
+    flight whenever the disk was busy. The images each control plane
+    holds come to 0.58–0.71 GB.
+-   **etcd's own histogram over the same run**: 4–8 WAL syncs over 1 s
+    on each member, one of them over 8 s on each, and heartbeat send
+    failures on two of the three. etcd's FAQ names a slow disk,
+    "contention among etcd and other applications", as the usual cause
+    of the latter.
+-   **The disk read as busy for only 63–72 s of those 86 minutes**, so
+    it moved 47–57 MB per busy second, about twice the 24 MB/s OCI
+    documents for the volume. Either the volume delivers more than its
+    figure in bursts, or the busy counter undercounts on this device.
+
+The readings are observations, not a cause: whether saturating the
+boot volume is what stretches etcd's syncs into seconds, and what
+write rate keeps them under 10 ms, is settled by a controlled
+reproduction (Aetf/kluster-ops#785), and its rate is what rule 3's
+bounds are sized to.
 
 ## 2. The deciding factor is egress, not compute
 
@@ -511,11 +683,12 @@ instead of a daemon.
 
 Cloud-node corollary — and the real point of this section: **cloud-node
 size is set by the fixed floors, not by workloads**. Platform floor
-(Talos + kubelet + Cilium + Envoy) is ~1.5 GiB; the CP slice
+(Talos + kubelet + Cilium) is ~1.5 GiB; the CP slice
 (etcd+apiserver+controllers) another ~2–2.5 GiB — before the first app
 pod. This is what made 2–4 GB paid instances structurally cramped and
 what the 8 GB A1 nodes absorb, billed at A1's memory rate (§3.2): each still keeps ~4 GiB for
-hath (~0.3) and Envoy. Meanwhile, the homelab
+Envoy, hath (a 30-day peak of 0.5 GiB, §1.1) and the internet-pool
+workloads. Meanwhile, the homelab
 side, though tighter on paper, is the flexible one: workloads can be
 trimmed, ARC squeezed, and RAM added (§4.2) — memory pressure there is
 real but manageable.
