@@ -158,6 +158,27 @@ kubeseal = "0.39.1"
 # reading of the whole-cluster rebuild (docs/operations.md §3.5, `anchors`).
 # Its releases are static binaries.
 doggo = "1.4.2"
+# kubectl is the client a runbook reads and steers the cluster with, under the
+# kubeconfig `physical`'s outputs carry. kubectl is supported within one
+# minor of the API server, so its minor is the one of the Kubernetes the
+# pinned Talos release defaults to, which the cluster runs (operations.md §1,
+# the Kubernetes version row): v1.36 under Talos v1.13. A test holds the two
+# minors equal, and an `allowedVersions` bound in `renovate.json5` keeps
+# renovate on that line, so a Talos release that defaults to another minor
+# moves this pin and the bound in its own pull request. Its releases are
+# static binaries, from the Kubernetes project's own download host rather
+# than from GitHub.
+kubectl = "1.36.6"
+# cmctl is cert-manager's client, which asks the cluster's cert-manager what
+# a certificate's state is and renews one on demand (`cmctl renew`). It is
+# versioned apart from cert-manager and built against one cert-manager
+# release, so the pin is the line built against the release line of the
+# cluster's chart (`versions:chart-cert-manager` in Pulumi.yaml): the cmctl
+# 2.6 line is built against cert-manager 1.21. An `allowedVersions` bound in
+# `renovate.json5` keeps renovate on that line, so a chart bump to another
+# minor moves this pin and the bound by hand, to the line built against it,
+# which cmctl's `go.mod` names. Its releases are static binaries.
+cmctl = "2.6.2"
 # node runs ZeroTier's own rule compiler, which the suite asks whether Central
 # would accept the overlay's rendered flow rules. The compiler is JavaScript
 # with no dependencies, vendored at the release the CI member runs

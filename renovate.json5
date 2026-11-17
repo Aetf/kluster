@@ -894,6 +894,36 @@
       enabled: true,
     },
     {
+      // The local kubectl's line: the minor of the Kubernetes the pinned
+      // Talos release defaults to, the cluster's, which kubectl's skew policy
+      // ties the client to (its comment in `mise.toml`). Kubernetes' newest
+      // release is on a later line, so the line bounds what renovate may
+      // offer, as gawk's rule above bounds gawk's, and a test holds the bound
+      // to the pin's line and the pin's line to the Talos release's. Within
+      // the line every release is a patch, which the global
+      // `patch: enabled: false` drops, so nothing here moves the pin: a Talos
+      // release that defaults to another minor moves the pin and this bound
+      // by hand in the Talos pull request, which that test holds red until
+      // both have moved. The pin stays in the toolchain group: this rule sets
+      // no group.
+      matchDepNames: [
+        'kubectl',
+      ],
+      allowedVersions: '/^1\\.36\\./',
+    },
+    {
+      // The local cmctl's line: the one built against the cert-manager line
+      // the cluster's chart runs (its comment in `mise.toml`), bounded the way
+      // kubectl's is above, and held to the pin's line by the same test. A
+      // chart bump onto another cert-manager minor moves the pin and this
+      // bound by hand, to the cmctl line whose `go.mod` names that minor. The
+      // pin stays in the toolchain group: this rule sets no group.
+      matchDepNames: [
+        'cmctl',
+      ],
+      allowedVersions: '/^2\\.6\\./',
+    },
+    {
       // The self-built images (ci.md §4). Each pin here is one image, so they
       // travel one per pull request rather than grouped: a Postgres operand
       // rebuild and a proxy's version bump are not one decision. Patch
