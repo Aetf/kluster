@@ -544,33 +544,36 @@ script has for the environment to be cached. It runs from two places:
     regardless.
 
 **The environment's network access is Full**, set on claude.ai, of the
-three levels None, Limited and Full. A new environment starts at
-Limited with "Allow package managers" checked, and one saved as Trusted
-opens as that (the Claude Code documentation's cloud environments page,
-"Access levels"). That default refuses hosts the script downloads from —
-mise's own, the one uv fetches its Python from, and
-`archive.archlinux.org`, where `dash` installs from (below) — and a refused download is
-the failure the script's line names. Full does not open the GitHub API:
-the session's GitHub proxy answers `api.github.com` only for
-repositories attached to the session, whatever the network access. So no
-tool `mise.toml` pins may need the API to install; the `ltex-ls-plus`
-pin's comment there says how that one stays off it.
+three levels None, Limited and Full. A new environment starts at Limited
+with "Allow package managers" checked, and one saved as Trusted opens as
+that (the Claude Code documentation's cloud environments page, "Access
+levels"). That default refuses hosts the script downloads from — mise's
+own, the one uv fetches its Python from, `archive.archlinux.org`, where
+`dash` installs from, and `dl-cdn.alpinelinux.org`, where `busybox`
+installs from (below) — and a refused download is the failure the
+script's line names. Full does not open the GitHub API: the session's
+GitHub proxy answers `api.github.com` only for repositories attached to
+the session, whatever the network access. So no tool `mise.toml` pins
+may need the API to install; the `ltex-ls-plus` pin's comment there says
+how that one stays off it.
 
 The pinned tools install from these hosts, each tool's URL recorded in
-`mise.lock`: `nodejs.org` for `node`; `conda.anaconda.org` for every tool
-pinned from a `conda` channel (today `postgres`, `gawk` and `libxslt`),
-every package a `conda` install unpacks included; `archive.archlinux.org`
-for `dash`; `dl.k8s.io` for `kubectl`; and release downloads from
-`github.com` for every other tool.
-Full reaches any host. The Claude Code documentation lists each of them
-but `archive.archlinux.org` among the hosts that default allows too (its
-cloud environments page, "Default allowed domains"); it scopes the GitHub
-proxy's repository check to API requests and source archives ("GitHub
-proxy"), which leaves release downloads out of it. Release downloads from
-`github.com` pass at Full as measured in a cloud session. The other hosts
-have not been measured from one. A measurement of them goes the way the
-script's own downloads go, through whatever proxy the environment sets,
-because its subject is the session's reach rather than the host (§4).
+`mise.lock`: `nodejs.org` for `node`; `conda.anaconda.org` for every
+tool pinned from a `conda` channel (today `postgres`, `gawk` and
+`libxslt`), every package a `conda` install unpacks included;
+`archive.archlinux.org` for `dash`; `dl-cdn.alpinelinux.org` for
+`busybox`; `dl.k8s.io` for `kubectl`; and release downloads from
+`github.com` for every other tool. Full reaches any host. The Claude
+Code documentation lists each of them but `archive.archlinux.org` and
+`dl-cdn.alpinelinux.org` among the hosts that default allows too (its
+cloud environments page, "Default allowed domains"); it scopes the
+GitHub proxy's repository check to API requests and source archives
+("GitHub proxy"), which leaves release downloads out of it. Release
+downloads from `github.com` pass at Full as measured in a cloud session.
+The other hosts have not been measured from one. A measurement of them
+goes the way the script's own downloads go, through whatever proxy the
+environment sets, because its subject is the session's reach rather than
+the host (§4).
 
 ## 2. Concurrent dispatchers
 
