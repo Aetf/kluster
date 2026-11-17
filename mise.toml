@@ -179,6 +179,21 @@ kubectl = "1.36.6"
 # minor moves this pin and the bound by hand, to the line built against it,
 # which cmctl's `go.mod` names. Its releases are static binaries.
 cmctl = "2.6.2"
+# vmctl is VictoriaMetrics' migration client, which imports the legacy
+# Prometheus's series into the history store at Wave C's head
+# (docs/cluster/migration.md §2.1). It reaches each store only through its
+# HTTP API -- Prometheus's remote read on one side, VictoriaMetrics' import on
+# the other -- and reads no store's files, so its release is not held to the
+# one the stores run (the stack chart's `appVersion`), and renovate moves it
+# in the toolchain group. VictoriaMetrics publishes it only inside the
+# `vmutils` archive of each release, beside the other utilities, as
+# `vmctl-prod`: `matching_regex` narrows the assets to those archives and
+# leaves the platform to mise's selection, `rename_exe` names the binary
+# `vmctl`, and `filter_bins` puts it alone on `PATH`, so the archive's
+# `vmbackup-prod` and the rest stay off it. The key is the repository, which
+# is how mise's GitHub backend names a tool. Its releases are static
+# binaries.
+"github:VictoriaMetrics/VictoriaMetrics" = { version = "1.150.0", matching_regex = '^vmutils-[a-z0-9]+-[a-z0-9]+-v[0-9.]+\.(tar\.gz|zip)$', rename_exe = { "vmctl-prod" = "vmctl" }, filter_bins = "vmctl" }
 # node runs ZeroTier's own rule compiler, which the suite asks whether Central
 # would accept the overlay's rendered flow rules. The compiler is JavaScript
 # with no dependencies, vendored at the release the CI member runs

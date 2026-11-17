@@ -337,7 +337,9 @@ spends its way back (rfc-008 §5.9).
     static sites (NAS-sourced, workloads.md §4 — their content moves
     from the VPS hostPath onto a NAS share once); and **monitoring's
     name** (the monitoring component already runs, installed by
-    `k8s-base` from M2 with VictoriaMetrics fresh — no TSDB migration;
+    `k8s-base` from M2 with stores of its own, and the legacy series of
+    what moves to the control planes reach its history store at Wave
+    C's head, §2.1;
     what the wave moves is the dashboard's `mon` name from the legacy
     block to that component, published by `k8s-base`, and with it the
     alert read route, which needs a public name and lands with its
@@ -349,7 +351,10 @@ spends its way back (rfc-008 §5.9).
     removes Wave B's legacy applications and the legacy JuiceFS stack,
     whose last consumer was spoolman, with their claims kept, and stops
     legacy immich, jellyfin, shoko, the legacy monitoring and the legacy
-    mail relay, whose last senders those are. The wave then opens with
+    mail relay, whose last senders those are. Its first step, before the
+    change that stops the legacy monitoring merges, imports the legacy
+    series of what moves to the control planes into the history store
+    (§2.1). The wave then opens with
     one drained window that both grows the VM (§0 rule 4) and runs the
     A380's vfio-pci cutover (drain → bind → hostdev → reboot,
     physical/homelab-host.md §3), since each replaces the worker's
@@ -415,6 +420,158 @@ flags, dead DNS records (the jupyter/mc leftovers, dns.md §2 — the
 import census; resurrection, if ever wanted, is
 git history.
 
+### 2.1 Wave C's head: the legacy series imported
+
+The control planes' readings compare every period with every other
+(§0 rule 6), and for what moves onto them the period before the move
+is on the legacy Prometheus alone. That store stops at Wave C's head
+with the rest of the legacy monitoring, so the head's first step, run
+once before the kluster-code change that stops it merges, copies those
+series into the history store
+([declarative/cluster-infra.md](../declarative/cluster-infra.md) §1
+item 6) with `vmctl`, which `mise.toml` pins.
+
+-   **Which series.** The history store's class, `HISTORY_CLASS` in
+    `kluster.components.monitoring.stores`, less its entry for the
+    `etcd` job, which describes the new control planes alone. It is
+    taken in three selections, each the class's names and every label
+    match listed:
+    -   the workloads Aetf/kluster-ops#785's design places on the
+        control planes, by their legacy namespace: `serving-system`,
+        which holds traefik and authelia with its Redis, and `hath`,
+        `splitpro`, `matrix` and `nginx`, the blog's legacy server;
+    -   stdiscosrv: the pods of `syncthing` whose names start with
+        `stdiscosrv-`, since the namespace's other pods are the cloud
+        syncthing replica, which does not move;
+    -   the VPS node, as the legacy node exporter reports it: the
+        `node-exporter` job, `node="aetf-arch-vps"`.
+
+    A workload that left the legacy cluster in an earlier wave is
+    selected all the same, its series ending where it stopped. Every
+    series is written with `cluster="legacy"` beside its own labels and
+    the two the legacy Prometheus adds to what it serves over remote
+    read, its external labels `prometheus` and `prometheus_replica`;
+    `cluster="legacy"` is how a reading over the history selects it.
+-   **The time range.** From midnight UTC 100 days before the run: the
+    legacy store's retention is 90 days (`retention` in kluster-code's
+    monitoring component), and it drops a block only once the whole
+    block is older, so it holds up to a week more; a day it holds
+    nothing for costs one empty request. The range ends at `END`, the
+    moment the run starts, which fixes the range both readings compare.
+    `vmctl`
+    reads it a day per request, which bounds what one request costs the
+    legacy Prometheus. What the legacy store takes after `END`, until
+    the stop merges, is not carried.
+-   **The source.** The legacy Prometheus, which the chart
+    `kube-prometheus-stack` runs in the legacy cluster's `mon`
+    namespace, reached through a
+    port-forward of `prometheus-operated`, the Service the Prometheus
+    operator gives every Prometheus it runs, from the workstation's
+    port 19090 to its 9090. `vmctl` reads it through Prometheus's
+    remote-read API, `/api/v1/read`.
+-   **The target.** The history store's import endpoint,
+    `/api/v1/import` of `vmsingle-history` in `monitoring`, reached
+    through a port-forward from port 18428. The import writes to the
+    store directly rather than through vmagent, so the relabeling that
+    holds vmagent's remote write to the class does not apply to it: the
+    selections name the class themselves.
+-   **The reading that confirms it**, taken on each side over the same
+    range: for each selection, the number of series, equal on the two
+    sides; and for one name, the VPS node's `node_load1`, the number
+    of samples, equal too.
+
+From the root of a checkout, with `<legacy>` the `kubectl` context
+that reaches the legacy cluster (sources-of-truth.md, K3):
+
+```sh
+mise x -- kubectl --context <legacy> -n mon port-forward svc/prometheus-operated 19090:9090 & OLD=$!
+mise x -- kubectl --kubeconfig ~/.kube/kluster -n monitoring port-forward svc/vmsingle-history 18428:http & NEW=$!
+curl --noproxy '*' -sS http://127.0.0.1:19090/-/ready; echo; curl --noproxy '*' -sS http://127.0.0.1:18428/health; echo
+NAMES=$(mise x uv -- uv run python -c 'from kluster.components.monitoring.stores import HISTORY_CLASS as c; print("|".join(k.names for k in c if k.job == ".*"))')
+START=$(date -u -d '100 days ago' +%Y-%m-%dT00:00:00Z); END=$(date -u +%Y-%m-%dT%H:%M:%SZ); FROM=$START
+RANGE=$(( $(date -u -d "$END" +%s) - $(date -u -d "$START" +%s) ))s
+sel() { s="__name__=~\"$NAMES\""; for p in "$@"; do s="$s,${p%%=*}=~\"${p#*=}\""; done; echo "{$s}"; }
+each() { "$@" namespace='serving-system|hath|splitpro|matrix|nginx' && "$@" namespace=syncthing pod='stdiscosrv-.*' && "$@" job=node-exporter node=aetf-arch-vps; }
+answer() { mise x -- jq -n -r "(input? // error(\"no answer\")) | if .status == \"success\" then $1 else error(.error // \"no answer\") end"; }
+series() { curl --noproxy '*' -sS -G "http://127.0.0.1:$1/api/v1/series" --data-urlencode "match[]=$2" --data-urlencode "start=$START" --data-urlencode "end=$END" | answer '.data | length'; }
+src() { n=$(series 19090 "$(sel "$@")") && echo "$n" && [ "$n" -gt 0 ]; }
+dst() { series 18428 "$(sel "$@" cluster=legacy)"; }
+samples() { curl --noproxy '*' -sS -G "http://127.0.0.1:$1/api/v1/query" --data-urlencode "query=sum(count_over_time(node_load1{job=\"node-exporter\",node=\"aetf-arch-vps\"$2}[$RANGE]))" --data-urlencode "time=$END" | answer '.data.result[0].value[1] // 0'; }
+newest() { curl --noproxy '*' -sS -G http://127.0.0.1:18428/api/v1/query --data-urlencode "query=max(tlast_over_time($(sel "$@" cluster=legacy)[$RANGE]))" --data-urlencode "time=$END" | answer '.data.result[0].value[1] // empty'; }
+import() {
+    f=(--remote-read-filter-label=__name__ "--remote-read-filter-label-value=$NAMES")
+    for p in "$@"; do f+=("--remote-read-filter-label=${p%%=*}" "--remote-read-filter-label-value=${p#*=}"); done
+    env -u http_proxy -u https_proxy -u all_proxy -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY \
+        mise x -- vmctl remote-read -s --disable-progress-bar \
+        --remote-read-src-addr=http://127.0.0.1:19090 --remote-read-step-interval=day \
+        "--remote-read-filter-time-start=$FROM" "--remote-read-filter-time-end=$END" \
+        --vm-addr=http://127.0.0.1:18428 --vm-concurrency=1 --vm-extra-label=cluster=legacy "${f[@]}"
+}
+each src && samples 19090 '' &&
+    each import &&
+    curl --noproxy '*' -sS --fail http://127.0.0.1:18428/internal/force_flush &&
+    each dst && samples 18428 ',cluster="legacy"'
+kill $OLD $NEW
+```
+
+-   **The probes** on the third line are taken once each port-forward
+    has printed its `Forwarding from` line, and answer
+    `Prometheus Server is Ready.` and `OK`. A probe that fails is
+    recorded with the error line `curl` printed
+    ([framework/dispatch.md](../framework/dispatch.md) §4), and so is
+    the `vmctl` run, which the proxy variables are removed for.
+-   **Every reading fails on anything but an answer**: `series`,
+    `samples` and `newest` print the store's error text, or
+    `no answer` where the port-forward gave `curl` nothing, and return
+    non-zero, so an error is never read as a count of zero. Each step
+    of the last four lines runs only once the one before it succeeded.
+-   **`each src` reads the legacy store first**: one count per
+    selection, then the samples of the VPS node's `node_load1`. A
+    selection that counts no series stops the step there, since its
+    label matches are not the legacy store's labels, and an import
+    through it would write nothing and pass its own reading.
+-   **`each import` runs one `vmctl` per selection** and stops at the
+    first that exits non-zero. Each prints its importer's statistics,
+    the samples it wrote and the retries it took among them. Each
+    writes through one import worker (`--vm-concurrency=1`): a worker
+    sends a batch only once it is full, and a `vmctl` that fails drops
+    the batch each worker holds, so with one writer what the store
+    holds is a prefix of the day-ordered stream, and the day of its
+    newest sample is the only one that can be partial.
+-   **The forced flush** makes what the store was just written
+    searchable: VictoriaMetrics holds new samples in memory for up to a
+    few seconds before a query sees them, and `/internal/force_flush` is
+    the endpoint its documentation gives for querying them at once.
+-   **`each dst` and the second `samples`** are the reading: each line
+    equal to the one `each src` and the first `samples` printed.
+
+**A selection is not imported twice over the same days.** The history
+store keeps every sample it is written, a second copy of one already
+held included (VictoriaMetrics' documentation, "Data updates"), and its
+backup refuses a store that holds fewer rows than the last backup
+recorded (declarative/cluster-infra.md §1 item 6), so samples written
+twice are not deleted once the next hourly backup has counted them. A
+selection that stopped partway is run again from the first day of its
+newest sample in the history, or from `START` where the history holds
+no sample of it, and each selection after it from `START`. The newest
+sample is read after a forced flush, like the reading, since what the
+stopped run wrote last is otherwise not yet searchable:
+
+```sh
+curl --noproxy '*' -sS --fail http://127.0.0.1:18428/internal/force_flush &&
+    t=$(newest <the selection's matches>) &&
+    FROM=$(if [ -n "$t" ]; then date -u -d "@$t" +%Y-%m-%dT00:00:00Z; else echo "$START"; fi) &&
+    import <the selection's matches>
+FROM=$START
+```
+
+That day's samples written before the stop are then held twice, and
+where the selection was the VPS node's, the second `samples` reads
+more than the first by those.
+
+The history's earliest sample, which the rebuild's baseline reads
+(operations.md §3.5), is the legacy range's first from this step on.
+
 ## 3. Data movement, by storage kind
 
 | Kind | Technique |
@@ -424,7 +581,7 @@ git history.
 | NAS-backed data | **no movement** — PVs re-point at the same datasets; the NAS backup regime is untouched |
 | Legacy shared-JuiceFS data | **the cloud syncthing replica goes**, uncopied: the NAS instance holds the full set and serves roaming devices through the balancer. **Two copies are made**, each from the legacy pod's mount: the WebDAV server's own files (Wave A2) and spoolman's single database file (Wave B) |
 | hath cache | copied warm ahead of its land, then the final delta + client state at the land (preserved, not backed — workloads.md §2) |
-| Monitoring TSDB | not migrated: the legacy monitoring runs until Wave C's head, and its claim is then kept cold until its retention would have aged out |
+| Monitoring TSDB | not migrated whole: the legacy monitoring runs until Wave C's head, whose first step imports the series of what moves to the control planes into the history store with `vmctl` (§2.1), and its claim is then kept cold until its retention would have aged out |
 
 **Retained-PV census** (storage.md §3.3): while touching each legacy
 app, its retained-PV directories are identified and either mapped to

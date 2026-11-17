@@ -750,8 +750,10 @@ from an HTTP repository, which offers nothing to check a download against
 
     `metrics` reads the history store through the API server's service
     proxy: the rows it holds, the count its backup job compares, and the
-    time of its earliest sample, of `node_load1`, which every node has
-    reported since the history began.
+    time of its earliest sample, of `node_load1`, a name the history
+    holds from its first day: this cluster's nodes have reported it since
+    the store began, and the range Wave C's head imports carries the
+    legacy VPS node's (cluster/migration.md §2.1).
 
     `outside` prints a digest of every other resource's entry, secrets
     included, so that only the digest leaves the pipe. It leaves out the
