@@ -217,6 +217,19 @@ checksum = "sha256:634d88c92e1e98a8e5f6bc9758ca39a797f4237e4c542156e48c441be7027
 url = "https://github.com/mr-karan/doggo/releases/download/v1.4.2/doggo-linux-x86_64.tar.gz"
 url_api = "https://api.github.com/repos/mr-karan/doggo/releases/assets/664895944"
 
+[[tools."github:VictoriaMetrics/VictoriaMetrics"]]
+version = "1.150.0"
+backend = "github:VictoriaMetrics/VictoriaMetrics"
+specifiers = ["1.150.0"]
+
+[tools."github:VictoriaMetrics/VictoriaMetrics".options]
+matching_regex = '^vmutils-[a-z0-9]+-[a-z0-9]+-v[0-9.]+\.(tar\.gz|zip)$'
+
+[tools."github:VictoriaMetrics/VictoriaMetrics"."platforms.linux-x64"]
+checksum = "sha256:dbfb3a747d40de62142bcd6ec615377b27c346cced03763eba3cf6a8ba946bb7"
+url = "https://github.com/VictoriaMetrics/VictoriaMetrics/releases/download/v1.150.0/vmutils-linux-amd64-v1.150.0.tar.gz"
+url_api = "https://api.github.com/repos/VictoriaMetrics/VictoriaMetrics/releases/assets/514582114"
+
 [[tools."github:ltex-plus/ltex-ls-plus"]]
 version = "18.7.0"
 backend = "github:ltex-plus/ltex-ls-plus"

@@ -110,10 +110,10 @@ LEGACY: tuple[Block, ...] = (
     ),
     # the WebDAV successor -- Wave A
     _vps('dav', 'nextcloud WebDAV'),
-    # monitoring -- Wave B. Kept because the dashboard is in use; which
-    # component declares the name afterwards is the monitoring design's answer
-    # to give, and the ordering is safe either way because monitoring is
-    # rebuilt fresh rather than migrated.
+    # monitoring -- Wave B. Kept because the dashboard is in use; the
+    # monitoring component, which `k8s-base` installs, takes the name in that
+    # wave (docs/cluster/migration.md §2), and the order is safe because that
+    # component already runs beside the legacy one.
     _vps('mon', 'cluster monitoring'),
     # spoolman -- Wave B
     _vps('spool', 'spoolman'),
