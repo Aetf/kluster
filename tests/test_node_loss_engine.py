@@ -294,8 +294,43 @@ physical() {
 """
 
 
-def lost_node_block() -> list[str]:
-    """The lost-node block of operations.md §3.1, a line per command, from its URN reads on.
+def continued(line: str) -> bool:
+    """Whether a line of the block continues onto the next: it ends in an unescaped backslash, outside a comment.
+
+    A run of trailing backslashes continues the line when it is odd, an
+    even run being escaped backslashes. A comment starts at a `#` that
+    opens a word outside quotes and runs to the end of the line, so a
+    backslash at its end is the comment's.
+
+    Two shapes bash reads otherwise are outside the rule: a `$'…'` is
+    read as a plain single quote, so a `\\'` inside it ends the quote, and
+    a `#` after an escaped blank (`x\\ #y`) is read as opening a comment.
+    """
+    quote = ''
+    escaped = False
+    for index, char in enumerate(line):
+        if escaped:
+            escaped = False
+        elif char == '\\' and quote != "'":
+            escaped = True
+        elif quote:
+            quote = '' if char == quote else quote
+        elif char in '\'"':
+            quote = char
+        elif char == '#' and (index == 0 or line[index - 1] in ' \t;&|()<>'):
+            return False
+    return (len(line) - len(line.rstrip('\\'))) % 2 == 1
+
+
+def lost_node_block(runbook: str) -> list[str]:
+    """The lost-node block of operations.md §3.1, a command apiece, from its URN reads on.
+
+    The block is the code block, indented 8 spaces, that runs the gated
+    refresh, taken whole as CommonMark reads an indented code block: a
+    line indented deeper continues it, and so does a line indented 8
+    spaces or more after blank lines. A line ending in an unescaped
+    backslash, outside a comment, joins the next into one element, so a
+    split between commands never falls inside one.
 
     The lines ahead of those act on the real cloud and the cluster, the
     instance's read and the Node object's delete, and gate nothing the
@@ -303,18 +338,23 @@ def lost_node_block() -> list[str]:
     """
     blocks = [
         textblock
-        for textblock in re.findall(r'\n\n((?: {8}\S.*\n)+)', RUNBOOK.read_text())
+        for textblock in re.findall(r'(?<=\n\n)( {8}\S.*\n(?:(?:[ \t]*\n)* {8}.*\S.*\n)*)', runbook)
         if 'refresh --run-program' in textblock and 'urns()' in textblock
     ]
     assert len(blocks) == 1, blocks
-    lines = [line[8:] for line in blocks[0].splitlines()]
-    start = next(index for index, line in enumerate(lines) if line.startswith('urns()'))
-    return lines[start:]
+    commands: list[str] = []
+    for line in (line[8:] for line in blocks[0].splitlines()):
+        if commands and continued(commands[-1].rsplit('\n', 1)[-1]):
+            commands[-1] += '\n' + line
+        else:
+            commands.append(line)
+    start = next(index for index, command in enumerate(commands) if command.startswith('urns()'))
+    return commands[start:]
 
 
-def on_the_vip_node(lines: list[str]) -> list[str]:
+def on_the_vip_node(lines: list[str], runbook: str) -> list[str]:
     """The block as §3.1's prose extends it on the dedicated VIP's node: a pattern that gains more, and a count."""
-    text = ' '.join(RUNBOOK.read_text().split())
+    text = ' '.join(runbook.split())
     gained = re.search(r'the pattern gains `([^`]+)` and the count is `([^`]+)`', text)
     assert gained is not None, 'operations.md §3.1 no longer says what the pattern gains on the dedicated VIP node'
     addition, count = gained.groups()
@@ -328,14 +368,127 @@ def on_the_vip_node(lines: list[str]) -> list[str]:
     return extended
 
 
-def recovery(node: str) -> tuple[str, str]:
+def recovery(node: str, runbook: str) -> tuple[str, str]:
     """The block for `node`, split after the refresh: the gated refresh, then the preview and the `up`."""
-    lines = lost_node_block()
+    lines = lost_node_block(runbook)
     if node == conventions.DEDICATED_VIP_NODE:
-        lines = on_the_vip_node(lines)
+        lines = on_the_vip_node(lines, runbook)
     (gate,) = [index for index, line in enumerate(lines) if 'refresh --run-program' in line]
     script = [line.replace('<node>', node) for line in lines]
     return '\n'.join(script[: gate + 1]) + '\n', '\n'.join(script[gate + 1 :]) + '\n'
+
+
+#: A runbook whose lost-node block takes a shape an edit of operations.md §3.1
+#: may give it -- a command continued onto lines indented deeper than the
+#: block, a blank line inside the block, a line ending in a backslash that
+#: does not continue it -- and what each half of the block runs: the gated
+#: refresh, then what follows it.
+CONTINUED = [
+    pytest.param(
+        """\
+A paragraph ahead of the block:
+
+        urns() { :; }
+        physical refresh --run-program \\
+            --target=a \\
+            --target=b
+        physical up
+
+A paragraph after it.
+""",
+        (['refresh --run-program --target=a --target=b'], ['up']),
+        id='the gated refresh',
+    ),
+    pytest.param(
+        """\
+A paragraph ahead of the block:
+
+        urns() { :; }
+        physical refresh --run-program --target=a
+        physical preview --diff
+        physical up \\
+            --continued \\
+            words
+
+A paragraph after it.
+""",
+        (['refresh --run-program --target=a'], ['preview --diff', 'up --continued words']),
+        id='the last command',
+    ),
+    pytest.param(
+        """\
+A paragraph ahead of the block:
+
+        urns() { :; }
+        physical refresh --run-program --target=a
+        physical up
+
+        physical preview --diff
+
+A paragraph after it.
+""",
+        (['refresh --run-program --target=a'], ['up', 'preview --diff']),
+        id='a command after a blank line',
+    ),
+    pytest.param(
+        """\
+A paragraph ahead of the block:
+
+        urns() { :; }
+        physical refresh --run-program --target=a  # the targets \\
+        physical up
+
+A paragraph after it.
+""",
+        (['refresh --run-program --target=a'], ['up']),
+        id='a comment ending in a backslash',
+    ),
+    pytest.param(
+        """\
+A paragraph ahead of the block:
+
+        urns() { :; }
+        physical refresh --run-program --target=a\\\\
+        physical up
+
+A paragraph after it.
+""",
+        (['refresh --run-program --target=a\\'], ['up']),
+        id='an escaped backslash',
+    ),
+    pytest.param(
+        """\
+A paragraph ahead of the block:
+
+        urns() { :; }
+        physical refresh --run-program "--note=a \\" #b" \\
+            --target=b
+        physical up
+
+A paragraph after it.
+""",
+        (['refresh --run-program --note=a " #b --target=b'], ['up']),
+        id='a hash inside quotes, after an escaped quote',
+    ),
+]
+
+
+@pytest.mark.parametrize(('runbook', 'expected'), CONTINUED)
+def test_a_continued_command_reaches_the_shell_whole_on_its_side_of_the_refresh(
+    runbook: str, expected: tuple[list[str], list[str]]
+) -> None:
+    """Each half of the block, run by bash under a `physical` that prints its arguments, runs every command whole."""
+
+    def ran(script: str) -> list[str]:
+        result = process_sessions.run(
+            ['bash', '-c', 'set -e\nphysical() { echo "$*"; }\n' + script], text=True, timeout=COMMAND_TIMEOUT
+        )
+        assert result.returncode == 0, _ran(result)
+        return result.stdout.splitlines()
+
+    gate, rest = recovery('cp2', runbook)
+
+    assert (ran(gate), ran(rest)) == expected
 
 
 @dataclass
@@ -445,7 +598,7 @@ def refreshed(launched: Engine, request: pytest.FixtureRequest) -> tuple[Engine,
     node: str = request.param
     gone = lost(launched, node)
     launched.env['PROBE_GONE'] = json.dumps(gone)
-    gate, _ = recovery(node)
+    gate, _ = recovery(node, RUNBOOK.read_text())
 
     ran = launched.shell(gate)
 
@@ -473,7 +626,7 @@ def test_the_gated_refresh_drops_what_the_cloud_lost_and_keeps_the_reserved_ip_a
 
 def test_the_up_after_it_writes_the_lost_node_and_nothing_else(refreshed: tuple[Engine, str]) -> None:
     engine, node = refreshed
-    _, rest = recovery(node)
+    _, rest = recovery(node, RUNBOOK.read_text())
     before = len(engine.log())
 
     recovered = engine.shell(rest)
