@@ -25,8 +25,10 @@ The module also holds the layer's tripwire (style/README.md, "A workaround
 for an upstream defect is a layer of its own"): the bare preview under
 `--expect-no-changes` still exits 0 on each of those changes, which is the
 defect the command answers. A release that refuses one turns that case red,
-and the removal condition in `kluster.scripts.stack_plan`'s docstring is
-then what to read.
+and the removal condition in `kluster.lib.state_only`'s docstring is then
+what to read. The tripwire is the operator driver's too: the driver counts
+the steps of its refreshed preview as the engine's `HasChanges` does, which
+is what `--expect-no-changes` refuses on.
 
 One case runs another program, `WAITING`, whose provider call never returns,
 and holds that a signal to the command leaves no process of the run behind:
@@ -257,12 +259,12 @@ def test_a_change_no_step_carries_would_write_until_an_up_writes_it(launched: En
 
 @pytest.mark.parametrize('change', STATE_ONLY)
 def test_the_bare_preview_still_exits_0_on_a_change_no_step_carries(launched: Engine, change: str) -> None:
-    """The defect `stack-plan` answers: the preview's own exit counts steps alone."""
+    """The defect `stack-plan` and the operator driver answer: the preview's own exit counts steps alone."""
     previewed = launched.pulumi('preview', '--stack', STACK, '--expect-no-changes', change=change)
 
     assert previewed.returncode == 0, (
         f'the pinned `pulumi preview --expect-no-changes` now refuses {change!r} (exit {previewed.returncode}): '
-        'read the removal condition in the docstring of kluster.scripts.stack_plan. A release that refuses '
+        'read the removal condition in the docstring of kluster.lib.state_only. A release that refuses '
         'every change of STATE_ONLY is the one that removes the layer; one that refuses some of them leaves '
         'the command answering for the rest, and the tripwire lists only those.'
     )

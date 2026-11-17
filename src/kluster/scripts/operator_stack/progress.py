@@ -1,6 +1,6 @@
 """What a `pulumi` run the driver starts is still waiting on, said at a display rate.
 
-The driver starts two runs whose progress `pulumi` itself does not show:
+The driver narrates two runs whose progress `pulumi` itself does not show:
 
 -   **The refreshed preview.** Its standard output is the engine's events,
     which the driver reads for the plan (`driver.read_preview`), so `pulumi`
@@ -17,10 +17,16 @@ every `INTERVAL` it reads what the engine appended (`EventLog`) and logs the
 line due (`Narrator`, `Line`): the custom resources' steps in flight and for
 how long, or that the engine has said nothing. It goes to the driver's log, on
 standard error, never to standard output. **Nothing the driver acts on reads
-the log**: the plan is read from the preview's standard output, the checks
+that log**: the plan is read from the preview's standard output, the checks
 from the state, the answers from each process's exit code. The layer is a
 display, and fails open: a failure inside it is one warning, and the run
 goes on unnarrated.
+
+The preview without a refresh that `driver.Run` makes where the refreshed
+one plans no step (`kluster.lib.state_only`) is announced before it starts
+and not narrated. Its event log is the reading's own, the flag names one
+file, and a reading that fails closed does not share a file with a display
+that fails open.
 
 **The apply's narration is a workaround for an upstream defect**, and stands
 apart so that it can go: pulumi/pulumi#11139 asks the non-interactive display

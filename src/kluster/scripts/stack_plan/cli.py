@@ -10,11 +10,10 @@ most two runs:
 1.  `pulumi preview --diff --expect-no-changes`, its output on the terminal
     unchanged. `REFUSED` is a step, and the answer is `WOULD_WRITE` with
     nothing more run.
-2.  After a 0 only: `pulumi preview --json --show-sames --expect-no-changes
-    --event-log <file>`, its output kept off the terminal. `REFUSED` here is
-    the two runs disagreeing, and is `WOULD_WRITE`. A 0 hands the document
-    and the event log to `comparison`, and any field it finds is
-    `WOULD_WRITE`, printed under the section it writes.
+2.  After a 0 only: the second preview of `kluster.lib.state_only`, its
+    output kept off the terminal. A step it plans is the two runs
+    disagreeing, and is `WOULD_WRITE`; so is any field it finds, printed
+    under the section it writes.
 
 Any other exit of either run is `NO_ANSWER`, and so is a run stopped at its
 bound and a document or an event log that does not say what an `up` would
@@ -28,24 +27,20 @@ also an annotation on the run's page (`GITHUB_ACTIONS_ENV`).
 from __future__ import annotations
 
 import argparse
-import json
 import logging
 import os
 import tempfile
 from pathlib import Path
-from typing import cast
 
-from kluster.scripts.stack_plan import comparison, preview
+from kluster.lib import state_only
+from kluster.lib.state_only import REFUSED
+from kluster.scripts.stack_plan import preview
 
 log = logging.getLogger(__name__)
 
-#: The CLI's exit when `--expect-no-changes` refuses the steps a preview
-#: planned (`ExitNoChanges`, sdk/go/common/util/cmdutil/exit.go).
-REFUSED = 7
-
-#: An `up` would write nothing, short of a secret whose value alone changed,
-#: which the previews print as a placeholder on both sides (the package
-#: docstring says when that is).
+#: An `up` would write nothing, short of the secret written with no step
+#: whose value alone changed, which the second preview prints as a
+#: placeholder on both sides (`kluster.lib.state_only` says which that is).
 NOTHING = 0
 #: No answer: a preview failed, or what it recorded does not say. Python
 #: exits with it on an uncaught exception, and `argparse` exits 2 on a bad
@@ -56,12 +51,6 @@ NO_ANSWER = 1
 #: caller reads one table of exits before this layer, while it stands and once
 #: it is removed.
 WOULD_WRITE = REFUSED
-
-#: The variable that makes the CLI take `--event-log`, the flag the Automation
-#: API reads its events through: without it the flag is unknown and the run
-#: fails. It is set on the JSON run alone, so the first run is the plain
-#: preview a caller reads.
-DEBUG_COMMANDS_ENV = 'PULUMI_DEBUG_COMMANDS'
 
 #: The variable a GitHub Actions runner sets on every step. Under it a plan
 #: that changes no resource and rewrites state also writes a `::notice::`
@@ -91,7 +80,7 @@ def main(argv: list[str] | None = None) -> int:
     stack: str = args.stack
     try:
         return plan(stack)
-    except (comparison.Unreadable, preview.Stopped, OSError) as exc:
+    except (state_only.Unreadable, preview.Stopped, OSError) as exc:
         log.error('no answer for %s: %s', stack, exc)
         return NO_ANSWER
     except preview.Signalled as signalled:
@@ -118,38 +107,31 @@ def plan(stack: str) -> int:
             stack,
         )
         status, printed = preview.run(
-            ['preview', '--stack', stack, '--json', '--show-sames', '--expect-no-changes', '--event-log', str(events)],
-            env=os.environ | {DEBUG_COMMANDS_ENV: 'true'},
-            captured=True,
+            [*state_only.arguments(events), '--stack', stack], env=os.environ | state_only.ENVIRONMENT, captured=True
         )
-        if status == REFUSED:
+        try:
+            written = state_only.answer(status, printed, events)
+        except state_only.Failed as failed:
+            log.error('the JSON preview of %s failed (exit %d), so there is no answer', stack, failed.status)
+            _print_diagnostics(failed)
+            return NO_ANSWER
+    match written:
+        case state_only.Stepped():
             log.warning('the JSON preview of %s plans a step the first preview did not, so an `up` would write', stack)
             return WOULD_WRITE
-        if status != 0:
-            log.error('the JSON preview of %s failed (exit %d), so there is no answer', stack, status)
-            _print_diagnostics(printed)
-            return NO_ANSWER
-        found = comparison.changes(comparison.read_steps(printed), comparison.read_outputs(events.read_text()))
-    if not found:
-        print(f'An `up` of {stack} would write nothing.', flush=True)
-        return NOTHING
-    print(comparison.section(stack, found), flush=True)
+        case state_only.Fields(changes=()):
+            print(f'An `up` of {stack} would write nothing.', flush=True)
+            return NOTHING
+        case state_only.Fields(changes=found):
+            print(state_only.section(stack, found), flush=True)
     if os.environ.get(GITHUB_ACTIONS_ENV) == 'true':
         print(f"::notice::the plan of {stack} changes no resource and rewrites the stack's state", flush=True)
     return WOULD_WRITE
 
 
-def _print_diagnostics(printed: str) -> None:
+def _print_diagnostics(failed: state_only.Failed) -> None:
     """The error and warning messages a failed JSON preview's document carries, or what stands in their way."""
-    try:
-        document = json.loads(printed)
-    except ValueError:
-        log.error('the JSON preview printed no document, so its diagnostics are unknown')
-        return
-    diagnostics = cast('dict[str, object]', document).get('diagnostics') if isinstance(document, dict) else None
-    if not isinstance(diagnostics, list):
-        log.error('the JSON preview recorded no diagnostics')
-        return
-    for diagnostic in cast('list[object]', diagnostics):
-        if isinstance(diagnostic, dict) and (entry := cast('dict[str, object]', diagnostic)).get('severity') != 'debug':
-            print(str(entry.get('message', '')).rstrip(), flush=True)
+    if failed.unrecorded is not None:
+        log.error('%s', failed.unrecorded)
+    for line in failed.diagnostics:
+        print(line, flush=True)
