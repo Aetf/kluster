@@ -23,12 +23,19 @@ itself must provide. Sizing and the host inventory live in
 
 ## 1. VM disk: raw sparse file on the root btrfs, nodatacow, virtio-blk
 
-The NVMe is a single btrfs partition (no LVM, no spare partitions), so
-a file it is — the shape makes that rational:
+The worker's disk lives on the host's root filesystem: a btrfs on the
+main partition of the Samsung 980, beside the EFI partition and swap,
+with no LVM and no spare partition. Neither of the host's ZFS pools
+holds a node's disk. `fast`, a ZFS pool on the PM983, serves the legacy
+cluster, and `nas`, the HDDs in the JBOD, is the bulk tier the worker
+reaches over NFS (§5). nodes.md §4.1 is the inventory, with what each
+is for. On the root btrfs a file it is — the shape makes that
+rational:
 
 -   **Dedicated subvolume with `chattr +C`** (nodatacow, set on the
-    directory before image creation). VM images are the canonical
-    CoW-on-CoW pathology — the guest's random small writes fragment a
+    directory before image creation), `/var/lib/libvirt/kluster`
+    (`HOMELAB_STORAGE_DIR` in `kluster.conventions.homelab`). VM images
+    are the canonical CoW-on-CoW pathology — the guest's random small writes fragment a
     checksummed CoW file without bound. nodatacow trades btrfs
     checksums/compression for sane write behavior; integrity of the
     data that matters is owned by the *cluster's* backup regime, not
