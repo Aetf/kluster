@@ -174,9 +174,23 @@ def chart_values() -> dict[str, Any]:
         # §4.1). The chart's default, stated so that a moved default cannot
         # take it away.
         'pmtuDiscovery': {'packetizationLayerPMTUDMode': 'blackhole'},
+        # A values change reaches the agent and the operator as a rewritten
+        # `cilium-config`, and Envoy as a rewritten bootstrap in
+        # `cilium-envoy-config`, each read when the pod starts and not after:
+        # the chart's own note on its drift checker says an agent whose
+        # settings differ from the ConfigMap "needs to be restarted", and an
+        # Envoy bootstrap is static. `rollOutCiliumPods` and the `rollOutPods`
+        # of `operator` and `envoy` put the checksum of the ConfigMap each one
+        # reads on its pod template (`cilium.io/cilium-configmap-checksum` in
+        # `cilium-agent/daemonset.yaml` and `cilium-operator/deployment.yaml`,
+        # `cilium.io/cilium-envoy-configmap-checksum` in
+        # `cilium-envoy/daemonset.yaml`, at 1.20.4), so a change that rewrites
+        # a ConfigMap rolls what reads it, and an `up` that rewrites none rolls
+        # nothing.
+        'rollOutCiliumPods': True,
         'prometheus': {'enabled': True},
-        'operator': {'prometheus': {'enabled': True}},
-        'envoy': {'prometheus': {'enabled': True}},
+        'operator': {'rollOutPods': True, 'prometheus': {'enabled': True}},
+        'envoy': {'rollOutPods': True, 'prometheus': {'enabled': True}},
         'hubble': {
             'metrics': {'enabled': list(HUBBLE_METRICS)},
             'relay': {'enabled': False},

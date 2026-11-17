@@ -1200,8 +1200,9 @@ fix, and the diff is the only artifact that disagrees.
     in §1 — for what the per-case bound cannot reach, and leave that bound in
     place: it is what ends a coroutine that never resolves its futures, by
     name.
-4.  **Keep it Fast**: Unit tests should not make network calls or create real
-    resources.
+4.  **Keep it Fast**: Unit tests make no network calls and create no real
+    resources. The fetches §8 names are the exceptions, each with its
+    reason there.
 5.  **No Wall-Clock Budgets**: A unit case's outcome never depends on how
     much real time passes. A budget measured against the real clock is also
     a budget on the *process*: a machine stalled past it -- swap, a
@@ -1364,6 +1365,37 @@ and each product on every runtime object. It also holds that the Chart
 records no inputs, so the interpreter's path in its post-renderer is never a
 diff between two checkouts. Dropping the post-renderer from the helper fails
 it.
+
+`tests/test_cilium_rollout.py` holds what a change to Cilium's values
+rests on ([declarative/cluster-infra.md](../declarative/cluster-infra.md)
+§2): rendered with the component's values, the pinned Cilium chart puts on
+each workload's pod template a checksum of the config map that workload
+reads, so a value that only one config map carries changes the pod
+templates of the workloads reading it, and a render of the same values
+twice changes none. It also holds that every workload in the render, and
+every rendered config map one of them reads, is in the module's table, and
+names each that is not. That is the chart's own templating, which the mock
+monitor never renders, and `tests/chart_engine.py` cannot render this chart
+as the stack installs it: with no cluster to ask, the provider renders for a
+Kubernetes release below the chart's floor and refuses the `lookup` the
+chart's Hubble certificates make, and the harness hands its chart no values.
+So the module runs Helm's own `template`, the component's values and each
+change handed over as values files, and starts no `pulumi`:
+
+-   **It fetches the Helm `update_crds` pins and the pinned Cilium chart**,
+    an exception to fetching nothing beside the plugin above.
+    `sources.fetch_helm` checks Helm's archive against the sha256 in
+    `update_crds/pins.py` before it unpacks it, and Helm pulls the chart by
+    the digest its pin names, so what is rendered cannot vary, only whether
+    the hosts answer. The property is the pinned chart's, and the
+    repository holds no copy of the chart; a record `update_crds` wrote
+    cannot carry it, since the import contract "Scripts declare no
+    resources" keeps a script from reading the component's values.
+-   **Each `helm` process runs through `tests/process_sessions.py`**
+    (§1.2), under the module's command bound, below its case bound. Both
+    are stop-losses in the form given below for a case that starts the
+    CLI, the measurement in their comment, though this module starts none
+    and is outside that census.
 
 `tests/test_targeted_import_engine.py` holds the engine semantics that
 every targeted `up` of the bring-up rests on, wherever its runbook
