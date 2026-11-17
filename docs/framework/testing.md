@@ -324,6 +324,16 @@ last container that mounts it, the removal `--rm` makes at the container's
 `--timeout` included. `tests/test_state_roles.py` holds both halves for the
 directory its box shares with the pooler.
 
+**A container a case publishes a port from is published on a port the case
+reserved through `tests/host_ports.py`, never on one podman picks.** podman
+picks a free port when it creates the container, and pasta binds it later.
+Anything that binds port 0 in between can be handed the same port,
+`pulumi`'s servers among them (podman#19048). A reserved port lies outside
+the network namespace's ephemeral range, where no process lands by chance,
+and the reservation keeps two runs off the same port. The reservation is
+held until the `podman run` that publishes the port has returned, by which
+point pasta holds the port.
+
 **A call that starts a process any other way says why at the call.** A test
 module that reaches one -- calls it, or hands it on as a value -- carries
 `# outside process_sessions -- <reason>` on the line that names it, or among

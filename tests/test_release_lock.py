@@ -30,6 +30,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
+import host_ports
 import process_sessions
 import pytest
 from scratch_projects import PASSPHRASE, cli_directories, scrubbed
@@ -113,13 +114,15 @@ def _answers(box: Box) -> bool:
 
 @pytest.fixture(scope='module')
 def box() -> Iterator[Box]:
-    """The pinned image, serving on a free port, with a role that writes the state and cannot delete it.
+    """The pinned image, serving on a port this module reserved, with a role that writes the state and cannot delete it.
 
     `--timeout` has conmon end the container at `CONTAINER_TIMEOUT` and `--rm`
     removes it then, however this process ended. The data directory, the
     image's one `VOLUME`, is a tmpfs, so the container has no anonymous
     volume to leave. `podman run` creates and starts it in one command, so
-    the port it publishes is bound before this reads it.
+    the port it publishes is bound before the reservation is let go: the
+    port is one `host_ports` reserved, never one podman picks
+    (framework/testing.md §1.2).
     """
     if shutil.which('podman') is None:
         pytest.skip('podman is not on PATH')
@@ -127,29 +130,29 @@ def box() -> Iterator[Box]:
         pytest.skip(f'there is no local copy of {IMAGE}')
     name = f'kluster-test-release-lock-{uuid.uuid4().hex[:12]}'
     try:
-        _ = _podman(
-            'run',
-            '--detach',
-            '--rm',
-            '--timeout',
-            str(CONTAINER_TIMEOUT),
-            '--label',
-            LABEL,
-            '--name',
-            name,
-            '--tmpfs=/var/lib/postgresql/data',
-            '--network',
-            'pasta',
-            '--publish',
-            f'{ADDRESS}::{settings.PORT}',
-            '--env',
-            f'POSTGRES_DB={settings.DATABASE}',
-            '--env',
-            'POSTGRES_HOST_AUTH_METHOD=trust',
-            IMAGE,
-        )
-        published = _podman('port', name, f'{settings.PORT}/tcp').split()[0]
-        found = Box(name=name, port=int(published.rsplit(':', 1)[1]))
+        with host_ports.reserved(ADDRESS) as port:
+            _ = _podman(
+                'run',
+                '--detach',
+                '--rm',
+                '--timeout',
+                str(CONTAINER_TIMEOUT),
+                '--label',
+                LABEL,
+                '--name',
+                name,
+                '--tmpfs=/var/lib/postgresql/data',
+                '--network',
+                'pasta',
+                '--publish',
+                f'{ADDRESS}:{port}:{settings.PORT}',
+                '--env',
+                f'POSTGRES_DB={settings.DATABASE}',
+                '--env',
+                'POSTGRES_HOST_AUTH_METHOD=trust',
+                IMAGE,
+            )
+        found = Box(name=name, port=port)
         # The entrypoint's initialization runs a server that listens on its
         # socket alone, so an answer over TCP is the serving one.
         stop_loss = time.monotonic() + COMMAND_TIMEOUT
