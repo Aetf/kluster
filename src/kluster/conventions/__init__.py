@@ -281,6 +281,7 @@ from kluster.conventions.dns import (
 )
 from kluster.conventions.homelab import (
     HOMELAB_BRIDGE,
+    HOMELAB_DISK_GIB,
     HOMELAB_HOST_KEY,
     HOMELAB_HOST_LEG_IPV4,
     HOMELAB_MEMORY_GIB,
@@ -364,6 +365,7 @@ __all__ = (
     'GATEWAY_NAMESPACE',
     'GATEWAY_PORTS',
     'HOMELAB_BRIDGE',
+    'HOMELAB_DISK_GIB',
     'HOMELAB_HOST_KEY',
     'HOMELAB_HOST_LEG_IPV4',
     'HOMELAB_MEMORY_GIB',

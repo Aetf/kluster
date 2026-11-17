@@ -11,9 +11,10 @@ through a metadata service: there is no cloud platform here to serve one. The
 seed is an ISO 9660 image labelled `cidata` that the program builds (`seed`),
 uploaded into the pool as an ordinary volume and attached as the domain's
 second virtio disk, read-only. It carries cluster secrets, as the disk does,
-and both volumes are declared `0600` (`volume_xslt`). Neither the provider's
-`CloudInitDisk` nor the domain's `cloudinit` attribute is used: the attribute
-writes the seed as an IDE cdrom, which the q35 machine has no bus for.
+and both volumes are declared `0600` (`disk_xslt`, `volume_xslt`). Neither
+the provider's `CloudInitDisk` nor the domain's `cloudinit` attribute is
+used: the attribute writes the seed as an IDE cdrom, which the q35 machine
+has no bus for.
 
 **The seed is first-boot input.** Talos reads its `user-data` only while the
 disk's STATE partition holds no complete configuration, so the seed ignores
@@ -35,6 +36,18 @@ pool over the same connection it defines the domain through. So the first
 boot is a consequence of an apply rather than an operator writing an image
 by hand.
 
+**The disk is created at its declared capacity**, `disk_gib`, which the stack
+program takes from `conventions.HOMELAB_DISK_GIB`. The provider sets a
+volume's capacity from its source's length and refuses `size` beside
+`source`, so the capacity is stated in the disk's stylesheet instead
+(`disk_xslt`), with an allocation of zero, before libvirt creates the file:
+libvirt makes a raw file of the stated capacity and preallocates only the
+stated allocation, and the upload then writes the image into the head of a
+sparse file that already has its full length. Talos creates STATE and
+EPHEMERAL past the image at first boot, EPHEMERAL across the rest, so the
+run that creates the worker passes day 1's health gate with no step on the
+host and no reboot.
+
 The system this assumes of the host — the disk shape, the second bridge, the
 two-phase GPU passthrough, and the host preparation that must happen before
 any of it — is docs/physical/homelab-host.md. This module owns only the
@@ -50,22 +63,19 @@ operation:
     domain, redefines it and starts it again. The disk is a separate resource
     and survives; the workloads on it do not, so the growth belongs in a
     drained window.
--   *Disk* grows on the host — `truncate` plus `virsh blockresize`, and then
-    a reboot of the worker (`talosctl reboot`), because Talos extends its
-    EPHEMERAL partition into the new space only at boot (homelab-host.md §1).
-    The declaration cannot state a size at all: the provider refuses `size`
-    beside `source` and sets the volume's capacity from the source file's
-    length. That file is the Talos image followed by the room Talos creates
-    its data partitions in at first boot, sized so that EPHEMERAL clears
-    day 1's health gate (`components/talos/image.py`, `HOMELAB_DISK_ROOM`).
-    So the disk is created bootable and passes the gate of the run that
-    creates it, and its bootstrap and working sizes are the host-side step's
-    to reach.
-    The file and the declaration part company from the moment that step runs —
-    which is why `size` is ignored here as well. Every field of a libvirt
-    volume replaces the volume, so a program insisting on a size would propose
-    destroying the worker's disk the first time a refresh read the grown file
-    back.
+-   *Disk* of a running worker grows on the host — `truncate` plus `virsh
+    blockresize`, and then a reboot of the worker (`talosctl reboot`),
+    because Talos extends its EPHEMERAL partition into the new space only at
+    boot (homelab-host.md §1) — and `HOMELAB_DISK_GIB` is raised after it.
+    The capacity is a fact of the disk's creation, so the disk ignores the
+    `size` it reads back and the stylesheet that states the capacity alike:
+    every field of a libvirt volume replaces the volume, and a program that
+    insisted on either would propose destroying the worker's disk the first
+    time a refresh read a grown file back, or the constant moved. Ignored,
+    an edit of the constant plans nothing on the running disk, and the next
+    replacement creates the disk at the new capacity. The two disagreeing
+    is visible all the same: the component warns when the `size` read back
+    is not the declared capacity (`_warn_when_the_disk_differs`).
 
 The image is a creation-time fact for the same reason. Talos upgrades itself
 in place over its machine API — the declared artifact is what the disk was
@@ -90,12 +100,13 @@ the disk's delete, once the seed and the domain are gone, and keeps the disk
 
 **What the provider cannot declare is one stylesheet layer**, applied when the
 domain and the volumes are created: the data disk's cache and discard, the
-seed's read-only flag, a domain with no display, and a volume's mode
-(`domain_xslt`, `volume_xslt`). The provider applies an `xml.xslt` by running
-`xsltproc` on the machine running the program, pinned in `mise.toml`. The
-layer goes when the pinned provider is a release whose schema declares those
-four and whose SSH transport offers only the configured identity
-(homelab-host.md §6): the templates, the pin, the provider's recorded
+seed's read-only flag, a domain with no display, a volume's mode, and the
+disk's capacity beside its source (`domain_xslt`, `disk_xslt`,
+`volume_xslt`). The provider applies an `xml.xslt` by running `xsltproc` on
+the machine running the program, pinned in `mise.toml`. The layer goes when
+the pinned provider is a release whose schema declares each of them and
+whose SSH transport offers only the configured identity (homelab-host.md
+§6): the templates, the pin, the provider's recorded
 definitions — the domain's transcript `tests/data/homelab-domain.xml` and the
 volume's `PROVIDER_VOLUME_XML` in `tests/test_homelab.py` — and the cases over
 them go with it, and the declarations take the provider's own attributes in
@@ -108,6 +119,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 from urllib.parse import urlencode
 
 import pulumi
@@ -129,17 +141,16 @@ __all__ = ('LIBVIRT_USER', 'PRIVATE_KEY', 'HomelabHost', 'connection_uri', 'slot
 _TEMPLATE_PACKAGE = 'kluster.components.homelab'
 
 #: Memory is quoted in GiB (nodes.md §4.2) and libvirt domains are sized in
-#: MiB. Disk sizes have no counterpart here: a volume created from a source
-#: file takes that file's length, and the rest is host-side growth.
+#: MiB; the disk is quoted in GiB too, and a volume's capacity is stated in
+#: bytes.
 MIB_PER_GIB = 1024
+BYTES_PER_GIB = 1 << 30
 
 #: Raw, not qcow2: the image lives on a nodatacow subvolume, where qcow2's
 #: allocation layer buys indirection and nothing else (homelab-host.md §1).
-#: The volume is created with a capacity and no allocation, and the upload
-#: then writes every byte of its source into it, the room after the image
-#: included (`components/talos/image.py`, `HOMELAB_DISK_ROOM`). Growth past
-#: that is `truncate` on the host, so the file occupies the source's length
-#: and what the guest writes beyond it.
+#: The volume is created at its declared capacity with an allocation of zero
+#: (`disk_xslt`), and the upload then writes the image's bytes into its head,
+#: so the file occupies the image and what the guest writes beyond it.
 DISK_FORMAT = 'raw'
 
 #: The seed's format as libvirt records it. libvirt probes an uploaded ISO
@@ -346,6 +357,43 @@ def domain_xslt(*, disk_volume: str, seed_volume: str) -> str:
     )
 
 
+@dataclass(frozen=True)
+class _DiskStylesheet:
+    """What the disk's stylesheet is rendered with: the capacity it states, in bytes."""
+
+    capacity: int
+
+
+def disk_xslt(*, capacity: int) -> str:
+    """The stylesheet that turns the provider's volume into the worker's disk.
+
+    What `volume_xslt` makes of a volume, the mode `0600` for its reason, and
+    two changes more:
+
+    -   `<capacity>` becomes `capacity` bytes. The provider writes the
+        source file's length there and refuses `size` beside `source`, so
+        this is the one place a capacity larger than the image is stated. The
+        provider uploads the source's own length into the created volume, so
+        the upload is the image's bytes and libvirt's file keeps the length
+        stated here (terraform-provider-libvirt v0.8.1,
+        `libvirt/resource_libvirt_volume.go`).
+    -   `<allocation unit="B">0</allocation>` is added, and that is not
+        optional: libvirt reads a volume with no allocation as one allocated in
+        full and preallocates the whole capacity on the host, where an
+        allocation of zero makes a sparse file of the capacity's length
+        (libvirt v11.8.0, `src/conf/storage_conf.c` and
+        `src/storage/storage_util.c`, `createRawFile`).
+
+    A stylesheet of its own rather than an edit to `volume_xslt`, which the
+    seed is created with: every field of a libvirt volume replaces it, the
+    seed ignores only its `source`, so a seed whose stylesheet text moved
+    would be replaced, and the domain with it. The disk ignores this one
+    (`HomelabHost`), so neither an edit of it nor of the capacity it is
+    rendered with plans anything on a running disk.
+    """
+    return templates.render(_TEMPLATE_PACKAGE, 'templates/disk.xslt.j2', _DiskStylesheet(capacity=capacity))
+
+
 def volume_xslt() -> str:
     """The stylesheet that gives a volume's file mode `0600`.
 
@@ -370,7 +418,8 @@ def volume_xslt() -> str:
     account every domain's QEMU runs as, and by no other.
 
     Read verbatim, for the reason `domain_xslt` gives; an edit to it is a
-    change to both volumes, and every field of a libvirt volume replaces it.
+    change to the seed, and every field of a libvirt volume replaces it. The
+    disk makes the same change through a stylesheet of its own (`disk_xslt`).
     """
     return templates.load(_TEMPLATE_PACKAGE, 'templates/volume.xslt')
 
@@ -437,6 +486,9 @@ class HomelabHost(Component, pulumi_type='kluster:homelab:HomelabHost'):
         worker's link-local address is derived from it, and the gateway routes
         through that address, so it is stated rather than left to the
         provider, which would generate another at every replacement of the domain.
+    :param disk_gib: the capacity the disk is created at, in GiB. A fact of
+        the disk's creation: the running disk keeps the capacity it has, and
+        the next replacement creates it at this one.
     """
 
     def __init__(
@@ -450,6 +502,7 @@ class HomelabHost(Component, pulumi_type='kluster:homelab:HomelabHost'):
         mac: pulumi.Input[str],
         vcpus: int,
         memory_gib: int,
+        disk_gib: int,
         image_path: pulumi.Input[str],
         opts: pulumi.ResourceOptions | None = None,
     ) -> None:
@@ -487,6 +540,7 @@ class HomelabHost(Component, pulumi_type='kluster:homelab:HomelabHost'):
         )
 
         disk_volume = f'{domain_name}.{DISK_FORMAT}'
+        capacity = disk_gib * BYTES_PER_GIB
         # What keeps a replacement from deleting the disk while no file is at
         # its `source` (`rebuild`).
         guard = SourceGuard()
@@ -496,10 +550,9 @@ class HomelabHost(Component, pulumi_type='kluster:homelab:HomelabHost'):
             pool=self.pool.name,
             format=DISK_FORMAT,
             # The bytes the worker boots. No `size` beside it: the provider
-            # refuses the pair and takes the volume's capacity from the file,
-            # which is the image and the room Talos boots into after it.
+            # refuses the pair, and the capacity is the stylesheet's to state.
             source=guard.source(image_path),
-            xml=libvirt.VolumeXmlArgs(xslt=volume_xslt()),
+            xml=libvirt.VolumeXmlArgs(xslt=disk_xslt(capacity=capacity)),
             opts=self.child_opts(
                 # The worker's disk is everything the node holds, and every
                 # field of a libvirt volume replaces it, so neither a delete
@@ -507,12 +560,17 @@ class HomelabHost(Component, pulumi_type='kluster:homelab:HomelabHost'):
                 # from a newer image is the deliberate unprotect and replace
                 # the module docstring describes.
                 protect=True,
-                # Both are facts about the volume's *creation*, and every field
-                # of a libvirt volume replaces the volume, so neither may
-                # become a diff afterwards:
+                # All three are facts about the volume's *creation*, and every
+                # field of a libvirt volume replaces the volume, so none may
+                # become a diff afterwards. A replacement is still created
+                # from this run's values of all three: the engine hands a
+                # replacement the declared inputs, not the ignored ones.
                 #
-                # -   `size` is the source file's at creation and the host's
-                #     from the first `truncate` onwards.
+                # -   `size` is the declared capacity at creation and the
+                #     host's from the first growth onwards.
+                # -   `xml` carries the capacity the disk was created at, and
+                #     the mode: an edit of `HOMELAB_DISK_GIB` or of the
+                #     stylesheet waits for the next replacement.
                 # -   `source` describes the bytes the disk was written with,
                 #     and stops describing what is on it the moment Talos
                 #     upgrades itself over the machine API. Insisting on it
@@ -520,7 +578,7 @@ class HomelabHost(Component, pulumi_type='kluster:homelab:HomelabHost'):
                 #     stack makes for the machine configuration anyway — into a
                 #     proposal to rewrite a running node's disk, which `protect`
                 #     would then refuse for as long as the bump stood.
-                ignore_changes=['size', 'source'],
+                ignore_changes=['size', 'source', 'xml'],
                 # The volume's name is stated, and a create before the delete
                 # would ask the pool for a second volume under it: the
                 # provider adopts the existing volume, uploads into it, and
@@ -603,7 +661,39 @@ class HomelabHost(Component, pulumi_type='kluster:homelab:HomelabHost'):
             opts=self.child_opts(delete_before_replace=True),
         )
 
+        # The host and the declaration disagreeing is visible, as fresh as the
+        # last refresh. A warning rather than an error: the disk is grown on
+        # the host before the constant is raised, and an error would stop
+        # every run in between.
+        _ = async_output(_warn_when_the_disk_differs(self.volume, capacity=capacity))
+
         self.register_outputs({})
+
+
+async def _warn_when_the_disk_differs(volume: libvirt.Volume, *, capacity: int) -> None:
+    """Warn when the capacity the disk reads back is not the one declared, naming both.
+
+    Silent while the size is unknown, which is a disk not yet created, and
+    while it is absent.
+    """
+    # Typed as an int by the SDK, and None where nothing was read back.
+    read = cast('int | None', await resolve(volume.size))
+    if read is None:
+        return
+    # A number crosses the engine as a float, whatever the schema says.
+    size = int(read)
+    if size == capacity:
+        return
+    pulumi.log.warn(
+        f'the worker disk reads back {_gib(size)} and is declared at {_gib(capacity)}: a replacement creates it '
+        f'at {_gib(capacity)}, and the running disk keeps {_gib(size)} (physical/homelab-host.md §1)'
+    )
+
+
+def _gib(size: int) -> str:
+    """A size in bytes as GiB, with the bytes beside it when they are not whole GiB."""
+    whole, rest = divmod(size, BYTES_PER_GIB)
+    return f'{whole} GiB' if rest == 0 else f'{size / BYTES_PER_GIB:.2f} GiB ({size} B)'
 
 
 def _sole_worker(cluster: TalosCluster) -> str:

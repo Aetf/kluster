@@ -342,7 +342,7 @@ async def worker_path(name: str, version: str = TALOS_VERSION) -> str:
 
 @pytest.mark.asyncio
 async def test_the_local_artifact_is_named_by_what_it_contains(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    # Schematic, version and room, under the stack's directory, and nothing
+    # Schematic and version, under the stack's directory, and nothing
     # else. The path is an input of the image, so anything else in it — a
     # timestamp, a temporary directory, the user's home — would replace the
     # image, fetching the whole artifact again, every time the program ran
@@ -359,10 +359,6 @@ async def test_the_local_artifact_is_named_by_what_it_contains(tmp_path: Path, m
     # Another release is another file: the provider keeps a file already at
     # the path, so a release that kept the path would be served the old file.
     assert paths[0] != await worker_path(WORKER, f'{TALOS_VERSION}-next')
-    # Another room is another file, for the same reason: a file already at the
-    # path is reused, so a path that kept still would serve the old room.
-    monkeypatch.setattr(image, 'HOMELAB_DISK_ROOM', image.HOMELAB_DISK_ROOM + 1)
-    assert paths[0] != await worker_path(WORKER)
     assert Path(paths[0]).is_absolute()
 
 
@@ -392,8 +388,6 @@ async def test_a_stack_keeps_its_file_when_another_stack_that_declares_the_artif
     projects that share a stack name are two stacks too.
     """
     monkeypatch.setattr(image, 'IMAGE_CACHE', tmp_path / 'cache')
-    # No room, so the file read back below is the artifact alone.
-    monkeypatch.setattr(image, 'HOMELAB_DISK_ROOM', 0)
     first = await declared_in(*one)
     second = await declared_in(*other)
     assert first['url'] == second['url'], 'both stacks declare one artifact'
@@ -412,81 +406,6 @@ def test_the_cache_is_somewhere_both_a_workstation_and_a_runner_have() -> None:
     # an input, and it is disk-backed, which a 1.25 GB artifact wants.
     assert image.IMAGE_CACHE.is_absolute()
     assert image.IMAGE_CACHE.parent == Path('/var/tmp')
-
-
-# -- the room Talos boots into ------------------------------------------------
-
-MIB = 1 << 20
-GIB = 1 << 30
-
-#: What Talos creates past a disk image's last partition at first boot is STATE
-#: at its fixed size and EPHEMERAL in the rest; a disk image carries neither
-#: from v1.8 on (siderolabs/talos v1.13.0, `cmd/installer/pkg/install/install.go`,
-#: `SkipDataPartitions`). The sizes below are read off the pinned release,
-#: siderolabs/talos v1.13.9, rather than off the program, so that each case
-#: holds the program's room against Talos and not against itself:
-#:
-#: -   `pkg/machinery/imager/quirks/partitions.go`: STATE is 100 MiB, META
-#:     1 MiB, and the UKI EFI partition the EFI, BIOS and boot sizes together,
-#:     100 + 1 + 2000 MiB, the boot size being the one `quirks.New("")` gives
-#:     (`quirks.go`, `PartitionSizes`).
-#: -   `pkg/minimal/limits.go`: the minimal disk, `DiskSize`, is 6 GiB.
-#: -   `pkg/cluster/check/nodes.go`, `AllNodesDiskSizes`: the health check
-#:     refuses an EPHEMERAL smaller than the minimal disk less the other three
-#:     partitions and 10 MiB of GPT overhead, alignment included.
-TALOS_STATE_SIZE = 100 * MIB
-TALOS_META_SIZE = 1 * MIB
-TALOS_UKI_EFI_SIZE = (100 + 1 + 2000) * MIB
-TALOS_MINIMAL_DISK_SIZE = 6 * GIB
-TALOS_GPT_OVERHEAD = 10 * MIB
-TALOS_EPHEMERAL_FLOOR = TALOS_MINIMAL_DISK_SIZE - (
-    TALOS_UKI_EFI_SIZE + TALOS_STATE_SIZE + TALOS_META_SIZE + TALOS_GPT_OVERHEAD
-)
-
-
-async def created_worker_disk(factory: Factory, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """The file the worker's declaration has the provider create, from an artifact that is `PAYLOAD`."""
-    _ = await build_worker().path.future()
-    declared = factory.inputs_of(f'{WORKER}-nocloud')
-    _ = serve(monkeypatch, lzma.compress(PAYLOAD))
-    disk = tmp_path / 'worker.raw'
-    _ = talos_factory.FactoryImageProvider().create(declared | {'path': str(disk)})
-    return disk
-
-
-@pytest.mark.asyncio
-async def test_the_workers_first_ephemeral_clears_the_health_gates_floor(
-    factory: Factory, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    # The libvirt volume takes the length of the file it is created from as its
-    # capacity, so the file the worker's declaration makes is the disk the
-    # worker first boots on. The run that creates the worker also runs day 1's
-    # health gate, so an EPHEMERAL under the gate's floor fails that run, on a
-    # node that booted and whose kubelet runs.
-    disk = await created_worker_disk(factory, tmp_path, monkeypatch)
-
-    room = disk.stat().st_size - len(PAYLOAD)
-    # EPHEMERAL is what the room holds once STATE and the GPT overhead the
-    # check allows for are taken out of it.
-    assert room - TALOS_STATE_SIZE - TALOS_GPT_OVERHEAD >= TALOS_EPHEMERAL_FLOOR
-    with disk.open('rb') as written:
-        assert written.read(len(PAYLOAD)) == PAYLOAD
-
-
-@pytest.mark.asyncio
-async def test_the_room_takes_no_blocks_on_the_machine_running_the_program(
-    factory: Factory, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    # The room is gigabytes of zeros past the artifact. Grown by length rather
-    # than written, it reads back as zeros and allocates nothing, so the file
-    # takes the artifact's blocks and no more, whatever the room.
-    disk = await created_worker_disk(factory, tmp_path, monkeypatch)
-    status = disk.stat()
-
-    assert status.st_size > len(PAYLOAD) + MIB, 'the room is there to be read'
-    # `st_blocks` counts 512-byte units on every POSIX file system. A file
-    # system block or two past the artifact is rounding; a megabyte is not.
-    assert status.st_blocks * 512 < len(PAYLOAD) + MIB
 
 
 # -- fetching and decompressing ----------------------------------------------
@@ -550,7 +469,7 @@ def test_an_uncompressed_artifact_lands_as_it_was_served(tmp_path: Path, monkeyp
     _ = serve_raw(monkeypatch, PAYLOAD)
     path = tmp_path / 'talos.qcow2'
 
-    talos_factory.materialize('https://factory.invalid/oracle-arm64.qcow2', path, room=0)
+    talos_factory.materialize('https://factory.invalid/oracle-arm64.qcow2', path)
 
     assert path.read_bytes() == PAYLOAD
 
@@ -567,7 +486,7 @@ def test_an_uncompressed_artifact_whose_end_cannot_be_vouched_for_leaves_nothing
     refusal = talos_factory.TruncatedArtifact if declared is not None else talos_factory.UndeclaredLength
 
     with pytest.raises(refusal):
-        talos_factory.materialize('https://factory.invalid/oracle-arm64.qcow2', path, room=0)
+        talos_factory.materialize('https://factory.invalid/oracle-arm64.qcow2', path)
 
     assert list(tmp_path.iterdir()) == []
 
@@ -577,22 +496,11 @@ def test_a_fetched_artifact_lands_decompressed(tmp_path: Path, monkeypatch: pyte
     _ = serve(monkeypatch, compressed[:20], compressed[20:])
     path = tmp_path / 'nested' / 'talos.raw'
 
-    talos_factory.materialize('https://factory.invalid/nocloud-amd64.raw.xz', path, room=0)
+    talos_factory.materialize('https://factory.invalid/nocloud-amd64.raw.xz', path)
 
     # Decompressed, whole, and in a directory the program created: the libvirt
     # provider is handed a plain raw image because it will not unpack an xz.
     assert path.read_bytes() == PAYLOAD
-
-
-def test_the_room_follows_the_artifact_as_zeros(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    _ = serve(monkeypatch, lzma.compress(PAYLOAD))
-    path = tmp_path / 'talos.raw'
-
-    talos_factory.materialize('https://factory.invalid/nocloud-amd64.raw.xz', path, room=4096)
-
-    # A volume created from the file takes its length as its capacity, so the
-    # room is disk the guest sees past the image's end, and it reads as zeros.
-    assert path.read_bytes() == PAYLOAD + bytes(4096)
 
 
 def test_an_artifact_already_on_disk_is_reused_rather_than_fetched_again(
@@ -602,7 +510,7 @@ def test_an_artifact_already_on_disk_is_reused_rather_than_fetched_again(
     path = tmp_path / 'talos.raw'
     _ = path.write_bytes(PAYLOAD)
 
-    talos_factory.materialize('https://factory.invalid/nocloud-amd64.raw.xz', path, room=0)
+    talos_factory.materialize('https://factory.invalid/nocloud-amd64.raw.xz', path)
 
     # A file under the final name is complete by construction — the download
     # is renamed into place, never written into place — so re-creating the
@@ -633,7 +541,7 @@ def test_the_artifact_says_what_it_does_before_it_does_it(
     if on_disk:
         _ = path.write_bytes(PAYLOAD)
 
-    talos_factory.materialize(url, path, room=0)
+    talos_factory.materialize(url, path)
 
     if on_disk:
         assert [kind for kind, _ in events] == ['said']
@@ -652,7 +560,7 @@ def test_a_stream_that_ends_early_leaves_nothing_that_looks_finished(
     path = tmp_path / 'talos.raw'
 
     with pytest.raises(talos_factory.TruncatedArtifact):
-        talos_factory.materialize('https://factory.invalid/nocloud-amd64.raw.xz', path, room=0)
+        talos_factory.materialize('https://factory.invalid/nocloud-amd64.raw.xz', path)
 
     # The failure mode this guards against is silent: half an image written
     # into a volume boots into nothing, and the next run would have reused it.
@@ -724,8 +632,8 @@ def test_a_success_is_handed_back_unread(monkeypatch: pytest.MonkeyPatch) -> Non
 # -- the resource around it --------------------------------------------------
 
 
-def props(url: str, path: Path, room: int = 0) -> dict[str, Any]:
-    return {'url': url, 'path': str(path), 'room': room}
+def props(url: str, path: Path) -> dict[str, Any]:
+    return {'url': url, 'path': str(path)}
 
 
 def test_creating_the_resource_fetches_it_and_is_identified_by_the_path(
@@ -754,16 +662,20 @@ def test_a_new_schematic_is_a_new_artifact_rather_than_an_update(tmp_path: Path)
     assert set(result.replaces or []) == {'url', 'path'}
 
 
-def test_another_room_is_another_artifact_too(tmp_path: Path) -> None:
-    olds = props('https://factory.invalid/a.raw.xz', tmp_path / 'a.raw', room=1)
-    news = props('https://factory.invalid/a.raw.xz', tmp_path / 'a.raw', room=2)
+def test_a_key_state_holds_and_the_program_does_not_declare_plans_nothing(tmp_path: Path) -> None:
+    """State a resource was created under can hold a key the program no longer declares, a `room` among them.
+
+    The diff reads the artifact's identity and nothing else, so a resource
+    whose artifact and path are unchanged keeps still. For the cloud image a
+    replacement would also replace the archive and the image imported from it.
+    """
+    news = props('https://factory.invalid/a.qcow2', tmp_path / 'a.qcow2')
+    olds = news | {'room': 0, talos_factory.WRITTEN: '1 2'}
 
     result = talos_factory.FactoryImageProvider().diff('old', olds, news)
 
-    # The room is part of what the file holds, so a file with the old room is
-    # not the one declared, even at the same path.
-    assert result.changes is True
-    assert result.replaces == ['room']
+    assert result.changes is False
+    assert not result.replaces
 
 
 def test_a_preview_that_cannot_know_the_url_does_not_claim_a_change(tmp_path: Path) -> None:

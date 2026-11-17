@@ -5,9 +5,10 @@ under it is not. What keeps the program from resizing or rewriting that disk
 out from under a running node is resource options, and each carries its reason
 at its declaration (`components/homelab`) rather than a case here restating it.
 The cases hold what the declarations produce: the disk and the seed the
-worker boots, the session the provider dials, and what the stylesheets make of
-the definitions the provider generates. What the engine does with the seed's
-options is `tests/test_homelab_engine.py`'s.
+worker boots, the session the provider dials, what the stylesheets make of
+the definitions the provider generates, and the warning a disk that reads back
+another capacity than the declared one raises. What the engine does with the
+disk's and the seed's options is `tests/test_homelab_engine.py`'s.
 
 The home-automation domain on the same host is declared nowhere, so nothing
 here asserts about it (rfc-002 §13).
@@ -52,6 +53,9 @@ BRIDGE = 'kvmbr1'
 MAC = '52:54:00:12:34:56'
 VCPUS = 12
 MEMORY_GIB = 10
+#: Not the convention's: what is asserted is that the disk is created at the
+#: capacity the component is handed.
+DISK_GIB = 7
 
 #: Where the Talos `nocloud` image has been decompressed for the provider to
 #: upload. What matters below is that the volume is created *from* it.
@@ -151,6 +155,7 @@ def build(**kwargs: Any) -> Any:
     kwargs.setdefault('mac', MAC)
     kwargs.setdefault('vcpus', VCPUS)
     kwargs.setdefault('memory_gib', MEMORY_GIB)
+    kwargs.setdefault('disk_gib', DISK_GIB)
     kwargs.setdefault('image_path', IMAGE_PATH)
     return HomelabHost(CLUSTER, **kwargs)
 
@@ -182,16 +187,14 @@ async def test_the_worker_boots_because_the_volume_is_created_from_the_talos_ima
 
 
 @pytest.mark.asyncio
-async def test_the_disk_is_not_sized_by_the_declaration(monitor: Providers) -> None:
+async def test_the_disks_capacity_is_stated_in_its_stylesheet_and_not_beside_its_source(monitor: Providers) -> None:
     host = build()
     request = await registration(monitor, host.volume)
 
-    # The provider refuses `size` beside `source` outright — it takes the
-    # volume's capacity from its source file — so stating the worker's
-    # intended disk size here would not shrink-wrap anything, it would fail
-    # the apply.
+    # The provider refuses `size` beside `source` outright, so stating the
+    # worker's disk size as `size` would fail the apply. The stylesheet is
+    # where it is stated (`test_the_disk_stylesheet_states_the_capacity_and_the_mode_and_nothing_else`).
     assert 'size' not in dict(request.object)
-    assert await host.volume.size.future() is None
 
 
 @pytest.mark.asyncio
@@ -611,22 +614,111 @@ async def test_the_domain_stylesheet_makes_exactly_its_three_changes(tmp_path: P
 
 
 @pytest.mark.asyncio
-async def test_each_volume_is_created_readable_by_its_owner_alone(tmp_path: Path) -> None:
-    """The disk and the seed carry the machine secrets, and the provider creates every volume `0644`.
+async def test_the_disk_stylesheet_states_the_capacity_and_the_mode_and_nothing_else(tmp_path: Path) -> None:
+    """The disk is created at the component's capacity, unallocated, and readable by its owner alone.
 
-    The mode is all the stylesheet changes; the directory above the files is
-    the host's, and QEMU needs its search bit.
+    The capacity is `disk_gib` in bytes, where the provider writes the
+    source's length. The allocation is zero, since libvirt preallocates a
+    volume that states none in full. The mode is `0600`, since the disk
+    carries the machine secrets and the provider creates every volume `0644`;
+    the directory above the files is the host's, and QEMU needs its search
+    bit.
     """
     host = build()
     etree = _etree()
     expected = etree.XML(PROVIDER_VOLUME_XML.encode())
     expected.find('target/permissions/mode').text = '0600'
+    capacity = expected.find('capacity')
+    capacity.text = str(DISK_GIB * (1 << 30))
+    allocation = etree.Element('allocation', unit='B')
+    allocation.text = '0'
+    capacity.addnext(allocation)
 
-    for volume in (host.volume, host.seed):
-        xml = await volume.xml.future()
-        assert xml is not None and xml.xslt is not None
-        transformed = etree.XML(_xsltproc(tmp_path, xml.xslt, PROVIDER_VOLUME_XML.encode()))
-        assert _canonical(transformed) == _canonical(expected)
+    xml = await host.volume.xml.future()
+    assert xml is not None and xml.xslt is not None
+    transformed = etree.XML(_xsltproc(tmp_path, xml.xslt, PROVIDER_VOLUME_XML.encode()))
+
+    assert _canonical(transformed) == _canonical(expected)
+
+
+@pytest.mark.asyncio
+async def test_the_seed_stylesheet_changes_the_mode_alone(tmp_path: Path) -> None:
+    """The seed carries the machine secrets too, and keeps the capacity its source gives it."""
+    host = build()
+    etree = _etree()
+    expected = etree.XML(PROVIDER_VOLUME_XML.encode())
+    expected.find('target/permissions/mode').text = '0600'
+
+    xml = await host.seed.xml.future()
+    assert xml is not None and xml.xslt is not None
+    transformed = etree.XML(_xsltproc(tmp_path, xml.xslt, PROVIDER_VOLUME_XML.encode()))
+
+    assert _canonical(transformed) == _canonical(expected)
+
+
+#: Talos's minimal disk (siderolabs/talos v1.13.9, `pkg/minimal/limits.go`,
+#: `DiskSize`). Day 1's health gate refuses an EPHEMERAL smaller than this
+#: less the other partitions and their GPT overhead (`pkg/cluster/check/nodes.go`,
+#: `AllNodesDiskSizes`), and EPHEMERAL takes what a disk leaves past those, so a
+#: disk at least this large passes the gate of the run that creates it.
+TALOS_MINIMAL_DISK_SIZE = 6 * (1 << 30)
+
+
+def test_the_disk_the_convention_declares_clears_the_health_gates_floor() -> None:
+    """The run that creates the worker ends on day 1's health gate, on the disk as created."""
+    assert conventions.HOMELAB_DISK_GIB * (1 << 30) >= TALOS_MINIMAL_DISK_SIZE
+
+
+# -- the disk the host has, against the one declared -------------------------
+
+
+class ReadBack(Providers):
+    """The libvirt half reading the disk's capacity back as `size`, as a refresh records it."""
+
+    def __init__(self, size: int | None) -> None:
+        super().__init__()
+        self.size = size
+
+    def computed(self, args: pulumi.runtime.MockResourceArgs) -> dict[str, Any]:
+        if args.typ == 'libvirt:index/volume:Volume' and args.name == f'{DOMAIN}-disk' and self.size is not None:
+            return {'size': self.size}
+        return super().computed(args)
+
+
+async def warnings_of(monitor: Providers, monkeypatch: pytest.MonkeyPatch, *, preview: bool = False) -> list[str]:
+    """What declaring the host warns, against `monitor`."""
+    _ = await run_with(monitor, stack='physical', preview=preview)
+    warned: list[str] = []
+
+    def warn(message: str, *_: object, **__: object) -> None:
+        warned.append(message)
+
+    monkeypatch.setattr(pulumi.log, 'warn', warn)
+    async with declaring():
+        _ = build()
+    return warned
+
+
+@pytest.mark.asyncio
+async def test_a_disk_that_reads_back_another_capacity_warns_naming_both(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The host grown ahead of the constant, or the constant raised ahead of a replacement."""
+    warned = await warnings_of(ReadBack(size=(DISK_GIB + 3) * (1 << 30)), monkeypatch)
+
+    (warning,) = warned
+    assert f'{DISK_GIB + 3} GiB' in warning
+    assert f'a replacement creates it at {DISK_GIB} GiB' in warning
+
+
+@pytest.mark.parametrize('size', [DISK_GIB * (1 << 30), None], ids=['equal', 'absent'])
+@pytest.mark.asyncio
+async def test_a_disk_at_its_declared_capacity_warns_nothing(monkeypatch: pytest.MonkeyPatch, size: int | None) -> None:
+    assert await warnings_of(ReadBack(size=size), monkeypatch) == []
+
+
+@pytest.mark.asyncio
+async def test_a_disk_not_yet_created_warns_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A preview of the run that creates the disk, where the size it will read back is unknown."""
+    assert await warnings_of(ReadBack(size=None), monkeypatch, preview=True) == []
 
 
 def _xsltproc(tmp_path: Path, stylesheet: str, document: bytes) -> bytes:

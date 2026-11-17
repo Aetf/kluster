@@ -1,18 +1,21 @@
-"""The engine semantics the homelab worker's seed and its rebuild rest on, held by the pinned `pulumi` itself.
+"""The engine semantics the homelab worker's disk, its seed and its rebuild rest on, held by the pinned `pulumi` itself.
 
-The seed is first-boot input: a new rendering of the worker's configuration
-plans nothing on it or on the domain that attaches it, and a replaced disk
-replaces the seed from the current rendering, and the domain with both
-(`components.homelab`). Every name is stated on the host, so whatever is
-replaced is deleted before it is created again. No mock can show what the
-engine does with `ignore_changes`, `replace_with` and `delete_before_replace`
-together, so each
+The disk's capacity is a fact of its creation: a new value of the input that
+carries it plans nothing on the running disk, and a replaced disk is created
+from the new value. The seed is first-boot input: a new rendering of the
+worker's configuration plans nothing on it or on the domain that attaches it,
+and a replaced disk replaces the seed from the current rendering, and the
+domain with both (`components.homelab`). Every name is stated on the host, so
+whatever is replaced is deleted before it is created again. No mock can show
+what the engine does with `ignore_changes`, `replace_with` and
+`delete_before_replace` together, so each
 case runs the CLI `mise.toml` pins over a `file://` backend and a
 `PULUMI_HOME` of the case's own, against a program of stand-ins shaped as the
 libvirt resources are:
 
 -   `disk`, the worker's disk: protected, deleted before it is replaced, and
-    replaced on `gen`.
+    replaced on `gen` and on `xml`, which it ignores, as the worker's disk
+    ignores the stylesheet that states its capacity.
 -   `seed`: replaced on `source`, which it ignores, replaced with `disk`, and
     deleted before it is replaced.
 -   `domain`: replaced on its `disks`, the ids of the two above, and deleted
@@ -101,16 +104,16 @@ def log(line):
 class Replaced(ResourceProvider):
     \"\"\"A resource every input of which replaces it, as every field of a libvirt volume does.\"\"\"
 
-    def __init__(self, kind, key):
+    def __init__(self, kind, keys):
         self.kind = kind
-        self.key = key
+        self.keys = keys
 
     def create(self, props):
-        log(f'create {self.kind} {self.key}={props[self.key]}')
+        log(f'create {self.kind} ' + ' '.join(f'{key}={props[key]}' for key in self.keys))
         return CreateResult(id_=f'{self.kind}-{uuid.uuid4().hex[:8]}', outs=dict(props))
 
     def diff(self, _id, olds, news):
-        replaces = [self.key] if olds.get(self.key) != news.get(self.key) else []
+        replaces = [key for key in self.keys if olds.get(key) != news.get(key)]
         return DiffResult(changes=bool(replaces), replaces=replaces)
 
     def delete(self, id_, _props):
@@ -118,21 +121,19 @@ class Replaced(ResourceProvider):
 
 
 class Stand(Resource):
-    def __init__(self, name, key, value, opts):
-        super().__init__(Replaced(name, key), name, {key: value}, opts)
+    def __init__(self, name, props, opts):
+        super().__init__(Replaced(name, tuple(props)), name, props, opts)
 
 
 settings = json.loads(pathlib.Path('settings.json').read_text())
 disk = Stand(
     'disk',
-    'gen',
-    settings['gen'],
-    pulumi.ResourceOptions(protect=True, delete_before_replace=True),
+    {'gen': settings['gen'], 'xml': settings['xml']},
+    pulumi.ResourceOptions(protect=True, ignore_changes=['xml'], delete_before_replace=True),
 )
 seed = Stand(
     'seed',
-    'source',
-    settings['rendering'],
+    {'source': settings['rendering']},
     pulumi.ResourceOptions(
         ignore_changes=['source'],
         replace_with=[disk],
@@ -141,8 +142,7 @@ seed = Stand(
 )
 Stand(
     'domain',
-    'disks',
-    pulumi.Output.all(disk.id, seed.id).apply(lambda ids: ','.join(ids)),
+    {'disks': pulumi.Output.all(disk.id, seed.id).apply(lambda ids: ','.join(ids))},
     pulumi.ResourceOptions(delete_before_replace=True),
 )
 """
@@ -158,8 +158,8 @@ class Engine:
     env: dict[str, str]
     log_file: Path
 
-    def settings(self, *, rendering: str = 'r1', gen: str = 'g1') -> None:
-        _ = (self.project / 'settings.json').write_text(json.dumps({'rendering': rendering, 'gen': gen}))
+    def settings(self, *, rendering: str = 'r1', gen: str = 'g1', xml: str = 'x1') -> None:
+        _ = (self.project / 'settings.json').write_text(json.dumps({'rendering': rendering, 'gen': gen, 'xml': xml}))
 
     def pulumi(self, *args: str) -> sp.CompletedProcess[str]:
         return process_sessions.run(
@@ -242,9 +242,40 @@ def test_a_rebuilt_disk_replaces_the_domain_and_the_seed_from_the_current_render
     deleted, created = log[:3], log[3:]
     assert sorted(deleted) == ['delete disk', 'delete domain', 'delete seed']
     assert deleted[-1] == 'delete disk'
-    assert created == ['create disk gen=g1', 'create seed source=r2', 'create domain disks=disk-<id>,seed-<id>']
+    assert created == [
+        'create disk gen=g1 xml=x1',
+        'create seed source=r2',
+        'create domain disks=disk-<id>,seed-<id>',
+    ]
     # The program's `protect` protects the new disk in the same run.
     assert launched.resources()['disk'].get('protect') is True
+
+
+def test_a_new_value_of_the_disks_ignored_input_plans_nothing_and_a_replacement_is_created_from_it(
+    launched: Engine,
+) -> None:
+    """The capacity the disk's stylesheet states (`components.homelab`).
+
+    An edit of `HOMELAB_DISK_GIB` changes the disk's `xml`, which replaces a
+    volume, on a disk that is protected: ignored, it plans nothing and the run
+    goes through. A replacement of the disk, the rebuild's, is created from
+    the program's value rather than the one state recorded.
+    """
+    launched.settings(xml='x2')
+
+    planned = launched.pulumi('preview', '--expect-no-changes')
+    assert planned.returncode == 0, _ran(planned)
+    result = launched.up()
+    assert result.returncode == 0, _ran(result)
+    assert launched.log() == []
+    disk = launched.urn('disk')
+    unprotected = launched.pulumi('state', 'unprotect', '--yes', disk)
+    assert unprotected.returncode == 0, _ran(unprotected)
+
+    replaced = launched.up('--replace', disk)
+
+    assert replaced.returncode == 0, _ran(replaced)
+    assert [line for line in launched.log() if line.startswith('create disk')] == ['create disk gen=g1 xml=x2']
 
 
 @pytest.mark.parametrize(
@@ -328,7 +359,7 @@ class Stand(Resource):
         super().__init__(provider, name, props, opts)
 
 
-image = FactoryImage('image', url=os.environ['PROBE_URL'], path=os.environ['PROBE_IMAGE'], room=0)
+image = FactoryImage('image', url=os.environ['PROBE_URL'], path=os.environ['PROBE_IMAGE'])
 guard = SourceGuard()
 disk = Stand(
     'disk',

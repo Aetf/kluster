@@ -35,28 +35,33 @@ a file it is — the shape makes that rational:
     the host fs. The subvolume boundary also keeps the image out of
     any host snapshot/send scope.
 -   **Raw, not qcow2**: with CoW disabled, qcow2's allocation layer
-    buys nothing but indirection. The file is created as the Talos
-    image followed by the room Talos creates STATE and EPHEMERAL in at
-    first boot (`components/talos/image.py`, `HOMELAB_DISK_ROOM`) — the
-    volume is created *from* that file (declarative/physical.md §3).
-    The room is sized so that EPHEMERAL clears the floor of day 1's
-    health gate, so the `physical up` that creates the worker passes its
-    gate on the disk as created. The room stops there because the
-    provider uploads every byte of the file, zeros included, and libvirt
-    writes each of them on the host, whereas a `truncate` on the host
-    lengthens the file and writes nothing. So every size the disk has
-    after its creation is `truncate` on the file + `virsh blockresize`,
-    the ~60 GB bootstrap size as much as the 100+ GB end state reached
-    interleaved with reclamation (migration.md §0.4); the bootstrap
-    growth follows the first run rather than standing between it and its
-    gate. Talos grows its
-    EPHEMERAL partition into the new space on its own, but only at
-    boot: a volume grows on its way to being mounted, and Talos does
-    not take up a mounted one again. So every growth of the file is
-    followed by a reboot of the worker, `talosctl -n <worker> reboot`,
-    and the partition has its new size once the node is back. The
-    declaration stops matching the file from the first `truncate`
-    onwards, which is why it ignores the size rather than stating one.
+    buys nothing but indirection. The volume is created *from* the
+    Talos image (declarative/physical.md §3) at the capacity
+    `HOMELAB_DISK_GIB` declares in `kluster.conventions.homelab`, the
+    ~60 GB bootstrap size, with an allocation of zero: libvirt makes a
+    sparse file of that length, and the provider uploads the image into
+    its head. Talos creates STATE and EPHEMERAL past the image at first
+    boot, EPHEMERAL across the rest of the disk, so the `physical up`
+    that creates the worker passes day 1's health gate on the disk as
+    created, with no step on the host and no reboot. Every replacement
+    of the disk, a whole-cluster rebuild's included, is created the same
+    way.
+-   **Growing a running disk** is `truncate` on the file +
+    `virsh blockresize`, the 100+ GB end state reached interleaved with
+    reclamation (migration.md §0.4). A `truncate` lengthens the file and
+    writes nothing. Talos grows its EPHEMERAL partition into the new
+    space on its own, but only at boot: a volume grows on its way to
+    being mounted, and Talos does not take up a mounted one again. So
+    every growth of the file is followed by a reboot of the worker,
+    `talosctl -n <worker> reboot`, and the partition has its new size
+    once the node is back. `HOMELAB_DISK_GIB` is raised to the new size
+    in the same sitting, **after** the host, so the declaration never
+    states more than the file has; between the two, a replacement would
+    create the disk at the earlier size. The disk ignores the capacity
+    it reads back and the stylesheet that states the declared one, so
+    raising the constant plans nothing on the running disk, and the
+    next replacement creates the disk at it. Where the two disagree, the
+    `physical` run warns, naming both, as fresh as the last refresh.
 -   **virtio-blk with `discard=unmap`, `cache=none`**: in-guest TRIM
     punches holes back out of the sparse file, so NVMe space actually
     returns to the host when the guest deletes data — load-bearing

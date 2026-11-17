@@ -98,8 +98,11 @@ owns sequencing, data movement, and teardown.
 4.  **NVMe space *and* RAM are interleaved, and the worker grows to
     fit** (nodes.md §4.2). While both clusters coexist, ~85 GB of NVMe
     is free and legacy k3s holds its share of the host's memory, so the
-    worker VM starts at ~60 GB disk and **10 GiB RAM**. The disk grows
-    on the host (physical/homelab-host.md §1) as legacy data is deleted.
+    worker VM starts at ~60 GB disk and **10 GiB RAM**. The disk is
+    created at that size (`HOMELAB_DISK_GIB` in
+    `kluster.conventions.homelab`) and grows on the host as legacy data
+    is deleted, the constant raised after each growth
+    (physical/homelab-host.md §1).
     -   **A window grows the worker by what the next wave's requests
         and their headroom need, capped by what legacy has released.**
         Whatever legacy releases beyond that stays with the host, so the
@@ -194,9 +197,8 @@ runbook, from the gateway window to a verified, empty cluster.
     the flow-rules verification does CI's per-run overlay join become
     load-bearing (physical/gateway.md §2.5).
 2.  `physical` up: 3× A1 (A1 capacity confirmed at creation), worker VM
-    (created as the Talos image followed by the room day 1's health
-    gate needs, then grown on the host to its ~60 GB bootstrap size
-    once that run has passed, physical/homelab-host.md §1), NLB, the UDM's BGP configuration and container services, B2. The gateway's share of this is
+    (its disk created at its ~60 GB bootstrap size,
+    physical/homelab-host.md §1), NLB, the UDM's BGP configuration and container services, B2. The gateway's share of this is
     **three applies, not one, and operator-local by construction** — CI
     reaches the site over ZeroTier and the gateway is not on ZeroTier
     yet. Set `gatewayBootstrapHost` to a LAN address for the UDM and

@@ -28,13 +28,6 @@ factory's TLS are the whole of what vouches for an artifact: the public factory
 publishes no checksum for one. The schematic id the URL carries is the
 factory's content hash of the customization asked for, not of the bytes served.
 
-**The file can be longer than the artifact.** A volume created from a file
-takes the file's length as its capacity, and a Talos disk booted in place
-needs room past the image's last partition for the partitions Talos creates
-there at first boot. So the artifact is extended by `room` bytes
-of zeros, sparsely: the extension costs the machine running the program no
-space, and how much room a disk needs is the consumer's to say.
-
 **A delete removes only the file its own create left.** The object a
 `FactoryImage` stands for is the file, not anything at the factory: the
 factory names an artifact by the schematic's content and offers no delete.
@@ -160,8 +153,8 @@ def fetch(url: str) -> requests.Response:
     return response
 
 
-def materialize(url: str, path: Path, *, room: int) -> None:
-    """Leave the artifact at `url` at `path`, decompressed if served `xz`, and `room` zero bytes after it.
+def materialize(url: str, path: Path) -> None:
+    """Leave the artifact at `url` at `path`, decompressed if served `xz`.
 
     An artifact whose URL ends in `.xz` is decompressed; any other is written
     as it is served (the module docstring). A file already at `path` is the
@@ -180,9 +173,7 @@ def materialize(url: str, path: Path, *, room: int) -> None:
 
     Fetching and decompressing, or writing, are the same pass. Neither form of
     the artifact is ever held in memory, and a failure removes the partial
-    file rather than leaving something that looks finished. The room is added
-    before the rename too, so a file under the final name has it, and a
-    consumer that wants another room names another path.
+    file rather than leaving something that looks finished.
 
     Which of the two it does -- the pass, or reusing the file -- it says
     first, through `pulumi.log`, which `pulumi` draws on the stack's row as the
@@ -205,9 +196,6 @@ def materialize(url: str, path: Path, *, room: int) -> None:
                 _decompress(url, response, sink)
             else:
                 _copy(url, response, sink)
-            # Past the end of what was written: on POSIX, growing a file this
-            # way reads back as zeros and allocates nothing.
-            _ = sink.truncate(sink.tell() + room)
         partial.chmod(ARTIFACT_MODE)
         # Atomic, and within one directory so it stays atomic: either the
         # whole artifact is under its final name or nothing is.
@@ -276,8 +264,10 @@ def _identity(status: os.stat_result) -> str:
     return f'{status.st_ino} {status.st_ctime_ns}'
 
 
-#: Every input, each of which makes the file another file.
-_IDENTITY = ('url', 'path', 'room')
+#: Every input, each of which makes the file another file. The diff reads
+#: these and nothing else, so a key that state recorded for an earlier
+#: declaration and the program no longer declares plans nothing.
+_IDENTITY = ('url', 'path')
 
 
 def _is_unknown(value: Any) -> bool:
@@ -290,8 +280,8 @@ class FactoryImageProvider(dynamic.ResourceProvider):
     """One factory artifact, as a file on whatever machine runs the program.
 
     There is no update: the resource *is* a particular artifact at a particular
-    path with a particular room after it, so a different schematic, a different
-    Talos version or a different room is a different file and a replacement.
+    path, so a different schematic or a different Talos version is a different
+    file and a replacement.
 
     **`read` is deliberately the inherited one, which reports no drift.** The
     file is a build artifact rather than managed state — a CI runner is fresh
@@ -305,8 +295,7 @@ class FactoryImageProvider(dynamic.ResourceProvider):
 
     def create(self, props: dict[str, Any]) -> dynamic.CreateResult:
         path = Path(str(props['path']))
-        # A number crosses the engine as a float, whatever the program declared.
-        materialize(str(props['url']), path, room=int(props['room']))
+        materialize(str(props['url']), path)
         return dynamic.CreateResult(id_=str(path), outs={**props, WRITTEN: _written(path)})
 
     def diff(self, _id: str, olds: dict[str, Any], news: dict[str, Any]) -> dynamic.DiffResult:
@@ -357,11 +346,10 @@ class FactoryImageProvider(dynamic.ResourceProvider):
 
 @final
 class FactoryImage(dynamic.Resource, module='talos_factory', name='FactoryImage'):
-    """A factory artifact, fetched to `path` (decompressed if served `xz`), with `room` bytes of zeros after it."""
+    """A factory artifact, fetched to `path`, decompressed if served `xz`."""
 
     url: pulumi.Output[str]
     path: pulumi.Output[str]
-    room: pulumi.Output[int]
 
     def __init__(
         self,
@@ -369,17 +357,14 @@ class FactoryImage(dynamic.Resource, module='talos_factory', name='FactoryImage'
         *,
         url: pulumi.Input[str],
         path: pulumi.Input[str],
-        room: pulumi.Input[int],
         opts: pulumi.ResourceOptions | None = None,
     ) -> None:
-        """Declare that `path` holds `url`'s contents, decompressed if served `xz`, and `room` zero bytes after them.
+        """Declare that `path` holds `url`'s contents, decompressed if served `xz`.
 
         `path` is the caller's, and it is the same for one declaration on every
         run and on every machine rather than generated — which is what lets a
         consumer take the path as an input without proposing a change each
         time the program moves. No other resource declares it
-        (`materialize`). The room is part of what the file contains: a file
-        already at the path is reused as it is, so a path that did not change
-        with the room would serve a file with the old one.
+        (`materialize`).
         """
-        super().__init__(FactoryImageProvider(), name, {'url': url, 'path': path, 'room': room}, opts)
+        super().__init__(FactoryImageProvider(), name, {'url': url, 'path': path}, opts)

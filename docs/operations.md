@@ -337,7 +337,11 @@ from an HTTP repository, which offers nothing to check a download against
     the disk as `…:Volume::kluster-worker-disk` and the image as
     `…:FactoryImage::kluster-worker-nocloud`. The new disk is created
     from the Talos image cached on the machine running the apply
-    (`components/talos/image.py`, `IMAGE_CACHE`), and the libvirt
+    (`components/talos/image.py`, `IMAGE_CACHE`), at the capacity
+    `HOMELAB_DISK_GIB` declares rather than the size the old disk had,
+    and boots with EPHEMERAL across it, no reboot needed; a disk grown
+    on the host ahead of the constant comes back at the constant's size,
+    which the run's warning names (physical/homelab-host.md §1). The libvirt
     provider first opens that file at the disk's create, after the
     delete-first replacement has removed the old disk. So a run that
     names the disk alone where the cache has lost the file, or never
@@ -716,10 +720,11 @@ from an HTTP repository, which offers nothing to check a download against
     and of the worker's image, disk, seed and domain; and the stack's
     outputs. Anything else, the node volume above all, is a diff nobody
     expected, and nothing is applied until it has been read. The `up`
-    ends on the Talos health gate, every node named. The new disk is
-    created at its declared size, which leaves the worker short of disk
-    once step 8 has deployed both stacks onto it: an open gap,
-    Aetf/kluster-ops#787.
+    ends on the Talos health gate, every node named, with no reboot of
+    the worker: the new disk is created at the capacity
+    `HOMELAB_DISK_GIB` declares (physical/homelab-host.md §1), and
+    `tal -n "$WORKER" get volumestatus EPHEMERAL` reads that capacity
+    less the image's partitions and STATE.
 
     **Step 6: `physical` converges.** A further `physical up` reports
     no changes, and `physical preview --refresh --run-program
@@ -765,12 +770,14 @@ from an HTTP repository, which offers nothing to check a download against
 
     **It passes when each of these holds:**
 
-    1.  Step 5's `up` exits 0 behind the health gate, and step 6's
-        readings hold.
+    1.  Step 5's `up` exits 0 behind the health gate with no reboot of
+        the worker, the worker's EPHEMERAL reads as step 5 says, and
+        step 6's readings hold.
     2.  Step 7's readings hold, the volume's two UUIDs those of the
         baseline.
-    3.  Bring-up stage 5's gate holds on the rebuilt cluster, and each
-        of `up-k8s-base` and `up-apps` converged in its one run.
+    3.  Bring-up stage 5's gate holds on the rebuilt cluster, each
+        of `up-k8s-base` and `up-apps` converged in its one run, and no
+        node reports `DiskPressure` through either of them.
     4.  **Nothing outside changed:**
         -   `gateway-health` is clean at step 0, after step 3 and after
             step 9;
