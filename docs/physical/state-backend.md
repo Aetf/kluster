@@ -540,12 +540,80 @@ oraclecloud`, x86_64), the qcow2 imports as a custom image
     the suffix that copy carries, and with `--yes` beside it deletes them.
     The delete applies the same definition again, in the statement and to
     the table as of its snapshot, so it deletes no checkpoint, no update
-    record, and no copy in a format its stack's checkpoint is stored in. A
-    stack with no checkpoint keeps its copies, which are all that is left
-    of a removed stack. A row the prune deletes stays in every nightly
-    dump taken while it existed, for as long as the retention of §5 keeps
-    that dump, and `state-backend dump` just before the prune puts the
-    rows in one taken then.
+    record, and no copy in a format its stack's checkpoint is stored in.
+    This prune leaves a stack with no checkpoint its copies, which are
+    all that is left of a removed stack; the retention rule below expires
+    them two dump periods after each was written, and the dumps keep them
+    for the 30 days of §5 beyond that. A row the prune deletes stays in
+    every nightly dump taken while it existed, for as long as the
+    retention of §5 keeps that dump, and `state-backend dump` just before
+    the prune puts the rows in one taken then.
+-   **The table keeps an update's record by count and a checkpoint copy
+    by age.** A writing operation — `update`, `refresh`, `destroy`,
+    `resource-import` — leaves two rows in its stack's `history/`
+    directory: the update's record, `<stack>-<nanoseconds>.history.json`
+    and a suffix, and the checkpoint copy beside it (above); a run
+    without `PULUMI_DIY_BACKEND_DISABLE_CHECKPOINT_BACKUPS` leaves a third
+    under `backups/`. A preview and a `pulumi stack import` leave none.
+    The records are read: by `pulumi stack history`, by the reading of
+    every stack's history that sources-of-truth.md §4 takes a page of
+    1000 records at a time, and, the newest alone, by every command that
+    recovers a stack's configuration from it (`GetLatestConfiguration`).
+    No command reads a copy back — `pulumi stack export --version` is
+    refused on this backend — so a copy's one use is by hand, fetched and
+    given to `pulumi stack import`. Yet every listing of a history
+    directory sizes each copy in it (above), so the copies cost every
+    read of the records.
+    -   **The rule.** A row is *expired* when it was written more than
+        `settings.EXPIRY_AGE` ago, and it is a checkpoint copy under
+        `history/` or `backups/`, in any format, its stack still existing
+        or not; an update record that is not among the newest
+        `settings.HISTORY_RECORDS` records of its directory; or a `.bak`
+        whose stack has no checkpoint under any suffix, which is what
+        `pulumi stack rm` without `--remove-backups` and `pulumi stack
+        rename` leave behind. Nothing else expires: no checkpoint, no
+        `.bak` beside one, no lock, no `meta.yaml`, and no row younger
+        than `EXPIRY_AGE`. A copy is large and unread, so it is bounded
+        by age, at the point where deleting it loses nothing; a record is
+        small and read, so it is bounded by count, which is what a
+        listing's cost follows.
+    -   **The lengths.** `EXPIRY_AGE` is two dump periods, derived from
+        `DUMP_PERIOD`: a row that old has stood through two scheduled
+        dumps, so one missed run does not leave it outside every dump, and
+        it is half a period past `DUMP_MAX_AGE`, so while the dump-age
+        probe passes, the newest dump holds every row a prune takes.
+        `HISTORY_RECORDS` is the page the reading of sources-of-truth.md
+        §4 asks for, so the rule deletes no record a reader asks for, and
+        the newest record is always kept.
+    -   **Age and order.** Age is the row's `updated_at`, which the
+        backend sets on every write, against the server's `now()`: one
+        clock, and the instant the row came to exist in the table, which
+        is what a dump holding it depends on. A restore carries
+        `updated_at` over; a `pulumi stack rename` rewrites its stack's
+        history rows, which then age from the rename. Newest is by key
+        within the directory, the order `getHistory` returns, the stamp
+        in the name being fixed-width, so both the project layout and the
+        project-less one are covered.
+    -   **Enforcement.** `state-backend census --prune-expired` lists the
+        expired rows, each with its stored size and the clause that
+        expires it, and with `--yes` deletes them. The rule is written
+        once, in SQL (`state.EXPIRED`): the listing selects from it in
+        the census's read-only session, and the delete takes the listed
+        keys and applies the rule again as of its own snapshot, so a row
+        written again, or a record back among the newest, since the
+        listing is kept, named, and makes the exit status 1. Neither
+        statement reads a value. An empty listing is the reading that the
+        rule holds.
+    -   **What it leaves alone.** The prune takes no `pulumi` lock, and
+        a lock would not cover the case, since the readers of a history
+        directory take none: a `pulumi stack history` listing a directory
+        while the prune deletes from it fails once and is run again, and
+        a `pulumi stack rename` that meets a prune fails with its history
+        in two directories, so no stack is renamed while one runs.
+        `pulumi up`, `preview` and `refresh` list no directory the prune
+        deletes from. The prune does not shrink the data directory on the
+        box, where Postgres reuses the space; the dumps and every listing
+        shrink at once.
 
 ## 3. PKI: a tiny offline CA
 
@@ -778,7 +846,10 @@ step 8).
     keeps
     the box's key free of delete/prune capability (the H4
     discipline), and it is what gives retired encryption keys a
-    definite end of life (below).
+    definite end of life (below). The state table's own retention rule
+    (§2) expires a row only once two dump periods have passed since it
+    was written, so a row a prune takes is in the dumps for those 30
+    days.
 -   **Stale means one and a half periods.** The rule is
     `conventions.backup.max_age`, one function for every scheduled
     backup: a run that is merely late is inside the age, a run that was
@@ -1365,6 +1436,8 @@ state-backend restore <dump>          # feed a dump into a box that serves no st
 state-backend census                  # the state table's rows and stored bytes by kind of key, and each checkpoint's size
 state-backend census --prune-superseded        # also list the copies stored in a format their stack no longer writes (§2)
 state-backend census --prune-superseded --yes  # and delete them
+state-backend census --prune-expired           # also list the rows the retention rule expires (§2)
+state-backend census --prune-expired --yes     # and delete them
 state-backend probe                   # the scheduled checks, run by the ops repository
 state-backend ssh                     # a diagnostic login; the box is never configured by hand
 ```

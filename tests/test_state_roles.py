@@ -48,6 +48,7 @@ from __future__ import annotations
 
 import base64
 import dataclasses
+import datetime as dt
 import errno
 import gzip
 import io
@@ -1531,6 +1532,293 @@ def test_a_copy_its_stack_is_written_in_again_is_kept_by_the_delete_listed_befor
 
     assert state.prune(operator, listing) == []
     assert _keys(box) == after
+
+
+#: The lengths the retention cases hand the rule in place of the settings', and
+#: how far back a case moves a row it ages: past the first, so an aged row is
+#: old enough and an untouched one, written seconds ago, is not.
+EXPIRY = dt.timedelta(hours=1)
+AGED = 2 * EXPIRY
+
+
+def _age(box: Box, keys: set[str]) -> None:
+    """Move each of `keys` back by `AGED`, as if it had been written that long ago."""
+    listed = ', '.join(f"'{key}'" for key in sorted(keys))
+    _ = box.local(
+        f'UPDATE {BACKEND_TABLE} SET updated_at = now() - make_interval(secs => {AGED.total_seconds()}) '
+        f'WHERE key IN ({listed})'
+    )
+
+
+def _expired_listed(printed: str) -> set[str]:
+    """The keys a `--prune-expired` census lists, read off what it printed."""
+    listing = printed.split('expired rows:', 1)[1]
+    return {line.split()[0] for line in listing.splitlines()[1:] if line.startswith('  ')}
+
+
+def test_the_expired_copies_go_and_the_history_an_operator_reads_does_not_change(
+    start: Start,
+    ignition: dict[str, Any],
+    roots: config.Roots,
+    clients: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The rows `--prune-expired` exists for, as the pinned `pulumi` leaves them, and the prune of them.
+
+    A stack updated once with a `backups/` copy and once without, both
+    aged, then once more: the listing is exactly the aged `history/` and
+    `backups/` copies -- no checkpoint, no `.bak` beside one, no record
+    inside the bound, no `meta.yaml`, nothing young -- and deletes nothing
+    without `--yes`. With it they go, `pulumi stack history` prints what it
+    printed before, and the stack updates again.
+    """
+    for variable in STATE_SWITCHES_ENV:
+        monkeypatch.delenv(variable, raising=False)
+    box = _appliance(start, ignition)
+    operator = _bundle(roots, box, clients, settings.OPERATOR_ROLE)
+    project = tmp_path / 'project'
+    _stack_init(operator, project, STACK)
+    _up(operator, project, STACK)
+    _up(operator, project, STACK, stack_environment.state_switches())
+    aged = _keys(box)
+    _age(box, aged)
+    _up(operator, project, STACK, stack_environment.state_switches())
+    before = _keys(box)
+    copies = _copies(aged, STACK, layout=f'{settings.DATABASE}/.pulumi/')
+    assert {key for key in copies if '/history/' in key}
+    assert {key for key in copies if '/backups/' in key}
+    assert {key for key in aged if '.history.json' in key}
+    history = _history(operator, project, STACK)
+    assert isinstance(history, list)
+    assert len(cast('list[object]', history)) == 3
+
+    listed = io.StringIO()
+    assert (
+        census.run(
+            operator, prune=False, expire=True, yes=False, out=listed, age=EXPIRY, records=settings.HISTORY_RECORDS
+        )
+        == 0
+    )
+    assert _keys(box) == before
+    assert _expired_listed(listed.getvalue()) == copies
+
+    pruned = io.StringIO()
+    assert (
+        census.run(
+            operator, prune=False, expire=True, yes=True, out=pruned, age=EXPIRY, records=settings.HISTORY_RECORDS
+        )
+        == 0
+    )
+    assert _keys(box) == before - copies
+    assert all(f'deleted  {key}' in pruned.getvalue() for key in copies)
+    assert _history(operator, project, STACK) == history
+    _up(operator, project, STACK, stack_environment.state_switches())
+    assert len(cast('list[object]', _history(operator, project, STACK))) == 4
+
+
+def test_the_update_records_beyond_the_bound_go_and_each_stack_keeps_its_newest(
+    start: Start,
+    ignition: dict[str, Any],
+    roots: config.Roots,
+    clients: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With a bound of two, an aged stack of three updates keeps its newest two, and a stack of one loses none."""
+    for variable in STATE_SWITCHES_ENV:
+        monkeypatch.delenv(variable, raising=False)
+    box = _appliance(start, ignition)
+    operator = _bundle(roots, box, clients, settings.OPERATOR_ROLE)
+    project = tmp_path / 'project'
+    other = f'{STACK}-other'
+    _stack_init(operator, project, STACK)
+    for _ in range(3):
+        _up(operator, project, STACK, stack_environment.state_switches())
+    _stack_init(operator, project, other)
+    _up(operator, project, other, stack_environment.state_switches())
+    history = _history(operator, project, STACK)
+    assert isinstance(history, list)
+    assert len(cast('list[object]', history)) == 3
+    others = _history(operator, project, other)
+    _age(box, _keys(box))
+
+    assert census.run(operator, prune=False, expire=True, yes=True, out=io.StringIO(), age=EXPIRY, records=2) == 0
+    assert _history(operator, project, STACK) == cast('list[object]', history)[:2]
+    assert _history(operator, project, other) == others
+
+
+def test_a_lone_bak_goes_and_a_bak_beside_its_checkpoint_stays(
+    start: Start,
+    ignition: dict[str, Any],
+    roots: config.Roots,
+    clients: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`pulumi stack rm` leaves its stack's checkpoint as a `.bak` with no checkpoint, which the rule expires."""
+    for variable in STATE_SWITCHES_ENV:
+        monkeypatch.delenv(variable, raising=False)
+    box = _appliance(start, ignition)
+    operator = _bundle(roots, box, clients, settings.OPERATOR_ROLE)
+    project = tmp_path / 'project'
+    removed = f'{STACK}-removed'
+    _stack_init(operator, project, removed)
+    _ = _pulumi(operator, project, ['stack', 'rm', '--yes', '--stack', removed], None)
+    _stack_init(operator, project, STACK)
+    _up(operator, project, STACK)
+    stacks = f'{settings.DATABASE}/{BACKEND_STACKS}{project.name}/'
+    lone = f'{stacks}{removed}.json.bak'
+    beside = f'{stacks}{STACK}.json.bak'
+    keys = _keys(box)
+    assert {lone, beside, f'{stacks}{STACK}.json'} <= keys
+    assert f'{stacks}{removed}.json' not in keys
+    _age(box, keys)
+
+    listing = {row.key: row.clause for row in state.expired(operator, age=EXPIRY, records=settings.HISTORY_RECORDS)}
+    assert listing[lone] is state.Expiry.LONE
+    assert beside not in listing
+
+    assert (
+        census.run(
+            operator,
+            prune=False,
+            expire=True,
+            yes=True,
+            out=io.StringIO(),
+            age=EXPIRY,
+            records=settings.HISTORY_RECORDS,
+        )
+        == 0
+    )
+    after = _keys(box)
+    assert lone not in after
+    assert {beside, f'{stacks}{STACK}.json'} <= after
+
+
+def test_the_delete_applies_the_rule_as_of_its_own_snapshot(
+    start: Start,
+    ignition: dict[str, Any],
+    roots: config.Roots,
+    clients: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A listed row written again before the delete is kept, named, and fails the run; the rest go.
+
+    And handed every key the table then holds -- a checkpoint, the `.bak`
+    beside it, the young copy, records inside the bound, `meta.yaml` -- the
+    delete takes nothing.
+    """
+    for variable in STATE_SWITCHES_ENV:
+        monkeypatch.delenv(variable, raising=False)
+    box = _appliance(start, ignition)
+    operator = _bundle(roots, box, clients, settings.OPERATOR_ROLE)
+    project = tmp_path / 'project'
+    _stack_init(operator, project, STACK)
+    _up(operator, project, STACK)
+    _up(operator, project, STACK)
+    _age(box, _keys(box))
+    listing = [row.key for row in state.expired(operator, age=EXPIRY, records=settings.HISTORY_RECORDS)]
+    assert len(listing) > 1
+    young = listing[0]
+    delete = state.prune_expired
+
+    def written_again_first(target: state.Connection, keys: list[str], *, age: dt.timedelta, records: int) -> list[str]:
+        _ = box.local(f"UPDATE {BACKEND_TABLE} SET updated_at = now() WHERE key = '{young}'")
+        return delete(target, keys, age=age, records=records)
+
+    monkeypatch.setattr(state, 'prune_expired', written_again_first)
+    pruned = io.StringIO()
+    assert (
+        census.run(
+            operator, prune=False, expire=True, yes=True, out=pruned, age=EXPIRY, records=settings.HISTORY_RECORDS
+        )
+        == 1
+    )
+    assert f'kept  {young}' in pruned.getvalue()
+    assert all(f'deleted  {key}' in pruned.getvalue() for key in listing[1:])
+    left = _keys(box)
+    assert young in left
+    assert not set(listing[1:]) & left
+
+    stacks = f'{settings.DATABASE}/{BACKEND_STACKS}{project.name}/'
+    assert {f'{stacks}{STACK}.json', f'{stacks}{STACK}.json.bak', f'{settings.DATABASE}/.pulumi/meta.yaml'} <= left
+    assert {key for key in left if '.history.json' in key}
+    assert delete(operator, sorted(left), age=EXPIRY, records=settings.HISTORY_RECORDS) == []
+    assert _keys(box) == left
+
+
+def test_census_takes_one_mode_a_run(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit) as refused:
+        _ = cli.main(['census', '--prune-superseded', '--prune-expired'])
+
+    assert refused.value.code == 2
+    assert 'not allowed with' in capsys.readouterr().err
+
+
+#: Keys under `<database>/.pulumi/`, whether a case ages each, and the clause
+#: that expires it with a bound of two records per directory, or `None`.
+EXPIRING: list[tuple[str, bool, state.Expiry | None]] = [
+    ('stacks/p/a.json.zst', True, None),
+    ('stacks/p/a.json.zst.bak', True, None),
+    ('stacks/p/a.json.bak', True, None),
+    ('stacks/p/a.pulumi-tags', True, None),
+    ('stacks/p/gone.json.zst.bak', True, state.Expiry.LONE),
+    ('stacks/p/young.json.bak', False, None),
+    ('stacks/solo.json.bak', True, state.Expiry.LONE),
+    ('stacks/i.json', True, None),
+    ('stacks/i.json.bak', True, None),
+    ('history/p/a/a-1790591454000000001.history.json', True, state.Expiry.RECORD),
+    ('history/p/a/a-1790591454000000002.history.json.zst', True, None),
+    ('history/p/a/a-1790591454000000003.history.json.zst', False, None),
+    ('history/p/a/a-1790591454000000001.checkpoint.json', True, state.Expiry.COPY),
+    ('history/p/a/a-1790591454000000002.checkpoint.json.zst', True, state.Expiry.COPY),
+    ('history/p/a/a-1790591454000000003.checkpoint.json.zst', False, None),
+    ('history/p/b/b-1790591454000000005.history.json.gz', True, None),
+    ('history/p/c/c-1790591454000000001.history.json', True, state.Expiry.RECORD),
+    ('history/p/c/c-1790591454000000002.history.json', True, None),
+    ('history/p/c/c-1790591454000000003.history.json', True, None),
+    ('history/p/gone/gone-1790591454000000001.checkpoint.json.gz', True, state.Expiry.COPY),
+    ('history/i/i-1790591454000000001.history.json', True, None),
+    ('history/i/i-1790591454000000001.checkpoint.json', True, state.Expiry.COPY),
+    ('backups/p/a/a.1790591454000000001.json', True, state.Expiry.COPY),
+    ('backups/k-8s.x/k-8s.x.1790591454000000017.json.zst', True, state.Expiry.COPY),
+    ('backups/p/a/a.1790591454000000002.json', False, None),
+    ('history/p/j/k-1.checkpoint.json', True, None),
+    ('history/p/j/j-1.checkpoint.json.bak', True, None),
+    ('history/p/j-1.history.json', True, None),
+    ('backups/p/j/j.json', True, None),
+    ('locks/organization/p/a/id.json', True, None),
+]
+
+
+def test_the_rule_reads_the_backends_layout_and_the_delete_takes_what_it_lists(
+    start: Start,
+    ignition: dict[str, Any],
+    roots: config.Roots,
+    clients: Path,
+    tmp_path: Path,
+) -> None:
+    """`EXPIRED` against every case above, and the same keys under another database's prefix, which it never lists.
+
+    The listing is the clauses the table names, and the delete, handed
+    every key, takes exactly what the listing names.
+    """
+    box = _appliance(start, ignition)
+    operator = _bundle(roots, box, clients, settings.OPERATOR_ROLE)
+    _stack_init(operator, tmp_path / 'project', STACK)
+    layout = f'{settings.DATABASE}/.pulumi/'
+    keys = [prefix + path for path, _, _ in EXPIRING for prefix in (layout, 'other/.pulumi/')]
+    values = ', '.join(f'(\'{key}\', \'{{"data":""}}\')' for key in keys)
+    _ = box.local(f'INSERT INTO {BACKEND_TABLE} (key, data) VALUES {values}')
+    _age(box, {prefix + path for path, aged, _ in EXPIRING if aged for prefix in (layout, 'other/.pulumi/')})
+    expected = {layout + path: clause for path, _, clause in EXPIRING if clause is not None}
+
+    listing = state.expired(operator, age=EXPIRY, records=2)
+    assert {row.key: row.clause for row in listing} == expected
+
+    assert sorted(state.prune_expired(operator, keys, age=EXPIRY, records=2)) == sorted(expected)
 
 
 def test_a_credentials_run_against_an_operator_stack_in_the_box_reaches_it_with_its_bundles_files(

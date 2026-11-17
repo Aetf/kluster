@@ -115,19 +115,29 @@ def build_parser() -> argparse.ArgumentParser:
     # Needs no offline database: the client bundle is the whole credential.
     counting = actions.add_parser(
         'census',
-        help='count the state table by kind of key, and prune the checkpoint copies nothing reads',
+        help='count the state table by kind of key, and prune the rows nothing reads',
         description=census.__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    _ = counting.add_argument(
+    modes = counting.add_mutually_exclusive_group()
+    _ = modes.add_argument(
         '--prune-superseded',
         action='store_true',
         help='also list each .bak, history/ and backups/ copy stored in a format its stack no longer writes',
     )
+    _ = modes.add_argument(
+        '--prune-expired',
+        action='store_true',
+        help=(
+            f'also list each row the retention rule expires: past {probe.hours(settings.EXPIRY_AGE)}, every checkpoint copy, '
+            f'every update record beyond the newest {settings.HISTORY_RECORDS} of its stack, and every .bak '
+            'whose stack has no checkpoint'
+        ),
+    )
     _ = counting.add_argument(
         '--yes',
         action='store_true',
-        help='with --prune-superseded, delete the rows it lists',
+        help='with --prune-superseded or --prune-expired, delete the rows it lists',
     )
     _ = counting.add_argument(
         '--bundle',
@@ -304,8 +314,8 @@ def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
     parser = build_parser()
     args = parser.parse_args(argv)
-    if args.action == 'census' and args.yes and not args.prune_superseded:
-        parser.error('--yes deletes what --prune-superseded lists, and is nothing without it')
+    if args.action == 'census' and args.yes and not (args.prune_superseded or args.prune_expired):
+        parser.error('--yes deletes what --prune-superseded or --prune-expired lists, and is nothing without one')
 
     # One dispatch, and the kit is opened by the arms that need it rather than
     # before them: `pins`, `ssh`, `probe`, `census`, `release-lock` and a drill's `restore
@@ -327,7 +337,11 @@ def main(argv: list[str] | None = None) -> int:
                 provision.ssh(args.command)
             case 'census':
                 return census.run(
-                    state.connection(args.bundle), prune=args.prune_superseded, yes=args.yes, out=sys.stdout
+                    state.connection(args.bundle),
+                    prune=args.prune_superseded,
+                    expire=args.prune_expired,
+                    yes=args.yes,
+                    out=sys.stdout,
                 )
             case 'release-lock':
                 return locks.release(

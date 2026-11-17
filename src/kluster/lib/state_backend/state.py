@@ -644,6 +644,200 @@ def prune(target: Connection, keys: Sequence[str]) -> list[str]:
     return cast('list[str]', deleted)
 
 
+#: An update's own record under `history/`: `<stack>-<unix nanoseconds>.history.json`
+#: and the suffix of its writer's format (`addToHistory`), beside the
+#: checkpoint copy `COPIES` names, and the file `pulumi stack history` reads
+#: (`getHistory`). Written like `COPIES`, for the same two dialects.
+RECORD = rf'{Kind.HISTORY.value}{_STACK_DIRECTORY}/\2-[0-9]+\.history\.json{_FORMAT}'
+
+
+class Expiry(enum.Enum):
+    """The clause of the retention rule that expires a row (`EXPIRED`); each member's value is how a listing prints it."""
+
+    #: A checkpoint copy under `history/` or `backups/`.
+    COPY = 'checkpoint copy'
+    #: An update record beyond the newest of its history directory.
+    RECORD = 'update record'
+    #: A `.bak` whose stack has no checkpoint under any suffix.
+    LONE = 'lone .bak'
+
+
+@dataclass(frozen=True)
+class Expired:
+    """A row the retention rule expires, its stored size as `Row` reads it, and the clause that expires it."""
+
+    key: str
+    size: int
+    clause: Expiry
+
+
+#: The retention rule (physical/state-backend.md §2), the one place it is
+#: written: the common table expressions ending in `expired`, the key of
+#: every row of the table the rule expires as of the statement's snapshot,
+#: and the clause that expires it. A row is expired when it was written more
+#: than `age` ago and it is a checkpoint copy under `history/` or `backups/`
+#: (`COPIES`), in any format and whether or not its stack still exists; an
+#: update record (`RECORD`) that is not among the newest `records` records
+#: of its directory, newest by key, the order `getHistory` returns; or a
+#: `.bak` (`COPIES`) whose stack has no checkpoint under any suffix of
+#: `COMPRESSED`. Nothing else expires. Age is the row's `updated_at`, which
+#: the backend sets on every write, against the server's `now()`. Only
+#: `key` and `updated_at` are read, so the rule costs what a listing of keys
+#: costs. `EXPIRED_QUERY` lists from it and `EXPIRE_STATEMENT` deletes by
+#: it, each as of its own snapshot, from the variables `_retention` names.
+EXPIRED = f"""
+laid_out AS (
+    SELECT key, updated_at, substr(key, length(:'layout') + 1) AS path
+    FROM {STATE_TABLE}
+    WHERE starts_with(key, :'layout')
+      AND updated_at < now() - make_interval(secs => :'age'::double precision)
+),
+ranked AS (
+    SELECT key,
+           row_number() OVER (
+               PARTITION BY regexp_replace(path, '/[^/]*$', '')
+               ORDER BY key COLLATE "C" DESC
+           ) AS newest
+    FROM (
+        SELECT key, substr(key, length(:'layout') + 1) AS path
+        FROM {STATE_TABLE}
+        WHERE starts_with(key, :'layout')
+    ) AS everything
+    WHERE path ~ ('^(?:' || :'record' || ')$')
+),
+expired AS (
+    SELECT laid_out.key, :'copy' AS clause
+    FROM laid_out
+    WHERE EXISTS (
+        SELECT 1
+        FROM json_array_elements_text(:'copies'::json) AS copy (pattern)
+        WHERE laid_out.path ~ ('^(?:' || copy.pattern || ')$')
+    )
+    UNION ALL
+    SELECT laid_out.key, :'record_clause'
+    FROM laid_out
+    JOIN ranked USING (key)
+    WHERE ranked.newest > :'records'::integer
+    UNION ALL
+    SELECT laid_out.key, :'lone'
+    FROM laid_out
+    CROSS JOIN LATERAL regexp_match(laid_out.path, '^(?:' || :'previous' || ')$') AS matched (parts)
+    WHERE matched.parts IS NOT NULL
+      AND NOT EXISTS (
+          SELECT 1
+          FROM {STATE_TABLE} AS live, json_array_elements_text(:'formats'::json) AS stored (format)
+          WHERE live.key = :'layout' || :'stacks' || matched.parts[1] || '.json' || stored.format
+      )
+)
+"""
+
+#: Every row `EXPIRED` expires, as one JSON document: its key, its stored
+#: size (`Row`) and its clause.
+EXPIRED_QUERY = f"""
+WITH {EXPIRED}
+SELECT coalesce(
+    json_agg(json_build_array(expired.key, pg_column_size(listed.data), expired.clause) ORDER BY expired.key),
+    '[]'
+)
+FROM expired
+JOIN {STATE_TABLE} AS listed USING (key);
+"""
+
+#: The delete of the keys in the `keys` variable, a JSON array, answering with
+#: the keys it deleted: those among them that `EXPIRED` expires as of the
+#: statement's snapshot. A row written again since a listing named it, or a
+#: record that is among the newest of its directory again, is not deleted,
+#: whatever the list says.
+EXPIRE_STATEMENT = f"""
+WITH {EXPIRED},
+asked AS (
+    SELECT listed.key FROM json_array_elements_text(:'keys'::json) AS listed (key)
+),
+gone AS (
+    DELETE FROM {STATE_TABLE} AS stale
+    USING expired
+    WHERE stale.key = expired.key
+      AND expired.key IN (SELECT asked.key FROM asked)
+    RETURNING stale.key
+)
+SELECT coalesce(json_agg(key ORDER BY key), '[]') FROM gone;
+"""
+
+
+def _retention(age: dt.timedelta, records: int) -> dict[str, str]:
+    """The variables `EXPIRED` reads: the rule's two lengths, the key grammar, and each clause's label."""
+    return {
+        'layout': f'{settings.DATABASE}/{BOOKKEEPING}',
+        'stacks': STACKS.removeprefix(BOOKKEEPING),
+        'copies': json.dumps([COPIES[Kind.HISTORY], COPIES[Kind.BACKUPS]]),
+        'previous': COPIES[Kind.PREVIOUS],
+        'record': RECORD,
+        'formats': json.dumps(['', *COMPRESSED]),
+        'age': str(age.total_seconds()),
+        'records': str(records),
+        'copy': Expiry.COPY.value,
+        'record_clause': Expiry.RECORD.value,
+        'lone': Expiry.LONE.value,
+    }
+
+
+def expired(target: Connection, *, age: dt.timedelta, records: int) -> list[Expired]:
+    """Every row the retention rule expires (`EXPIRED`), in key order, read in a session that cannot write.
+
+    `age` and `records` are the rule's two lengths, `settings.EXPIRY_AGE` and
+    `settings.HISTORY_RECORDS` where an operator runs it.
+    """
+    log.info(
+        'listing the rows of %s older than %s that the retention rule expires, from %s',
+        STATE_TABLE,
+        age,
+        endpoint(target.url),
+    )
+    what = f'the listing of the expired rows of {STATE_TABLE}'
+    listing = query(target, EXPIRED_QUERY, what=what, variables=_retention(age, records), env=_READ_ONLY)
+    if not isinstance(listing, list):
+        raise StateError(f'{what} printed a {type(listing).__name__}, not a list of rows')
+    clauses = {member.value: member for member in Expiry}
+    found: list[Expired] = []
+    for entry in cast('list[object]', listing):
+        row = cast('list[object]', entry) if isinstance(entry, list) else []
+        if (
+            len(row) != 3
+            or not isinstance(row[0], str)
+            or not isinstance(row[1], int)
+            or not isinstance(row[2], str)
+            or row[2] not in clauses
+        ):
+            raise StateError(f'{what} printed an entry that is no key, size and clause: {entry!r}')
+        found.append(Expired(key=row[0], size=row[1], clause=clauses[row[2]]))
+    return found
+
+
+def prune_expired(target: Connection, keys: Sequence[str], *, age: dt.timedelta, records: int) -> list[str]:
+    """Delete the expired rows named, returning the keys deleted.
+
+    A key is deleted only where the rule expires it as of the statement's
+    snapshot (`EXPIRE_STATEMENT`), under the same lengths the listing was
+    read with, so a key the statement passes over is a row a writer has
+    written again, a record among the newest of its directory again, one
+    already gone, or one the rule never expired; the caller compares what it
+    asked for with what came back.
+    """
+    if not keys:
+        return []
+    log.info('deleting %d expired row(s) from %s', len(keys), endpoint(target.url))
+    what = f'the delete of the expired rows of {STATE_TABLE}'
+    deleted = query(
+        target,
+        EXPIRE_STATEMENT,
+        what=what,
+        variables={**_retention(age, records), 'keys': json.dumps(list(keys))},
+    )
+    if not isinstance(deleted, list) or not all(isinstance(key, str) for key in cast('list[object]', deleted)):
+        raise StateError(f'{what} answered something other than the keys it deleted: {deleted!r}')
+    return cast('list[str]', deleted)
+
+
 def verify_dump(archive: Path) -> list[str]:
     """The stack checkpoints the archive carries. An archive that holds none is not a dump.
 
