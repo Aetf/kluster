@@ -23,14 +23,11 @@ from __future__ import annotations
 
 import base64
 import hashlib
-import os
 import re
-import shlex
 import subprocess as sp
 import tomllib
 from pathlib import Path
 
-import pinned_tools
 import process_sessions
 import pytest
 from state_dump_box import (
@@ -106,79 +103,21 @@ def _left_nothing_behind(box: Box) -> None:
     assert box.spooled() == []
 
 
-def _keeping_curl_input(box: Box) -> Path:
-    """Put a stand-in ahead of the box's `curl` that keeps what each call reads on standard input.
-
-    The script hands every B2 call its `Authorization` header there, and the
-    fake records a call's arguments and wiring alone. The stand-in copies its
-    input to a file numbered for the call -- `01` for the first `curl` -- in
-    the directory it returns, then runs the fake with that input spent.
-    """
-    kept = box.record.parent / 'curl-input'
-    kept.mkdir()
-    fake = box.bin / 'curl'
-    recording = fake.rename(box.bin / 'curl-recording')
-    into = shlex.quote(str(kept))
-    _ = fake.write_text(
-        f'#!{SHEBANG}\n'
-        'set -euo pipefail\n'
-        'shopt -s nullglob\n'
-        f'earlier=({into}/*)\n'
-        f'cat > {into}/"$(printf %02d $(( ${{#earlier[@]}} + 1 )))"\n'
-        f'exec {shlex.quote(str(recording))} "$@" < /dev/null\n'
-    )
-    fake.chmod(0o755)
-    return kept
-
-
-def _authorization(given: bytes) -> str | None:
-    """The `Authorization` header among the header lines a call read on standard input."""
-    for line in given.decode().splitlines():
-        name, _, value = line.partition(':')
-        if name.strip().lower() == 'authorization':
-            return value.strip()
-    return None
-
-
-def _recording_jq(box: Box) -> Path:
-    """Put a stand-in ahead of the pinned `jq` that keeps each call's argument list, then runs it.
-
-    `jq` is a real tool here rather than one of the box's fakes, so nothing
-    else records what it was handed, and the key passes through it on the
-    way to its basic authentication. Each call's arguments land, NUL-separated,
-    in a file of their own in the directory this returns; the call itself is
-    the pinned binary's, standard input and all.
-    """
-    kept = box.record.parent / 'jq-arguments'
-    kept.mkdir()
-    stand_in = box.bin / 'jq'
-    _ = stand_in.write_text(
-        f'#!{SHEBANG}\n'
-        f'printf \'%s\\0\' "$@" > {shlex.quote(str(kept))}/$$\n'
-        f'exec {shlex.quote(pinned_tools.located("jq"))} "$@"\n'
-    )
-    stand_in.chmod(0o755)
-    return kept
-
-
 #: The key's basic authentication as B2 documents it for `b2_authorize_account`.
 BASIC = base64.b64encode(f'{ENV["B2_KEY_ID"]}:{ENV["B2_KEY"]}'.encode()).decode()
 
 
 def test_upload_walks_authorize_then_get_url_then_put(tmp_path: Path) -> None:
     box = Box(tmp_path)
-    given = _keeping_curl_input(box)
 
     ran = box.run()
 
     assert ran.returncode == 0, ran.stderr
     authorize, get_url, put = box.of('curl')
     assert authorize.argv[-1].startswith(AUTHORIZATION_ROOT) and authorize.argv[-1].endswith('/b2_authorize_account')
-    # Every call reads its headers on standard input as well as from its arguments.
-    assert all(('-H', '@-') in zip(call.argv, call.argv[1:], strict=False) for call in (authorize, get_url, put))
     # Basic auth is the key id and secret, not a token; each later call
     # carries the token the call before it answered with.
-    assert [_authorization(path.read_bytes()) for path in sorted(given.iterdir())] == [
+    assert [call.header('Authorization') for call in (authorize, get_url, put)] == [
         f'Basic {BASIC}',
         ACCOUNT['authorizationToken'],
         UPLOAD_TARGET['authorizationToken'],
@@ -208,27 +147,23 @@ def test_no_credential_is_an_argument_of_any_call(tmp_path: Path) -> None:
 
     An argument is in the process table, which every account on the box
     reads through `/proc`, for as long as the call runs -- the upload's for
-    as long as the state takes to send. The box's fakes record every argument
-    list the run hands `podman`, `age` and `curl`, and a stand-in ahead of
-    the pinned `jq` records the ones `jq` is handed: the key passes through
-    it, and the script builds other values with `jq --arg`, which is where a
-    value sits on the command line.
+    as long as the state takes to send. The box records the argument list of
+    every tool the run starts (`state_dump_box`), `jq` among them: the key
+    passes through it, and the script builds other values with `jq --arg`,
+    which is where a value sits on the command line.
     """
     box = Box(tmp_path)
-    jq = _recording_jq(box)
 
     ran = box.run()
 
     assert ran.returncode == 0, ran.stderr
     assert box.of('curl'), 'the run made its B2 calls'
-    handed = [(call.tool, call.argv) for call in box.calls]
-    handed += [('jq', path.read_bytes().decode().split('\0')[:-1]) for path in jq.iterdir()]
-    assert any(tool == 'jq' for tool, _ in handed), 'the run reached jq'
+    assert box.of('jq'), 'the run reached jq'
     credentials = (ENV['B2_KEY'], BASIC, ACCOUNT['authorizationToken'], UPLOAD_TARGET['authorizationToken'])
     exposed = [
-        (tool, argument)
-        for tool, argv in handed
-        for argument in argv
+        (call.tool, argument)
+        for call in box.calls
+        for argument in call.argv
         if any(credential in argument for credential in credentials)
     ]
     assert exposed == []
@@ -337,16 +272,18 @@ STACK_ROWS = [
 ]
 
 
-def _count_stacks(data: str, tools: Path) -> int:
+def _count_stacks(data: str, root: Path) -> int:
     """The box's parser, through the mode the script exposes it under, reading the database the unit names.
 
-    Under the box's `awk`, `gawk`, which `tools` holds ahead of the host's.
+    Under the box's `awk`, `gawk`, with the box's tools alone on the run's `PATH`.
     """
-    box_tools(tools)
+    tools = root / 'bin'
+    tools.mkdir()
+    box_tools(tools, root / 'calls')
     ran = process_sessions.run(
         [str(SCRIPT), 'count-stacks'],
         input=data,
-        env={'PATH': f'{tools}{os.pathsep}/usr/bin:/bin', 'PG_DATABASE': ENV['PG_DATABASE']},
+        env={'PATH': str(tools), 'PG_DATABASE': ENV['PG_DATABASE']},
         text=True,
         timeout=30,
     )
@@ -383,15 +320,73 @@ def test_the_box_tools_a_run_here_reaches_are_the_pinned_releases(tmp_path: Path
     name.
     """
     pins = tomllib.loads((Path(__file__).parent.parent / 'mise.toml').read_text())['tools']
-    box_tools(tmp_path)
-    environment = {'PATH': f'{tmp_path}{os.pathsep}{os.environ["PATH"]}'}
+    tools = tmp_path / 'bin'
+    tools.mkdir()
+    box_tools(tools, tmp_path / 'calls')
 
-    def version(*argv: str) -> str:
-        ran = process_sessions.run(argv, env=environment, text=True, timeout=30, check=True)
+    def version(tool: str) -> str:
+        ran = process_sessions.run(
+            [str(tools / tool), '--version'], env={'PATH': str(tools)}, text=True, timeout=30, check=True
+        )
         return ran.stdout.splitlines()[0]
 
-    assert version(str(tmp_path / 'awk'), '--version').startswith(f'GNU Awk {pins["conda:gawk"]["version"]},')
-    assert version('jq', '--version') == f'jq-{pins["jq"]}'
+    assert version('awk').startswith(f'GNU Awk {pins["conda:gawk"]["version"]},')
+    assert version('jq') == f'jq-{pins["jq"]}'
+
+
+def test_calls_running_at_once_are_each_recorded(tmp_path: Path) -> None:
+    """The record of one call is never another's, whatever runs beside it.
+
+    The script pipes one recorded tool into another (`sha1sum | cut`,
+    `jq | sed`, `podman | awk`), so the two sides number their calls at the
+    same moment. A call that took the number another had just taken would
+    overwrite that call's record, and a credential handed on the lost argv
+    would go unseen. A pipeline as wide as this one starts its members
+    faster than one of them records its call.
+    """
+    box = Box(tmp_path)
+    width = 32
+
+    ran = process_sessions.run(
+        [SHEBANG, '-c', ' | '.join(f'cut -c {column}-' for column in range(1, width + 1))],
+        input='x\n',
+        env=box.env,
+        text=True,
+        timeout=30,
+    )
+
+    assert ran.returncode == 0, ran.stderr
+    assert sorted(call.argv for call in box.of('cut')) == sorted(['-c', f'{column}-'] for column in range(1, width + 1))
+
+
+def test_a_run_reaches_no_tool_the_box_does_not_record(tmp_path: Path) -> None:
+    """The record holds every tool a run starts because nothing else is on its `PATH`.
+
+    A tool the box's directory does not hold is not found: the shell names
+    it, and it never starts unseen. `python3` is the plainest such tool,
+    since the box has no interpreter (state-backend.md §1).
+    """
+    box = Box(tmp_path)
+
+    ran = process_sessions.run([SHEBANG, '-c', 'python3 -c pass'], env=box.env, text=True, timeout=30)
+
+    assert ran.returncode == 127, ran.stderr
+    assert 'python3' in ran.stderr
+    assert box.calls == []
+
+
+def test_a_run_that_calls_a_tool_the_box_does_not_hold_fails_the_case(tmp_path: Path) -> None:
+    """A tool missing from the box's directory is a failed case, not a quiet run.
+
+    The script calls `stat` inside the upload's log line, a substitution the
+    run survives when the tool is not found. Taken out of the directory, it
+    would leave a run that passes without ever starting it.
+    """
+    box = Box(tmp_path)
+    (box.bin / 'stat').unlink()
+
+    with pytest.raises(pytest.fail.Exception, match=r'stat: command not found'):
+        _ = box.run()
 
 
 def test_the_script_and_the_operator_name_the_same_table_and_layout() -> None:

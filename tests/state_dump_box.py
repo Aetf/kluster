@@ -3,12 +3,18 @@
 The script is a file with a shebang and no interpreter behind it that this
 repository ships, so the seam a case gets is the one the box has: `PATH`. A
 `Box` runs the script as an executable -- its shebang, not `bash <path>` --
-with a `podman`, an `age` and a `curl` of this module's making ahead of the
-real ones, each recording its argv and what it was wired to before answering
-as the case configured. What the recording keeps is the wiring and not only
-the argv, because it is the wiring that decides whether the listing reads the
-archive and where the archive is written, and the script closes both files as
-soon as the call returns.
+with a `PATH` holding one directory of this module's making and nothing
+else. In it are a `podman`, an `age` and a `curl` that answer as the case
+configured, and, under its own name, every other tool the script starts,
+each handing over to the real one. Every one of them records its argv and
+what it was wired to before it does anything else, so the record holds
+every tool the run started by construction rather than by a list: a tool
+the directory does not hold is not found and never starts, and the shell
+says so on standard error (`command not found`). What the
+recording keeps is the wiring and not only the argv, because it is the
+wiring that decides whether the listing reads the archive and where the
+archive is written, and the script closes both files as soon as the call
+returns.
 
 The spool is a seam like the recipients file and `age`: each box spools
 under a directory of its own case's, so what a run leaves there is the case's
@@ -43,40 +49,105 @@ SCRIPT = Path(render.__file__).with_name(render.MACHINE) / render.DUMP_SCRIPT
 SHEBANG = SCRIPT.read_text().splitlines()[0].removeprefix('#!')
 
 #: What the box's image carries that the script runs and that no fake here
-#: stands in for: the image's set the script's header names, less `bash`, which
-#: `SHEBANG` names by path, and `podman`, `age` and `curl`, which are faked.
-#: `mise.toml` pins the two whose behavior is the script's own logic -- `gawk`,
-#: at the appliance's release line, and `jq` -- so a run reaches those and not
-#: a host's; the rest a host is trusted to carry, and a host without one fails
-#: the run by naming it rather than with the script's own failure.
-PINNED_TOOLS = ('jq', 'gawk')
-HOST_TOOLS = ('sha1sum', 'sed')
+#: stands in for, by the name the script calls it and the binary a run here
+#: reaches under that name: the image's set the script's header names, less
+#: `bash`, which `SHEBANG` names by path, and `podman`, `age` and `curl`, which
+#: are faked. `mise.toml` pins the two whose behavior is the script's own logic
+#: -- `gawk`, the box's `awk`, at the appliance's release line, and `jq` -- so a
+#: run reaches those and not a host's; the rest a host is trusted to carry, and
+#: a host without one fails the run by naming it rather than with the script's
+#: own failure.
+PINNED_TOOLS = {'awk': 'gawk', 'jq': 'jq'}
+HOST_TOOLS = ('cut', 'date', 'mktemp', 'rm', 'sed', 'sha1sum', 'stat')
 
 
-def box_awk() -> str:
-    """The path of the box's `awk` here: the pinned `gawk`, refused by name where it is missing."""
-    return pinned_tools.located('gawk')
+#: How each executable in the box's directory numbers and records its call
+#: before it does anything else.
+#:
+#: A call claims its number by creating an empty file of that name in the
+#: claims directory beside the record (`claims`), and the claim is the one
+#: step that is exclusive: under `set -C` bash opens a file that does not
+#: exist with `O_EXCL`, so of two calls opening the same name, one creates it
+#: and the other's redirection fails. So two calls running at once --
+#: recorded tools sit on both sides of the script's pipes -- never share a
+#: number: the one whose claim fails goes on to the next. The exclusivity is
+#: the shell's, which the box already runs, and not the host's `mkdir`
+#: utility, which does not report a lost race on every host (uutils coreutils
+#: before 0.11.0 exits 0 when the directory appeared between its check and
+#: its create, uutils/coreutils#13970). The record's directory is made only
+#: once its number is claimed. The search starts past the claims already
+#: there, which are numbered from 1 with no gaps, every number below the
+#: first free one being taken.
+_RECORD = r"""
+claims=$FAKE_RECORD.claims
+shopt -s nullglob
+taken=("$claims"/*)
+shopt -u nullglob
+n=${#taken[@]}
+while true; do
+  n=$((n + 1))
+  number=$(printf '%03d' "$n")
+  if ( set -C; : > "$claims/$number" ) 2>/dev/null; then break; fi
+  if [[ ! -e $claims/$number ]]; then echo "fake $FAKE_TOOL: cannot claim a call under $claims" >&2; exit 98; fi
+done
+call="$FAKE_RECORD/$number"
+mkdir "$call" || { echo "fake $FAKE_TOOL: cannot record a call under $FAKE_RECORD" >&2; exit 98; }
+echo "$FAKE_TOOL" > "$call/tool"
+printf '%s\0' "$@" > "$call/argv"
+readlink "/proc/$$/fd/0" > "$call/stdin_path" || true
+readlink "/proc/$$/fd/1" > "$call/stdout_path" || true
+"""
 
 
-def box_tools(directory: Path) -> None:
-    """Refuse a host missing what the box's image carries, and put the box's `awk` in `directory`.
+def claims(record: Path) -> Path:
+    """Where the calls recorded under `record` claim their numbers (`_RECORD`)."""
+    return record.with_name(f'{record.name}.claims')
 
-    The box's `awk` is `gawk`, and a run here reaches the pinned one under that
-    name, whichever `awk` the host has: the stand-in is a shell stub naming it
-    by the path it resolves to, so it holds however short the `PATH` it is run
-    under.
+
+def recorded(path: Path, tool: str, record: Path, body: str) -> None:
+    """Write an executable at `path` that records its call under `record` as `tool`'s, then runs `body`.
+
+    The record and `body` run with the host's `PATH`, which the run's own
+    leaves out; `box_path` keeps the run's, for a `body` that starts a tool
+    as the run would.
     """
-    pinned_tools.require(*PINNED_TOOLS)
-    missing = [tool for tool in HOST_TOOLS if shutil.which(tool) is None]
+    _ = path.write_text(
+        f'#!{SHEBANG}\n'
+        'set -uo pipefail\n'
+        f'FAKE_TOOL={shlex.quote(tool)}\n'
+        f'FAKE_RECORD={shlex.quote(str(record))}\n'
+        'box_path=$PATH\n'
+        f'PATH={shlex.quote(os.environ["PATH"])}\n'
+        f'{_RECORD}{body}'
+    )
+    path.chmod(0o755)
+
+
+def box_tools(directory: Path, record: Path) -> None:
+    """Refuse a host missing what the box's image carries, and put the box's tools in `directory`.
+
+    Each is a stub under the name the script calls it that records its call
+    under `record`, then runs the binary a run here reaches -- the pinned one
+    for a pinned tool, whichever the host has under that name -- by the path
+    it resolves to, so it holds however short the `PATH` it is run under. The
+    box's `awk` is `gawk`, and a run here reaches the pinned one under that
+    name, whichever `awk` the host has.
+    """
+    pinned_tools.require(*PINNED_TOOLS.values())
+    found = {tool: shutil.which(tool) for tool in HOST_TOOLS}
+    missing = [tool for tool, path in found.items() if path is None]
     if not os.access(SHEBANG, os.X_OK):
         missing.insert(0, SHEBANG)
     if missing:
         pytest.fail(
             f'not on this host: {", ".join(missing)}, which the box runs the dump script with, as a run here does'
         )
-    awk = directory / 'awk'
-    _ = awk.write_text(f'#!/bin/sh\nexec {shlex.quote(box_awk())} "$@"\n')
-    awk.chmod(0o755)
+    reached = {name: pinned_tools.located(binary) for name, binary in PINNED_TOOLS.items()}
+    reached |= {tool: path for tool, path in found.items() if path is not None}
+    record.mkdir(exist_ok=True)
+    claims(record).mkdir(exist_ok=True)
+    for name, binary in reached.items():
+        recorded(directory / name, name, record, f'PATH=$box_path\nexec {shlex.quote(binary)} "$@"\n')
 
 
 #: A `pg_restore --list` output, header and all, of a box the backend has
@@ -178,22 +249,9 @@ ENV = {
     'B2_PREFIX': 'kluster/state',
 }
 
-_RECORD = r"""
-n=$(cat "$FAKE_RECORD/n" 2>/dev/null || echo 0)
-n=$((n + 1))
-echo "$n" > "$FAKE_RECORD/n"
-call="$FAKE_RECORD/$(printf '%02d' "$n")"
-mkdir "$call"
-echo "$FAKE_TOOL" > "$call/tool"
-printf '%s\0' "$@" > "$call/argv"
-readlink "/proc/$$/fd/0" > "$call/stdin_path" || true
-readlink "/proc/$$/fd/1" > "$call/stdout_path" || true
-"""
-
-#: Each fake: record the call, then answer as the environment says to.
+#: Each fake: once its call is recorded, answer as the environment says to.
 FAKES = {
-    'podman': _RECORD
-    + r"""
+    'podman': r"""
 case " $* " in
   *" pg_dump "*) printf '%s' "$FAKE_ARCHIVE"; exit "$FAKE_PG_STATUS" ;;
   *" pg_restore --data-only "*)
@@ -209,15 +267,23 @@ case " $* " in
   *) echo "fake podman: unexpected call: $*" >&2; exit 99 ;;
 esac
 """,
-    'age': _RECORD
-    + r"""
+    'age': r"""
 cat > "$call/stdin"
 printf '%s' "$FAKE_CIPHERTEXT"
 exit "$FAKE_AGE_STATUS"
 """,
-    'curl': _RECORD
-    + r"""
+    'curl': r"""
 url=${*: -1}
+# `-H @-` reads header lines on standard input, as curl does; nothing else
+# here reads it, so a call that does not hold it reads none.
+previous=
+for argument in "$@"; do
+  if [[ $previous == -H || $previous == --header ]] && [[ $argument == @- ]]; then
+    cat > "$call/stdin"
+    break
+  fi
+  previous=$argument
+done
 while (( $# )); do
   if [[ $1 == --data-binary && ${2-} == @* ]]; then
     cp "${2#@}" "$call/sent"
@@ -263,7 +329,9 @@ class Call:
 
     tool: str
     argv: list[str]
-    #: What the tool read on standard input, where it read it at all.
+    #: What a fake read on standard input, where it read it at all: the
+    #: archive `podman` and `age` read, the header lines `curl` read for
+    #: `-H @-`. A tool that hands over to the real one keeps nothing here.
     stdin: bytes | None
     #: The file each standard stream was bound to, where it was a file.
     stdin_path: Path | None
@@ -274,10 +342,19 @@ class Call:
     beside: list[str] | None
 
     def header(self, name: str) -> str | None:
-        """A `-H` header's value, by case-insensitive name."""
+        """A header's value, by case-insensitive name: a `-H` argument's, or a line's that `-H @-` read.
+
+        `curl` only: `-H @-` reads header lines on standard input, which the
+        fake keeps as `stdin`.
+        """
+        lines: list[str] = []
         for flag, value in zip(self.argv, self.argv[1:], strict=False):
-            if flag == '-H' and value.lower().startswith(f'{name.lower()}:'):
-                return value.split(':', 1)[1].strip()
+            if flag in ('-H', '--header'):
+                lines += (self.stdin or b'').decode().splitlines() if value == '@-' else [value]
+        for line in lines:
+            given, _, value = line.partition(':')
+            if given.strip().lower() == name.lower():
+                return value.strip()
         return None
 
 
@@ -313,22 +390,18 @@ class Box:
         #: script's trap removes what a run put there, on every way out.
         self.spool: Path = root / 'spool'
         self.bin.mkdir()
-        box_tools(self.bin)
-        self.record.mkdir()
+        box_tools(self.bin, self.record)
         self.spool.mkdir()
         for tool, body in FAKES.items():
-            fake = self.bin / tool
-            _ = fake.write_text(f'#!{SHEBANG}\nset -uo pipefail\nFAKE_TOOL={tool}\n{body}')
-            fake.chmod(0o755)
+            recorded(self.bin / tool, tool, self.record, body)
         recipients_file = root / 'age-recipients.txt'
         _ = recipients_file.write_text(recipients)
         self.env: dict[str, str] = {
             **ENV,
-            'PATH': f'{self.bin}{os.pathsep}{os.environ["PATH"]}',
+            'PATH': str(self.bin),
             'STATE_DUMP_SPOOL': str(self.spool),
             'STATE_DUMP_RECIPIENTS': str(recipients_file),
             'STATE_DUMP_AGE': str(self.bin / 'age'),
-            'FAKE_RECORD': str(self.record),
             'FAKE_ARCHIVE': ARCHIVE.decode(),
             'FAKE_PG_STATUS': str(pg),
             'FAKE_LISTING': listing,
@@ -344,13 +417,26 @@ class Box:
         }
 
     def run(self, *args: str, env: dict[str, str] | None = None) -> sp.CompletedProcess[str]:
-        """The script, executed as the box executes it."""
-        return process_sessions.run([str(SCRIPT), *args], env={**self.env, **(env or {})}, text=True, timeout=30)
+        """The script, executed as the box executes it.
+
+        A tool the box's directory does not hold fails the case, whatever the
+        run's status. Not found, it never starts, so it is never recorded --
+        and the record is what says that no tool the run started was handed
+        a credential. A call in an argument's substitution (`log "$(stat …)"`)
+        is one the run survives, printing bash's `command not found` and
+        carrying on. The run's environment sets no locale, so that is the
+        message bash prints.
+        """
+        ran = process_sessions.run([str(SCRIPT), *args], env={**self.env, **(env or {})}, text=True, timeout=30)
+        missing = [line for line in ran.stderr.splitlines() if 'command not found' in line]
+        if missing:
+            pytest.fail(f'the run called a tool the box does not hold: {missing}')
+        return ran
 
     @property
     def calls(self) -> list[Call]:
         found: list[Call] = []
-        for call in sorted(path for path in self.record.iterdir() if path.is_dir()):
+        for call in sorted(self.record.iterdir(), key=lambda path: int(path.name)):
             argv = (call / 'argv').read_bytes().decode().split('\0')[:-1]
             beside = (call / 'beside').read_text().split() if (call / 'beside').exists() else None
             found.append(
