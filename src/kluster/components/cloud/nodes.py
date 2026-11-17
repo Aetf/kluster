@@ -250,9 +250,8 @@ class NodeLoadBalancer(Component, pulumi_type='kluster:cloud:NodeLoadBalancer'):
                     # balancer's. It is also what makes the subnet's rule for
                     # a backend the same rule as the listener's: a forwarded
                     # packet reaches the node carrying the client's address.
-                    # Turning it off on the IPv6 sets is the fallback
-                    # declarative/physical.md §6 keeps, and that section
-                    # states what it costs.
+                    # OCI keeps it on the IPv6 sets as well, whose backends
+                    # are named by address (declarative/physical.md §6).
                     is_preserve_source=True,
                     # Over TCP for every set, a port served on TCP and UDP
                     # included; `forwarded` refuses one with no TCP to check.
@@ -455,12 +454,12 @@ class CloudNodes(Component, pulumi_type='kluster:cloud:CloudNodes'):
                 network_load_balancer_id=load_balancer.load_balancer.id,
                 # An instance OCID stands for the primary VNIC's primary
                 # private IP, which is IPv4, so an IPv6 backend names its
-                # address instead -- the node's GUA, read off that VNIC. OCI's
-                # console guide says an address-named backend cannot join a
-                # source-preserving set; Oracle's cloud controller manager
-                # declares its IPv6 backends exactly so (`getBackends`). The
-                # first `up` that creates these settles it, and
-                # declarative/physical.md §6 names the fallback.
+                # address instead -- the node's GUA, read off that VNIC. OCI
+                # accepts these in a source-preserving set, as Oracle's cloud
+                # controller manager declares its IPv6 backends
+                # (`getBackends`), although OCI's console guide says an
+                # address-named backend cannot join one
+                # (declarative/physical.md §6).
                 target_id=instance.id if family == 'IPV4' else None,
                 ip_address=None if family == 'IPV4' else self.guas[node],
                 # No `name`: pulumi-oci autonames it from the logical name

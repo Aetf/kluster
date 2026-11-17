@@ -2083,7 +2083,9 @@ LB-IPAM pool, the balancer's dual-stack listeners and source
 preservation, the reserved address's NAT, the MTU over KubeSpan, the
 security verifications, and the volume items that need a pod. The rest
 need only the nodes, and run now, while the volumes are empty and a
-failure costs nothing. They share one setup:
+failure costs nothing; among them is declarative/physical.md §6's
+fronts item, the `GET /version` on 6443 at each of the balancer's
+addresses, since the API server is on the host network. They share one setup:
 
 ```sh
 TC=~/.talos/kluster          # the talosconfig the ceremony's step 3 wrote

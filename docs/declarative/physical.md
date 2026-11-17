@@ -173,7 +173,10 @@ credential (`ci_zerotier_identity_physical`,
     Service behind it (dns.md §5). Every backend set **preserves the source**
     (`is_preserve_source`), the raw ports' as the management ports': the
     apiserver's audit log and Envoy's access log both record the
-    client's address. Envoy keeps it under the `Cluster` policy every
+    client's address, on both fronts: OCI accepts the IPv6 sets'
+    backends, named by address, in a set that preserves the source, and
+    forwards to them with the client's address kept (§6). Envoy keeps
+    it under the `Cluster` policy every
     Service on the node addresses takes, because it takes the traffic on
     the node it arrives at (rfc-007 §5.1); a raw Service's pods see the
     receiving node's address, which is that policy's cost
@@ -242,7 +245,7 @@ machine_secrets
     until a `talosctl upgrade-k8s` prunes it, and the rules kube-proxy
     programmed stay on each node until it reboots (rfc-007 §4.2, §15.1); CP scheduling enabled
     (`allowSchedulingOnControlPlanes` — the combined CP+ingress role);
-    cert SANs including the NLB IP; **etcd encryption at rest**
+    cert SANs including the NLB's IPv4; **etcd encryption at rest**
     (secretbox — the architecture.md §6.5 residual-risk mitigation for
     cluster secrets in a $0-trust tenancy); on the control planes,
     **etcd's metrics listener**, plain HTTP on port
@@ -326,11 +329,29 @@ machine_secrets
     homelab worker additionally takes BGP 179/tcp from the UDM. The
     default-action document is on every node because without it Talos
     keeps the openings and accepts every other port.
--   **Only node-to-node traffic rides KubeSpan.** etcd, `trustd` and
-    the apiserver's calls to a remote kubelet go between node
-    addresses, which KubeSpan routes into the `kubespan` interface, and
-    the ingress chain accepts that interface ahead of every rule, so no
-    opening names them. **etcd's metrics listener takes no opening
+-   **KubeSpan carries every packet addressed to an address a node
+    holds**, in both families and in both directions of a flow. A
+    peer's allowed IPs are every routed address the node holds — a
+    cloud node's private IPv4 and its GUA, the worker's cluster-VLAN
+    address and its GUA — beside its KubeSpan address, and a node routes
+    into the `kubespan` interface by destination, what it forwards as
+    well as what it sends. A public IPv4 is no address a node holds: a
+    cloud node's is a one-to-one NAT on OCI's side (the item on node
+    names below), the worker's is the home router's, and each is a
+    WireGuard endpoint and never an allowed IP. etcd, `trustd` and the
+    apiserver's calls to a remote kubelet go between node addresses, so
+    they ride `kubespan`, and the ingress chain accepts that interface
+    ahead of every rule, so no opening names them. Two consequences
+    follow. A packet one node sends to another out of its physical link
+    is answered over `kubespan`, so a reading taken across the subnet
+    between two nodes sees one direction of the flow. And where a host
+    outside the cluster hands a node's connection to another node with
+    the source kept, as the balancer does to a backend, the answer is
+    addressed to a node and enters `kubespan`, reaching the caller from
+    the backend's address rather than the one it dialed, unless the
+    caller's end is an address no node holds. That decides what a node
+    reaches at the balancer's two fronts (architecture.md §3.2 item 3).
+    **etcd's metrics listener takes no opening
     either**. It has two readers. The API server's node proxy makes a
     call between node addresses that rides KubeSpan to another control
     plane and enters on `lo` at its own, and the chain accepts `lo` ahead
@@ -401,6 +422,9 @@ machine_secrets
     documents the component emits:
     -   `KubeSpanConfig`, on every node: KubeSpan on at the link MTU
         `conventions.KUBESPAN_MTU`, every other setting Talos' default.
+        It carries no `filters`, so a node advertises every address it
+        holds, in both families alike (the KubeSpan item above);
+        `kubespan_document` says what excluding the GUAs would cost.
     -   `HostnameConfig`, on every node: the node's declared name as a
         static hostname, with `auto: off` (the item on node names
         above).
@@ -549,6 +573,33 @@ machine_secrets
     the node network: Talos appends the lists of later patches and
     folds the result in order, so a negation listed ahead of the
     subnet would remove nothing.
+-   **Everything else that reads Talos' node addresses counts the
+    secondary address as the dedicated-VIP node's own**, until rfc-008
+    §5.4 removes it from the link. Talos v1.13 has no setting that
+    keeps one address out of a node's address list. Nothing that
+    advertises the node to Kubernetes or to etcd takes the address, by
+    the two pins above. What does take it:
+    -   the node's `default` address, which Talos writes into
+        `/etc/hosts` beside the hostname;
+    -   the node's discovery member addresses, and so everything built
+        from that list: KubePrism's upstreams on every node, Talos'
+        `discovery` endpoint list and the lists `trustd` and etcd's
+        clients dial from it, and the KubeSpan allowed IPs and endpoint
+        candidates its peers hold for it;
+    -   the `api` and `k8s` certificate SANs, which list every address
+        the node has held since it booted;
+    -   the source a pod on the node is masqueraded to when it calls
+        another node: that call leaves through `kubespan`, which carries
+        no IPv4 address, so the kernel takes the first primary address
+        of the physical link, and the secondary address is added ahead
+        of the lease's. The node's own sockets keep the lease's address,
+        which their route names.
+
+    Each works, as an address the node holds, and each follows the
+    address off the node when it leaves the link; the SANs drop it at
+    the first reboot after that. The item goes with rfc-008 §5.4's
+    slice. Readings and sources:
+    [Aetf/kluster-ops#799](https://github.com/Aetf/kluster-ops/issues/799).
 -   **What fails closed**: a change of the NLB's address leaves every
     certificate naming the old one, and every call fails verification.
     The same change breaks the cluster endpoint in every machine
@@ -1082,17 +1133,43 @@ The local-path volume (§2) is first exercised there as well:
 -   Once `k8s-base` runs the provisioner, a `local-path` claim binds
     and a pod writes through it.
 
-One part of the NLB item is answered earlier, by the first
-`pulumi up` that creates the balancer's IPv6 backends: each names a
-node's GUA inside a source-preserving backend set, which OCI's console
-guide refuses ("Preserve source IP must be disabled in the backend set
-to add an IP address-based backend server") and Oracle's cloud
-controller manager declares. A refusal fails that `up` at those
-backends, which nothing depends on. The fallback is
-`is_preserve_source` off on the IPv6 backend sets alone, the raw ports'
-with the management ports', and its cost is that the apiserver's audit
-log and Envoy's access log record the balancer's address for every
-request through the IPv6 front.
+**The NLB item keeps source preservation on both families.** Each IPv6
+backend names a node's GUA inside a source-preserving backend set, the
+form Oracle's cloud controller manager declares, and OCI accepts it,
+although its console guide says "Preserve source IP must be disabled in
+the backend set to add an IP address-based backend server": a request
+through the IPv6 front reaches the node carrying the client's own
+address, as one through the IPv4 front does. Whether the sentence binds
+an IPv4 backend named by address is unread, and only the reserved-address
+fallback of architecture.md §3.2 would name one.
+
+**The fronts item** reads the balancer from outside the cluster, and
+it runs at bring-up and at every rebuild (operations.md §3.5): an
+anonymous `GET /version` on 6443 reads `401` at each of the balancer's
+two addresses. It needs no network plugin, the API server being on the
+host network, and runs from a host that is no cluster member and
+reaches the internet in each family: a member's call to the IPv6
+front fails by the KubeSpan item of §2, whatever the balancer does. It
+is taken directly, never through an HTTP proxy, since a proxy that
+refuses `CONNECT` to an IPv6 literal fails the request with the same
+curl exit status a reset does. The IPv4 address is read under the
+cluster's CA, the IPv6 address with verification off, because no
+certificate names it (§2). From the root of the checkout that holds
+`.credentials/`, with `physical` the function above and the cluster's
+kubeconfig at `~/.kube/kluster`:
+
+```sh
+mise x -- kubectl --kubeconfig ~/.kube/kluster config view --raw -o jsonpath='{.clusters[0].cluster.certificate-authority-data}' | base64 -d > .claude/kluster-ca.pem
+curl --noproxy '*' --connect-timeout 10 --max-time 20 -sS -o /dev/null -w '%{http_code}\n' --cacert .claude/kluster-ca.pem "https://$(physical stack output cluster_endpoint):6443/version"; echo "exit $?"
+curl --noproxy '*' --connect-timeout 10 --max-time 20 -sS -o /dev/null -w '%{http_code}\n' -k "https://[$(physical stack output cluster_endpoint_v6)]:6443/version"; echo "exit $?"
+```
+
+It passes when both requests print `401` and `exit 0`: the listener of
+each family forwards to a healthy backend, and the API server answers an
+anonymous request with that status because `anonymous-auth` is off (§2).
+A request that fails prints curl's error text, `000` and a non-zero
+exit, and is recorded with all three; the bounds end one that a front
+drops within twenty seconds.
 
 The M2 bootstrap gate (rfc-007 §14, slice 13) runs these once Cilium
 and the Gateways are up, a transcript per item on its ops issue:
@@ -1107,9 +1184,7 @@ and the Gateways are up, a transcript per item on its ops issue:
 -   Envoy's access log shows the client's address for a request
     through the NLB's IPv4 front.
 -   A request answers through the IPv6 front, and Envoy's log shows the
-    client's address where the IPv6 sets kept source preservation, or
-    the balancer's own address where the fallback above was taken —
-    that fallback's accepted cost.
+    client's address there too, the IPv6 sets preserving the source.
 -   The cluster DNS resolves through host DNS with the baseline policy
     on, and a pod's request to `169.254.169.254` is refused (the
     security item below).
@@ -1124,16 +1199,14 @@ and the Gateways are up, a transcript per item on its ops issue:
     name to the NLB's two addresses; a request to the name answers on
     each family, and the client the echo server reports is the pod's
     own address, which only the Envoy on the pod's own node would
-    report (rfc-007 §4.4). Beside it, the limit those addresses route
+    report (rfc-007 §4.4). Beside it, what those addresses route
     around: from a pod under the baseline policy alone, ten connections
     on each family to the NLB's 6443, a port no Service claims at that
-    address, fail from each cloud node and answer from the worker. The
-    count goes on the issue: ten of ten failing is the limit as OCI
-    states it; about a third failing is a limit on the caller's own
-    backend alone, which the pool's addresses answer just as well; none
-    failing means it does not bind this tenancy, and
-    architecture.md §3.2 then records the NLB's addresses in the pool as
-    the shorter path rather than a repair.
+    address. IPv4 answers from every node, and IPv6 fails from every
+    node, the worker included: the backend's answer to the pod's node,
+    whose GUA the call leaves from, rides `kubespan` past the NLB
+    (architecture.md §3.2 item 3). The counts go on the issue, and any
+    other count is a finding of its own issue.
 -   An alert raised through alertmanager reaches the phone, and
     stopping vmalert pushes the missed check-in.
 

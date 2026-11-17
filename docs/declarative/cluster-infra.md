@@ -652,10 +652,10 @@ All decided behavior from architecture.md §3, expressed as config:
     membership via the `serviceSelector` label from `conventions`. **Every Service on the `internet` pool's node
     addresses takes `Cluster`** (architecture.md §3.1), and **a Service
     whose raw port the balancer fronts asks for the balancer's two
-    addresses beside the node addresses**, so a pod on a cloud node
-    reaching one of the cluster's public names is answered without the
-    balancer, which a node it forwards to cannot reach (architecture.md
-    §3.2). Bootstrap verification: pool-contains-node-IP.
+    addresses beside the node addresses**, so a pod reaching one of the
+    cluster's public names is answered on its own node and never dials
+    the balancer, whose IPv6 front answers no cluster member
+    (architecture.md §3.2). Bootstrap verification: pool-contains-node-IP.
 -   **BGP**: Cilium **BGPv2** resources — `CiliumBGPClusterConfig`
     (node-selected to the homelab worker only) +
     `CiliumBGPPeerConfig` + `CiliumBGPAdvertisement`; the v1
