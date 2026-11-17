@@ -54,6 +54,7 @@ from __future__ import annotations
 
 import enum
 import json
+import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from functools import partial
@@ -125,6 +126,30 @@ class RollRefused(ValueError):
 #: Kubelet reservations exist so eviction has something to work with: an
 #: unreserved node starves its own control plane before the kubelet notices.
 SYSTEM_RESERVED = {'cpu': '200m', 'memory': '512Mi', 'ephemeral-storage': '1Gi'}
+
+#: The write rate, in MB/s, a control plane's boot volume takes beside etcd
+#: with etcd's syncs intact: writes held to it kept an etcd-shaped
+#: `fdatasync` at a p99 of 1.6 ms, where an image unpack's shape at the
+#: volume's full rate stretched it to 15.6 s (nodes.md §1.2).
+BOOT_VOLUME_SAFE_WRITE_MBPS = 12.0
+
+#: The rate, in MB/s, one writer alone drives a control plane's boot volume
+#: to: one sequential writer held it for the whole run, and four writers of
+#: an image unpack's shape together reached no more (nodes.md §1.2).
+BOOT_VOLUME_ONE_WRITER_MBPS = 51.7
+
+
+def image_pull_bound(safe_mbps: float, writer_mbps: float) -> int:
+    """How many images the kubelet may pull at once for the pulls to write within `safe_mbps` together.
+
+    Each pull is counted at `writer_mbps`, what one writer drives the disk
+    to, since no reading bounds a pull's own rate below that. The kubelet
+    refuses a bound under one, so where a single pull may exceed `safe_mbps`
+    the bound is one: the fewest pulls at once the kubelet can be held to,
+    with that one pull's own rate beyond what the kubelet bounds.
+    """
+    return max(1, math.floor(safe_mbps / writer_mbps))
+
 
 #: KubeSpan's WireGuard listen port. Talos fixes it (`KubeSpanDefaultPort`)
 #: and `KubeSpanConfig` has no field to move it; WireGuard runs over UDP.
@@ -290,10 +315,12 @@ def etcd_metrics_url() -> str:
     etcd opens the URL with a `tcp` listener, and on `tcp` an unspecified
     host is one dual-stack socket, so `0.0.0.0` answers on every IPv4 and
     IPv6 address alike. The host is unspecified rather than a node address
-    because the patch is shared by every control plane, and the reader, the
-    API server's node proxy, dials the node's internal address, where a
-    loopback listener would not answer. The firewall admits nothing to the
-    port, so nothing outside the cluster reaches it.
+    because the patch is shared by every control plane, and each of its
+    readers (`ETCD_METRICS_PORT`) — the API server's node proxy, and
+    vmagent's node scrape from the worker over KubeSpan — dials the node's
+    internal address, where a loopback listener would not answer. The
+    firewall admits nothing to the port, so nothing outside the cluster
+    reaches it.
     """
     return f'http://{IPv4Address(0)}:{ETCD_METRICS_PORT}'
 
@@ -412,11 +439,23 @@ def hostname_document(hostname: str) -> dict[str, Any]:
 
 
 def control_plane_patch(*, cert_sans: Sequence[str], secretbox_secret: str | None = None) -> dict[str, Any]:
-    """The parts only a control plane has: the apiserver, etcd, the CNI, the service proxy, and apid's SANs.
+    """What only a control plane has: the apiserver, etcd and its disk, the CNI, the service proxy, apid's SANs.
 
     A worker's configuration has no apiserver to harden and no etcd to
     encrypt or read, and the CNI and kube-proxy are installed by the control
     plane, so none of this belongs in the shared patch.
+
+    etcd's disk is the boot volume, which the images the kubelet pulls are
+    unpacked onto as well, and a burst of unpacks at the volume's full rate
+    stretches etcd's syncs into seconds (nodes.md §1.2). So a control plane's
+    kubelet pulls at most `image_pull_bound` images at once, sized from the
+    rate etcd's syncs survive beside it, `BOOT_VOLUME_SAFE_WRITE_MBPS`, and
+    the rate one writer reaches, `BOOT_VOLUME_ONE_WRITER_MBPS`. Unbounded,
+    as Talos leaves the kubelet, every image a burst of scheduling asks for
+    unpacks at once. The bound applies to a running node without a reboot:
+    `machine.kubelet` is among the fields Talos applies immediately
+    (`CanApplyImmediate`), and the kubelet restarts under the new
+    configuration. A worker's disk holds no etcd, so its pulls stay unbounded.
 
     `cert_sans` go into two certificates, which read two fields: the
     Kubernetes API server's (`cluster.apiServer.certSANs`) and apid's
@@ -438,7 +477,14 @@ def control_plane_patch(*, cert_sans: Sequence[str], secretbox_secret: str | Non
     node until it reboots.
     """
     config: dict[str, Any] = {
-        'machine': {'certSANs': list(cert_sans)},
+        'machine': {
+            'certSANs': list(cert_sans),
+            'kubelet': {
+                'extraConfig': {
+                    'maxParallelImagePulls': image_pull_bound(BOOT_VOLUME_SAFE_WRITE_MBPS, BOOT_VOLUME_ONE_WRITER_MBPS),
+                },
+            },
+        },
         'cluster': {
             'allowSchedulingOnControlPlanes': True,
             'network': {'cni': {'name': 'none'}},

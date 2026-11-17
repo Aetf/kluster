@@ -199,11 +199,12 @@ snapshots, the kubelet's and Talos' logs, every cloud-pool claim
 3.  **Rule: peaks run under the volume's throttle.** OCI's
     `VolumeThrottledIOs`, which OCI emits for every boot volume
     ([Block Volume metrics](https://docs.oracle.com/en-us/iaas/Content/Block/References/volumemetrics-reference.htm)),
-    stays 0. What holds a peak there is how many images the kubelet
-    pulls at once and how many objects an apply creates at once. The
-    kubelet pulls without a bound today (`maxParallelImagePulls` unset,
-    Talos' default), and the deploy chain applies at the CLI's default
-    parallelism; setting both is Aetf/kluster-ops#785.
+    stays 0, and a peak is shaped to the write rate the reproduction
+    below finds safe beside etcd, 12 MB/s. Two things set a peak's
+    size: how many images the kubelet pulls at once, which the shaping
+    below bounds, and how many objects an apply creates at once, which
+    the deploy chain leaves at the CLI's default parallelism; bounding
+    that is Aetf/kluster-ops#785.
 4.  **hath's cache I/O is on its own volume**, outside this budget.
 
 **What the readings show** (2026-11-17, on the cluster a from-scratch
@@ -224,14 +225,59 @@ rebuild brought up):
     of the latter.
 -   **The disk read as busy for only 63–72 s of those 86 minutes**, so
     it moved 47–57 MB per busy second, about twice the 24 MB/s OCI
-    documents for the volume. Either the volume delivers more than its
-    figure in bursts, or the busy counter undercounts on this device.
+    documents for the volume. The volume does deliver that: one writer
+    held 51.7 MB/s on it for two minutes (below).
 
-The readings are observations, not a cause: whether saturating the
-boot volume is what stretches etcd's syncs into seconds, and what
-write rate keeps them under 10 ms, is settled by a controlled
-reproduction (Aetf/kluster-ops#785), and its rate is what rule 3's
-bounds are sized to.
+**The cause is the disk path**, established by a controlled
+reproduction on one control plane that was not the leader
+(Aetf/kluster-ops#785, 2026-11-17). Each load ran for 120 s in a
+privileged pod on `/var/mnt/storage`, the filesystem etcd's write-ahead
+log lives on, beside a probe shaped like etcd's log: 2,300-byte writes,
+each followed by `fdatasync`.
+
+| Load beside the probe | Rate | Probe's `fdatasync`, p99 | etcd's WAL syncs on the member, over 1 s |
+| --- | --- | --- | --- |
+| None | — | 1.7 ms | 0 |
+| One sequential writer | 51.7 MB/s | 325 ms | 0, and 114 over 128 ms |
+| Random 4 KiB writes | 2,924 IOPS | 34.9 ms | 0 |
+| An image unpack's shape: four writers, buffered, each file synced as it closes | 51.7 MB/s | 15.6 s | 8 |
+| The sequential writer held to 12 MB/s | 12.6 MB/s | 1.6 ms | 0 |
+| Two cores at 70% CPU, the disk idle | — | 2.4 ms | 0 |
+
+-   **Writes at the volume's full rate stretch etcd's syncs into
+    seconds, and a loaded CPU does not.** The unpack-shaped load stalled
+    the probe for 15.6 s, the size of the syncs over 8 s that etcd took
+    on every member during the bring-up, and the CPU load held the
+    probe's p99 at 2.4 ms. The other two members, the controls, took no
+    WAL sync over 128 ms in any phase, and no member saw a leader
+    change.
+-   **The volume's caps**: 51.7 MB/s from one writer, which four
+    writers together did not exceed, twice the 24 MB/s OCI documents;
+    and 2,924 IOPS, the documented 3,000.
+-   **12 MB/s is the rate the volume takes beside etcd**: writes held
+    there kept the probe's p99 at 1.6 ms, within rule 1's 10 ms.
+
+**The shaping** keeps a peak's writes to that rate:
+
+-   **Rule: a control plane's kubelet pulls one image at a time**
+    (`maxParallelImagePulls`, `components.talos`). A pull unpacks
+    onto the boot volume, and no reading bounds one pull's write rate
+    below what one writer drives the volume to, 51.7 MB/s. So N pulls
+    at once stay within 12 MB/s only where N × 51.7 ≤ 12, which no N of
+    one or more meets (12 / 51.7 = 0.23); the kubelet refuses a bound
+    under one, so the bound is one. `image_pull_bound` computes it from
+    the two rates, `BOOT_VOLUME_SAFE_WRITE_MBPS` and
+    `BOOT_VOLUME_ONE_WRITER_MBPS`, so a reading that moves either moves
+    the bound. Unbounded, as Talos leaves the kubelet
+    (`maxParallelImagePulls` unset), every image a burst of scheduling
+    asks for unpacks at once, which is the load that stalled the probe
+    for 15.6 s. What it costs is that a pod's first start waits behind
+    the pulls queued ahead of it.
+-   **One pull's own rate is beyond what the kubelet bounds.** Whether
+    one pull at a time keeps etcd within rule 1 is read at the next
+    from-scratch rebuild (Aetf/kluster-ops#785); if it does not, buying
+    disk performance is the operator's decision on that issue.
+-   **A worker's pulls are not bounded**: its disk holds no etcd.
 
 ## 2. The deciding factor is egress, not compute
 
