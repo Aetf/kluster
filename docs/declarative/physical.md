@@ -306,23 +306,29 @@ machine_secrets
     addresses, which KubeSpan routes into the `kubespan` interface, and
     the ingress chain accepts that interface ahead of every rule, so no
     opening names them. **etcd's metrics listener takes no opening
-    either**: its reader is the API server's node proxy, a call between
-    node addresses that rides KubeSpan to another control plane and
-    enters on `lo` at its own, and the chain accepts `lo` ahead of every
-    rule too. The listener binds every address, because the proxy dials
+    either**. It has two readers. The API server's node proxy makes a
+    call between node addresses that rides KubeSpan to another control
+    plane and enters on `lo` at its own, and the chain accepts `lo` ahead
+    of every rule too. vmagent, the monitoring stack's scraper, runs on
+    the homelab worker and never on a control plane
+    (`components.monitoring`), so its scrape leaves the worker
+    masqueraded to the worker's address, rides KubeSpan and enters on
+    `kubespan`. The listener binds every address, because the proxy dials
     the node's internal address, and with no rule admitting the port it
     still answers nothing from outside the cluster. Inside the cluster
-    more than the proxy reaches it: every KubeSpan peer, the homelab
-    worker's host among them; once Cilium runs, a pod on another node,
-    whose call is masqueraded to its node's address and rides KubeSpan;
-    and a pod calling a host address inside the pod range on its own
-    node, which the ingress chain admits on any port, as it does all
-    traffic between the pod and service ranges. **That reach is accepted** under threat-model.md §4, on its
+    more than its readers reach it: every KubeSpan peer, the homelab
+    worker's host among them; once Cilium runs, any pod on another node,
+    whose call is masqueraded to its node's address and rides KubeSpan,
+    as vmagent's does; and a pod calling a host address inside the pod
+    range on its own node, which the ingress chain admits on any port, as
+    it does all traffic between the pod and service ranges. **That reach is accepted** under threat-model.md §4, on its
     second clause: the listener serves counters, histograms and health,
     never a key or a value, the class of host metrics rfc-007 §4.3
-    already lets a pod read at 9100 and 9962–9965. A scraper pod reading
-    it at its own node's address would need the cluster's ranges, and the
-    change that adds that scrape job settles the opening (rfc-007 §7.1).
+    already lets a pod read at 9100 and 9962–9965. The scrape takes no
+    opening only while vmagent stays off the control planes: on one, its
+    call to its own node's listener would arrive with a pod-range source,
+    which no rule admits, and the monitoring component's tests hold its
+    placement to the worker.
     Traffic from a pod to a listener in the
     host netns rides it only when the listener is on another node: Cilium's
     tunnel carries traffic addressed to pods, not to a node's own

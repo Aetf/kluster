@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from enum import StrEnum
 from types import MappingProxyType
 
+from kluster.conventions.cluster import MONITORING_NAMESPACE
+
 
 def max_age(period: dt.timedelta) -> dt.timedelta:
     """How old the newest object of a scheduled backup may be before the backup is stale.
@@ -105,6 +107,10 @@ def barman_repo_path(namespace: str, cluster: str) -> str:
     return f'cnpg/{namespace}/{cluster}'
 
 
+def metrics_repo_path(namespace: str, store: str) -> str:
+    return f'vm/{namespace}/{store}'
+
+
 ETCD_SNAPSHOT_PREFIX = 'etcd'
 STATE_DUMP_PREFIX = 'pulumi-state'
 
@@ -133,6 +139,9 @@ class BackupFamily(StrEnum):
     class, at `volsync_repo_path`."""
     BARMAN = 'cnpg'
     """The archives of the namespace's databases, at `barman_repo_path`."""
+    VM = 'vm'
+    """The `vmbackup` copies of the namespace's VictoriaMetrics stores, one
+    per store, at `metrics_repo_path`."""
 
 
 def writer_scope(namespace: str, family: BackupFamily) -> str:
@@ -146,17 +155,21 @@ def writer_scope(namespace: str, family: BackupFamily) -> str:
 
 #: Every namespace something backs up into the bucket, with the families that
 #: fill its prefix: a namespace with a claim under a retention class backs up
-#: through VolSync, one with a database through barman, and a namespace with
-#: neither is not here (rfc-008 §4.2). Three programs agree on it: `physical`
-#: declares each family's writer key from it, `credentials` seals those keys
-#: into the `apps` stack's configuration (`conventions.sealed.WRITER_KEYS`),
-#: and `apps` declares the claims and databases that use them. It names every
-#: namespace the waves back up from the start, so that the `physical` apply
-#: after it mints every key the migration needs.
+#: through VolSync, one with a database through barman, one with a
+#: VictoriaMetrics store through `vmbackup`, and a namespace with none of them
+#: is not here (rfc-008 §4.2). Three programs agree on it: `physical` declares
+#: each family's writer key from it, `credentials` seals those keys into the
+#: configuration of the stack that declares what reads them
+#: (`conventions.sealed.WRITER_KEYS`), and that stack declares the claims,
+#: databases and stores that use them -- `apps` for an application's
+#: namespace, `k8s-base` for the platform's. It names every namespace the
+#: waves back up from the start, so that the `physical` apply after it mints
+#: every key the migration needs.
 #:
-#: A namespace is named after the application it holds, except where a ported
-#: ciphertext fixes it: a legacy SealedSecret is sealed namespace-wide, and
-#: opens only in the namespace it was sealed to (declarative/workloads.md §5).
+#: An application's namespace is named after the application it holds, except
+#: where a ported ciphertext fixes it: a legacy SealedSecret is sealed
+#: namespace-wide, and opens only in the namespace it was sealed to
+#: (declarative/workloads.md §5).
 BACKED_NAMESPACES: Mapping[str, frozenset[BackupFamily]] = MappingProxyType(
     {
         'serving-system': frozenset({BackupFamily.VOLSYNC}),
@@ -171,5 +184,6 @@ BACKED_NAMESPACES: Mapping[str, frozenset[BackupFamily]] = MappingProxyType(
         'immich': frozenset({BackupFamily.BARMAN}),
         'jellyfin': frozenset({BackupFamily.VOLSYNC}),
         'qbittorrent': frozenset({BackupFamily.VOLSYNC}),
+        MONITORING_NAMESPACE: frozenset({BackupFamily.VM}),
     }
 )

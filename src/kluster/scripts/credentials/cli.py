@@ -223,9 +223,11 @@ _ORDER = """when to run what:
          the certificate its controller serves is confirmed as the cluster's
          own. physical's apply mints one key per family of each namespace
          conventions.backup names; this reads them out of physical's state
-         and seals each namespace-wide into the apps stack's config, for
-         every namespace at once. Commit Pulumi.apps.yaml. Re-run it after
-         an apply of physical that mints a key for a newly backed namespace.
+         and seals each namespace-wide into the config of the stack that
+         declares what reads it -- apps for an application's namespace,
+         k8s-base for monitoring's -- for every namespace at once. Commit
+         Pulumi.apps.yaml and Pulumi.k8s-base.yaml. Re-run it after an
+         apply of physical that mints a key for a newly backed namespace.
        kubectl --context <legacy> -n serving-system get secret authelia \\
            -o jsonpath='{.data.STORAGE_ENCRYPTION_KEY}' | base64 -d \\
            | credentials derived authelia-storage-key import
@@ -1009,23 +1011,25 @@ def build_parser() -> argparse.ArgumentParser:
         derived.B2_WRITER_ROW,
         help="the backup bucket's writer keys, sealed to the cluster",
         description=(
-            "The keys VolSync and barman write a namespace's backups with: one per family of each namespace the "
-            "census of backed namespaces names, each confined to that family's prefix of the namespace on the "
-            'backup bucket, with no capability to delete. The physical stack mints them from the B2 management '
-            'key and keeps them in its state; their consumers are in the cluster, so they reach it sealed.'
+            "The keys VolSync, barman and vmbackup write a namespace's backups with: one per family of each "
+            "namespace the census of backed namespaces names, each confined to that family's prefix of the "
+            'namespace on the backup bucket, with no capability to delete. The physical stack mints them from the '
+            'B2 management key and keeps them in its state; their consumers are in the cluster, so they reach it '
+            'sealed.'
         ),
     )
     writer_verbs = writer.add_subparsers(dest='action', required=True, metavar='<verb>')
     writer_seal = writer_verbs.add_parser(
         'seal',
-        help="seal every writer key physical holds into the apps stack's config",
+        help='seal every writer key physical holds into the config of the stack that reads it',
         description=(
             "Fetch the sealing certificate from the cluster's sealed-secrets controller, with the kubeconfig in "
             "the physical stack's state; read each backed namespace's writer keys out of that state, under the "
-            "physical stack's own passphrase; seal each with kubeseal namespace-wide, so that every repository "
-            'Secret of its namespace opens it under its own name; and write the ciphertext in the clear into the '
-            "apps stack's config, reading it back. A namespace whose key physical does not hold yet refuses the "
-            'run before anything is written. Then commit the config. Every run writes fresh ciphertext.'
+            "physical stack's own passphrase; seal each with kubeseal namespace-wide, so that every Secret of its "
+            'namespace that carries it opens it under its own name; and write the ciphertext in the clear into the '
+            'config of the stack that declares what reads it, apps or k8s-base, reading it back. A namespace whose '
+            'key physical does not hold yet refuses the run before anything is written. Then commit the config. '
+            'Every run writes fresh ciphertext.'
         ),
     )
     _add_bundle_dir(writer_seal)

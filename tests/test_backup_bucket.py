@@ -27,7 +27,7 @@ from kluster.components.backup import (
     s3_endpoint,
     volsync_scope,
 )
-from kluster.conventions.backup import BackupFamily
+from kluster.conventions.backup import BackupFamily, metrics_repo_path
 from kluster.stacks import physical
 
 BUCKET_ID = 'b2-bucket-id'
@@ -261,6 +261,7 @@ def test_a_familys_scope_reaches_where_that_family_writes_and_nothing_beside_it(
         return {
             BackupFamily.VOLSYNC: conventions.volsync_repo_path(within, 'a-claim'),
             BackupFamily.BARMAN: conventions.barman_repo_path(within, 'a-database'),
+            BackupFamily.VM: metrics_repo_path(within, 'a-store'),
         }
 
     assert written(namespace)[family].startswith(scope.prefix)

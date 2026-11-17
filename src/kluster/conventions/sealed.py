@@ -19,8 +19,8 @@ name two places.
 
 A row sealed namespace-wide opens under any name in its namespace, so its name
 says where its ciphertext is kept rather than which Secret it becomes: a
-namespace's writer keys, which every repository Secret there carries under its
-own name (`writer_key`). A ciphertext ported from the legacy cluster as it is
+namespace's writer keys, which every Secret there that backs up carries under
+its own name (`writer_key`). A ciphertext ported from the legacy cluster as it is
 has no row: it is not sealed here, the component that declares it is its one
 reader, and that component names it and the namespace it was sealed to
 (declarative/workloads.md §5).
@@ -54,6 +54,7 @@ __all__ = (
     'DNS01_TOKEN',
     'VALUES',
     'WRITER_KEYS',
+    'WRITER_KEY_STACKS',
     'SealedValue',
     'SealingScope',
     'writer_key',
@@ -80,7 +81,7 @@ class SealingScope(StrEnum):
     sealing key and ports the existing manifests unchanged
     (cluster/migration.md §0.5), and a different default would re-seal all of
     them for no gain. The writer keys are sealed at it too, because one
-    ciphertext serves every repository Secret of its namespace under that
+    ciphertext serves every Secret of its namespace that backs up, under that
     Secret's own name (`writer_key`)."""
 
     CLUSTER_WIDE = 'cluster-wide'
@@ -183,25 +184,38 @@ AUTHELIA_STORAGE_KEY = SealedValue(
 )
 
 
+#: The stack that declares what reads a backed namespace's writer keys, for
+#: each namespace where that is not `apps`: a namespace the platform holds,
+#: whose consumers `k8s-base` declares beside the rest of that namespace -- the
+#: monitoring stack's backups, beside alertmanager's webhook
+#: (`ALERT_WEBHOOK`). Every other backed namespace holds an application, which
+#: `apps` declares. A key sealed for a stack other than its consumer's would be
+#: ciphertext in a configuration nothing reads it from.
+WRITER_KEY_STACKS: Mapping[str, str] = MappingProxyType({MONITORING_NAMESPACE: STACK_NAMES.k8s_base})
+
+
 def writer_key(namespace: str, family: BackupFamily) -> SealedValue:
-    """One namespace's writer key of one family on the backup bucket, sealed for the `apps` stack.
+    """One namespace's writer key of one family on the backup bucket, sealed for the stack its consumers are in.
 
     `physical` mints the key (`conventions.backup.BACKED_NAMESPACES`) and
-    `credentials derived b2-writer seal` seals it out of that stack's state.
+    `credentials derived b2-writer seal` seals it out of that stack's state,
+    into the configuration of the stack that declares what reads it
+    (`WRITER_KEY_STACKS`, and `apps` for every namespace it does not name).
     Sealed namespace-wide, so the one ciphertext opens under whatever name a
     consumer in its namespace gives it: each repository Secret a backed claim
     declares carries it under the claim's own name, beside that repository's
     password (declarative/workloads.md §3). Its data keys are the fields a
-    mover reads the key's two halves from (`WRITER_KEY_FIELDS`). The name is
-    the key's scope on the bucket after `writer-`, which is what keeps it
-    apart from every value ported from the legacy cluster under that
-    application's own name.
+    mover reads the key's two halves from (`WRITER_KEY_FIELDS`), which
+    `vmbackup` and `vmrestore` read as restic does. The name is the key's
+    scope on the bucket after `writer-`, which is what keeps it apart from
+    every value ported from the legacy cluster under that application's own
+    name.
     """
     return SealedValue(
         name=f'writer-{writer_scope(namespace, family)}',
         namespace=namespace,
         keys=tuple(sorted(WRITER_KEY_FIELDS)),
-        stack=STACK_NAMES.apps,
+        stack=WRITER_KEY_STACKS.get(namespace, STACK_NAMES.apps),
         scope=SealingScope.NAMESPACE_WIDE,
     )
 

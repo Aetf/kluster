@@ -1075,14 +1075,15 @@ ROWS: dict[str, Row] = {
     derived.B2_WRITER_ROW: Row(
         register='B2 writer keys',
         source=Minted(
-            f'the `physical` stack, from the B2 seed, and sealed into `{APPS_STACK}` by '
+            f'the `physical` stack, from the B2 seed, and sealed into the stack that declares its consumers by '
             f'`credentials derived {derived.B2_WRITER_ROW} seal`'
         ),
         # The appliance's cron is not among the consumers: the key it uploads
         # dumps with is `writeFiles` alone, which is the dump-key row below and
-        # not a writer key. The sealed copies are VolSync's and CNPG barman's,
-        # one per family of each backed namespace; the etcd snapshots' key
-        # waits on the ops-repository workflow that would take it.
+        # not a writer key. The sealed copies are VolSync's, CNPG barman's and
+        # `vmbackup`'s, one per family of each backed namespace, each in the
+        # stack its row names; the etcd snapshots' key waits on the
+        # ops-repository workflow that would take it.
         targets=(
             PulumiState(PHYSICAL_STACK, 'one key per scope of the backup bucket, exported as `backup_keys`'),
             *(SealedSecret(value) for value in conventions.sealed.WRITER_KEYS),

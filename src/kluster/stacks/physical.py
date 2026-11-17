@@ -60,7 +60,7 @@ from kluster.components.overlay.flow_rules import flow_rules
 from kluster.components.talos import TalosCluster, TalosDay1
 from kluster.components.talos.image import TalosImage, TalosNocloudImage
 from kluster.conventions import backup as backup_conventions
-from kluster.conventions.backup import BackupFamily
+from kluster.conventions.backup import BackupFamily, metrics_repo_path, writer_scope
 from kluster.lib import config as lib_config
 from kluster.lib.versions import NAMESPACE as VERSIONS
 from kluster.lib.versions import versions
@@ -118,20 +118,27 @@ BUDGET_ALERT_RULES: tuple[AlertRule, ...] = (
 #: The bucket's consumers that exist whether or not any application does.
 FIXED_SCOPES: tuple[Scope, ...] = (etcd_scope(),)
 
+
+def metrics_scope(namespace: str) -> Scope:
+    """One namespace's `vmbackup` copies, every VictoriaMetrics store it holds, under its family's scope."""
+    return Scope(name=writer_scope(namespace, BackupFamily.VM), prefix=metrics_repo_path(namespace, ''))
+
+
 #: The scope each backup family's writer key reaches, by the namespace it
 #: backs up.
 FAMILY_SCOPES: Mapping[BackupFamily, Callable[[str], Scope]] = {
     BackupFamily.VOLSYNC: volsync_scope,
     BackupFamily.BARMAN: barman_scope,
+    BackupFamily.VM: metrics_scope,
 }
 
 
 def backup_scopes(backed: Mapping[str, frozenset[BackupFamily]]) -> tuple[Scope, ...]:
     """Every writer key the bucket carries: the fixed consumers, and one per family of each backed namespace.
 
-    `backed` is `conventions.backup.BACKED_NAMESPACES`, the census `apps` and
-    `credentials` read too, so a namespace that starts backing up is one row
-    there and a key here on the next apply.
+    `backed` is `conventions.backup.BACKED_NAMESPACES`, the census
+    `credentials` seals the keys by too, so a namespace that starts backing up
+    is one row there and a key here on the next apply.
     """
     return (
         *FIXED_SCOPES,
@@ -479,7 +486,8 @@ async def main() -> None:
     # bucket is configured with (physical.md §0). The keys are one per scope:
     # the etcd snapshots', and a writer key per family of every backed
     # namespace, which `credentials derived b2-writer seal` reads out of this
-    # stack's state by its scope and seals into `apps`.
+    # stack's state by its scope and seals into the stack that declares what
+    # reads it, `apps` or `k8s-base` (`conventions.sealed.WRITER_KEY_STACKS`).
     pulumi.export(outputs.backup_bucket, backup.bucket_name)
     pulumi.export(outputs.backup_endpoint, backup.endpoint)
     pulumi.export(

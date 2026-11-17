@@ -1072,6 +1072,15 @@ EXPORTED = {
     for family in sorted(families)
 }
 
+#: Every stack a writer key is sealed into: the one that declares what reads
+#: it, by its row.
+DECLARING = sorted({value.stack for value in conventions.sealed.WRITER_KEYS})
+
+
+def nothing_written(stacks: Stacks) -> bool:
+    """Whether no stack a writer key is sealed into holds anything in the clear."""
+    return not any(stacks.runner(stack).plain for stack in DECLARING)
+
 
 @dataclass
 class StatePulumi(PathPulumi):
@@ -1097,21 +1106,25 @@ def test_every_writer_key_is_sealed_out_of_physicals_state_in_the_clear_at_its_r
     sealed = derived.b2_writer_seal(sealer=sealer)
 
     # Read under `physical`'s own passphrase, which the recorded state alone
-    # opens, and written into `apps` as plain values, never as secrets. Each
-    # half under the variable a mover reads it from: restic's S3 backend takes
-    # the key's id as `AWS_ACCESS_KEY_ID` and the key itself as
-    # `AWS_SECRET_ACCESS_KEY`.
-    expected: dict[str, str] = {}
+    # opens, and written as plain values, never as secrets, into the stack each
+    # row names: `apps` for an application's namespace, `k8s-base` for the
+    # platform's. Each half under the variable a mover reads it from: restic's
+    # S3 backend, and `vmbackup`'s, take the key's id as `AWS_ACCESS_KEY_ID`
+    # and the key itself as `AWS_SECRET_ACCESS_KEY`.
+    expected: dict[str, dict[str, str]] = {}
     for namespace, families in BACKED_NAMESPACES.items():
         for family in families:
             row = conventions.sealed.writer_key(namespace, family)
             scope = writer_scope(namespace, family)
-            expected[row.path('AWS_ACCESS_KEY_ID')] = f'AgB-sealed-{scope}-id'
-            expected[row.path('AWS_SECRET_ACCESS_KEY')] = f'AgB-sealed-{scope}-secret'
-    apps = backed.runner(APPS)
-    assert apps.plain == expected
-    assert apps.config == {}
-    assert not [args for args in apps.invocations if '--secret' in args]
+            held = expected.setdefault(row.stack, {})
+            held[row.path('AWS_ACCESS_KEY_ID')] = f'AgB-sealed-{scope}-id'
+            held[row.path('AWS_SECRET_ACCESS_KEY')] = f'AgB-sealed-{scope}-secret'
+    for stack, held in expected.items():
+        runner = backed.runner(stack)
+        assert runner.plain == held, stack
+        assert runner.config == {}, stack
+        assert not [args for args in runner.invocations if '--secret' in args], stack
+    assert backed.runner(PHYSICAL).plain == {}
     assert sorted(sealed) == sorted(value.name for value in conventions.sealed.WRITER_KEYS)
 
 
@@ -1126,7 +1139,7 @@ def test_a_writer_key_physical_does_not_export_refuses_the_seal_before_anything_
         _ = derived.b2_writer_seal(sealer=sealer)
 
     assert refused.value.scope == missing
-    assert backed.runner(APPS).plain == {}
+    assert nothing_written(backed)
 
 
 @pytest.mark.parametrize(
@@ -1147,7 +1160,7 @@ def test_a_writer_key_half_that_is_not_a_key_half_refuses_the_seal_before_anythi
         _ = derived.b2_writer_seal(sealer=sealer)
 
     assert refused.value.scope == scope
-    assert backed.runner(APPS).plain == {}
+    assert nothing_written(backed)
 
 
 def test_a_writer_key_left_as_the_unknown_sentinel_is_refused_by_name(backed: Stacks) -> None:
@@ -1159,17 +1172,20 @@ def test_a_writer_key_left_as_the_unknown_sentinel_is_refused_by_name(backed: St
         _ = derived.b2_writer_seal(sealer=sealer)
 
     assert (refused.value.stack, refused.value.output) == (PHYSICAL, BACKUP_KEYS)
-    assert backed.runner(APPS).plain == {}
+    assert nothing_written(backed)
 
 
-def test_a_writer_key_seal_into_an_apps_stack_that_does_not_exist_reads_nothing_of_physical(backed: Stacks) -> None:
-    backed.runner(APPS).stacks.clear()
+@pytest.mark.parametrize('stack', DECLARING)
+def test_a_writer_key_seal_into_a_stack_that_does_not_exist_reads_nothing_of_physical(
+    backed: Stacks, stack: str
+) -> None:
+    backed.runner(stack).stacks.clear()
     sealer = sealing.Sealer(certificate='', open_stack=backed.open, run=fake_kubeseal)
 
     with pytest.raises(pulumi_config.StackMissing) as refused:
         _ = derived.b2_writer_seal(sealer=sealer)
 
-    assert refused.value.stack == APPS
+    assert refused.value.stack == stack
     assert not [args for args in backed.runner(PHYSICAL).invocations if args[:2] == ['stack', 'output']]
 
 
