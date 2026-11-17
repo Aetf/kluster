@@ -26,7 +26,9 @@ a passphrase of its own (rfc-005 §5.1), and a StackReference elides the secrets
 the reading stack cannot decrypt. So `credentials derived sync --only
 kubeconfig` copies it out of `physical`'s state into this stack's
 configuration, and it is read so that anything but a kubeconfig stops the run
-(`kluster.lib.k8s.kubeconfig_from`). The addresses the pools are made of are
+(`kluster.lib.k8s.kubeconfig_from`). Beside it is the random provider, which
+reads nothing and generates what a component keeps in state, such as Grafana's
+admin password. The addresses the pools are made of are
 plain machine facts, and they do cross by StackReference: for the `internet`
 pool, the cloud nodes' private IPv4s and GUAs, the dedicated VIP's private
 address and the balancer's two public ones (rfc-007 §4.4,
@@ -58,6 +60,7 @@ from __future__ import annotations
 
 import pulumi
 import pulumi_kubernetes as k8s
+import pulumi_random as random
 
 from kluster import conventions
 from kluster.components.backup.snapshots import SnapshotDefinitions
@@ -100,7 +103,10 @@ async def main() -> None:
         f'{pulumi.get_organization()}/{pulumi.get_project()}/{conventions.STACK_NAMES.physical}'
     )
 
-    opts = pulumi.ResourceOptions(providers=[provider])
+    # The random provider reads no configuration; it is explicit because this
+    # stack's file disables every package's default provider it uses.
+    generator = random.Provider(f'{conventions.CLUSTER_NAME}-random')
+    opts = pulumi.ResourceOptions(providers=[provider, generator])
     sealed = config.get_object(conventions.sealed.CONFIG_KEY)
 
     # cluster-infra.md §1's order. Nothing schedules before the CNI, so
