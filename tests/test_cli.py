@@ -34,7 +34,7 @@ from typing import Any
 
 import pinned_tools
 import pytest
-from credentials_command_tree import commands, named_leaves
+from credentials_command_tree import ELSEWHERE_ENTRY, commands, derived_commands_taking, named_leaves
 from keyring.backends import fail as fail_keyring
 from memory_keyring import MemoryKeyring, installed
 from memory_kit import MemoryKit
@@ -693,33 +693,7 @@ def test_the_freshness_key_reaches_its_mint_with_the_seed_as_the_admin_token(dis
     assert {type(args[0]) for args, _ in calls} == {KdbxStore}
 
 
-#: A kit entry no register row names, so a mint that reads its seed there can
-#: only have been pointed at it.
-ELSEWHERE_ENTRY = 'seeds/elsewhere'
-
-
-def _entry_commands() -> list[list[str]]:
-    """Every `derived` command whose parser takes `--entry`, as the argv that reaches it.
-
-    Read off the command's surface rather than off the function it reaches,
-    so a row leaves the census only when its flag leaves the CLI: a function
-    whose parameter is renamed stays in, and fails its own case by name.
-    """
-    parser = cli.build_parser()
-    return [
-        argv
-        for argv in commands()
-        if argv[:1] == ['derived'] and not parser.parse_known_args([*argv, '--entry', ELSEWHERE_ENTRY])[1]
-    ]
-
-
-ENTRY_COMMANDS = _entry_commands()
-# A census that collects nothing reports green, so its emptiness is refused
-# here, before collection, where no case could catch it.
-assert ENTRY_COMMANDS, 'no `derived` command takes `--entry`, so the census of its forwarding collects nothing'
-
-
-@pytest.mark.parametrize('argv', ENTRY_COMMANDS, ids=lambda argv: argv[1])
+@pytest.mark.parametrize('argv', derived_commands_taking('--entry'), ids=lambda argv: argv[1])
 def test_a_mint_command_hands_its_function_the_entry_it_names(argv: list[str], dispatch: Dispatch) -> None:
     target = expected(argv)
     assert target is not None
