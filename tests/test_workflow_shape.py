@@ -1078,8 +1078,13 @@ def _run_up_step(
         'UP_SIGNAL': signal,
         'RELEASE_EXIT': str(release_exit),
     }
-    # A step that names no shell runs as `bash -e {0}` on a Linux runner.
-    done = process_sessions.run(['bash', '-e', '-c', run], cwd=tmp_path, env=env, text=True, timeout=UP_STEP_TIMEOUT)
+    # A step that names no shell runs as `bash -e {0}` on a Linux runner. It
+    # starts with SIGHUP at its default, whatever this process inherited: a
+    # suite launched under `nohup` hands its children SIGHUP ignored, a shell
+    # can neither trap nor reset a signal ignored on entry, and the HUP the
+    # `pulumi` stand-in sends itself would then end nothing.
+    argv = ['env', '--default-signal=HUP', 'bash', '-e', '-c', run]
+    done = process_sessions.run(argv, cwd=tmp_path, env=env, text=True, timeout=UP_STEP_TIMEOUT)
     pulumi: list[StandInRun] = []
     releases: list[list[str]] = []
     for line in log.read_text().splitlines():
