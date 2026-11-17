@@ -2,7 +2,8 @@
 
 The program runs whole, against a `physical` that has published its addresses
 (`k8s_base_installation`), twice: as it stands before alertmanager's webhook is
-sealed in, and with it sealed in (rfc-007 §7, physical/bring-up.md §1).
+sealed in, and with it sealed in (rfc-007 §7, physical/bring-up.md §1). Before,
+the random provider's password is answered as it would be generated into state.
 
 Literals written here are upstream contracts: the charts' value names, the
 label Talos puts on a control plane node, Kubernetes' node-affinity and Pod
@@ -42,6 +43,8 @@ ROOT = Path(__file__).resolve().parents[1]
 
 CHART = 'kubernetes:helm.sh/v4:Chart'
 NAMESPACE = 'kubernetes:core/v1:Namespace'
+SECRET = 'kubernetes:core/v1:Secret'
+PASSWORD = 'random:index/randomPassword:RandomPassword'
 SEALED_SECRET = 'crds:bitnami.com/v1alpha1:SealedSecret'
 VM_RULE = type_token('VMRule')
 VM_ALERTMANAGER_CONFIG = type_token('VMAlertmanagerConfig')
@@ -59,9 +62,24 @@ TALOS_CONTROL_PLANE_LABEL = 'node-role.kubernetes.io/control-plane'
 #: The label the kubelet gives every node, its own name.
 HOSTNAME_LABEL = 'kubernetes.io/hostname'
 
+#: What the random provider generates for every password, as it would into state.
+GENERATED = 'generated-in-state'
+
+#: How a secret value crosses to the engine: wrapped, under the signature key,
+#: with the secret signature beside it (`pulumi/runtime/rpc.py` L65 and L83).
+SECRET_ENVELOPE = {'4dabf18193072939515e22adb298388d': '1b47061264138c4ac30d75fd1eb44270'}
+
 #: A playbook as the payload carries it: a document from the repository's root,
 #: and a section (`conventions.alert.FIELDS`).
 PLAYBOOK = re.compile(r'^(?P<document>\S+\.md) §(?P<section>\d+(?:\.\d+)*)$')
+
+
+class Generating(Autonaming):
+    """`Autonaming`, answering a password's `result` as the random provider would."""
+
+    def computed(self, args: pulumi.runtime.MockResourceArgs) -> dict[str, Any]:
+        outputs = super().computed(args)
+        return outputs | {'result': GENERATED} if args.typ == PASSWORD else outputs
 
 
 async def declare(*, sealed: dict[str, object] | None) -> tuple[Run, list[str]]:
@@ -72,7 +90,7 @@ async def declare(*, sealed: dict[str, object] | None) -> tuple[Run, list[str]]:
     if sealed is not None:
         config[f'kluster:{conventions.sealed.CONFIG_KEY}'] = json.dumps(sealed)
     pulumi.runtime.set_all_config(config | VERSIONS_CONFIG, secret_keys=[f'kluster:{KUBECONFIG_KEY}'])
-    monitor = await run_under_backstop(Autonaming(), stack=conventions.STACK_NAMES.k8s_base)
+    monitor = await run_under_backstop(Generating(), stack=conventions.STACK_NAMES.k8s_base)
     warned: list[str] = []
 
     def warn(message: str, *_: object, **__: object) -> None:
@@ -216,6 +234,53 @@ def test_alertmanager_can_schedule_on_the_worker_alone(absent: tuple[Run, list[s
     }
 
     assert schedulable == {conventions.HOMELAB_NODE}
+
+
+# -- Grafana's admin -----------------------------------------------------------------
+
+
+def _grafana_admin(run: Run) -> tuple[dict[str, Any], dict[str, Any]]:
+    """The chart's `grafana.admin` values, and the Secret declared under the name they give."""
+    admin = _values(run)['grafana']['admin']
+    (secret,) = [
+        it.inputs for it in run.monitor.of_type(SECRET) if it.inputs['metadata']['name'] == admin['existingSecret']
+    ]
+    return admin, secret
+
+
+def test_grafanas_admin_is_a_secret_the_program_declares_with_a_password_generated_in_state(
+    absent: tuple[Run, list[str]],
+) -> None:
+    """The chart is handed Grafana's credentials, so no render draws a password or hashes one.
+
+    Left to its own, the grafana chart draws the password at render time and
+    reuses its Secret through `lookup`, but the Deployment's `checksum/secret`
+    hashes a second draw on a first install and the found Secret afterward
+    (`templates/_helpers.tpl` L131-138, `templates/_config.tpl` L172-184 at
+    grafana chart 12.7.3), so the first `up` applies a Deployment no later run
+    renders. Given `admin.existingSecret` it renders neither the Secret nor the
+    annotation (`templates/secret.yaml` L1, `templates/deployment.yaml` L44),
+    and its pod reads the two keys `userKey` and `passwordKey` name from that
+    Secret, in the release's namespace (`templates/_pod.tpl` L1420-1433).
+    """
+    run, _ = absent
+    admin, secret = _grafana_admin(run)
+    data = secret['stringData']
+
+    assert secret['metadata']['namespace'] == run.inputs(CHART, STACK)['namespace']
+    # The password reaches the engine as a secret, and so state as one.
+    assert {key: data[key] for key in SECRET_ENVELOPE} == SECRET_ENVELOPE
+    assert admin['userKey'] in data['value']
+    assert data['value'][admin['passwordKey']] == GENERATED
+
+
+def test_the_chart_is_installed_behind_grafanas_secret(absent: tuple[Run, list[str]]) -> None:
+    """Grafana's pod reads the Secret when it starts, and pulumi-kubernetes waits for the pod to be ready."""
+    run, _ = absent
+    admin, _ = _grafana_admin(run)
+    (declared,) = [it for it in run.monitor.of_type(SECRET) if it.inputs['metadata']['name'] == admin['existingSecret']]
+
+    assert run.urn(SECRET, declared.name) in run.dependencies(CHART, STACK)
 
 
 # -- The rules ---------------------------------------------------------------------

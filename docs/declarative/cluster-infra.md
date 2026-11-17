@@ -423,11 +423,20 @@ The API every component installs through, wrapped as
     so a template's `lookup` sees what the cluster holds. A value a
     chart generates at render time, a certificate or a password, is
     stable across runs only where its template reuses what `lookup`
-    finds; one that does not is a diff on every `up`. The
-    VictoriaMetrics operator's webhook certificate reuses its Secret
-    while `admissionWebhooks.keepTLSSecret` holds, which the monitoring
-    component states, and Grafana's admin password reuses its own, so
-    each is generated once, by the first install.
+    finds, and every object carrying the value, or a digest of it,
+    renders the same text from what it finds as from what it drew; a
+    value that is not reused is a diff on every `up`, and one rendered
+    differently once found is a diff on the first `up` after the
+    install. The VictoriaMetrics operator's webhook certificate reuses
+    its Secret while `admissionWebhooks.keepTLSSecret` holds, which the
+    monitoring component states, so it is generated once, by the first
+    install. Grafana's admin password is reused but not rendered the
+    same: the Deployment's checksum of it hashes a second draw on the
+    install, and the found password without its quotes afterward. So
+    the monitoring component generates that password itself, into its
+    state, and hands the chart a Secret of its own
+    (`admin.existingSecret`), with which the chart renders neither its
+    Secret nor the checksum.
 -   **Values may be Outputs.** Because the render happens in the
     provider rather than in the language host, a chart value can be an
     unresolved Output — the limitation that made `v3.Chart` unusable for
