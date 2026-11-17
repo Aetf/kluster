@@ -387,6 +387,19 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     jobs to needing `up-dns`, and evaluates each one's condition over
     every result the jobs up its chain can end in, through a model of how
     GitHub reads a job's `if:`.
+-   **`up-k8s-base` and `up-apps` apply at a bounded parallelism.**
+    Each one's `Up` step passes `--parallel` from
+    `CLUSTER_APPLY_PARALLEL`, a variable of the workflow's own `env`,
+    which is the one place the bound is held; `up-physical` and `up-dns`
+    keep the CLI's default, four times the runner's CPUs. The bound is
+    the control planes': the objects of these two stacks start pods
+    there, and the number of workloads starting together sets what a
+    from-scratch apply writes beside etcd on each boot volume. Why the variable holds the
+    value it does, and what the flag bounds in the pinned CLI, are
+    [cluster/nodes.md](../cluster/nodes.md) §1.2. A test in `checks`
+    runs each `Up` step against a stand-in `pulumi`, with the variable
+    set to a value the workflow does not hold, and holds the apply of
+    each of the two stacks to that value.
 -   **PR previews run in parallel** (previews don't mutate state). When
     an upstream layer has a diff, downstream previews are computed
     against the *current* StackReference outputs and may be off — accepted

@@ -201,10 +201,8 @@ snapshots, the kubelet's and Talos' logs, every cloud-pool claim
     ([Block Volume metrics](https://docs.oracle.com/en-us/iaas/Content/Block/References/volumemetrics-reference.htm)),
     stays 0, and a peak is shaped to the write rate the reproduction
     below finds safe beside etcd, 12 MB/s. Two things set a peak's
-    size: how many images the kubelet pulls at once, which the shaping
-    below bounds, and how many objects an apply creates at once, which
-    the deploy chain leaves at the CLI's default parallelism; bounding
-    that is Aetf/kluster-ops#785.
+    size: how many images the kubelet pulls at once, and how many
+    objects an apply creates at once; the shaping below bounds both.
 4.  **hath's cache I/O is on its own volume**, outside this budget.
 
 **What the readings show** (2026-11-17, on the cluster a from-scratch
@@ -273,10 +271,43 @@ each followed by `fdatasync`.
     asks for unpacks at once, which is the load that stalled the probe
     for 15.6 s. What it costs is that a pod's first start waits behind
     the pulls queued ahead of it.
--   **One pull's own rate is beyond what the kubelet bounds.** Whether
-    one pull at a time keeps etcd within rule 1 is read at the next
-    from-scratch rebuild (Aetf/kluster-ops#785); if it does not, buying
-    disk performance is the operator's decision on that issue.
+-   **Rule: the deploy chain applies `k8s-base` and `apps` four
+    resource operations at a time** (`pulumi up --parallel`, from
+    `CLUSTER_APPLY_PARALLEL` in the `env` of `deploy.yml`). In the
+    pinned `pulumi` v3.274.1 the flag sets how many step workers the
+    engine runs, each carrying out one resource operation at a time
+    (`newStepExecutor`, `pkg/resource/deploy/step_executor.go`), and a
+    workload's create holds its worker through the Kubernetes provider's
+    await, until its pods are ready, their pulls included
+    (declarative/cluster-infra.md §1.2). Unset, it is four times the
+    CPUs Go sees, or `PULUMI_PARALLEL` where that is set
+    (`defaultParallel`, `pkg/cmd/pulumi/operations/up.go`): 16 on the
+    four CPUs of the
+    [hosted runner](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)
+    the chain runs on (framework/ci.md §3), which is what the bring-up
+    above was applied at.
+-   **Four is chosen, not derived from 12 MB/s.** The pull bound's
+    arithmetic counts writers, and an object in flight is not one. Of
+    the 321 objects the bring-up's first `up` of `k8s-base` created, 21
+    are workloads that run pods; the rest, 75 definitions among them,
+    write little beyond their own object in etcd. And with the kubelet
+    admitting one pull at a time on a control plane, the objects in
+    flight no longer set how many images unpack there at once. What
+    they still set is how many workloads start together, their pods
+    queued behind that pull and their first writes beside it, and the
+    reproduction rated neither. So four is chosen against that `up`:
+    at 16, its workloads finished in groups of up to eight within half
+    a minute of each other, and four lets fewer start together, while
+    more than one keeps each workload's wait for readiness from holding
+    every other object behind it. What it costs is a longer first `up`,
+    that one having taken 12 minutes under the `Up` step's two-hour
+    bound. A reading of what one workload's start writes is what would
+    size it.
+-   **One pull's own rate is beyond what either bound reaches.**
+    Whether one pull at a time, with four operations in flight, keeps
+    etcd within rule 1 is read at the next from-scratch rebuild
+    (Aetf/kluster-ops#785); if it does not, buying disk performance is
+    the operator's decision on that issue.
 -   **A worker's pulls are not bounded**: its disk holds no etcd.
 
 ## 2. The deciding factor is egress, not compute
