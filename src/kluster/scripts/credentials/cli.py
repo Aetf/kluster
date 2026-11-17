@@ -47,6 +47,7 @@ from . import (
     lifecycle,
     masters,
     oci_iam,
+    oci_recovery,
     pulumi_config,
     sealing,
     slots,
@@ -812,7 +813,8 @@ def build_parser() -> argparse.ArgumentParser:
             "cluster's certificate with kubeseal and written, as ciphertext anyone may read, into the "
             'configuration of the stack that declares it; `seal` writes that copy for a row recorded before '
             'the cluster existed, and for an escrowed row the cluster consumes, from the escrow. `ls`, '
-            '`check` and `sync` act on the map rather than on one row.'
+            "`check` and `sync` act on the map rather than on one row. The physical stack's OCI row also has "
+            'the verbs that spend its credential: the OCI calls a recovery procedure makes outside the program.'
         ),
         epilog=_see_also('§3'),
     )
@@ -1054,6 +1056,51 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_oci_mint_options(physical_mint, conventions.PHYSICAL)
     _add_bundle_dir(physical_mint)
+    # The calls a recovery procedure makes by hand, signed as the credential
+    # this row delivers. They need no kit: the key is read out of the stack's
+    # configuration with its passphrase's workstation slot (`oci_recovery`).
+    spending = (
+        "Signs as the physical stack's own OCI user, its user and private key read out of that stack's "
+        'configuration with the passphrase in its workstation slot; no kit is opened. The key goes to '
+        'the SDK in memory and is never written or printed. Every call is logged before it is made, and a '
+        'refusal from OCI is reported with its status, code, message and request id.'
+    )
+    physical_terminate = physical_verbs.add_parser(
+        'terminate',
+        help='terminate instances with their boot volumes, waiting for each to be gone',
+        description=(
+            'Terminate each instance named, in order, with its boot volume deleted: find the boot volume while '
+            'it is still attached, terminate, wait for the work request OCI answers with to end -- a few '
+            'minutes -- and then for the instance and the boot volume to read TERMINATED. A work request that '
+            'ends anywhere but SUCCEEDED stops the run, naming its status and every error OCI recorded on it, '
+            'and no later instance is touched. An instance already TERMINATED is read and left. Prints one '
+            'reading per instance and per boot volume. ' + spending
+        ),
+    )
+    _ = physical_terminate.add_argument('ocid', nargs='+', help='the OCID of an instance')
+    physical_read = physical_verbs.add_parser(
+        'read',
+        help='print the state of instances, public IPs, volumes and boot volumes',
+        description=(
+            "Print one line per OCID: its kind, display name, OCID and lifecycle state, read off the OCID's own "
+            'resource type -- an instance (with its shape and size), a public IP (with its address, lifetime '
+            'and the entity it is assigned to), a block volume (with the instances it is attached to) or a '
+            'boot volume. A resource OCI answers it does not hold reads `absent`. ' + spending
+        ),
+    )
+    _ = physical_read.add_argument('ocid', nargs='+', help='the OCID of an instance, public IP, volume or boot volume')
+    physical_detach = physical_verbs.add_parser(
+        'detach',
+        help='detach block volumes from their instances, waiting for each attachment to read DETACHED',
+        description=(
+            'Detach each block volume named from the instance it is attached to, wait for the work request to '
+            "end and the attachment to read DETACHED, and print the volume's reading. A volume attached to no "
+            'instance is read and left; one attached to several is refused. ' + spending
+        ),
+    )
+    _ = physical_detach.add_argument('ocid', nargs='+', help='the OCID of a block volume')
+    for spender in (physical_terminate, physical_read, physical_detach):
+        _add_bundle_dir(spender)
 
     management_key = rows.add_parser(
         derived.B2_MANAGEMENT_ROW,
@@ -1586,6 +1633,20 @@ def _root(args: argparse.Namespace) -> int:
     return 0
 
 
+def _oci_physical(args: argparse.Namespace) -> int:
+    """`derived oci-physical terminate|read|detach`: each OCID in turn, its readings printed as they come.
+
+    The first refusal stops the run, so a termination that failed leaves every
+    later instance as it was.
+    """
+    verb = {'terminate': oci_recovery.terminate, 'read': oci_recovery.read, 'detach': oci_recovery.detach}[args.action]
+    session = oci_recovery.open_session(oci_recovery.physical_stack(args.bundle_dir))
+    for ocid in args.ocid:
+        for reading in verb(session, ocid):
+            print(reading.line(), flush=True)
+    return 0
+
+
 def _kit(args: argparse.Namespace) -> KdbxStore:
     """The seed kit, created on the spot if `kit bootstrap` is starting from none.
 
@@ -1841,6 +1902,10 @@ def main(argv: list[str] | None = None) -> int:
             for line in slots.describe():
                 print(line)
             return 0
+        # Ordered before the kit too: these sign with a key read out of a
+        # stack's configuration, opened with its passphrase's workstation slot.
+        if (args.subject, args.member) == ('derived', derived.OCI_PHYSICAL_ROW) and args.action in oci_recovery.VERBS:
+            return _oci_physical(args)
         registry = escrow.Registry.open(args.escrow)
         # Ordered before the kit deliberately: the point of `check` is that a
         # clone with no offline database can still say whether the registry is
@@ -2111,7 +2176,15 @@ def main(argv: list[str] | None = None) -> int:
                 raise KdbxError(f'`seed {member} {action}` is in the register (§2) but not yet implemented')
             case _:  # pragma: no cover - argparse rejects everything else
                 raise ValueError(f'unhandled command {args.subject}')
-    except (KdbxError, CredentialRejected, SlotRefused, EscrowError, AgeError, WorkstationError) as exc:
+    except (
+        KdbxError,
+        CredentialRejected,
+        SlotRefused,
+        EscrowError,
+        AgeError,
+        WorkstationError,
+        oci_recovery.OciRefused,
+    ) as exc:
         log.error('%s', exc)
         return 1
     return 0

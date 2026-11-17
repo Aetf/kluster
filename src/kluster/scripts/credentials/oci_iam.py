@@ -392,15 +392,13 @@ def _retry() -> Any:
     )
 
 
-def identity_client(tenancy: str, user: str, private_key_pem: str, *, domain_url: str | None = None) -> Any:
-    """A client for one API key, with no configuration file involved.
+def signing_config(tenancy: str, user: str, private_key_pem: str) -> dict[str, Any]:
+    """The SDK's configuration for one API key, with no configuration file involved.
 
-    The key never reaches `~/.oci/config` or any other path: it is read out of
-    the kit (or the secret store) and handed to the SDK in memory.
-
-    With a `domain_url` this is the identity-domains client for that domain,
-    which is a different service on a per-tenancy endpoint rather than a
-    different credential; the signing key is the same either way.
+    The key never reaches `~/.oci/config` or any other path: it is handed to
+    the SDK in memory, as `key_content`, wherever it was read from. The region
+    is this installation's constant and the fingerprint a function of the key
+    (`ApiKey`). A configuration the SDK would refuse is refused here, by name.
     """
     config: dict[str, Any] = {
         'tenancy': tenancy,
@@ -413,6 +411,17 @@ def identity_client(tenancy: str, user: str, private_key_pem: str, *, domain_url
         oci.config.validate_config(config)
     except oci.exceptions.InvalidConfig as exc:
         raise CredentialRejected(f'the OCI credential is not usable: {exc}') from exc
+    return config
+
+
+def identity_client(tenancy: str, user: str, private_key_pem: str, *, domain_url: str | None = None) -> Any:
+    """A client for one API key, read out of the kit (or the secret store) and configured in memory.
+
+    With a `domain_url` this is the identity-domains client for that domain,
+    which is a different service on a per-tenancy endpoint rather than a
+    different credential; the signing key is the same either way.
+    """
+    config = signing_config(tenancy, user, private_key_pem)
     if domain_url is not None:
         return oci.identity_domains.IdentityDomainsClient(config, service_endpoint=domain_url, retry_strategy=_retry())
     return oci.identity.IdentityClient(config, retry_strategy=_retry())

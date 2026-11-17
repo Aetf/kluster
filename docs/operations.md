@@ -250,13 +250,14 @@ from an HTTP repository, which offers nothing to check a download against
         0.8.1 bridges).
 
     **A lost node.** OCI terminated it, or it is gone for good: the
-    console shows the instance `TERMINATED`, or the node is to be
-    abandoned in place. From the root of the checkout that holds
-    `.credentials/`, with `physical` the function of
-    declarative/physical.md §6, `tal` and `CPS` the setup of
-    physical/gateway-cutover.md §8.1, and `<node>` the lost node's name
-    (`cp2`):
+    instance reads `TERMINATED`, or the node is to be abandoned in
+    place. From the root of the checkout that holds `.credentials/`,
+    with `physical` the function of declarative/physical.md §6, `tal`
+    and `CPS` the setup of physical/gateway-cutover.md §8.1, and
+    `<node>` the lost node's name (`cp2`):
 
+        ocid() { physical stack export | jq -r --arg t "$1" --arg n "$2" '.deployment.resources[] | select(.type == $t and .outputs.displayName == $n) | .id'; }
+        credentials derived oci-physical read "$(ocid oci:Core/instance:Instance kluster-<node>)"
         urns() { physical stack --show-urns | sed -n 's|.*URN: \(urn:.*\)$|\1|p' | grep -E "$1"; }
         S=$(urns '\$oci:NetworkLoadBalancer/backendSet:BackendSet::' | wc -l); echo "$S"
         T=($(urns '::kluster:cloud:CloudNodes\$oci:(Core/instance:Instance::kluster-<node>|NetworkLoadBalancer/backend:Backend::kluster-nlb-.*-<node>)$'))
@@ -265,8 +266,14 @@ from an HTTP repository, which offers nothing to check a download against
         physical preview --diff
         physical up
 
-    A URN carries `$`, which the array keeps as it is, since the output
-    of a command substitution is not expanded again. A component of
+    `ocid` prints the identifier that `physical`'s state records for
+    the resource of that type and display name. `read` prints the
+    instance's state, `TERMINATED` for a node OCI terminated, as OCI
+    reports it under `physical`'s own OCI credential, read out of the
+    stack's configuration with the passphrase in its workstation slot
+    (credentials.md §4.4). A URN carries `$`, which the array keeps as
+    it is, since the output of a command substitution is not expanded
+    again. A component of
     `physical` hangs off the stack itself, so its type opens the URN's
     type chain, after the project's `::`, and a resource it holds
     follows it after a `$`:
@@ -424,7 +431,10 @@ from an HTTP repository, which offers nothing to check a download against
     cluster's region, and nothing in this repository makes the call. A
     report's compartment is always the tenancy's root, which `physical`'s
     key cannot reach, being confined to its own compartment, while Cloud
-    Shell runs Oracle's `oci` CLI under the operator's own identity. The
+    Shell runs Oracle's `oci` CLI under the operator's own identity.
+    `credentials derived oci-physical`, which makes the other OCI calls
+    of these runbooks, signs with that key, so this reading stays with
+    the operator. The
     form is the CLI's documented one,
     [`oci compute compute-capacity-report create`](https://docs.oracle.com/en-us/iaas/tools/oci-cli/latest/oci_cli_docs/cmdref/compute/compute-capacity-report/create.html),
     with `--shape-availabilities` given inline as JSON, whose keys are
@@ -482,10 +492,12 @@ from an HTTP repository, which offers nothing to check a download against
     **A node that does not come back** — the `up` fails, the instance
     is not `RUNNING`, or `etcd status` keeps missing its member — stops
     the rollout where it is, with no other node touched, since quorum
-    holds at two. The instance's state and shape, in the console, say
-    which case it is. `RUNNING` at its old shape is a failed update:
-    nothing changed, `physical refresh --run-program "${U[@]/#/--target=}"`
-    brings state back to the cloud, and the node is retried later.
+    holds at two. The instance's state and shape, which
+    `credentials derived oci-physical read "$(ocid oci:Core/instance:Instance kluster-<node>)"`
+    prints, with `ocid` the helper of §3.1, say which case it is.
+    `RUNNING` at its old shape is a failed update: nothing changed,
+    `physical refresh --run-program "${U[@]/#/--target=}"` brings state
+    back to the cloud, and the node is retried later.
     Stopped, it is started from the console. One that does not boot at
     its new shape goes back to its original one, Oracle's instruction
     for that case, through the console's *Edit shape*, followed by the
@@ -503,7 +515,7 @@ from an HTTP repository, which offers nothing to check a download against
     balancer survive; and the bring-up's rebuild drill, which runs it
     once on the empty cluster (physical/bring-up.md §2, stage 5a).
     Gist: the three instances are gone, by the loss or by a termination
-    in the console; a targeted refresh records that in `physical`'s
+    outside the program; a targeted refresh records that in `physical`'s
     state; one `physical up` creates the fleet, the worker and the
     day-1 chain again; then the states of `k8s-base` and `apps` are
     refreshed and the deploy chain applies both stacks from empty. The
@@ -650,17 +662,27 @@ from an HTTP repository, which offers nothing to check a download against
     **Step 2:** `physical state unprotect '<worker disk URN>'`, the
     disk of §3.2.
 
-    **Step 3: the loss.** For a deliberate run, in the console, in
-    `physical`'s compartment, terminate `kluster-cp1`, `kluster-cp2`
-    and `kluster-cp3`, each with its boot volume deleted; from Oracle's
-    CLI, `oci compute instance terminate` with `--preserve-boot-volume
-    false` takes the boot volume with the instance. The loss is taken
-    outside the program rather than by a `destroy`, because a destroy
-    of `cp1` reaches the reserved IP (§3.1). Readings: the three
-    instances are `TERMINATED` and no boot volume of theirs is left;
-    `kluster-vip1` is listed as reserved and unassigned;
-    `kluster-hath-cache` is available; `gateway-health` is still clean.
-    From here the way is forward only.
+    **Step 3: the loss.** For a deliberate run, terminate `kluster-cp1`,
+    `kluster-cp2` and `kluster-cp3`, each with its boot volume deleted,
+    with `ocid` the helper of §3.1:
+
+        I=($(for n in cp1 cp2 cp3; do ocid oci:Core/instance:Instance "kluster-$n"; done)); printf '%s\n' "${I[@]}"
+        [ ${#I[@]} -eq 3 ] && credentials derived oci-physical terminate "${I[@]}"
+        credentials derived oci-physical read "$(ocid oci:Core/publicIp:PublicIp kluster-vip1)" "$(ocid oci:Core/volume:Volume kluster-hath-cache)"
+
+    The list prints three identifiers, and `terminate` runs only at that
+    count, as in §3.1. It takes them in turn: it deletes each instance
+    with its boot volume, waits for the work request OCI answers with, a
+    few minutes each, and prints the instance and its boot volume once
+    both read `TERMINATED`. A work request that ends anywhere but
+    `SUCCEEDED` stops it, naming its errors, before the next instance is
+    touched; run again, it leaves an instance already `TERMINATED` as it
+    is. The loss is taken outside the program rather than by a
+    `destroy`, because a destroy of `cp1` reaches the reserved IP
+    (§3.1). Readings: the three instances and their boot volumes print
+    `TERMINATED`; `kluster-vip1` prints `lifetime=RESERVED assigned=-`;
+    `kluster-hath-cache` prints `AVAILABLE attached-to=-`;
+    `gateway-health` is still clean. From here the way is forward only.
 
     **Step 4: the state records the loss.**
 
@@ -782,9 +804,7 @@ from an HTTP repository, which offers nothing to check a download against
 
     -   whether a targeted `destroy` of an instance refuses while a
         protected dependent stays outside the targets, or drops it; the
-        console termination of step 3 stands either way;
-    -   whether the console deletes boot volumes by default at a
-        termination, which step 3 reads either way;
+        termination of step 3 stands either way;
     -   after an actual loss, whether step 1's deletes go through with
         no node to reach; a resource whose delete does not go through
         leaves state with `physical state delete`.

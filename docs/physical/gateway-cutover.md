@@ -2144,9 +2144,17 @@ vol; ids; mnt; boot
     probed the partition again since Talos formatted it, so on the boot
     that provisioned it `uuid` can be empty; then item 4's reading is the baseline that item 5 compares
     against.
-2.  **Detach it**, in the OCI console, from the instance's attached
-    block volumes. `ids` then prints nothing, because the partition has
-    left discovery. `vol` still prints `ready`: Talos does not evaluate a
+2.  **Detach it**, with `physical`'s own OCI credential and the
+    `physical()` function of this runbook's header:
+
+    ```sh
+    VID=$(physical stack export | jq -r --arg n "kluster-$V" '.deployment.resources[] | select(.type == "oci:Core/volume:Volume" and .outputs.displayName == $n) | .id')
+    credentials derived oci-physical detach "$VID"
+    ```
+
+    `detach` waits for the attachment to read `DETACHED` and prints the
+    volume with `attached-to=-`. `ids` then prints nothing, because the
+    partition has left discovery. `vol` still prints `ready`: Talos does not evaluate a
     ready volume again when its disk goes, and that is not a fault.
 3.  **Reboot the node with the disk gone**, then read the volume and the
     cluster:
