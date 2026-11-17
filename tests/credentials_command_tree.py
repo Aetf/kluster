@@ -34,7 +34,7 @@ from kluster.scripts.credentials import cli
 
 
 def _subparsers(parser: argparse.ArgumentParser) -> argparse._SubParsersAction[argparse.ArgumentParser] | None:  # pyright: ignore[reportPrivateUsage]
-    for action in parser._actions:  # pyright: ignore[reportPrivateUsage]
+    for action in parser._actions:
         if isinstance(action, argparse._SubParsersAction):  # pyright: ignore[reportPrivateUsage]
             return cast('argparse._SubParsersAction[argparse.ArgumentParser]', action)  # pyright: ignore[reportPrivateUsage]
     return None
@@ -48,7 +48,7 @@ def _fill(parser: argparse.ArgumentParser, into: list[str]) -> None:
     than listed here, which is what keeps a newly required option from
     silently going untested.
     """
-    for action in parser._actions:  # pyright: ignore[reportPrivateUsage]
+    for action in parser._actions:
         if isinstance(action, argparse._SubParsersAction | argparse._HelpAction):  # pyright: ignore[reportPrivateUsage]
             continue
         placeholder = 'placeholder.kdbx' if action.type is Path else 'placeholder'

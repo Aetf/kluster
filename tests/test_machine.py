@@ -84,7 +84,7 @@ def test_the_certificate_the_box_gets_matches_the_key_it_gets(roots: config.Root
     cert = x509.load_pem_x509_certificate(values.server_cert.encode())
     key = serialization.load_pem_private_key(values.server_key.encode(), password=None)
 
-    assert key.public_key().public_bytes(  # pyright: ignore[reportAttributeAccessIssue]
+    assert key.public_key().public_bytes(
         encoding=serialization.Encoding.DER,
         format=serialization.PublicFormat.SubjectPublicKeyInfo,
     ) == cert.public_key().public_bytes(

@@ -240,7 +240,7 @@ def _field_names(cls: type) -> tuple[str, ...]:
         case 'NamedTuple':
             return cast('tuple[str, ...]', cls._fields)
         case _:
-            return tuple(spec.name for spec in dataclasses.fields(cls))  # pyright: ignore[reportArgumentType]
+            return tuple(spec.name for spec in dataclasses.fields(cls))
 
 
 def _declared_types(cls: type) -> dict[str, object]:
@@ -294,12 +294,12 @@ def _hidden(cls: type) -> set[str]:
     """
     if _kind(cls) != 'dataclass':
         return set()
-    return {spec.name for spec in dataclasses.fields(cls) if not spec.repr}  # pyright: ignore[reportArgumentType]
+    return {spec.name for spec in dataclasses.fields(cls) if not spec.repr}
 
 
 def _uncompared(cls: type) -> set[str]:
     """The fields a dataclass leaves out of its equality, and so out of pytest's diff of two of it."""
-    return {spec.name for spec in dataclasses.fields(cls) if not spec.compare}  # pyright: ignore[reportArgumentType]
+    return {spec.name for spec in dataclasses.fields(cls) if not spec.compare}
 
 
 def _package() -> tuple[ModuleType, ...]:

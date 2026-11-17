@@ -761,7 +761,7 @@ def test_every_probe_has_a_bit_of_its_own_that_no_other_status_shares() -> None:
 def test_the_statuses_are_published_in_help() -> None:
     # A number a workflow's log is read by has to be readable without opening
     # the source, the way the `operator-stack` driver's restore-owed status is.
-    for action in cli.build_parser()._actions:  # pyright: ignore[reportPrivateUsage]
+    for action in cli.build_parser()._actions:
         if isinstance(action, argparse._SubParsersAction):  # pyright: ignore[reportPrivateUsage]
             chosen = cast('argparse._SubParsersAction[argparse.ArgumentParser]', action)  # pyright: ignore[reportPrivateUsage]
             help_text = chosen.choices['probe'].format_help()
