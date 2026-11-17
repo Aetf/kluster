@@ -15,15 +15,13 @@ and the bound admits the pinned release and not the next line's first.
 
 from __future__ import annotations
 
-import re
 import tomllib
 from pathlib import Path
 from typing import Any
 
 import pinned_tools
 import process_sessions
-import pytest
-from renovate_text import listed, package_rules, scalar
+from renovate_text import allowed_versions, listed, next_line, package_rules, scalar
 
 ROOT = Path(__file__).parent.parent
 
@@ -62,22 +60,6 @@ def _rule_for(config: str, key: str) -> str:
     return named[0]
 
 
-def allowed(rule: str) -> re.Pattern[str] | None:
-    """The rule's `allowedVersions`, where it sets one as a regular expression."""
-    written = scalar(rule, 'allowedVersions')
-    if written is None:
-        return None
-    unescaped = written.replace('\\\\', '\\')
-    assert unescaped.startswith('/') and unescaped.endswith('/'), f'allowedVersions {written} is not a pattern'
-    return re.compile(unescaped[1:-1])
-
-
-def next_line(version: str) -> str:
-    """The first release of the line after `version`'s: its next minor."""
-    major, minor = version.split('.')[:2]
-    return f'{major}.{int(minor) + 1}.0'
-
-
 def test_every_conda_pin_is_read_from_its_channel() -> None:
     config = (ROOT / 'renovate.json5').read_text()
     pins = channel_pins()
@@ -94,7 +76,7 @@ def test_a_conda_pins_bound_admits_its_release_and_not_the_next_line() -> None:
     bounded = {
         key: (pin['version'], bound)
         for key, pin in channel_pins().items()
-        if (bound := allowed(_rule_for(config, key))) is not None
+        if (bound := allowed_versions(_rule_for(config, key))) is not None
     }
 
     # Not vacuous: one pin holds a line today, gawk's.
@@ -102,8 +84,3 @@ def test_a_conda_pins_bound_admits_its_release_and_not_the_next_line() -> None:
     for key, (version, bound) in bounded.items():
         assert bound.search(version), f'{key}: the bound {bound.pattern} refuses the pinned {version}'
         assert not bound.search(next_line(version)), f'{key}: the bound {bound.pattern} admits {next_line(version)}'
-
-
-@pytest.mark.parametrize(('version', 'following'), [('5.3.1', '5.4.0'), ('17.11', '17.12.0'), ('0.9.3', '0.10.0')])
-def test_the_next_line_is_the_next_minor(version: str, following: str) -> None:
-    assert next_line(version) == following

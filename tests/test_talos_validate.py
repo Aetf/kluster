@@ -34,7 +34,6 @@ another (framework/testing.md §2).
 
 from __future__ import annotations
 
-import fnmatch
 import json
 import re
 import tomllib
@@ -47,7 +46,7 @@ import pinned_tools
 import process_sessions
 import pytest
 import yaml
-from renovate_text import listed, package_rules, scalar
+from renovate_text import listed, package_rules, reaches, scalar
 
 from kluster import conventions
 from kluster.components import talos
@@ -320,37 +319,6 @@ def test_talosctl_is_the_fleets_release() -> None:
     """
     tools = tomllib.loads((ROOT / 'mise.toml').read_text())['tools']
     assert f'v{tools[TOOL]}' == pinned_release()
-
-
-def matches(pattern: str, value: str) -> bool:
-    """Whether one renovate match pattern -- a `/regex/`, a glob or a literal -- matches `value`.
-
-    A negated pattern (`!…`) is taken as matching: whether it does depends on
-    the rest of its list, and the question here is only whether a rule might.
-    """
-    if pattern.startswith('!'):
-        return True
-    if len(pattern) > 1 and pattern.startswith('/') and pattern.endswith('/'):
-        return re.search(pattern[1:-1], value) is not None
-    return fnmatch.fnmatchcase(value, pattern)
-
-
-def reaches(rule: str, presents: dict[str, tuple[str, ...]]) -> bool:
-    """Whether a rule can match a dependency presenting these values to its matchers.
-
-    A matcher the dependency presents no value for -- an update type, any
-    `exclude…` key -- is taken as matching, so a rule is only cleared by a
-    matcher that provably misses.
-    """
-    for key in re.findall(r'^\s*((?:match|exclude)\w+):', rule, re.MULTILINE):
-        values = presents.get(key)
-        patterns = listed(rule, key)
-        # A key whose list this scan cannot read is taken as matching too.
-        if values is None or not patterns:
-            continue
-        if not any(matches(pattern, value) for pattern in patterns for value in values):
-            return False
-    return True
 
 
 def test_renovate_moves_both_pins_in_one_pull_request() -> None:
