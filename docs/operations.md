@@ -367,9 +367,15 @@ from an HTTP repository, which offers nothing to check a download against
         class and the claim of every volume whose node affinity names
         `<node>`:
 
-            kub get pv -o json | jq -r --arg n <node> '.items[] | select(any(.spec.nodeAffinity.required.nodeSelectorTerms[]?.matchExpressions[]? | select(.key == "kubernetes.io/hostname") | .values[]; . == $n)) | "\(.spec.storageClassName) \(.spec.claimRef.namespace)/\(.spec.claimRef.name)"'
+            pv=$(kub get pv -o json) && jq -r --arg n <node> '[.items[] | select(any(.spec.nodeAffinity.required.nodeSelectorTerms[]?.matchExpressions[]? | select(.key == "kubernetes.io/hostname") | .values[]; . == $n))] | (.[] | "\(.spec.storageClassName) \(.spec.claimRef.namespace)/\(.spec.claimRef.name)"), "\(length) volumes"' <<<"$pv"
 
-        A `local-path` one dies with the instance's system disk
+        Its last line counts the volumes listed, `0 volumes` on a node
+        that holds none. A read that does not end on that line is no
+        reading, and the sitting does not go on: `jq` reads only what
+        `kub` returned, so a failed read prints `kub`'s error and no
+        count, rather than the empty list of a node that holds nothing.
+
+        A `local-path` volume dies with the instance's system disk
         (cluster/storage.md §2, "What local-path data outlives"), so each
         such claim is replicated, backed up, or moved by its owner's
         procedure before the sitting goes on. A node volume's claim is
@@ -731,12 +737,12 @@ from an HTTP repository, which offers nothing to check a download against
         D=.claude/drill; mkdir -p "$D"
         SCOPE='::kluster:cloud:CloudNodes(\$|::)|::kluster:cloud:NodeVolume(::|\$oci:Core/volumeAttachment:)|::kluster:talos:TalosDay1(\$|::)|::kluster:homelab:HomelabHost(::|\$libvirt:index/(domain|volume):)|FactoryImage::kluster-worker-nocloud$|pulumi:pulumi:Stack::'
         protected() { physical stack export | jq -r '.deployment.resources[] | select(.protect) | .urn' | sort; }
-        outside() { physical stack export --show-secrets | jq -c --arg s "$SCOPE" '[.deployment.resources[] | select((.urn | test($s)) or (.urn | endswith("::pulumi:providers:pulumi-python::default")) | not) | {urn, inputs, outputs, protect}] | sort_by(.urn)' | sha256sum; }
-        anchors() { for n in kluster.hosts vip1.hosts; do for t in A AAAA; do echo "$n $t $(mise x -- doggo --short "$n.unlimited-code.works" "$t" @1.1.1.1 | sort | tr '\n' ' ')"; done; done; }
+        outside() { local e d; e=$(physical stack export --show-secrets) && d=$(jq -c --arg s "$SCOPE" '[.deployment.resources[] | select((.urn | test($s)) or (.urn | endswith("::pulumi:providers:pulumi-python::default")) | not) | {urn, inputs, outputs, protect}] | sort_by(.urn)' <<<"$e") && sha256sum <<<"$d"; }
+        anchors() { for n in kluster.hosts vip1.hosts; do for t in A AAAA; do if a=$(mise x -- doggo --short "$n.unlimited-code.works" "$t" @1.1.1.1); then echo "$n $t $(printf '%s' "$a" | sort | tr '\n' ' ')"; else echo "$n $t no reading"; fi; done; done; }
         sealing() { mise x -- kubeseal --kubeconfig ~/.kube/kluster --fetch-cert \
             $(mise x uv -- uv run python -c 'from kluster import conventions as c; print("--controller-namespace", c.SEALING_NAMESPACE, "--controller-name", c.SEALING_CONTROLLER)'); }
         history() { mise x -- kubectl --kubeconfig ~/.kube/kluster get --raw "/api/v1/namespaces/monitoring/services/vmsingle-history:http/proxy/$1"; }
-        metrics() { history metrics | awk '/^vm_rows\{type="storage\// { n += $2 } END { printf "rows %.0f\n", n }'
+        metrics() { local m; m=$(history metrics) && awk '/^vm_rows\{type="storage\// { n += $2 } END { printf "rows %.0f\n", n }' <<<"$m"
             history 'api/v1/query?query=min(tfirst_over_time(node_load1%5B100y%5D))' | mise x -- jq -r '"earliest \(.data.result[0].value[1])"'; }
 
     `SCOPE` matches every resource the run changes, and nothing else:
@@ -756,7 +762,9 @@ from an HTTP repository, which offers nothing to check a download against
     legacy VPS node's (cluster/migration.md §2.1).
 
     `outside` prints a digest of every other resource's entry, secrets
-    included, so that only the digest leaves the pipe. It leaves out the
+    included, so that only the digest is printed. It digests only what
+    an export and a `jq` that both succeeded returned, so a failed read
+    prints no digest rather than the digest of nothing. It leaves out the
     stack's default `pulumi-python` provider too, the provider of every
     dynamic resource: its entry records the stack's whole configuration,
     and any `physical up` rewrites it to the configuration of the commit
@@ -765,6 +773,16 @@ from an HTTP repository, which offers nothing to check a download against
     the difference. Taking the baseline after an `up` instead would make
     step 0 a write; the configuration is the commit's, and a review of
     the commit is where it is read.
+
+    **An empty `protected` or `outside` is no reading.** Each prints
+    nothing where its read of the export fails, and neither prints
+    nothing for the stack as it stands, which protects resources of its
+    own. An empty one, in a baseline or in a reading taken against one,
+    is taken again. `anchors` prints `no reading` in place of the
+    addresses of a query `doggo` could not send, and on any other answer
+    what `doggo` printed, which for a name with no record of the type is
+    nothing; so its reading is judged by which of its lines name an
+    address, as step 0 does below.
 
     **Step 0: the baseline, and the go.**
 
@@ -781,6 +799,7 @@ from an HTTP repository, which offers nothing to check a download against
         until k get job drill-history -o jsonpath='{.status.succeeded}{.status.failed}' | grep -q .; do sleep 10; done
         k get job drill-history -o jsonpath='{.status.succeeded}'
         for o in cluster_endpoint cluster_endpoint_v6 vip1 worker_gua; do echo "$o $(physical stack output "$o")"; done > "$D/outputs"
+        wc -l < "$D/protected"; cat "$D/outside" "$D/anchors" "$D/ids" "$D/metrics" "$D/outputs"; grep -c 'BEGIN CERTIFICATE' "$D/sealing.pem"
 
     After bring-up stage 9, the history is backed up once more after its
     baseline is read, so the backup a rebuild restores holds at least the
@@ -797,6 +816,17 @@ from an HTTP repository, which offers nothing to check a download against
     them, beside enabling `deploy.yml` again, with the same `patch`
     and `"suspend":false`. Before stage 9 there is no backup job, and the
     `kubectl` lines are left out.
+
+    **The last line shows every baseline, and the go needs each one
+    whole.** The `protected` count is not zero, and `outside` is a
+    digest. Three of the four `anchors` lines name an address, every one
+    but `vip1.hosts AAAA`, a name that is IPv4 only, and none says `no
+    reading`. `ids` prints `1 found` and the partition's line. After
+    stage 9, `metrics` prints a `rows` line and an `earliest` line. Each
+    of the four outputs has a value, and the certificate count is `1`.
+    A baseline that is not whole is taken again before the go, because
+    every later comparison against it reads as a pass where the reading
+    it is compared with failed the same way.
 
     Disabling `deploy.yml` is bring-up stage 4's way back used as a
     freeze: a merge, a Renovate automerge among them, would otherwise
@@ -872,11 +902,14 @@ from an HTTP repository, which offers nothing to check a download against
 
         W=($(urns '::kluster-worker-nocloud$|::kluster-worker-disk$')); printf '%s\n' "${W[@]}"
         [ ${#W[@]} -eq 2 ] && physical preview --diff "${W[@]/#/--replace=}"
-        physical preview --json "${W[@]/#/--replace=}" | jq -r '.steps[] | select(.op != "same") | .urn' | grep -Ev "$SCOPE"
+        p=$(physical preview --json "${W[@]/#/--replace=}") && jq -r --arg s "$SCOPE" '[.steps[] | select(.op != "same") | .urn | select(test($s) | not)] | length, .[]' <<<"$p"
         physical up "${W[@]/#/--replace=}"
 
     `W` holds the worker's `FactoryImage` and its disk. The scope check,
-    the second preview through `grep`, prints nothing. The plan holds
+    the second preview, prints `0`, the count of planned steps outside
+    `SCOPE`, and then the URN of each; it reads only what a preview that
+    succeeded returned, so a failed preview prints no count and is no
+    reading. The plan holds
     eleven creates: the three instances, the secondary private IP, the
     attachment and the six resources of the day-1 chain; one update,
     the reserved IP's `private_ip_id`; replacements of every backend
@@ -964,7 +997,10 @@ from an HTTP repository, which offers nothing to check a download against
     5.  **The metrics history came back**, where the run is after bring-up
         stage 9: `metrics` prints the earliest sample `$D/metrics` holds,
         and no fewer rows, and the history's backup job succeeds on its
-        next run (§6.2). Before stage 9, no key backs the stores up, and
+        next run (§6.2). `metrics` counts the rows only over a read that
+        succeeded, so a failed read prints no `rows` line rather than
+        `rows 0`, and a `metrics`, at step 0 or here, that prints none
+        is no reading. Before stage 9, no key backs the stores up, and
         both start empty.
     6.  `deploy.yml` is enabled again, and `.claude/drill/` is deleted.
 

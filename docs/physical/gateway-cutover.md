@@ -1227,12 +1227,16 @@ object with no file behind it and goes at the next boot, or to
                 [ -f /data/custom/dpkg/"${deb##*/}" ] || cp -v "$deb" /data/custom/dpkg/
             done
         done
-        closure=$(apt-cache depends --recurse --no-suggests --no-conflicts \
-            --no-breaks --no-replaces --no-enhances $set | grep -v '^ ')
-        for deb in /data/custom/dpkg/*.deb; do
-            name=${deb##*/}
-            printf '%s\n' "$closure" | grep -qxF "${name%%_*}" || rm -v "$deb"
-        done
+        if deps=$(apt-cache depends --recurse --no-suggests --no-conflicts \
+                --no-breaks --no-replaces --no-enhances $set); then
+            closure=$(printf '%s\n' "$deps" | grep -v '^ ')
+            for deb in /data/custom/dpkg/*.deb; do
+                name=${deb##*/}
+                printf '%s\n' "$closure" | grep -qxF "${name%%_*}" || rm -v "$deb"
+            done
+        else
+            echo "apt-cache depends failed: nothing removed"
+        fi
 
     **What is copied in is what the installs of the set installed**, as
     apt recorded them in `/var/log/apt/history.log`: the `Install:` and
@@ -1254,7 +1258,9 @@ object with no file behind it and goes at the next boot, or to
     into the firmware, so it removes only what no part of the set needs,
     FRR's debs among them. It reads apt's lists, which §3's install
     fetched; after a firmware update since then, run `apt-get update`
-    first.
+    first. A closure `apt-cache` failed to read is no closure, since its
+    empty answer would reach nothing and so remove every deb: the step
+    says so and removes nothing.
 
     The copy-in needs the log entries and the debs. apt writes an entry
     only for a run that changed something, so re-running §3's install once
@@ -1543,11 +1549,14 @@ other failure is reported, not retried.
 read, of the URNs alone, shows:
 
 ```sh
-physical stack export | mise x -- jq -r '.deployment.resources[] | select(.delete) | .urn'   # prints nothing
+s=$(physical stack export) && mise x -- jq -r '[.deployment.resources[] | select(.delete) | .urn] | length, .[]' <<<"$s"   # 0
 ```
 
-A URN it prints is a resource the engine created a replacement for and
-has not yet deleted; it is reported, and run 2 waits.
+It prints the count of pending deletes and then their URNs. A URN it
+prints is a resource the engine created a replacement for and has not
+yet deleted; it is reported, and run 2 waits. A read that prints no
+count is no reading, since `jq` reads only what the export returned,
+and run 2 waits on it too.
 
 Between the runs a reading may be taken, from any host with an IPv4
 route. It gates nothing. The balancer's address is read off the
@@ -1645,8 +1654,9 @@ That the bridged provider plans no row there is unproven live, and gateway.md §
 settles. After the `up`:
 
 -   On the homelab host and on the operator's workstation,
-    `ip -4 route show | grep -F 'via 10.144.1.1'` prints nothing: a
-    member that has not opted in installs the subnet route alone.
+    `r=$(ip -4 route show) && grep -cF 'via 10.144.1.1' <<<"$r"`
+    prints `0`: a member that has not opted in installs the subnet route
+    alone. A read that prints no count is no reading.
 -   From a LAN client, Home Assistant answers through the reverse proxy,
     and so does a service of the legacy cluster.
 
@@ -1988,8 +1998,13 @@ for d in bgpd zebra mgmtd; do
 done                                                 # every line: ubios-udapi-ser
 systemctl list-unit-files 'frr*'                     # 0 unit files listed
 diff -r /mnt/.rofs/etc/frr /etc/frr                  # silent
-/data/custom/bin/gateway-health | grep -E 'frr-config|routing daemon'   # silent
+h=$(/data/custom/bin/gateway-health); [ $? -le 1 ] && printf '%s\n' "$h" | grep -cE 'frr-config|routing daemon'   # 0
 ```
+
+`gateway-health` exits 0 on a healthy device and 1 with its findings
+(gateway.md §1.6), so the count is taken only over a run that ended in
+either; a run that did not, `gateway-health` missing or cut short,
+prints no count and is no reading.
 
 Until the apply's delete of `frr-config.service` lands, the unit's
 source is still in the unit store and the unit is inactive, so any run
@@ -2170,15 +2185,15 @@ carries a `phase` of its own):
 V=hath-cache; N=$(ip_of cp1)       # one line of the listing above
 H=$(for c in "${CP[@]}"; do [ "$c" != "$N" ] && echo "$c" && break; done)   # a control plane that is not N
 vol()  { tal -n "$N" get volumestatus "u-$V" -o json | jq -r '.spec.phase'; }
-ids()  { tal -n "$N" get discoveredvolumes -o json | jq -r --arg l "u-$V" 'select(.spec.partition_label == $l) | .spec | "\(.name) uuid=\(.uuid) partition_uuid=\(.partition_uuid)"'; }
+ids()  { local d; d=$(tal -n "$N" get discoveredvolumes -o json) && jq -rs --arg l "u-$V" 'map(select(.spec.partition_label == $l) | .spec) | "\(length) found", (.[] | "\(.name) uuid=\(.uuid) partition_uuid=\(.partition_uuid)")' <<<"$d"; }
 mnt()  { tal -n "$N" get mountstatus -o json | jq -r --arg t "/var/mnt/$V" 'select(.spec.target == $t) | .spec | "\(.source) \(.target) \(.filesystem)"'; }
 boot() { tal -n "$N" read /proc/sys/kernel/random/boot_id; }
 vol; ids; mnt; boot
 ```
 
 1.  **Talos provisioned the disk.** `vol` prints `ready`, `mnt` prints
-    the mount at `/var/mnt/<name>`, and `ids` prints the partition's
-    filesystem UUID and partition UUID; write both down. Discovery may not have
+    the mount at `/var/mnt/<name>`, and `ids` prints `1 found` and the
+    partition's filesystem UUID and partition UUID; write both down. Discovery may not have
     probed the partition again since Talos formatted it, so on the boot
     that provisioned it `uuid` can be empty; then item 4's reading is the baseline that item 5 compares
     against.
@@ -2191,8 +2206,10 @@ vol; ids; mnt; boot
     ```
 
     `detach` waits for the attachment to read `DETACHED` and prints the
-    volume with `attached-to=-`. `ids` then prints nothing, because the
-    partition has left discovery. `vol` still prints `ready`: Talos does not evaluate a
+    volume with `attached-to=-`. `ids` then prints `0 found`, because
+    the partition has left discovery. It counts only what the node
+    returned, so a failed read prints no count, and an `ids` without one
+    has not read the node. `vol` still prints `ready`: Talos does not evaluate a
     ready volume again when its disk goes, and that is not a fault.
 3.  **Reboot the node with the disk gone**, then read the volume and the
     cluster:
