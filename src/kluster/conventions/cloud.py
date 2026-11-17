@@ -85,9 +85,8 @@ class NodeVolumeEntry:
 #: The hath cache is preserved rather than backed up (storage.md §3.3): it is
 #: a slice of a distributed archive whose redundancy is the network it came
 #: from. It is exactly 50 GB of data, and its volume is sized above that. The
-#: invariants the type cannot carry — a node the fleet declares, at most one
-#: volume per node, a name Talos accepts — are held by tests, after the
-#: sentinel resolves.
+#: invariants the type cannot carry are held by `tests/test_conventions.py`,
+#: after the sentinel resolves.
 NODE_VOLUMES: Mapping[str, NodeVolumeEntry] = {
     'hath-cache': NodeVolumeEntry(node=FOLLOWS_DEDICATED_VIP, size_gb=55),
 }

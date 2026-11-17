@@ -61,6 +61,7 @@ from kluster.components.talos import TalosCluster, TalosDay1
 from kluster.components.talos.image import TalosImage, TalosNocloudImage
 from kluster.conventions import backup as backup_conventions
 from kluster.conventions.backup import BackupFamily
+from kluster.conventions.outputs import BOOT_VOLUME
 from kluster.lib import config as lib_config
 from kluster.lib.versions import NAMESPACE as VERSIONS
 from kluster.lib.versions import versions
@@ -312,9 +313,11 @@ async def main() -> None:
     # Both facts about placement are read off the instance rather than
     # restated: a volume attaches only within its own availability domain, and
     # the node's domain is itself a regional fact chosen at apply time
-    # (`_placements`).
+    # (`_placements`). Each is kept for its id, which the volume map exported
+    # below carries beside the node's boot volume.
+    volumes: dict[str, NodeVolume] = {}
     for volume_name, entry in sorted(conventions.NODE_VOLUMES.items()):
-        _ = NodeVolume(
+        volumes[volume_name] = NodeVolume(
             f'{conventions.CLUSTER_NAME}-{volume_name}',
             compartment_id=compartment_id,
             availability_domain=nodes.instances[entry.attached_node].availability_domain,
@@ -471,6 +474,13 @@ async def main() -> None:
     # readers follow in the same deploy chain. Each reader refuses an absent
     # value by name.
     pulumi.export(outputs.worker_gua, gateway.worker_gua)
+    # Every cloud node's volumes by name, each to the OCID OCI generated for
+    # it: the boot volume off the instance, and each block volume on the node
+    # it is attached to. OCI's block-volume metrics name a volume by that OCID
+    # alone, and this map is what turns one back into a node and a name
+    # `conventions` declares; a reader takes it through
+    # `kluster.lib.stack_volumes`, which refuses anything but such a map.
+    pulumi.export(outputs.volume_ids, _volume_ids(nodes.instances, volumes, conventions.NODE_VOLUMES))
 
     # Both are cluster-admin credentials, and both are marked secret at the
     # source; `k8s-base` and `apps` read them from here rather than from a file
@@ -502,6 +512,20 @@ async def main() -> None:
     # does not follow fail here rather than quietly rename the contract.
     for member, output in outputs.ci_identity.items():
         pulumi.export(output, pulumi.Output.secret(overlay.identities[member].private_key))
+
+
+def _volume_ids(
+    instances: Mapping[str, oci.core.Instance],
+    volumes: Mapping[str, NodeVolume],
+    rows: Mapping[str, conventions.NodeVolumeEntry],
+) -> dict[str, dict[str, pulumi.Output[str]]]:
+    """Cloud node → volume name → OCID: each node's boot volume, and each node volume on the node its row names."""
+    ids: dict[str, dict[str, pulumi.Output[str]]] = {
+        node: {BOOT_VOLUME: instance.boot_volume_id} for node, instance in instances.items()
+    }
+    for name, volume in volumes.items():
+        ids[rows[name].attached_node][name] = volume.volume.id
+    return ids
 
 
 def _gateway(config: pulumi.Config) -> Gateway:

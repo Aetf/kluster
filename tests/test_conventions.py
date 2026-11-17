@@ -54,6 +54,7 @@ from kluster.components.dns.base import overlay_records
 from kluster.components.dns.record import Block, zone_records
 from kluster.conventions import backup, identity, routes
 from kluster.conventions.cluster import Transports
+from kluster.conventions.outputs import BOOT_VOLUME
 from kluster.lib import k8s as lib_k8s
 from kluster.scripts.credentials import pulumi_config
 
@@ -375,6 +376,17 @@ def test_no_volume_takes_the_local_path_volumes_name() -> None:
     assert conventions.LOCAL_PATH_VOLUME not in conventions.NODE_VOLUMES
     # And its name is held to the rules a row's is: Talos reads it as one.
     assert VOLUME_NAME.fullmatch(conventions.LOCAL_PATH_VOLUME)
+
+
+def test_no_volume_takes_the_boot_volumes_name() -> None:
+    """`physical` exports each node's boot volume and its rows under their names in one map.
+
+    A row under the boot volume's name would put one OCID over the other there
+    (`outputs.PhysicalOutputs.volume_ids`), and the series named from the map
+    would call a block volume the boot volume, or the reverse.
+    """
+    assert conventions.NODE_VOLUMES
+    assert BOOT_VOLUME not in conventions.NODE_VOLUMES
 
 
 def test_a_volume_is_mounted_under_its_own_name() -> None:

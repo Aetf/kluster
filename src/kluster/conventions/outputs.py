@@ -18,6 +18,10 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 
+#: The name a cloud node's boot volume is under in `volume_ids`, beside the rows
+#: of `cloud.NODE_VOLUMES`, so no row may take it.
+BOOT_VOLUME = 'boot'
+
 
 @dataclass(frozen=True)
 class PhysicalOutputs:
@@ -51,6 +55,15 @@ class PhysicalOutputs:
     convention (`HOMELAB_NODE_IPV4`): `k8s-base` declares the pool from it,
     and `apps` hands it to a `SiteForward` port's Service, whose address the
     site's forward and pinhole end at (rfc-008 §4.1).
+    """
+    volume_ids: str
+    """Cloud node name → volume name → that volume's OCID, for every volume the node holds.
+
+    A node's boot volume is under `BOOT_VOLUME`, and each row of
+    `cloud.NODE_VOLUMES` under its own name, on the node it is attached to.
+    OCI names a volume in its block-volume metrics by its OCID alone, so this
+    is what turns a series back into a node and a volume that `conventions`
+    names; a replaced volume gets a new OCID and keeps its names.
     """
     kubeconfig: str
     """The cluster-admin kubeconfig, secret; `k8s-base` and `apps` are built on it."""
@@ -96,6 +109,7 @@ PHYSICAL_OUTPUTS = PhysicalOutputs(
     node_private_ips='node_private_ips',
     node_guas='node_guas',
     worker_gua='worker_gua',
+    volume_ids='volume_ids',
     kubeconfig='kubeconfig',
     talosconfig='talosconfig',
     backup_bucket='backup_bucket',
