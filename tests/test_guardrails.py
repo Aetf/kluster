@@ -113,38 +113,36 @@ def admitted(cores: int, memory_gb: int, *, quotas: dict[str, int], scope: str) 
     return cores <= quotas[f'standard-a1-core{suffix}'] and memory_gb <= quotas[f'standard-a1-memory{suffix}']
 
 
-def test_the_region_admits_the_fleet_and_one_replacement_in_flight() -> None:
+def test_the_region_admits_the_whole_fleet_at_once() -> None:
     quotas = quota_values(quota_statements(COMPARTMENT_NAME))
-    # A replacement is created before the node it replaces is deleted, so the
-    # region holds every declared node and the new one at once.
-    nodes = len(conventions.CLOUD_NODES) + 1
+    # Every node is created at once at bring-up, and again by the rebuild of
+    # operations.md §3.5.
+    nodes = len(conventions.CLOUD_NODES)
     assert admitted(nodes * conventions.NODE_OCPUS, nodes * conventions.NODE_MEMORY_GB, quotas=quotas, scope='region')
 
 
-def test_an_ad_admits_its_node_beside_a_replacement() -> None:
+def test_the_region_refuses_a_node_beyond_the_fleet() -> None:
     quotas = quota_values(quota_statements(COMPARTMENT_NAME))
-    # One node per AD, and the replacement lands beside it.
-    assert admitted(2 * conventions.NODE_OCPUS, 2 * conventions.NODE_MEMORY_GB, quotas=quotas, scope='ad')
-
-
-def test_the_region_bounds_what_the_ads_together_would_admit() -> None:
-    quotas = quota_values(quota_statements(COMPARTMENT_NAME))
-    # One AD per node is the most the fleet spreads over, and the per-AD room
-    # summed across them is a fleet's worth of replacements. The regional
-    # quota is the bound that holds the compartment to one.
-    ads = len(conventions.CLOUD_NODES)
-    per_ad = (quotas['standard-a1-core-count'], quotas['standard-a1-memory-count'])
-    assert not admitted(ads * per_ad[0], ads * per_ad[1], quotas=quotas, scope='region')
-
-
-def test_the_region_refuses_a_second_replacement_in_flight() -> None:
-    quotas = quota_values(quota_statements(COMPARTMENT_NAME))
-    # Never more than one node created at once: the capacity hold rests on
-    # it, and it is the regional quota alone that enforces it.
-    nodes = len(conventions.CLOUD_NODES) + 2
+    # A node is replaced delete-first, so nothing the design runs needs a
+    # node more than the fleet, and a replacement launched beside the node it
+    # replaces is refused wherever it is asked for.
+    nodes = len(conventions.CLOUD_NODES) + 1
     assert not admitted(
         nodes * conventions.NODE_OCPUS, nodes * conventions.NODE_MEMORY_GB, quotas=quotas, scope='region'
     )
+
+
+def test_an_ad_admits_its_node() -> None:
+    quotas = quota_values(quota_statements(COMPARTMENT_NAME))
+    # The fleet puts one node in each AD.
+    assert admitted(conventions.NODE_OCPUS, conventions.NODE_MEMORY_GB, quotas=quotas, scope='ad')
+
+
+def test_an_ad_refuses_a_second_node_beside_its_own() -> None:
+    quotas = quota_values(quota_statements(COMPARTMENT_NAME))
+    # A replacement is placed in its node's AD, so one launched beside a
+    # running node is refused there, whatever room the region has.
+    assert not admitted(2 * conventions.NODE_OCPUS, 2 * conventions.NODE_MEMORY_GB, quotas=quotas, scope='ad')
 
 
 #: Oracle's list prices and free allowances, the independent source the budget

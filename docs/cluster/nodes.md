@@ -514,11 +514,13 @@ program no longer exists on the official page. PAYG specifics:
     the envelope the design is budgeted against, plus budget alerts.
     Accept this consciously — "billed, not killed" means the bill is the
     failure mode. The quotas
-    bound A1 twice, per availability domain and per region, and the
-    regional bound is the compartment's ceiling: the fleet plus one node.
-    A replacement is created before the node it replaces is deleted, so a
-    ceiling of the fleet alone would refuse it, and one replacement in
-    flight is all the capacity hold below asks for. The guardrails
+    bound A1 twice, per availability domain and per region, and both
+    hold exactly the fleet: one node's worth per AD, the fleet putting
+    one node in each (§5), and the fleet's worth across the region. A
+    replacement is launched only once the node it replaces is
+    terminated (operations.md §3.1), so the cloud refuses a node beyond
+    the fleet, a replacement launched beside the node it replaces among
+    them, whoever asks for it. The guardrails
     component (`components/cloud/guardrails.py`) holds the numbers and
     their reasons, and its tests hold them against the fleet's declaration.
 
@@ -576,8 +578,8 @@ One OCPU a node is below Talos's control-plane minimum and does not
 carry a burst of creates (§1). Six GB a node would halve the ~4 GB that
 §1 leaves each node for workloads. The budget alert
 (`components/cloud/guardrails.py`) is set at $50: the designed month
-rounded up, the remainder covering about a week of one replacement node
-running beside the node it replaces, at about $0.77 a day.
+rounded up, the remainder being room for what a month adds beyond the
+fleet as declared, egress and request counts among them.
 
 What the three-way split buys over one big node — each a standing
 benefit, so the ~2× platform-floor overhead (3 × ~1.5 GiB instead of 1)

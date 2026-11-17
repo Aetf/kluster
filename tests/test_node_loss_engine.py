@@ -297,8 +297,9 @@ physical() {
 def lost_node_block() -> list[str]:
     """The lost-node block of operations.md §3.1, a line per command, from its URN reads on.
 
-    The lines ahead of those read the instance with the real cloud's tools
-    and gate nothing.
+    The lines ahead of those act on the real cloud and the cluster, the
+    instance's read and the Node object's delete, and gate nothing the
+    engine runs.
     """
     blocks = [
         textblock

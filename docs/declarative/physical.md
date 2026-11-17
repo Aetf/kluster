@@ -115,10 +115,13 @@ credential (`ci_zerotier_identity_physical`,
     changes to both and the instance keeps the values it launched with;
     a node that is replaced for any reason boots the current image and
     configuration, and takes its predecessor's name, the declared one
-    (§2), whatever hostname the VCN gives the new instance. While both
-    run they are two nodes of one name, which evict each other's etcd
-    member, so the order of a control plane's replacement is settled
-    on its own (Aetf/kluster-ops#742).
+    (§2), whatever hostname the VCN gives the new instance. A control
+    plane joining with an empty etcd data directory removes the member
+    of its own name, the predecessor's, which holds data and never adds
+    itself back, so a replacement launched beside the node it replaces
+    would take a live member out of etcd. A control plane is therefore replaced
+    delete-first, as a lost node made on purpose (operations.md §3.1),
+    and the A1 quotas leave no room for one (nodes.md §3.2).
     **Legacy IMDS (v1) is disabled** on every instance; note OCI's v2
     auth header is a static string, so the control that actually keeps
     pods away from `user_data` (= the machine config, secrets included)
@@ -187,16 +190,16 @@ credential (`ci_zerotier_identity_physical`,
     instance leaves the state only through a refresh that reads it
     gone** (operations.md §3.1). A control plane's replacement is an
     operation with an order of its own, which the engine cannot hold
-    (Aetf/kluster-ops#742), so the engine refuses it before it creates
+    (operations.md §3.1), so the engine refuses it before it creates
     anything: a replacement the provider plans for a changed input,
     such as the placement read from the region at apply time, and one
     that `--replace` or `--target-replace` asks for. An update in place
     passes, a resize among them (operations.md §3.4), and a refresh
     drops an instance that reads back without an ID whatever its
-    `protect`. A runbook that does replace an instance lifts the
-    protection first, for that instance alone, with `physical state
-    unprotect`, and the replacement is created protected
-    (physical/gateway-cutover.md §5). `tests/test_node_loss_engine.py`
+    `protect`. A deliberate replacement terminates the instance
+    outside the program, and the refresh after it drops the instance
+    from the state (operations.md §3.1, physical/gateway-cutover.md §5).
+    `tests/test_node_loss_engine.py`
     holds the refusal and the refresh against the pinned CLI.
 -   **Guardrails**: compartment quotas pinning creatable shapes to the
     envelope the design is budgeted against, plus a budget with alert
@@ -261,8 +264,7 @@ machine_secrets
     a control plane's member by and what the kubelet registers the node
     under. A static hostname outranks every other source Talos reads one
     from: the VCN's hostname for a cloud instance, which carries a
-    suffix when its label is still held, as it is by the predecessor of
-    a replacement created before it is deleted (§1); the nocloud seed's
+    suffix when another instance still holds its label; the nocloud seed's
     `local-hostname`; and the name Talos generates. The document states
     `auto: off` beside the name, because the configuration the provider
     generates for v1.13 already carries a `HostnameConfig` with
@@ -555,7 +557,8 @@ machine_secrets
     partitions (provider issue #205) — never enabled on nodes carrying
     data; node replacement is explicit, and destroys no instance through
     the program: a lost node is refreshed out of state and created again,
-    and a deliberate one is replaced create-first (operations.md §3.1).
+    and a deliberate replacement terminates the node outside the program
+    and takes the same path (operations.md §3.1).
 -   **Secrets in state, accepted**: the TF provider's ephemeral
     resources don't bridge to Pulumi, so `machine_secrets` (cluster PKI)
     lives in Pulumi state — passphrase-encrypted, in the TLS-guarded

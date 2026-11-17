@@ -205,10 +205,10 @@ from an HTTP repository, which offers nothing to check a download against
     program.** Each node's instance is protected, so the engine refuses
     to delete it and refuses its replacement, planned or targeted,
     before it creates anything, while a refresh still drops an instance
-    that reads back gone (declarative/physical.md §1). A lost node is recovered by a targeted
-    `refresh --run-program` and an `up`. A deliberate replacement is a
-    create-first `up --target-replace`, the order the regional quota is
-    sized for: the fleet plus one node (cluster/nodes.md §3.2).
+    that reads back gone (declarative/physical.md §1). A lost node is
+    recovered by a targeted `refresh --run-program` and an `up`. A
+    deliberate replacement makes the node a lost one on purpose, one
+    node per sitting, and takes the same recovery.
 
     The program has no delete-first path for the node holding the
     **dedicated VIP**. A targeted destroy of that instance reaches its
@@ -252,15 +252,19 @@ from an HTTP repository, which offers nothing to check a download against
         `terraform-provider-talos` v0.11.0, which `pulumiverse-talos`
         0.8.1 bridges).
 
-    **A lost node.** OCI terminated it, or it is gone for good: the
-    instance reads `TERMINATED`, or the node is to be abandoned in
-    place. From the root of the checkout that holds `.credentials/`,
+    **A lost node.** OCI terminated it: the instance reads
+    `TERMINATED`. A node that is up but given up is terminated first,
+    by the deliberate replacement's termination step below, with the
+    etcd steps it can no longer take left out. From the root of the checkout that holds `.credentials/`,
     with `physical` the function of declarative/physical.md §6, `tal`
-    and `CPS` the setup of physical/gateway-cutover.md §8.1, and
+    and `CPS` the setup of physical/gateway-cutover.md §8.1, `kub`
+    the cluster's `kubectl` under the kubeconfig that setup writes, and
     `<node>` the lost node's name (`cp2`):
 
+        kub() { kubectl --kubeconfig ~/.kube/kluster "$@"; }
         ocid() { physical stack export | jq -r --arg t "$1" --arg n "$2" '.deployment.resources[] | select(.type == $t and .outputs.displayName == $n) | .id'; }
         credentials derived oci-physical read "$(ocid oci:Core/instance:Instance kluster-<node>)"
+        kub delete node <node>
         urns() { physical stack --show-urns | sed -n 's|.*URN: \(urn:.*\)$|\1|p' | grep -E "$1"; }
         S=$(urns '\$oci:NetworkLoadBalancer/backendSet:BackendSet::' | wc -l); echo "$S"
         T=($(urns '::kluster:cloud:CloudNodes\$oci:(Core/instance:Instance::kluster-<node>|NetworkLoadBalancer/backend:Backend::kluster-nlb-.*-<node>)$'))
@@ -274,7 +278,10 @@ from an HTTP repository, which offers nothing to check a download against
     instance's state, `TERMINATED` for a node OCI terminated, as OCI
     reports it under `physical`'s own OCI credential, read out of the
     stack's configuration with the passphrase in its workstation slot
-    (credentials.md §4.4). A URN carries `$`, which the array keeps as
+    (credentials.md §4.4). `kub delete node` removes the Node object
+    the lost machine registered, so that the new machine registers one
+    of its own rather than inheriting the old one's cordon and status.
+    A URN carries `$`, which the array keeps as
     it is, since the output of a command substitution is not expanded
     again. A component of
     `physical` hangs off the stack itself, so its type opens the URN's
@@ -312,24 +319,134 @@ from an HTTP repository, which offers nothing to check a download against
     itself above all, is a diff nobody expected, and nothing is applied
     until it has been read. The `up` ends on the Talos health gate,
     every node named, and §2.5's sync follows it, as it follows every
-    `physical` `up`.
+    `physical` `up`. **The deploy chain follows it, dispatched as at
+    the end of §3.4**: `plan-physical` finds no diff, `up-physical` is
+    skipped, and `up-k8s-base` and `up-apps` run. OCI picks a
+    re-created instance's addresses again, so the node's entries in the
+    `node_private_ips` and `node_guas` outputs move, and on the
+    dedicated VIP's node the `vip1_private` output besides (§3.5).
+    `k8s-base` reads them for the `internet` pool's blocks and the
+    Gateways' addresses (`components/cilium`), and `apps` for the
+    addresses of the Services the balancer fronts (`components/apps`),
+    so until both have run the new node takes no traffic the balancer
+    hands it.
 
-    One fact of this path is not established, and the first recovery
-    reads it: whether the health gate, which the refresh's run of the
-    program reaches, waits on the lost node and fails the refresh.
+    **A deliberate replacement.** The node is up and is to be replaced
+    by a new instance. The order is delete-first: the old instance is
+    terminated, and the recovery is the lost node's. The A1 quotas hold
+    the fleet and no node more (cluster/nodes.md §3.2), so the cloud
+    refuses a replacement launched beside the node it replaces. From the
+    termination until the new member is promoted, etcd runs on two
+    members and tolerates no failure. If the AD refuses the create, that
+    lasts as long as the hunt, which may be days (cluster/nodes.md
+    §3.1), and a second loss inside it is the rung of cluster/nodes.md
+    §5 that loses two nodes, for which this document holds no runbook
+    but §3.5. One node per sitting, and no second node until the closing
+    readings pass. The first deliberate replacement runs on a node that
+    holds neither the dedicated VIP nor a claim reading 3 lists, and the
+    dedicated VIP's node is replaced this way only once one has passed.
 
-    **A deliberate replacement.** The node is up and is to be replaced:
-    drain it, then, with `U` its instance's URN,
-    `physical preview --diff --target-replace "$U"` and, once its plan
-    has been read, `physical up --target-replace "$U"`. The
-    replacement launches first, from the program's current values, and
-    the old instance is deleted at the end of the run. While both run
-    they are two nodes of one name, which evict each other's etcd member
-    (declarative/physical.md §1). How that window is held is settled on
-    its own (Aetf/kluster-ops#742), and no deliberate replacement of a
-    control plane runs before it is. On the dedicated VIP's node the
-    attachment is replaced with the instance, and is protected, so it
-    is unprotected first with `physical state unprotect`.
+    The setup is the lost node's above, the `kub` and `ocid` lines of
+    its block included, with `ip_of` from the same setup of
+    physical/gateway-cutover.md §8.1 and `<node>` the node to be
+    replaced.
+
+    **Readings, all of which pass before anything is written.**
+
+    1.  *Quorum is whole.* `tal -n "$CPS" etcd members` lists one
+        member per control plane from every node, none a learner.
+        `tal -n "$CPS" etcd status` shows one leader, the same on every
+        row, and no error. `tal -n "$CPS" etcd alarm list` prints no
+        alarm. `kub get nodes` shows every node `Ready`.
+    2.  *The AD has capacity.* §3.4's capacity reading, at the declared
+        size, passes for the AD the node's instance names, its
+        `availabilityDomain` in `physical stack export`, taken in the
+        hour before the termination. It is a reading and no reservation:
+        the node's place in the AD is given up at the termination.
+    3.  *What the node holds is given up knowingly.* This lists the
+        class and the claim of every volume whose node affinity names
+        `<node>`:
+
+            kub get pv -o json | jq -r --arg n <node> '.items[] | select(any(.spec.nodeAffinity.required.nodeSelectorTerms[]?.matchExpressions[]? | select(.key == "kubernetes.io/hostname") | .values[]; . == $n)) | "\(.spec.storageClassName) \(.spec.claimRef.namespace)/\(.spec.claimRef.name)"'
+
+        A `local-path` one dies with the instance's system disk
+        (cluster/storage.md §2, "What local-path data outlives"), so each
+        such claim is replicated, backed up, or moved by its owner's
+        procedure before the sitting goes on. A node volume's claim is
+        listed too and loses nothing: the block volume outlives the
+        instance.
+    4.  *On the dedicated VIP's node*, the outage is accepted for the
+        sitting: the reserved address answers nothing and hath is
+        offline until the chain's `up-apps`, where hath's Service asks
+        for the address.
+
+    **The node is emptied and stepped down.**
+
+        kub drain <node> --ignore-daemonsets --delete-emptydir-data
+        tal -n "$(ip_of <node>)" etcd forfeit-leadership
+        (umask 077; tal -n "$(ip_of <another node>)" etcd snapshot ~/.talos/kluster-etcd-before-<node>.snapshot)
+
+    `tal -n "$CPS" etcd status` then shows a leader that is not
+    `<node>`. The drain is undone by `kub uncordon <node>`, and a
+    forfeited leadership needs no undoing. The snapshot holds all of
+    etcd's data, the cluster's Secrets among it, so it is written beside
+    the talosconfig and readable by the operator alone. It is what a
+    recovery from the loss of quorum would start from, and that
+    recovery is not written (cluster/nodes.md §5). The node does not
+    leave etcd: its member is removed by the new instance's join, as a
+    lost node's is, so the one step that cannot be taken back is the
+    next.
+
+    **The instance is terminated**, at a count of one:
+
+        I=($(ocid oci:Core/instance:Instance kluster-<node>)); printf '%s\n' "${I[@]}"
+        [ ${#I[@]} -eq 1 ] && credentials derived oci-physical terminate "${I[@]}"
+
+    `terminate` deletes the instance with its boot volume and prints
+    both once they read `TERMINATED`, as in §3.5's step 3. On the
+    dedicated VIP's node,
+    `credentials derived oci-physical read "$(ocid oci:Core/publicIp:PublicIp kluster-vip1)" "$(ocid oci:Core/volume:Volume kluster-hath-cache)"`
+    then prints `lifetime=RESERVED assigned=-` and
+    `AVAILABLE attached-to=-`, and anything else stops the sitting
+    before the refresh. `tal -n "$CPS" etcd status` answers from the
+    other two nodes with one leader, and errs on the terminated one.
+
+    **The recovery is the lost node's block, from its `read` line on**:
+    the `read` printing `TERMINATED`, the delete of the Node object, the
+    count-gated targeted refresh, the preview, and the `up`. A create
+    the AD refuses fails that instance alone and leaves the cluster on two
+    members; the same `up` again retries it, and nothing else is tried
+    in between.
+
+    **Closing readings**, with the setup taken again from the new
+    outputs: reading 1 passes again, three members and no learner, and
+    `<node>` is `Ready` and not cordoned. The etcd fsync item of
+    declarative/physical.md §6 passes on the new boot volume. The
+    deploy chain of the lost node's path has run to the end of
+    `up-apps`, and the `internet` pool holds the new node's two
+    addresses, which this prints, one line each:
+
+        G=$(physical stack output node_guas --json | jq -r --arg n <node> '.[$n]')
+        kub get ciliumloadbalancerippool internet -o json | jq -r '.spec.blocks[].cidr' | grep -xF -e "$(ip_of <node>)/32" -e "$G/128"
+
+    On the dedicated VIP's node, two more: the `read` above shows an
+    assigned reserved address and an attached volume, and the items of
+    declarative/physical.md §6 for the node volume that need no pod
+    pass.
+
+    **Not established, and read by the first run that meets it:**
+
+    -   whether the health gate, which the refresh's run of the program
+        reaches, waits on the missing node and fails the refresh;
+    -   a re-created control plane joining a live cluster under its old
+        name: the join removing the old member, the new one listed as a
+        learner and then promoted, with two members live throughout;
+    -   what the new kubelet, Cilium and Talos discovery keep of the old
+        machine once its Node object is deleted;
+    -   whether OCI's quota accounting releases a terminated instance
+        before the create that follows it. A create refused on the
+        quota rather than on capacity is that case, and the same `up`,
+        run again later, retries it.
 -   **§3.2 Homelab worker VM.** Trigger: VM/disk loss or rebuild.
     Gist: from the root of the checkout that holds `.credentials/`,
     with `physical` the function of declarative/physical.md §6, which
@@ -587,8 +704,10 @@ from an HTTP repository, which offers nothing to check a download against
     create at once: three creates follow three terminations, each in
     the AD its node's position fixes, and a full AD refuses its create
     for as long as the hunt takes, which may be days (cluster/nodes.md
-    §3.1). The regional quota admits the whole fleet at once, since it
-    is the fleet plus one node. Before stage 6 a hunt costs calendar
+    §3.1). The quotas admit the whole fleet at once, since they hold
+    exactly the fleet (cluster/nodes.md §3.2), once OCI has released
+    the terminated instances, which §3.1 lists as not established.
+    Before stage 6 a hunt costs calendar
     time and no money, the half-built fleet billing what the fleet
     bills. So a deliberate run goes only on a day when §3.4's capacity
     reading, taken in the hour before the termination for every AD of

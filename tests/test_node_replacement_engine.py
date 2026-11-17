@@ -1,27 +1,26 @@
-"""The engine semantics the recovery's control-plane replacement rests on, held by the pinned `pulumi` itself.
+"""The recovery's control-plane replacement, run as the runbook writes it over the pinned `pulumi`.
 
 The recovery of a fleet that booted without the balancer in apid's
-certificate replaces one control plane's instance in a run of its own, and
-bootstraps in the next (physical/gateway-cutover.md §4 step 5). The second
-run is safe only if the first leaves no predecessor behind: a replaced
-instance whose original is still in the state as a pending delete keeps
-running with valid cluster secrets, and stays a backend of every forward,
-while the next run bootstraps etcd; it shares its replacement's hostname
-whenever both booted a rendering that states one. A preview does
-not show such a pending delete, and a run whose flags forbid deletes still
-exits zero, so what the runbook's flags do is read off the engine.
+certificate gives one control plane a new instance in a run of its own, and
+bootstraps in the next (physical/gateway-cutover.md §5). The second run is
+safe only if no predecessor is left beside the new instance: two instances
+of one name that both booted a rendering stating it remove each other's
+etcd member while the next run bootstraps. So run 1 terminates the old
+instance before the program creates the new one, and leaves no pending
+delete in the state, which a preview does not show.
 
 The case runs the CLI `mise.toml` pins over a `file://` backend and a
 `PULUMI_HOME` of its own (`scratch_projects`), against a program of stand-ins
 that registers under the physical stack's own URNs -- project `kluster-py`,
 stack `physical` -- and in its dependency shape:
 
+-   `NodeLoadBalancer`: one backend set per forwarded port and family.
 -   `CloudNodes`: one instance per control plane, and one balancer backend per
-    node, per forwarded port and per family, each naming its instance's id
-    (`components/cloud/nodes.py`). Each declares the options the real fleet
-    registers under its type and name (`fleet_registrations`), so the
-    instances are protected as the fleet's are, and the run replaces one
-    only once the runbook has lifted that protection.
+    node, per forwarded port and per family, each naming its backend set and
+    its instance's id (`components/cloud/nodes.py`). Each stand-in declares
+    the options the real fleet registers under its type and name
+    (`fleet_registrations`), so the instances are protected as the fleet's
+    are.
 -   `TalosDay1`: one configuration apply per node, naming the node's private
     address and depending on every backend (`stacks/physical.py`).
 -   `Gateway` and `Overlay`: a device file, and the overlay's network adopted
@@ -29,12 +28,16 @@ stack `physical` -- and in its dependency shape:
 
 The state is the one the failed first form leaves: everything but Talos day 1
 applied. The run is the runbook's run-1 block as written, under a `physical`
-that names the scratch stack and confirms the `up`.
+that names the scratch stack and confirms each `refresh` and `up`, and a
+`credentials` that stands in for the cloud: its `terminate` marks an
+instance gone and its `read` reports it.
 
-The stand-in providers are a plugin of the case's own: an instance's id is
-fresh on every create, as a cloud's is, so a replacement moves the backends
-that name it, and every create, update and delete appends a line to a log,
-which is how the case knows what the run did.
+The stand-in provider is a plugin of the case's own: an instance's id is
+fresh on every create, as a cloud's is, so a new instance moves the backends
+that name it; an instance the cloud terminated reads back without an ID; and
+every create, update and delete appends a line to a log, as every
+termination does, which is how the case knows what the run did and in what
+order.
 """
 
 from __future__ import annotations
@@ -94,6 +97,9 @@ from pulumi.provider.experimental.provider import (
 from pulumi.provider.experimental.server import main
 
 LOG = pathlib.Path(os.environ['PROBE_LOG'])
+#: The ids of what the cloud no longer holds, one a line, as the stand-in
+#: `credentials` writes them.
+GONE = pathlib.Path(os.environ['PROBE_GONE'])
 INSTANCE = 'oci:Core/instance:Instance'
 
 
@@ -122,15 +128,19 @@ class StandIn(Provider):
         return DiffResponse(changes=bool(changed), diffs=changed)
 
     async def create(self, request):
-        log(f'create {kind(request.urn)} {name(request.urn)}')
         props = dict(request.properties)
         if kind(request.urn) == INSTANCE:
             props['private_ip'] = PropertyValue(f'10.20.0.{len(name(request.urn))}')
-            return CreateResponse(resource_id=f'{name(request.urn)}-{uuid.uuid4().hex[:8]}', properties=props)
-        return CreateResponse(resource_id=name(request.urn), properties=props)
+            resource_id = f'{name(request.urn)}-{uuid.uuid4().hex[:8]}'
+        else:
+            resource_id = name(request.urn)
+        log(f'create {kind(request.urn)} {name(request.urn)} {resource_id}')
+        return CreateResponse(resource_id=resource_id, properties=props)
 
     async def read(self, request):
         log(f'read {kind(request.urn)} {request.resource_id}')
+        if request.resource_id in GONE.read_text().split():
+            return ReadResponse(resource_id=None)
         props = request.properties or {'name': PropertyValue('adopted')}
         inputs = request.inputs or {'name': PropertyValue('adopted')}
         return ReadResponse(resource_id=request.resource_id, properties=props, inputs=inputs)
@@ -140,7 +150,7 @@ class StandIn(Provider):
         return UpdateResponse(properties=dict(request.news))
 
     async def delete(self, request):
-        log(f'delete {kind(request.urn)} {name(request.urn)}')
+        log(f'delete {kind(request.urn)} {name(request.urn)} {request.resource_id}')
 
 
 main(sys.argv[1:], '0.0.1', StandIn())
@@ -211,12 +221,24 @@ class Instance(pulumi.CustomResource):
 
     def __init__(self, name, opts):
         typ = 'oci:Core/instance:Instance'
-        super().__init__(typ, name, {'display_name': name, 'private_ip': None}, registered(typ, name, opts))
+        # `displayName`, as the bridged provider records it in the state.
+        super().__init__(typ, name, {'displayName': name, 'private_ip': None}, registered(typ, name, opts))
+
+
+class NodeLoadBalancer(pulumi.ComponentResource):
+    def __init__(self, name, provider):
+        super().__init__('kluster:cloud:NodeLoadBalancer', name, None, pulumi.ResourceOptions(providers=[provider]))
+        typ = 'oci:NetworkLoadBalancer/backendSet:BackendSet'
+        child = pulumi.ResourceOptions(parent=self)
+        self.backend_sets = {
+            forward: pulumi.CustomResource(typ, f'{name}-nlb-{forward}', {'name': forward}, registered(typ, f'{name}-nlb-{forward}', child))
+            for forward in FORWARDS
+        }
+        self.register_outputs({})
 
 
 class CloudNodes(pulumi.ComponentResource):
-    def __init__(self, name):
-        provider = pulumi.ProviderResource('oci', f'{name}-oci', {})
+    def __init__(self, name, provider, balancer):
         super().__init__('kluster:cloud:CloudNodes', name, None, pulumi.ResourceOptions(providers=[provider]))
         child = pulumi.ResourceOptions(parent=self)
         self.instances = {node: Instance(f'{name}-{node}', child) for node in NODES}
@@ -224,7 +246,7 @@ class CloudNodes(pulumi.ComponentResource):
             pulumi.CustomResource(
                 'oci:NetworkLoadBalancer/backend:Backend',
                 f'{name}-nlb-{forward}-{node}',
-                {'target_id': instance.id, 'forward': forward},
+                {'backend_set_name': balancer.backend_sets[forward].id, 'target_id': instance.id},
                 registered('oci:NetworkLoadBalancer/backend:Backend', f'{name}-nlb-{forward}-{node}', child),
             )
             for forward in FORWARDS
@@ -249,7 +271,8 @@ class TalosDay1(pulumi.ComponentResource):
 
 Gateway('kluster')
 Overlay('kluster')
-nodes = CloudNodes('kluster')
+oci = pulumi.ProviderResource('oci', 'kluster-oci', {})
+nodes = CloudNodes('kluster', oci, NodeLoadBalancer('kluster', oci))
 # The failed first form applied everything but day 1, which failed at its
 # first apply and left nothing in the state.
 if os.environ.get('PROBE_STAGE') != 'tonight':
@@ -263,26 +286,43 @@ UNTOUCHED = ('talos:', 'device-file', 'zerotier:')
 INSTANCE = 'oci:Core/instance:Instance'
 
 #: The `physical` of the runbook's opening, for the scratch stack: every
-#: command names the stack, and an `up` is confirmed, as the operator confirms
-#: it once its preview has been read.
+#: command names the stack, and an `up` or a `refresh` is confirmed, as the
+#: operator confirms it once its preview has been read. Beside it, the cloud's
+#: own tools: `credentials derived oci-physical terminate` marks each instance
+#: gone, which the stand-in provider then reads back without an ID, and logs
+#: the termination; `read` reports what it marked.
 PHYSICAL = """\
+set -e
 physical() {
-    if [ "$1" = up ]; then
+    if [ "$1" = up ] || [ "$1" = refresh ]; then
+        command=$1
         shift
-        pulumi --non-interactive up --yes --skip-preview "$@" --stack physical
+        pulumi --non-interactive "$command" --yes --skip-preview "$@" --stack physical
     else
         pulumi --non-interactive "$@" --stack physical
     fi
+}
+credentials() {
+    [ "$1 $2" = 'derived oci-physical' ] || return 2
+    verb=$3
+    shift 3
+    for id in "$@"; do
+        case "$verb" in
+            terminate) echo "$id" >> "$PROBE_GONE"; echo "terminate $id" >> "$PROBE_LOG"; echo "$id TERMINATED" ;;
+            read) if grep -qxF "$id" "$PROBE_GONE"; then echo "$id TERMINATED"; else echo "$id RUNNING"; fi ;;
+            *) return 2 ;;
+        esac
+    done
 }
 """
 
 
 def run_1_block() -> str:
-    """The runbook's block that replaces `cp3`'s instance: the one `up` carrying `--replace`."""
+    """The runbook's block that gives `cp3` a new instance: the one `up` that names `cp3`'s instance."""
     blocks = [
         block
         for block in re.findall(r'```sh\n(.*?)```', RUNBOOK.read_text(), re.DOTALL)
-        if 'physical up' in block and '--replace' in block
+        if 'physical up' in block and 'Instance::kluster-cp3' in block
     ]
     assert len(blocks) == 1, blocks
     return blocks[0]
@@ -324,10 +364,12 @@ async def options() -> str:
 def tonight(tmp_path: Path, options: str) -> Engine:
     """The stack the failed first form leaves: the fleet, the gateway and the adopted network, and no day 1."""
     log_file = tmp_path / 'engine.log'
+    gone = tmp_path / 'gone'
+    _ = gone.write_text('')
     scratch = scratch_project(
         tmp_path, PROGRAM, name=PROJECT, providers=dict.fromkeys(('oci', 'talos', 'zerotier'), PROVIDER)
     )
-    env = scratch.env | {'PROBE_LOG': str(log_file), 'PROBE_OPTIONS': options}
+    env = scratch.env | {'PROBE_LOG': str(log_file), 'PROBE_OPTIONS': options, 'PROBE_GONE': str(gone)}
     engine = Engine(project=scratch.directory, env=env, log_file=log_file)
     initialized = engine.pulumi('stack', 'init', STACK)
     assert initialized.returncode == 0, initialized.stderr
@@ -342,22 +384,46 @@ def tonight(tmp_path: Path, options: str) -> Engine:
     return engine
 
 
-def test_the_recoverys_first_run_replaces_cp3_whole_and_writes_nothing_else(tonight: Engine) -> None:
+def instances_of(name: str, log: list[str]) -> list[int]:
+    """How many instances of `name` the cloud holds after each line of the log: the program's creates and deletes, and the terminations."""
+    live: set[str] = set()
+    counts: list[int] = []
+    for line in log:
+        match line.split(' '):
+            case ['create', typ, created, resource_id] if typ == INSTANCE and created == name:
+                live.add(resource_id)
+            case ['delete', typ, deleted, resource_id] if typ == INSTANCE and deleted == name:
+                live.discard(resource_id)
+            case ['terminate', resource_id]:
+                live.discard(resource_id)
+            case _:
+                pass
+        counts.append(len(live))
+    return counts
+
+
+def test_the_recoverys_first_run_gives_cp3_a_new_instance_only_once_the_old_is_gone(tonight: Engine) -> None:
     """Run 1, as the runbook spells it, over tonight's stack.
 
-    It has to leave no pending delete -- the original instance, and every
-    backend the replacement moved, gone from the state -- and to have deleted
-    the original, so that nothing named `kluster-cp3` survives into the run
-    that bootstraps. It writes nothing to Talos, the gateway or the overlay,
-    and the replacement is protected again, as the program declares it.
+    The cloud never holds two instances named `kluster-cp3`, and the program
+    deletes no instance: the old one is terminated outside it before the new
+    one is created. The run leaves no pending delete, every backend named for
+    `cp3` names the new instance, and the new instance is protected, as the
+    program declares it. It writes nothing to Talos, the gateway or the
+    overlay.
     """
     before = len(tonight.log())
 
     replaced = tonight.shell(run_1_block())
 
     assert replaced.returncode == 0, _ran(replaced)
-    written = [line for line in tonight.log()[before:] if line.split(' ')[0] in {'create', 'update', 'delete'}]
-    assert f'delete {INSTANCE} kluster-cp3' in written, written
+    log = tonight.log()
+    counts = instances_of('kluster-cp3', log)
+    assert counts[before - 1] == 1, log[:before]
+    assert max(counts) == 1, log
+    assert counts[-1] == 1, log
+    written = [line for line in log[before:] if line.split(' ')[0] in {'create', 'update', 'delete'}]
+    assert not [line for line in written if line.startswith(f'delete {INSTANCE} ')], written
     assert not [line for line in written if line.split(' ')[1].startswith(UNTOUCHED)], written
     exported = tonight.pulumi('stack', 'export')
     assert exported.returncode == 0, exported.stderr
@@ -367,3 +433,7 @@ def test_the_recoverys_first_run_replaces_cp3_whole_and_writes_nothing_else(toni
         resource for resource in resources if resource['type'] == INSTANCE and resource['urn'].endswith('::kluster-cp3')
     ]
     assert replacement.get('protect') is True
+    assert f'create {INSTANCE} kluster-cp3 {replacement["id"]}' in written, written
+    backends = [resource for resource in resources if re.search(r'Backend::kluster-nlb-.*-cp3$', resource['urn'])]
+    assert backends
+    assert {resource['inputs']['target_id'] for resource in backends} == {replacement['id']}
