@@ -1,12 +1,29 @@
 """`renovate.json5` read as text, the way the suites that hold its rules read it.
 
 There is no JSON5 parser here, so a suite that holds a renovate rule finds
-the rule's entry in the file's text and reads its keys one line at a time.
-The shape that makes that sound is the file's own: no `packageRules` entry
-nests an object, and each key a rule sets sits on a line of its own. A brace
-in a comment or inside a string -- a quantifier in a rule's regular
-expression, `[0-9a-f]{12}` -- is passed over, so the braces a scan finds are
-the ones that delimit an entry.
+the rule's entry in the file's text, finds the keys the rule sets, and reads
+the value of each from the line its key starts. The shape that makes that
+sound is the file's own: no `packageRules` entry nests an object, each key a
+rule sets sits on a line of its own, and a line feed is the one line break.
+Text outside that shape fails rather than reads: an entry that nests an
+object and a line break of another kind fail an assertion, and a key read
+off a line it does not start is `Unread`. The scan reads strings and
+comments, of both kinds, as JSON5 does, so a brace in a comment or inside a
+string -- a quantifier in a rule's regular expression, `[0-9a-f]{12}` -- is
+passed over, and the braces a scan finds are the ones that delimit an
+entry; a key inside a comment is no key.
+
+A read fails closed. When a rule sets a key and the scan cannot read its
+value, `listed` and `scalar` raise `Unread` rather than answer as if the
+rule did not set it, so a check that skips a rule setting no group never
+skips one whose group it could not read; `reaches` alone catches it, and
+takes the matcher as matching.
+
+A rule that sets a key twice is read at the last value, which is the value
+renovate reads: it parses a `.json5` file with `JSON5.parse`, which assigns
+each key in turn and does not refuse a duplicate. Taking such a rule as
+unreadable would fail closed too, through `Unread`; reading the last value
+is the more precise of the two.
 
 A custom manager's `matchStrings` are regular expressions, which a suite
 holds by writing each one out in Python and checking it two ways: that
@@ -32,24 +49,100 @@ import re
 #: and in double quotes where the value holds an apostrophe.
 _STRING = re.compile(r"'(?:[^'\\\n]|\\.)*'|\"(?:[^\"\\\n]|\\.)*\"")
 
+#: A comment, as JSON5 reads one: `//` to the end of its line, or `/* … */`.
+_COMMENT = r'//[^\n]*|/\*[\s\S]*?\*/'
+
+#: What JSON5 reads as one piece wherever it starts, scanned from the left so
+#: that whichever opens first takes the text: a string, which an escaped
+#: line break continues onto the next line, or a comment. A `//` or `/*`
+#: inside a string is part of it, and a quote inside a comment is part of that.
+_TOKEN = re.compile(rf"""'(?:[^'\\\n]|\\[\s\S])*'|"(?:[^"\\\n]|\\[\s\S])*"|{_COMMENT}""")
+
+
+#: The line breaks JSON5 reads besides a line feed, each of which ends a `//`
+#: comment: the scan reads none of them, so a text holding one is refused.
+_OTHER_BREAK = re.compile('[\r\u2028\u2029]')
+
+
+def _lf_only(text: str) -> str:
+    """`text`, once it is shown to break its lines with a line feed alone."""
+    assert not _OTHER_BREAK.search(text), 'the scan reads line feeds alone as line breaks'
+    return text
+
+
+def _blank(text: str) -> str:
+    """`text` with every character but a line break turned into a space."""
+    return re.sub(r'[^\n]', ' ', text)
+
 
 def _structure(text: str) -> str:
-    """`text` with each comment line and the inside of each string blanked, every offset kept."""
-
-    def blank(line: str) -> str:
-        if line.lstrip().startswith('//'):
-            return ' ' * len(line)
-        return _STRING.sub(lambda found: found[0][0] + ' ' * (len(found[0]) - 2) + found[0][-1], line)
-
-    return '\n'.join(blank(line) for line in text.split('\n'))
+    """`text` with each comment and the inside of each string blanked, every offset kept."""
+    return _TOKEN.sub(
+        lambda found: _blank(found[0]) if found[0][0] == '/' else found[0][0] + _blank(found[0][1:-1]) + found[0][-1],
+        _lf_only(text),
+    )
 
 
 def _uncommented(text: str) -> str:
-    return '\n'.join(line for line in text.splitlines() if not line.lstrip().startswith('//'))
+    """`text` with its comments passed over, as JSON5 reads them: as whitespace.
+
+    A `/* … */` comment is blanked, its line breaks kept, and a `//` comment
+    on a line of its own is dropped. A `//` comment after other text on its
+    line stays: `listed` passes over one among a list's entries, and a key's
+    value with one after it on its closing line is a value no read can read.
+    """
+
+    def uncomment(found: re.Match[str]) -> str:
+        token = found[0]
+        if token.startswith('/*'):
+            return _blank(token)
+        if token.startswith('//') and not text[text.rfind('\n', 0, found.start()) + 1 : found.start()].strip():
+            return ''
+        return token
+
+    return _TOKEN.sub(uncomment, _lf_only(text))
+
+
+#: A string or a comment, or else a name, which may spell a character as a
+#: `\u` escape.
+_WORD = re.compile(rf'{_TOKEN.pattern}|(?:[\w$]|\\u[0-9A-Fa-f]{{4}})+')
+
+#: What makes the string or name before it a key: a colon, past any
+#: whitespace and comments.
+_COLON = re.compile(rf'(?:\s|{_COMMENT})*:')
+
+
+def _keys(rule: str) -> list[tuple[str, int]]:
+    """Each key `rule` sets, as the name JSON5 reads, with the offset its spelling starts at, in order.
+
+    A string or a name is a key when a colon follows it, which in an entry
+    that nests no object is the one place a colon goes.
+    """
+    keys: list[tuple[str, int]] = []
+    for found in _WORD.finditer(_lf_only(rule)):
+        word = found[0]
+        if word.startswith('/') or not _COLON.match(rule, found.end()):
+            continue
+        keys.append((_value(word[1:-1] if word[0] in '\'"' else word), found.start()))
+    return keys
+
+
+def _set_at(rule: str, key: str) -> int | None:
+    """Where the value JSON5 keeps for `key` starts, past the last spelling of the key.
+
+    `None` when the rule does not set the key, and when that spelling is
+    not the plain name, first on its line and followed by `: `.
+    """
+    setting = [at for name, at in _keys(rule) if name == key]
+    if not setting:
+        return None
+    at = setting[-1]
+    written = re.compile(rf'[ \t]*{re.escape(key)}: ').match(rule, rule.rfind('\n', 0, at) + 1)
+    return written.end() if written is not None and written.end() == at + len(key) + 2 else None
 
 
 def package_rule(config: str, at: int) -> tuple[int, str]:
-    """The `packageRules` entry around offset `at`: where it starts, and its lines bar comments.
+    """The `packageRules` entry around offset `at`: where it starts, and its text, its comments passed over.
 
     An entry is the braces around the offset, which holds because no entry
     nests an object.
@@ -60,20 +153,52 @@ def package_rule(config: str, at: int) -> tuple[int, str]:
 
 
 def package_rules(config: str) -> list[str]:
-    """Each `packageRules` entry of `renovate.json5`, with its comment lines dropped.
+    """Each `packageRules` entry of `renovate.json5`, its comments passed over.
 
-    An entry is a brace-delimited object, and none nests an object, which is
-    what lets a text scan find them.
+    An entry is a brace-delimited object inside the brackets of
+    `packageRules: [`, and none nests an object, which is what lets a text
+    scan find them. A rule may set an object -- renovate takes
+    `prBodyDefinitions` and `constraints` there -- and an entry that nests
+    one fails here rather than read as a rule it is not.
     """
-    start = config.index('packageRules: [')
-    block = config[start : config.index('customManagers: [', start)]
-    return [_uncommented(block[found.start() : found.end()]) for found in re.finditer(r'\{[^{}]*\}', _structure(block))]
+    structure = _structure(config)
+    start = structure.index('packageRules: [') + len('packageRules: [')
+    end = _closing(structure, start)
+    entries = list(re.compile(r'\{[^{}]*\}').finditer(structure, start, end))
+    assert structure.count('{', start, end) == len(entries), (
+        'a packageRules entry nests an object, which tests/renovate_text.py does not read'
+    )
+    return [_uncommented(config[found.start() : found.end()]) for found in entries]
 
 
-#: What a list holds between its brackets besides commas and whitespace: a
-#: string, a `//` comment, which takes the rest of its line and gives none of
-#: it back, so a `],` it ends with never closes the list, or a `/* … */` comment.
-_LISTED = re.compile(rf'{_STRING.pattern}|//[^\n]*+|/\*(?:[^*]|\*(?!/))*\*/')
+def _closing(structure: str, start: int) -> int:
+    """Where the `]` that closes the list opened just before `start` sits."""
+    depth = 1
+    for found in re.compile(r'[\[\]]').finditer(structure, start):
+        depth += 1 if found[0] == '[' else -1
+        if not depth:
+            return found.start()
+    raise AssertionError('packageRules is never closed')
+
+
+class Unread(AssertionError):
+    """A rule sets the key, and the scan cannot read the value JSON5 keeps."""
+
+
+def _refuse_unread(rule: str, key: str) -> None:
+    """Raise `Unread` when `rule` sets `key`: called once the scan has found no value it can read."""
+    if any(name == key for name, _ in _keys(rule)):
+        raise Unread(f'{key} is set in a spelling this scan does not read:\n{rule}')
+
+
+#: What a list holds between its brackets besides commas and whitespace, once
+#: its `/* … */` comments are blanked: a string, or a `//` comment, which takes
+#: the rest of its line and gives none of it back, so a `],` it ends with
+#: never closes the list.
+_LISTED = re.compile(rf'{_STRING.pattern}|//[^\n]*+')
+
+#: A list read whole, from its opening bracket to a `],` that ends its line.
+_LIST = re.compile(rf'\[((?:[\s,]|{_LISTED.pattern})*)\],$', re.MULTILINE)
 
 
 def listed(rule: str, key: str) -> list[str]:
@@ -81,24 +206,49 @@ def listed(rule: str, key: str) -> list[str]:
 
     An entry is read in either quote, so a list mixing the two is read whole,
     and a `]` inside an entry is part of it; a comment among the entries is
-    passed over. The list is empty without the key, and when the scan cannot
-    read it whole: an entry that is no string on one line -- a number, a
-    name, a string continued onto the next line -- or a closing `]` not
-    followed by a comma and the end of its line.
+    passed over. A rule that sets the key twice is read at the last list.
+    The list is empty when the rule does not set the key. The scan reads a
+    list when the last spelling of its key is the plain name, first on its
+    line and followed by `: `, and the list holds strings each on one line
+    and closes with `],` at the end of a line; any other is `Unread`.
     """
-    found = re.search(rf'^\s*{key}: \[((?:[\s,]|{_LISTED.pattern})*)\],$', rule, re.MULTILINE)
-    return [entry[1:-1] for entry in _LISTED.findall(found[1]) if not entry.startswith('/')] if found else []
+    rule = _uncommented(rule)
+    at = _set_at(rule, key)
+    found = None if at is None else _LIST.match(rule, at)
+    if found is None:
+        _refuse_unread(rule, key)
+        return []
+    return [entry[1:-1] for entry in _LISTED.findall(found[1]) if not entry.startswith('/')]
+
+
+#: A string a key is set to, followed by a comma and the end of its line.
+_SCALAR = re.compile(rf'({_STRING.pattern}),$', re.MULTILINE)
 
 
 def scalar(rule: str, key: str) -> str | None:
-    """The string a rule sets `key` to, as the file writes it between its quotes; `None` when it does not set it."""
-    found = re.search(rf'^\s*{key}: ({_STRING.pattern}),$', rule, re.MULTILINE)
-    return found[1][1:-1] if found else None
+    """The string a rule sets `key` to, as the file writes it between its quotes; `None` when it does not set it.
+
+    A rule that sets the key twice is read at the last value. The scan reads
+    a value when the last spelling of its key is the plain name, first on
+    its line and followed by `: `, and the value is a string on that line
+    followed by a comma and the end of the line; any other is `Unread`.
+    """
+    rule = _uncommented(rule)
+    at = _set_at(rule, key)
+    found = None if at is None else _SCALAR.match(rule, at)
+    if found is None:
+        _refuse_unread(rule, key)
+        return None
+    return found[1][1:-1]
 
 
 def group(rule: str) -> list[str]:
-    """The group name and slug a rule sets, in the order it writes them."""
-    return [found[1:-1] for found in re.findall(rf'^\s*group(?:Name|Slug): ({_STRING.pattern}),$', rule, re.MULTILINE)]
+    """The group name and slug a rule sets, each as `scalar` reads it, in the order it first writes them.
+
+    A group the scan cannot read is `Unread`, as it is for `scalar`.
+    """
+    named = dict.fromkeys(name for name, _ in _keys(rule) if name in {'groupName', 'groupSlug'})
+    return [value for name in named if (value := scalar(rule, name)) is not None]
 
 
 def constraints(config: str) -> dict[str, str]:
@@ -197,18 +347,22 @@ def reaches(rule: str, presents: dict[str, tuple[str, ...]]) -> bool:
 
     A `match…` key clears the rule when no pattern it lists matches any value
     the update presents for it. A key the update presents no value for, and
-    a key whose list this scan cannot read, are taken as matching, so a rule
-    is only cleared by a matcher that provably misses. An `exclude…` key
-    never clears it: an exclusion takes effect on a match, and `matches` can
-    prove only a miss. A rule setting a deprecated key renovate merges into
-    another matcher's list before matching -- `match…Patterns`,
-    `match…Prefixes` -- is taken as matching.
+    a key whose list this scan cannot read (`Unread`), are taken as
+    matching, so a rule is only cleared by a matcher that provably misses.
+    An `exclude…` key never clears it: an exclusion takes effect on a match,
+    and `matches` can prove only a miss. A rule setting a deprecated key
+    renovate merges into another matcher's list before matching --
+    `match…Patterns`, `match…Prefixes` -- is taken as matching.
     """
-    if re.search(r'^\s*match\w+(?:Patterns|Prefixes):', rule, re.MULTILINE):
+    keys = dict.fromkeys(name for name, _ in _keys(rule))
+    if any(re.fullmatch(r'match\w+(?:Patterns|Prefixes)', key) for key in keys):
         return True
-    for key in re.findall(r'^\s*(match\w+):', rule, re.MULTILINE):
+    for key in filter(re.compile(r'match\w+').fullmatch, keys):
         values = presents.get(key)
-        patterns = listed(rule, key)
+        try:
+            patterns = listed(rule, key)
+        except Unread:
+            continue
         if values is None or not patterns:
             continue
         if not any(matches(pattern, value) for pattern in patterns for value in values):
@@ -225,7 +379,7 @@ def effective(config: str, presents: dict[str, tuple[str, ...]], key: str) -> st
     setting = [
         rule
         for rule in package_rules(config)
-        if re.search(rf'^\s*{key}:', rule, re.MULTILINE) and reaches(rule, presents)
+        if any(name == key for name, _ in _keys(rule)) and reaches(rule, presents)
     ]
     return setting[-1] if setting else None
 

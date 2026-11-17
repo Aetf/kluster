@@ -24,7 +24,18 @@ what `listed` hands `matches`.
 from __future__ import annotations
 
 import pytest
-from renovate_text import allowed_versions, effective, group, listed, matches, next_line, reaches, scalar
+from renovate_text import (
+    Unread,
+    allowed_versions,
+    effective,
+    group,
+    listed,
+    matches,
+    next_line,
+    package_rules,
+    reaches,
+    scalar,
+)
 
 #: Patterns renovate matches against the value, each with the rule that makes
 #: it a match.
@@ -160,8 +171,119 @@ def test_a_bracket_ending_a_comment_does_not_close_the_list() -> None:
       'talosctl',
     ], // a close the scan does not read
   }"""
-    assert listed(rule, 'matchDepNames') == []
+    with pytest.raises(Unread):
+        _ = listed(rule, 'matchDepNames')
     assert reaches(rule, {'matchDepNames': ('talosctl',)})
+
+
+def test_a_block_comment_is_passed_over() -> None:
+    """JSON5 reads a `/* … */` comment as whitespace: a brace in one delimits no entry, and a key in one is no key."""
+    config = """  packageRules: [
+    {
+      matchDepNames: ['kubectl'],
+      /* one group per tool { */
+    },
+    {
+      /*
+      matchDepNames: ['kubectl'],
+      } */
+      matchPackageNames: ['quay.io/cilium/**'],
+      groupName: 'regrouped',
+    },
+  ],
+  customManagers: [
+  ],
+"""
+    first, second = package_rules(config)
+    assert listed(first, 'matchDepNames') == ['kubectl']
+    assert listed(second, 'matchDepNames') == []
+    assert scalar(second, 'groupName') == 'regrouped'
+    assert reaches(second, {'matchDepNames': ('cilium',), 'matchPackageNames': ('quay.io/cilium/cilium',)})
+
+
+def test_a_key_set_twice_is_read_at_its_last_value() -> None:
+    """JSON5 keeps the last value of a key a rule sets twice, so a read takes that one, or refuses one it cannot read."""
+    rule = """  {
+    matchDepNames: ['kubectl'],
+    groupName: 'tools',
+    matchDepNames: ['cilium'],
+    groupName: 'regrouped',
+  }"""
+    assert listed(rule, 'matchDepNames') == ['cilium']
+    assert scalar(rule, 'groupName') == 'regrouped'
+    assert group(rule) == ['regrouped']
+    assert reaches(rule, {'matchDepNames': ('cilium',)})
+    quoted = """  {
+    matchDepNames: ['kubectl'],
+    'matchDepNames': ['cilium'],
+  }"""
+    with pytest.raises(Unread):
+        _ = listed(quoted, 'matchDepNames')
+    assert reaches(quoted, {'matchDepNames': ('cilium',)})
+
+
+@pytest.mark.parametrize(
+    'setting',
+    ["groupName: 'regrouped', // rides with the tools", "groupName:'regrouped',"],
+    ids=['a-comment-after-it', 'no-space-after-the-colon'],
+)
+def test_a_group_the_scan_cannot_read_is_refused(setting: str) -> None:
+    """A check that skips a rule setting no group cannot skip one whose group the scan does not read."""
+    rule = f"""  {{
+    matchDepNames: ['cilium'],
+    {setting}
+  }}"""
+    with pytest.raises(Unread):
+        _ = scalar(rule, 'groupName')
+    with pytest.raises(Unread):
+        _ = group(rule)
+    assert scalar(rule, 'groupSlug') is None
+
+
+@pytest.mark.parametrize(
+    'line_break', ['\r', '\u2028', '\u2029'], ids=['carriage-return', 'line-separator', 'paragraph-separator']
+)
+def test_a_line_break_the_scan_does_not_read_fails(line_break: str) -> None:
+    """JSON5 ends a `//` comment at any line break, so a key after one is live; the scan refuses the text instead."""
+    rule = f"""  {{
+    matchDepNames: ['kubectl'],
+    // tools{line_break}matchDepNames: ['cilium'],
+  }}"""
+    with pytest.raises(AssertionError, match='line feeds alone'):
+        _ = reaches(rule, {'matchDepNames': ('cilium',)})
+    with pytest.raises(AssertionError, match='line feeds alone'):
+        _ = package_rules(f'  packageRules: [\n{rule},\n  ],\n')
+
+
+def test_an_entry_nesting_an_object_fails() -> None:
+    """A rule may set an object, which the scan does not read, so the list it sits in fails rather than drop it."""
+    config = """  packageRules: [
+    {
+      matchDepNames: ['cilium'],
+      groupName: 'regrouped',
+      prBodyDefinitions: { Notes: 'see the changelog' },
+    },
+  ],
+"""
+    with pytest.raises(AssertionError, match='nests an object'):
+        _ = package_rules(config)
+
+
+def test_the_entries_are_the_ones_inside_the_list() -> None:
+    """An object after the list's `]` is no entry, whatever key comes next."""
+    config = """  packageRules: [
+    {
+      matchDepNames: ['cilium'],
+    },
+  ],
+  lockFileMaintenance: {
+    schedule: ['before 4am on monday'],
+  },
+  customManagers: [
+  ],
+"""
+    (rule,) = package_rules(config)
+    assert listed(rule, 'matchDepNames') == ['cilium']
 
 
 def test_only_a_matcher_that_provably_misses_clears_a_rule() -> None:
@@ -178,7 +300,8 @@ def test_only_a_matcher_that_provably_misses_clears_a_rule() -> None:
     matchFileNames: ['docker/\\
 Containerfile'],
   }"""
-    assert listed(unreadable, 'matchFileNames') == []
+    with pytest.raises(Unread):
+        _ = listed(unreadable, 'matchFileNames')
     assert reaches(unreadable, {'matchFileNames': ('Pulumi.yaml',)})
 
 
@@ -232,16 +355,21 @@ def test_a_rule_without_a_bound_has_none() -> None:
 
 
 @pytest.mark.parametrize(
-    'written',
-    ["'<2.0.0'", "'!/^2\\\\./'", "'/^{{major}}\\\\./'", "'/^(?!2\\\\.)/'"],
+    ('written', 'failure'),
+    [
+        ("'<2.0.0'", 'is not a pattern'),
+        ("'!/^2\\\\./'", 'is negated'),
+        ("'/^{{major}}\\\\./'", 'is a template'),
+        ("'/^(?!2\\\\.)/'", 'is no regex this reading holds'),
+    ],
     ids=['range', 'negated', 'template', 're2-refuses'],
 )
-def test_a_bound_the_reading_does_not_hold_fails(written: str) -> None:
+def test_a_bound_the_reading_does_not_hold_fails(written: str, failure: str) -> None:
     """A range is read in the dependency's versioning, a negation inverts, a template is expanded first.
 
     And a lookahead RE2 refuses leaves renovate with no regex, so it rejects the setting.
     """
-    with pytest.raises(AssertionError):
+    with pytest.raises(AssertionError, match=failure):
         _ = allowed_versions(f'  {{\n    allowedVersions: {written},\n  }}')
 
 
