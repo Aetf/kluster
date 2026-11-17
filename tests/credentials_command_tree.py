@@ -4,6 +4,8 @@ Shared by the suites that hold the tree against something else: the dispatch
 test drives each leaf through `main`, the slot map's test holds each
 `credentials derived` command a row names against the leaves that exist, and
 the help suite renders every parser `tree` reaches, the inner ones included.
+The CLI and `derived` suites split one claim over the commands
+`derived_commands_taking` finds, so the two hold it over the same rows.
 The walks read the real parser, so a subcommand added later is in every suite
 that walks it without anyone editing one.
 
@@ -84,6 +86,35 @@ def leaves(parser: argparse.ArgumentParser) -> Iterator[list[str]]:
 def commands() -> list[list[str]]:
     """Every leaf of `credentials`, each as the shortest argv that reaches it."""
     return list(leaves(cli.build_parser()))
+
+
+#: A kit entry no register row names: the value a census hands an option that
+#: takes an entry, and the entry the cases over that census keep a seed at, so
+#: a mint that reads its seed there can only have been pointed at it.
+ELSEWHERE_ENTRY = 'seeds/elsewhere'
+
+
+def derived_commands_taking(option: str) -> list[list[str]]:
+    """Every `derived` command whose parser takes `option`, as the argv that reaches it.
+
+    Read off the command's surface rather than off the function it reaches,
+    so a row leaves the census only when its flag leaves the CLI: a function
+    whose parameter is renamed stays in, and fails its own case by name.
+    `option` must be one that takes an entry: the probe hands it
+    `ELSEWHERE_ENTRY`.
+
+    A census that collects nothing reports green, so an empty one is refused
+    here; a suite that parametrizes over it calls this at import, where the
+    refusal fails the collection rather than no case at all.
+    """
+    parser = cli.build_parser()
+    found = [
+        argv
+        for argv in commands()
+        if argv[:1] == ['derived'] and not parser.parse_known_args([*argv, option, ELSEWHERE_ENTRY])[1]
+    ]
+    assert found, f'no `derived` command takes `{option}`, so a census over it collects nothing'
+    return found
 
 
 #: A `credentials …` command where prose names one, in a code span.

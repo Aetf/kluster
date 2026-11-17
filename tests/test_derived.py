@@ -38,7 +38,7 @@ import oci_clock
 import pinned_tools
 import pytest
 from cloudflare_api import ACCOUNT_ID, FakeApi, console_seed
-from credentials_command_tree import commands, named_leaves
+from credentials_command_tree import ELSEWHERE_ENTRY, derived_commands_taking, named_leaves
 from cryptography import x509
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -58,7 +58,6 @@ from kluster.lib.state_backend import settings as appliance_settings
 from kluster.scripts.credentials import (
     age,
     b2,
-    cli,
     cloudflare,
     derived,
     entries,
@@ -1845,33 +1844,12 @@ def test_a_recipients_file_that_refuses_stops_generate_before_anything_is_drawn(
 # -- every mint pointed at a seed: it opens the entry it is handed -------------
 
 
-#: A kit entry no register row names. The kits below hold their seed there and
-#: nowhere else, so a mint that opens its row's default entry instead finds no
-#: seed at all.
-ELSEWHERE_ENTRY = 'seeds/elsewhere'
-
-
-def _entry_rows() -> list[str]:
-    """The row of every `derived` command whose parser takes `--entry`.
-
-    The census the CLI suite holds `--entry`'s forwarding over, read off the
-    command's surface rather than off the parameter its function names: a
-    function whose `seed_entry` is renamed stays in, and fails its own case
-    by name. The two suites split one claim: there, the command hands its
-    function the entry `--entry` names; here, the function opens it.
-    """
-    parser = cli.build_parser()
-    return [
-        argv[1]
-        for argv in commands()
-        if argv[:1] == ['derived'] and not parser.parse_known_args([*argv, '--entry', ELSEWHERE_ENTRY])[1]
-    ]
-
-
-ENTRY_ROWS = _entry_rows()
-# A census that collects nothing reports green, so its emptiness is refused
-# here, before collection, where no case could catch it.
-assert ENTRY_ROWS, 'no `derived` command takes `--entry`, so the census of the mints it points at collects nothing'
+# The rows are the census `derived_commands_taking('--entry')` returns, which
+# the CLI suite holds `--entry`'s forwarding over: the two suites split one claim.
+# There, the command hands its function the entry `--entry` names; here, the
+# function opens it. The kits below hold their seed at `ELSEWHERE_ENTRY` and
+# nowhere else, so a mint that opens its row's default entry instead finds no
+# seed at all.
 
 
 def _sealed_as_marked(args: Sequence[str], *, stdin: str | None) -> str:
@@ -2002,7 +1980,7 @@ SEEDED_MINTS: dict[object, Callable[[pytest.FixtureRequest], KdbxStore]] = {
 }
 
 
-@pytest.mark.parametrize('row', ENTRY_ROWS)
+@pytest.mark.parametrize('row', [argv[1] for argv in derived_commands_taking('--entry')])
 def test_a_mint_opens_the_seed_entry_it_is_handed(row: str, request: pytest.FixtureRequest) -> None:
     function = getattr(derived, row.replace('-', '_'), None)
     assert function is not None, f'`derived {row}` takes `--entry`, and derived.py has no function of that name'

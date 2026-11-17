@@ -144,19 +144,27 @@ def api(monkeypatch: pytest.MonkeyPatch, timeline: Timeline) -> B2Api:
     return fake
 
 
+def _hold_oci_seed(store: KdbxStore, tenancy: Tenancy, entry: str) -> None:
+    root = masters.Credential(
+        root=masters.ROOTS['oci'],
+        values={'tenancy': TENANCY, 'user': ROOT_USER, 'private-key': oci_iam.generate_key().private_pem},
+    )
+    _ = oci_iam.create_seed(root=root, seeds=store, seed_entry=entry, connect=tenancy)
+
+
+def _hold_b2_seed(store: KdbxStore, api: B2Api, entry: str) -> None:
+    root = masters.Credential(
+        root=masters.ROOTS['b2'], values={'account-id': api.master.key_id, 'key': api.master.secret}
+    )
+    _ = b2.create_seed(root=root, seeds=store, seed_entry=entry)
+
+
 @pytest.fixture
 def kit(tenancy: Tenancy, api: B2Api) -> KdbxStore:
     """A kit holding both seeds, created the way a bring-up creates them."""
     store = MemoryKit()
-    oci_root = masters.Credential(
-        root=masters.ROOTS['oci'],
-        values={'tenancy': TENANCY, 'user': ROOT_USER, 'private-key': oci_iam.generate_key().private_pem},
-    )
-    _ = oci_iam.create_seed(root=oci_root, seeds=store, seed_entry=derived.OCI_SEED_ENTRY, connect=tenancy)
-    b2_root = masters.Credential(
-        root=masters.ROOTS['b2'], values={'account-id': api.master.key_id, 'key': api.master.secret}
-    )
-    _ = b2.create_seed(root=b2_root, seeds=store, seed_entry=derived.B2_SEED_ENTRY)
+    _hold_oci_seed(store, tenancy, derived.OCI_SEED_ENTRY)
+    _hold_b2_seed(store, api, derived.B2_SEED_ENTRY)
     return store
 
 
@@ -376,6 +384,33 @@ def test_only_mints_one_half_and_leaves_the_other_untouched(
     assert [name for _, _, name in gh.values] == [
         slot.name for slot in (*derived.DRILL_OCI_SLOTS, *derived.DRILL_B2_SLOTS)
     ]
+
+
+#: A kit entry no register row names. The kits below hold a half's seed there
+#: and nowhere else, so a half that opens its default entry instead finds no
+#: seed at all.
+ELSEWHERE_ENTRY = 'seeds/elsewhere'
+
+
+@pytest.mark.parametrize('half', derived.DRILL_HALVES)
+def test_each_half_mints_from_the_seed_entry_it_is_handed(
+    half: str, forge: Forge, tenancy: Tenancy, api: B2Api, bucket_id: str
+) -> None:
+    kit = MemoryKit()
+    if half == derived.DRILL_OCI_HALF:
+        _hold_oci_seed(kit, tenancy, ELSEWHERE_ENTRY)
+        default, handed = derived.OCI_SEED_ENTRY, {'oci_seed_entry': ELSEWHERE_ENTRY}
+    else:
+        _hold_b2_seed(kit, api, ELSEWHERE_ENTRY)
+        default, handed = derived.B2_SEED_ENTRY, {'b2_seed_entry': ELSEWHERE_ENTRY}
+    assert not kit.has(default)
+
+    delivered = derived.drill_credentials(kit, forge, only=half, connect=tenancy, **handed)
+
+    # `--oci-entry` and `--b2-entry` reach these parameters (the CLI suite
+    # holds that); here each half opens the entry handed to its own parameter
+    # alone, rather than its register row's, where this kit holds nothing.
+    assert list(delivered) == [half]
 
 
 def test_a_half_the_drill_does_not_have_is_refused_before_anything_is_minted(
