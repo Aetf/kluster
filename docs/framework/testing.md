@@ -1308,7 +1308,10 @@ It runs in the suite, under the bounds every real-engine case carries
     and the case's own server, rather than from the CLI's output.
 -   **What one release does and the next stops doing is not held.** A test
     that pinned it would fail on the bump for a change that removes nothing
-    the design relies on.
+    the design relies on. A workaround's tripwire is not such a test: it
+    holds the upstream defect a layer answers, and failing on the bump that
+    fixes the defect is its purpose ([style/README.md](../style/README.md),
+    "A workaround for an upstream defect is a layer of its own").
 
 `tests/test_extension_provider.py` holds what the CRD extension rests on
 (kluster-ops#160): a resource of an extension package -- a `crds:` resource
@@ -1411,6 +1414,21 @@ misses a dependency fails, the refusal's text or the checkpoint written
 before it ([pulumi.md](pulumi.md) §1.4), is not held: a release may
 change either without changing what a run rests on.
 
+`tests/test_stack_plan_engine.py` holds what `stack-plan` rests on, as
+the modules of `src/kluster/scripts/stack_plan/` state it: the JSON
+preview's states and the event log's outputs, as the pinned CLI writes
+them, carry each change an `up` writes on a `same` step -- a resource
+option, aliases among them, and an output of the stack or of a
+component -- so the command reads each as one an `up` would write, and as
+nothing once an `up` has written it. An unchanged program reads as
+nothing, and a plan that rewrites a secret prints no secret. It runs the
+command as the console script the package installs. It also holds the
+command's tripwire, a workaround's in the sense of the bullet above: the
+bare preview under `--expect-no-changes` still exits 0 on each of those
+changes. And it holds that a signal to the command, while its preview waits
+on a provider call that never returns, leaves no process of the run behind:
+not the CLI, its language host or its provider.
+
 **A stand-in the engine imports is a provider plugin of the case's
 own**, served from the project's `plugins.providers` path, and it
 fetches nothing. An import's `Read` carries neither inputs nor state,
@@ -1432,8 +1450,9 @@ are:
 -   the engine modules above, `tests/test_state_backend_engine.py`,
     `tests/test_homelab_engine.py`, `tests/test_extension_provider.py`,
     `tests/test_admission_wait_engine.py`,
-    `tests/test_install_order_engine.py` and
-    `tests/test_targeted_import_engine.py`;
+    `tests/test_install_order_engine.py`,
+    `tests/test_targeted_import_engine.py` and
+    `tests/test_stack_plan_engine.py`;
 -   `tests/test_device_directory_engine.py`, which holds what a device
     directory's `delete_before_replace` rests on;
 -   the `real` cases of `tests/test_operator_stack.py`, which run the
