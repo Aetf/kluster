@@ -9,15 +9,13 @@ the image lives in, GitHub's, whether it serves the pinned digest.
 
 from __future__ import annotations
 
-import fnmatch
 import json
-import re
 from pathlib import Path
 from typing import cast
 from urllib import request as urllib_request
 
 import pytest
-from renovate_text import as_python_spells_it, group, listed, package_rules
+from renovate_text import as_python_spells_it, effective, group, listed, package_rules
 
 from kluster.lib.state_backend import settings
 from kluster.scripts.state_backend import provision
@@ -49,61 +47,6 @@ def test_renovate_reads_the_image_the_box_runs() -> None:
     (found,) = as_python_spells_it(IMAGE_MATCH_STRING).finditer((ROOT / APPLIANCE).read_text())
 
     assert f'{found["depName"]}:{found["currentValue"]}@{found["currentDigest"]}' == settings.PGBOUNCER_IMAGE
-
-
-def _matches(pattern: str, value: str) -> bool:
-    """Whether one renovate match pattern -- a `/regex/` or `/regex/i`, a glob or a literal -- matches `value`.
-
-    Read as renovate reads it: the regex is the JSON5 string's value, and a
-    glob ignores case. What this reading cannot settle is taken as matching: a
-    negated pattern (`!…`), whose effect depends on the rest of its list; a
-    regex Python cannot compile; and glob syntax `fnmatch` does not share with
-    minimatch, braces and extglobs.
-    """
-    if pattern.startswith('!'):
-        return True
-    regex = re.fullmatch(r'/(.+)/(i?)', pattern)
-    if regex:
-        try:
-            # The file's text doubles each backslash of the pattern renovate compiles.
-            return re.search(regex[1].replace('\\\\', '\\'), value, re.IGNORECASE if regex[2] else 0) is not None
-        except re.error:
-            return True
-    # Brace and extglob syntax is minimatch's alone.
-    if any(char in pattern for char in '{('):
-        return True
-    return fnmatch.fnmatchcase(value.lower(), pattern.lower())
-
-
-def _reaches(rule: str, presents: dict[str, tuple[str, ...]]) -> bool:
-    """Whether a rule can match an update presenting these values to its matchers.
-
-    A matcher the update presents no value for, and a key whose list this scan
-    cannot read, are taken as matching, so a rule is only cleared by a matcher
-    that provably misses.
-    """
-    for key in re.findall(r'^\s*((?:match|exclude)\w+):', rule, re.MULTILINE):
-        values = presents.get(key)
-        patterns = listed(rule, key)
-        if values is None or not patterns:
-            continue
-        if not any(_matches(pattern, value) for pattern in patterns for value in values):
-            return False
-    return True
-
-
-def _effective(config: str, presents: dict[str, tuple[str, ...]], key: str) -> str | None:
-    """The rule renovate takes `key` from for an update: the last one that sets it and can match.
-
-    Every matching rule is merged in order, so a later one overrides an
-    earlier one on any key both set. `None` when no rule sets the key.
-    """
-    setting = [
-        rule
-        for rule in package_rules(config)
-        if re.search(rf'^\s*{key}:', rule, re.MULTILINE) and _reaches(rule, presents)
-    ]
-    return setting[-1] if setting else None
 
 
 def test_the_images_digest_moves_monthly_in_the_appliances_group() -> None:
@@ -138,7 +81,7 @@ def test_the_images_digest_moves_monthly_in_the_appliances_group() -> None:
         'matchUpdateTypes': ('digest',),
     }
 
-    scheduling = _effective(config, digest, 'schedule')
+    scheduling = effective(config, digest, 'schedule')
     assert scheduling is not None, 'no rule gives the digest a window, so each rebuild opens a pull request'
     windows = [entry.split() for entry in listed(scheduling, 'schedule')]
     assert windows, f'the window renovate takes is not a list of cron entries:\n{scheduling}'
@@ -154,8 +97,8 @@ def test_the_images_digest_moves_monthly_in_the_appliances_group() -> None:
         f'more than one day a month: {windows}'
     )
 
-    assert _effective(config, digest, 'groupName') == _appliance_rule(config)
-    assert _effective(config, digest, 'groupSlug') == _appliance_rule(config)
+    assert effective(config, digest, 'groupName') == _appliance_rule(config)
+    assert effective(config, digest, 'groupSlug') == _appliance_rule(config)
 
 
 class _Answer:
