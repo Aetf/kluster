@@ -28,18 +28,21 @@ import ipaddress
 import re
 import shlex
 import shutil
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
+from typing import override
 
 import b2_api
 import oci_clock
 import pinned_tools
 import pytest
 from cloudflare_api import ACCOUNT_ID, FakeApi, console_seed
-from credentials_command_tree import named_leaves
+from credentials_command_tree import commands, named_leaves
 from cryptography import x509
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from fake_gh import RecordedGh
 from fake_pulumi import RecordedPulumi
 from memory_kit import MemoryKit
 from oci_clock import SimulatedClock
@@ -55,6 +58,7 @@ from kluster.lib.state_backend import settings as appliance_settings
 from kluster.scripts.credentials import (
     age,
     b2,
+    cli,
     cloudflare,
     derived,
     entries,
@@ -70,6 +74,7 @@ from kluster.scripts.credentials import (
 # Aliased: `slots` is the name a fixture below gives the workstation's
 # `.credentials/` directory, and the map is a different thing entirely.
 from kluster.scripts.credentials import slots as slot_map
+from kluster.scripts.credentials.github_secrets import Forge
 from kluster.scripts.credentials.kdbx import KdbxStore
 from kluster.scripts.operator_stack import cli as operator_stack_cli
 
@@ -132,11 +137,16 @@ def recorded_account(monkeypatch: pytest.MonkeyPatch) -> None:
     _with_cloudflare_account(monkeypatch, ACCOUNT_ID)
 
 
+def _cloudflare_kit(api: FakeApi, entry: str) -> KdbxStore:
+    """A kit holding the Cloudflare seed at `entry`, adopted the way a bring-up adopts it."""
+    store = MemoryKit()
+    _ = cloudflare.adopt_seed(token=console_seed(api), seeds=store, seed_entry=entry)
+    return store
+
+
 @pytest.fixture
 def kit(api: FakeApi) -> KdbxStore:
-    store = MemoryKit()
-    _ = cloudflare.adopt_seed(token=console_seed(api), seeds=store, seed_entry=derived.CLOUDFLARE_SEED_ENTRY)
-    return store
+    return _cloudflare_kit(api, derived.CLOUDFLARE_SEED_ENTRY)
 
 
 @pytest.fixture
@@ -615,17 +625,21 @@ def tenancy(monkeypatch: pytest.MonkeyPatch) -> Tenancy:
     return Tenancy()
 
 
-@pytest.fixture
-def oci_kit(tenancy: Tenancy) -> KdbxStore:
-    """A kit holding the OCI seed, created the way a bring-up creates it."""
+def _oci_kit(tenancy: Tenancy, entry: str) -> KdbxStore:
+    """A kit holding the OCI seed at `entry`, created the way a bring-up creates it."""
     store = MemoryKit()
     private_pem = oci_iam.generate_key().private_pem
     root = masters.Credential(
         root=masters.ROOTS['oci'],
         values={'tenancy': TENANCY, 'user': ROOT_USER, 'private-key': private_pem},
     )
-    _ = oci_iam.create_seed(root=root, seeds=store, seed_entry=derived.OCI_SEED_ENTRY, connect=tenancy)
+    _ = oci_iam.create_seed(root=root, seeds=store, seed_entry=entry, connect=tenancy)
     return store
+
+
+@pytest.fixture
+def oci_kit(tenancy: Tenancy) -> KdbxStore:
+    return _oci_kit(tenancy, derived.OCI_SEED_ENTRY)
 
 
 def _named(tenancy: Tenancy, name: str) -> str:
@@ -1036,15 +1050,20 @@ def b2_api_fake(monkeypatch: pytest.MonkeyPatch) -> b2_api.FakeApi:
     return fake
 
 
-@pytest.fixture
-def b2_kit(b2_api_fake: b2_api.FakeApi) -> KdbxStore:
+def _b2_kit(api: b2_api.FakeApi, entry: str) -> KdbxStore:
+    """A kit holding the B2 seed at `entry`, created from the account's master key the way a bring-up creates it."""
     store = MemoryKit()
     root = masters.Credential(
         root=masters.ROOTS['b2'],
-        values={'account-id': b2_api_fake.master.key_id, 'key': b2_api_fake.master.secret},
+        values={'account-id': api.master.key_id, 'key': api.master.secret},
     )
-    _ = b2.create_seed(root=root, seeds=store, seed_entry=derived.B2_SEED_ENTRY)
+    _ = b2.create_seed(root=root, seeds=store, seed_entry=entry)
     return store
+
+
+@pytest.fixture
+def b2_kit(b2_api_fake: b2_api.FakeApi) -> KdbxStore:
+    return _b2_kit(b2_api_fake, derived.B2_SEED_ENTRY)
 
 
 def test_the_management_key_lands_in_the_stack_config_with_its_id(
@@ -1821,3 +1840,181 @@ def test_a_recipients_file_that_refuses_stops_generate_before_anything_is_drawn(
         _ = derived.backup_age_recipient(vault_in_hand, label, recipients_file=recipients_file)
 
     assert vault_in_hand.registry.generations(label) == []
+
+
+# -- every mint pointed at a seed: it opens the entry it is handed -------------
+
+
+#: A kit entry no register row names. The kits below hold their seed there and
+#: nowhere else, so a mint that opens its row's default entry instead finds no
+#: seed at all.
+ELSEWHERE_ENTRY = 'seeds/elsewhere'
+
+
+def _entry_rows() -> list[str]:
+    """The row of every `derived` command whose parser takes `--entry`.
+
+    The census the CLI suite holds `--entry`'s forwarding over, read off the
+    command's surface rather than off the parameter its function names: a
+    function whose `seed_entry` is renamed stays in, and fails its own case
+    by name. The two suites split one claim: there, the command hands its
+    function the entry `--entry` names; here, the function opens it.
+    """
+    parser = cli.build_parser()
+    return [
+        argv[1]
+        for argv in commands()
+        if argv[:1] == ['derived'] and not parser.parse_known_args([*argv, '--entry', ELSEWHERE_ENTRY])[1]
+    ]
+
+
+ENTRY_ROWS = _entry_rows()
+# A census that collects nothing reports green, so its emptiness is refused
+# here, before collection, where no case could catch it.
+assert ENTRY_ROWS, 'no `derived` command takes `--entry`, so the census of the mints it points at collects nothing'
+
+
+def _sealed_as_marked(args: Sequence[str], *, stdin: str | None) -> str:
+    """Seals nothing: a ciphertext stand-in that names what it was given, so a seal reaches the write it feeds."""
+    del args
+    return f'AgB-sealed-{stdin}\n'
+
+
+@dataclass(frozen=True)
+class SealerWritingNothing(sealing.Sealer):
+    """A sealer that seals with the stand-in it runs, and whose write goes no further than its argument.
+
+    The write is the one step left out, so a row reaches it however it
+    composes the seal and the write: through `deliver`, or calling both. The
+    declaring stack is still asked for, as every sealed row asks before it
+    mints; what these cases hold is the seed the value was minted from, and
+    how it is sealed and where the ciphertext lands is `test_sealing`'s.
+    """
+
+    @override
+    def write(self, value: conventions.sealed.SealedValue, sealed: Mapping[str, str]) -> None:
+        del value, sealed
+
+
+def _sealer_writing_nothing() -> SealerWritingNothing:
+    """Such a sealer over stacks that all exist, as they do by the time anything is sealed."""
+    open_stack, _ = _stacks_on(pulumi_config.BackendEnvironment(passphrase=lambda: 'the-stack-passphrase'))
+    return SealerWritingNothing(certificate='', open_stack=open_stack, run=_sealed_as_marked)
+
+
+# Each mint below takes the fake of its own platform from the row's own
+# fixture, asked for only when that row runs: the Cloudflare and B2 fakes
+# both stand in for `requests`, so a case holding both would reach one
+# platform through the other's fake.
+
+
+def _zones(request: pytest.FixtureRequest) -> KdbxStore:
+    kit = _cloudflare_kit(request.getfixturevalue('api'), ELSEWHERE_ENTRY)
+    slot, _ = request.getfixturevalue('stack')
+    derived.cloudflare_zones(kit, stacks=[slot], seed_entry=ELSEWHERE_ENTRY)
+    return kit
+
+
+def _gateway_acme(request: pytest.FixtureRequest) -> KdbxStore:
+    kit = _cloudflare_kit(request.getfixturevalue('api'), ELSEWHERE_ENTRY)
+    slot, _ = request.getfixturevalue('physical_stack')
+    _ = derived.cloudflare_gateway_acme(kit, stack=slot, seed_entry=ELSEWHERE_ENTRY)
+    return kit
+
+
+def _dns01(request: pytest.FixtureRequest) -> KdbxStore:
+    kit = _cloudflare_kit(request.getfixturevalue('api'), ELSEWHERE_ENTRY)
+    _ = derived.cloudflare_dns01(kit, sealer=_sealer_writing_nothing(), seed_entry=ELSEWHERE_ENTRY)
+    return kit
+
+
+def _oci_physical(request: pytest.FixtureRequest) -> KdbxStore:
+    tenancy: Tenancy = request.getfixturevalue('tenancy')
+    kit = _oci_kit(tenancy, ELSEWHERE_ENTRY)
+    slot, _ = request.getfixturevalue('physical_stack')
+    _ = derived.oci_physical(kit, stack=slot, compartment_id=COMPARTMENT, seed_entry=ELSEWHERE_ENTRY, connect=tenancy)
+    return kit
+
+
+def _oci_state_backend(request: pytest.FixtureRequest) -> KdbxStore:
+    tenancy: Tenancy = request.getfixturevalue('tenancy')
+    kit = _oci_kit(tenancy, ELSEWHERE_ENTRY)
+    slot, _ = request.getfixturevalue('state_backend_stack')
+    _ = derived.oci_state_backend(
+        kit, stack=slot, compartment_id=COMPARTMENT, seed_entry=ELSEWHERE_ENTRY, connect=tenancy
+    )
+    return kit
+
+
+def _oci_metrics(request: pytest.FixtureRequest) -> KdbxStore:
+    tenancy: Tenancy = request.getfixturevalue('tenancy')
+    kit = _oci_kit(tenancy, ELSEWHERE_ENTRY)
+    # The reader reads `physical`'s compartment, which exists by the time
+    # anything is sealed.
+    _ = request.getfixturevalue('recorded_compartment')
+    _ = derived.oci_metrics(kit, sealer=_sealer_writing_nothing(), seed_entry=ELSEWHERE_ENTRY, connect=tenancy)
+    return kit
+
+
+def _b2_management(request: pytest.FixtureRequest) -> KdbxStore:
+    kit = _b2_kit(request.getfixturevalue('b2_api_fake'), ELSEWHERE_ENTRY)
+    slot, _ = request.getfixturevalue('physical_stack')
+    _ = derived.b2_management(kit, stack=slot, seed_entry=ELSEWHERE_ENTRY)
+    return kit
+
+
+def _b2_state_backend_management(request: pytest.FixtureRequest) -> KdbxStore:
+    kit = _b2_kit(request.getfixturevalue('b2_api_fake'), ELSEWHERE_ENTRY)
+    slot, _ = request.getfixturevalue('state_backend_stack')
+    _ = derived.b2_state_backend_management(kit, stack=slot, seed_entry=ELSEWHERE_ENTRY)
+    return kit
+
+
+def _b2_freshness_dumps(request: pytest.FixtureRequest) -> KdbxStore:
+    api: b2_api.FakeApi = request.getfixturevalue('b2_api_fake')
+    kit = _b2_kit(api, ELSEWHERE_ENTRY)
+    # The bucket the `state-backend` stack declares, which the row looks up
+    # rather than creates.
+    api.buckets['bucket-dumps'] = {
+        'bucketId': 'bucket-dumps',
+        'bucketName': appliance_settings.B2_BUCKET,
+        'bucketType': 'allPrivate',
+        'lifecycleRules': [],
+    }
+    _ = derived.b2_freshness_dumps(kit, Forge(token='admin-token', run=RecordedGh()), seed_entry=ELSEWHERE_ENTRY)
+    return kit
+
+
+#: How each mint the census reaches is run, from a kit holding its seed at
+#: `ELSEWHERE_ENTRY` alone, into the fakes. Keyed by the function, which the
+#: census finds by its row; a row the census finds and this does not run
+#: fails by name, so the census rather than this table decides what is held.
+SEEDED_MINTS: dict[object, Callable[[pytest.FixtureRequest], KdbxStore]] = {
+    derived.cloudflare_zones: _zones,
+    derived.cloudflare_gateway_acme: _gateway_acme,
+    derived.cloudflare_dns01: _dns01,
+    derived.oci_physical: _oci_physical,
+    derived.oci_state_backend: _oci_state_backend,
+    derived.oci_metrics: _oci_metrics,
+    derived.b2_management: _b2_management,
+    derived.b2_state_backend_management: _b2_state_backend_management,
+    derived.b2_freshness_dumps: _b2_freshness_dumps,
+}
+
+
+@pytest.mark.parametrize('row', ENTRY_ROWS)
+def test_a_mint_opens_the_seed_entry_it_is_handed(row: str, request: pytest.FixtureRequest) -> None:
+    function = getattr(derived, row.replace('-', '_'), None)
+    assert function is not None, f'`derived {row}` takes `--entry`, and derived.py has no function of that name'
+    mint = SEEDED_MINTS.get(function)
+    assert mint is not None, f'`derived {row}` takes `--entry`, and nothing here runs it from a seed kept elsewhere'
+
+    kit = mint(request)
+
+    # `--entry` points a mint at a seed kept anywhere but its register row's
+    # entry, and the kit holds the seed there and nothing at that default: a
+    # function that opened its row's entry rather than the one it was handed
+    # would find no seed, where against a real kit it would find the
+    # installation's own and mint and retire in that seed's account. The kit
+    # comes out as it went in, the minted credential never in it.
+    assert kit.entries() == [ELSEWHERE_ENTRY]
