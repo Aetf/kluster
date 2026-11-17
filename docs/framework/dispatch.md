@@ -560,7 +560,8 @@ The pinned tools install from these hosts, each tool's URL recorded in
 `mise.lock`: `nodejs.org` for `node`; `conda.anaconda.org` for every tool
 pinned from a `conda` channel (today `postgres`, `gawk` and `libxslt`),
 every package a `conda` install unpacks included; `archive.archlinux.org`
-for `dash`; and release downloads from `github.com` for every other tool.
+for `dash`; `dl.k8s.io` for `kubectl`; and release downloads from
+`github.com` for every other tool.
 Full reaches any host. The Claude Code documentation lists each of them
 but `archive.archlinux.org` among the hosts that default allows too (its
 cloud environments page, "Default allowed domains"); it scopes the GitHub
