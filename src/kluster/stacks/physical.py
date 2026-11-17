@@ -40,7 +40,7 @@ import pulumi_oci as oci
 import pulumiverse_talos
 
 from kluster import conventions
-from kluster.components.backup import BackupBucket, Scope, barman_scope, etcd_scope, volsync_scope
+from kluster.components.backup import BackupBucket, Scope, barman_scope, etcd_scope, metrics_scope, volsync_scope
 from kluster.components.cloud import CloudNetwork
 from kluster.components.cloud.guardrails import AlertRule, Guardrails
 from kluster.components.cloud.nodes import CloudNodes, NodeLoadBalancer
@@ -60,7 +60,7 @@ from kluster.components.overlay.flow_rules import flow_rules
 from kluster.components.talos import TalosCluster, TalosDay1
 from kluster.components.talos.image import TalosImage, TalosNocloudImage
 from kluster.conventions import backup as backup_conventions
-from kluster.conventions.backup import BackupFamily, metrics_repo_path, writer_scope
+from kluster.conventions.backup import BackupFamily
 from kluster.lib import config as lib_config
 from kluster.lib.versions import NAMESPACE as VERSIONS
 from kluster.lib.versions import versions
@@ -117,11 +117,6 @@ BUDGET_ALERT_RULES: tuple[AlertRule, ...] = (
 
 #: The bucket's consumers that exist whether or not any application does.
 FIXED_SCOPES: tuple[Scope, ...] = (etcd_scope(),)
-
-
-def metrics_scope(namespace: str) -> Scope:
-    """One namespace's `vmbackup` copies, every VictoriaMetrics store it holds, under its family's scope."""
-    return Scope(name=writer_scope(namespace, BackupFamily.VM), prefix=metrics_repo_path(namespace, ''))
 
 
 #: The scope each backup family's writer key reaches, by the namespace it

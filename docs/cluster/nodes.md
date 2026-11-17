@@ -777,10 +777,11 @@ answered with `kubectl top` on the legacy cluster (2026-08-22), of
 | --- | --- | --- |
 | k3s server + containerd (host procs) | ~1.7 GiB | CP moved cloud-side; the homelab VM keeps only kubelet+containerd (~0.5 GiB). The CP cost re-appears as ~2–2.5 GiB × 3 on the cloud nodes — paid out of OCI RAM, not out of the 32 GB host |
 | Monitoring (prometheus 948 Mi, grafana 428 Mi, exporters/operator/alertmanager ~200 Mi) | ~1.6 GiB | **switch to VictoriaMetrics** (vmsingle + vmagent + vmalert): PromQL-compatible, typically ~1/5 the RAM at this scale; grafana stays. Target ≤0.7 GiB, held as requests on the worker: 0.65 GiB of them (`components/monitoring/memory.py`), against 0.9 GiB of working set measured 2026-11-17 under the charts' defaults. metrics-server, which the monitoring component installs beside it, is charged to the kube-system row below |
+| Monitoring's history store (none on the legacy cluster) | — | **a line of its own**, the second vmsingle that keeps the comparison's series for good (declarative/cluster-infra.md §1 item 6): a 150 Mi request beside monitoring's ≤0.7 GiB, its own line of `components/monitoring/memory.py`. Derived from the recent store's 225 Mi at 171,229 series, read 2026-11-17: the history holds 5,000–6,000 of them, so what it takes is the process's floor rather than its series' |
 | Shared-JuiceFS stack (CSI ×5, redis, 4 mount pods) | ~1.0 GiB | gone by design: no CSI driver, no shared metadata store, and no workload mounts JuiceFS (storage.md §6). A workload admitted later brings its own sidecar mount, **budgeted honestly at 0.5–1 GiB requests** — root cause (b) of the legacy instability was starving exactly this process |
 | Everything else in kube-system (coredns, metrics-server, cert-manager, sealed-secrets, nfd, local-path, reloader) | ~0.45 GiB | kept as-is — **sealed-secrets stays** (the secret-management model is unchanged from kluster-code); only the JuiceFS dashboard is dropped |
 | CNPG operator + traefik | ~0.3 GiB | CNPG stays; traefik → the two Envoy gateways (similar) |
-| **Total** | **~5 GiB (~30%)** | **projected ~3.5 GiB** |
+| **Total** | **~5 GiB (~30%)** | **projected ~3.65 GiB** |
 
 The projection *includes* what the new design adds (Cilium agents are
 heavier than flannel+kube-proxy, two gateways, VolSync controller) and

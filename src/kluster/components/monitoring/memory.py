@@ -6,8 +6,11 @@ the component runs on the worker is a row of `WORKER_CONTAINERS`, and both
 charts take each row's request and limit from there (`chart_values`), so a
 container the program runs is a container some line of that table counts.
 Each row names its line (`Line`): the stack's containers are charged to
-monitoring's, which the budget holds, and metrics-server to the line for
-everything else in kube-system, where nodes.md §4.4 counts it.
+monitoring's, which the budget holds, metrics-server to the line for
+everything else in kube-system, where nodes.md §4.4 counts it, and the
+history store, the vmsingle the component declares itself, to a line of its
+own, `HISTORY_BUDGET_MIB` beside monitoring's (nodes.md §4.4, as the operator
+ruled on Aetf/kluster-ops#790).
 
 **A request is what the container runs at**, its anonymous memory as the
 kubelet reports it, rounded up (workloads.md §1), and for the two
@@ -46,6 +49,8 @@ __all__ = (
     'BUDGET_MIB',
     'GRAFANA',
     'GRAFANA_GOGC',
+    'HISTORY_BUDGET_MIB',
+    'HISTORY_STORE',
     'METRICS_SERVER_CHART',
     'STACK_CHART',
     'WORKER_CONTAINERS',
@@ -60,6 +65,13 @@ __all__ = (
 #: The memory nodes.md §4.4 budgets for monitoring on the worker, and rfc-008
 #: §6.1 reserves there as a request: 0.7 GiB, in MiB.
 BUDGET_MIB = 0.7 * 1024
+
+#: The memory nodes.md §4.4 gives the history store on the worker, a line of
+#: its own beside `BUDGET_MIB`, in MiB. Derived rather than measured: the
+#: recent store ran at 225 MiB holding 171,229 series (Aetf/kluster-ops#790),
+#: and the history holds 5,000 to 6,000 of them, so what it takes is the
+#: process's and its caches' floor rather than its series'.
+HISTORY_BUDGET_MIB = 150
 
 #: The names of the two charts the component installs, as their pins name
 #: them (`versions.chart`).
@@ -81,6 +93,8 @@ class Line(enum.Enum):
     MONITORING = 'monitoring'
     #: Everything else in kube-system, metrics-server among it.
     KUBE_SYSTEM = 'kube-system'
+    #: The history store, whose budget is `HISTORY_BUDGET_MIB`.
+    HISTORY = 'monitoring history'
 
 
 @dataclass(frozen=True)
@@ -106,11 +120,13 @@ class Memory:
 class Container:
     """One container the component runs on the worker: which chart runs it, where that chart reads its memory.
 
-    `line` is the line of nodes.md §4.4 the container is charged to.
+    `chart` is `None` for an object the component declares itself, whose spec
+    reads its memory at `path`. `line` is the line of nodes.md §4.4 the
+    container is charged to.
     """
 
     name: str
-    chart: str
+    chart: str | None
     path: tuple[str, ...]
     memory: Memory
     line: Line = Line.MONITORING
@@ -118,6 +134,14 @@ class Container:
 
 #: Grafana itself, its Go runtime collecting at `GRAFANA_GOGC`.
 GRAFANA = Container('grafana', STACK_CHART, ('grafana', 'resources'), Memory(request=128, limit=384))
+
+#: The history store's vmsingle, which the component declares itself, on its
+#: own line. Its limit is the recent store's: the same process, whose caches
+#: are sized from it, and which a query over a long period of the history
+#: needs room for.
+HISTORY_STORE = Container(
+    'vmsingle-history', None, ('spec', 'resources'), Memory(HISTORY_BUDGET_MIB, 512), Line.HISTORY
+)
 
 #: Every container the component runs on the worker. The node exporter runs on
 #: every node, and its row is the worker's copy. The stack's operator also runs
@@ -145,6 +169,7 @@ WORKER_CONTAINERS: tuple[Container, ...] = (
     # The pinned chart's values hold `resources.requests` and only a comment
     # for limits, so its record has no path for one.
     Container('metrics-server', METRICS_SERVER_CHART, ('resources',), Memory(32, None), Line.KUBE_SYSTEM),
+    HISTORY_STORE,
 )
 
 

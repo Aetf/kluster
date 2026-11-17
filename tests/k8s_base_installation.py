@@ -154,6 +154,10 @@ VERSIONS_CONFIG = {
     ),
     'versions:image-local-path-provisioner': f'registry.example.invalid/local-path-provisioner:v9.4.0@sha256:{"3" * 64}',
     'versions:image-local-path-helper': f'registry.example.invalid/busybox:9.5.0@sha256:{"4" * 64}',
+    'versions:image-metrics-history': f'registry.example.invalid/victoria-metrics:v9.15.0@sha256:{"0" * 64}',
+    'versions:image-metrics-backup': f'registry.example.invalid/vmbackup:v9.15.0@sha256:{"1" * 64}',
+    'versions:image-metrics-restore': f'registry.example.invalid/vmrestore:v9.15.0@sha256:{"2" * 64}',
+    'versions:image-metrics-bucket': f'registry.example.invalid/curl:9.16.0@sha256:{"3" * 64}',
     'versions:manifest-gateway-api': json.dumps(
         {
             'repository': 'example/gateway-api',

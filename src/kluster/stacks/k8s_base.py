@@ -48,8 +48,9 @@ not pre-decided"), and each chart is a project-level `versions:chart-<name>`
 pin in `Pulumi.yaml`'s `config:` block, which renovate moves
 (framework/pulumi.md §3.2), as the Gateway API definitions are a
 `versions:manifest-<name>` pin, the volume snapshot definitions a
-`versions:source-<name>` pin and local-path-provisioner's two images
-`versions:image-<name>` pins; a component installs what the program reads
+`versions:source-<name>` pin and the images a component runs beside a chart,
+local-path-provisioner's two and the monitoring stack's history store, backups
+and restores, `versions:image-<name>` pins; a component installs what the program reads
 through `kluster.lib.versions` and hands it. The custom resources are written
 against `sdks/crds`, which `mise x -- uv run update_crds` regenerates from the
 same pins, but for the VictoriaMetrics operator's, which that SDK cannot import
@@ -73,6 +74,7 @@ from kluster.components.monitoring import Monitoring
 from kluster.components.postgres import PostgresOperator
 from kluster.components.reloader import Reloader
 from kluster.components.sealing import SealedSecretsController
+from kluster.conventions.backup import BackupFamily
 from kluster.lib import stack_addresses
 from kluster.lib.k8s import KUBECONFIG_KEY, kubeconfig_from, sealed_ciphertext
 from kluster.lib.release_assets import fetch_manifest
@@ -112,8 +114,8 @@ async def main() -> None:
     # cluster-infra.md §1's order. Nothing schedules before the CNI, so
     # everything is behind Cilium; cert-manager, the BGP session and monitoring
     # are behind the sealing controller, because the credential cert-manager's
-    # solver uses, the session's password and the address alertmanager posts
-    # to are sealed values.
+    # solver uses, the session's password, and the address alertmanager posts
+    # to and the key the metrics stores are backed up with are sealed values.
     # A chart that declares objects another chart defines is behind that
     # chart: the database operator's backup plugin and the GPU plugin's
     # operator declare cert-manager's, and the GPU plugin declares NFD's.
@@ -161,6 +163,13 @@ async def main() -> None:
         metrics_server_chart=versions.chart['metrics-server'],
         after=[cilium, sealing],
         alert_webhook=sealed_ciphertext(conventions.sealed.ALERT_WEBHOOK, sealed),
+        writer_key=sealed_ciphertext(
+            conventions.sealed.writer_key(conventions.MONITORING_NAMESPACE, BackupFamily.VM), sealed
+        ),
+        history_image=versions.image['metrics-history'],
+        backup_image=versions.image['metrics-backup'],
+        restore_image=versions.image['metrics-restore'],
+        bucket_image=versions.image['metrics-bucket'],
         opts=opts,
     )
     node_features = NodeFeatureDiscovery(

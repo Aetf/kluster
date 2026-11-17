@@ -14,14 +14,20 @@ census is held to that.
 
 from __future__ import annotations
 
+import base64
 import datetime as dt
 import importlib
 import json
 import re
-from collections.abc import Mapping
+import subprocess
+import sys
+import tarfile
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any, cast
 
+import pinned_tools
+import process_sessions
 import pulumi
 import pytest
 import pytest_asyncio
@@ -29,6 +35,7 @@ import yaml
 from fences import prose
 from k8s_base_installation import SEALED, VERSIONS_CONFIG, Autonaming, Run, applied, release_assets
 from mock_monitor import declaring, run_under_backstop
+from renovate_text import listed, package_rules, scalar
 from section_numbers import sections
 
 from kluster import conventions
@@ -36,7 +43,9 @@ from kluster.components.monitoring import DATASOURCES_DIGEST_ENV, RECEIVER, memo
 from kluster.components.monitoring.operator_objects import type_token
 from kluster.components.monitoring.rules import HEARTBEAT, HEARTBEAT_TIMER
 from kluster.components.talos import ETCD_METRICS_PORT
+from kluster.conventions import backup
 from kluster.conventions.alert import Tier
+from kluster.conventions.backup import BackupFamily
 from kluster.lib.k8s import KUBECONFIG_KEY
 from kluster.lib.versions import ChartPin, versions
 
@@ -51,15 +60,19 @@ VM_RULE = type_token('VMRule')
 VM_ALERTMANAGER_CONFIG = type_token('VMAlertmanagerConfig')
 VM_POD_SCRAPE = type_token('VMPodScrape')
 VM_NODE_SCRAPE = type_token('VMNodeScrape')
+VM_SINGLE = type_token('VMSingle')
+CRONJOB = 'kubernetes:batch/v1:CronJob'
+CONFIGMAP = 'kubernetes:core/v1:ConfigMap'
 
 #: Every kind of the operator's the component declares.
-OPERATOR_KINDS = (VM_RULE, VM_ALERTMANAGER_CONFIG, VM_POD_SCRAPE, VM_NODE_SCRAPE)
+OPERATOR_KINDS = (VM_RULE, VM_ALERTMANAGER_CONFIG, VM_POD_SCRAPE, VM_NODE_SCRAPE, VM_SINGLE)
 
 #: The logical names of the component's two charts.
 STACK = 'monitoring'
 METRICS_SERVER = 'monitoring-metrics-server'
 
 WEBHOOK = conventions.sealed.ALERT_WEBHOOK
+WRITER_KEY = conventions.sealed.writer_key(conventions.MONITORING_NAMESPACE, BackupFamily.VM)
 
 #: The label Talos puts on every control plane node and on no other
 #: (`node_label_spec.go` L83-85 at Talos v1.13.9).
@@ -697,10 +710,14 @@ def _mib(quantity: str) -> int:
 def _installed_memory(
     run: Run, containers: tuple[memory.Container, ...] = memory.WORKER_CONTAINERS
 ) -> dict[str, Mapping[str, Any]]:
-    """Each container's `resources`, read where its chart reads them in the values the program installs."""
+    """Each container's `resources`, read where its chart reads them in the values the program installs.
+
+    A container of an object the component declares itself, the history
+    store, is read in that object's declared inputs.
+    """
     found: dict[str, Mapping[str, Any]] = {}
     for container in containers:
-        value: Any = run.values(INSTALLED_AS[container.chart])
+        value: Any = run.values(INSTALLED_AS[container.chart]) if container.chart is not None else _history(run)
         for key in container.path:
             value = value[key]
         found[container.name] = value
@@ -720,6 +737,26 @@ def test_the_memory_requests_on_the_worker_fit_monitorings_budget(absent: tuple[
     requested = {name: _mib(it['requests']['memory']) for name, it in _installed_memory(run, charged).items()}
 
     assert sum(requested.values()) <= memory.BUDGET_MIB, requested
+
+
+def test_the_history_stores_request_is_its_own_line_beside_monitorings(absent: tuple[Run, list[str]]) -> None:
+    """The history store is charged to a line of its own, as the operator ruled (Aetf/kluster-ops#790, option A).
+
+    Its request is read where the declared store reads it, so monitoring's
+    worker memory is the two lines together: the stack's containers within
+    `BUDGET_MIB`, the history store within `HISTORY_BUDGET_MIB`.
+    """
+    run, _ = absent
+    charged = memory.charged_to(memory.Line.HISTORY)
+    requested = {name: _mib(it['requests']['memory']) for name, it in _installed_memory(run, charged).items()}
+    monitoring = {
+        name: _mib(it['requests']['memory'])
+        for name, it in _installed_memory(run, memory.charged_to(memory.Line.MONITORING)).items()
+    }
+
+    assert requested
+    assert sum(requested.values()) <= memory.HISTORY_BUDGET_MIB, requested
+    assert sum(requested.values()) + sum(monitoring.values()) <= memory.BUDGET_MIB + memory.HISTORY_BUDGET_MIB
 
 
 def test_every_memory_limit_is_at_least_its_request(absent: tuple[Run, list[str]]) -> None:
@@ -1095,3 +1132,791 @@ def test_the_spelling_check_names_a_field_its_definition_lacks(
     }
 
     assert _unknown_fields(spec, schema, 'spec') == ['spec.receivers[0].webhook_configs[0].send_resolvd']
+
+
+# -- The two stores --------------------------------------------------------------------
+
+
+def _history(run: Run) -> dict[str, Any]:
+    (store,) = run.monitor.of_type(VM_SINGLE)
+    return store.inputs
+
+
+def _history_service(run: Run) -> str:
+    """The address of the history store's Service, as the operator names it: `vmsingle-<object>` on 8428.
+
+    `PrefixedName` and the Service's one port (`api/operator/v1beta1/vmsingle_types.go`
+    L340-345 and `factory/build/service.go` L45-65 at operator v0.74.0).
+    """
+    metadata = _history(run)['metadata']
+    return f'http://vmsingle-{metadata["name"]}.{metadata["namespace"]}.svc:8428'
+
+
+def test_the_history_store_runs_on_the_worker_alone(absent: tuple[Run, list[str]]) -> None:
+    """It is a second vmsingle beside the chart's, on the worker's local disk, as every store of the stack is."""
+    run, _ = absent
+    spec = _history(run)['spec']
+
+    schedulable = {
+        name
+        for name, labels in _talos_nodes().items()
+        if _admits(labels, spec.get('nodeSelector', {}), spec.get('affinity', {}))
+    }
+
+    assert schedulable == {conventions.HOMELAB_NODE}
+    assert spec['storage']['storageClassName'] == conventions.SC_LOCAL_PATH
+
+
+def test_the_history_stores_mutating_endpoints_take_the_stacks_keys(absent: tuple[Run, list[str]]) -> None:
+    """Deleting the history is behind a key, as deleting the recent store's series is."""
+    run, _ = absent
+    spec = _history(run)['spec']
+    recent = _values(run)['vmsingle']['spec']
+
+    assert {flag: spec['extraArgs'].get(flag) for flag in MUTATING_ENDPOINT_FLAGS} == {
+        flag: recent['extraArgs'][flag] for flag in MUTATING_ENDPOINT_FLAGS
+    }
+    assert set(recent['secrets']) <= set(spec.get('secrets', []))
+
+
+def _history_write(run: Run) -> dict[str, Any]:
+    (write,) = [
+        it
+        for it in _values(run)['vmagent'].get('additionalRemoteWrites', [])
+        if it['url'].startswith(_history_service(run))
+    ]
+    return write
+
+
+def test_vmagent_writes_to_the_history_stores_service(absent: tuple[Run, list[str]]) -> None:
+    """On its write path, where vmsingle takes Prometheus remote write (`/api/v1/write`)."""
+    run, _ = absent
+
+    assert _history_write(run)['url'] == f'{_history_service(run)}/api/v1/write'
+
+
+@pytest.mark.parametrize(
+    ('series', 'kept'),
+    [
+        ({'__name__': 'node_pressure_cpu_waiting_seconds_total', 'job': 'node-exporter'}, True),
+        ({'__name__': 'node_disk_written_bytes_total', 'job': 'node-exporter'}, True),
+        ({'__name__': 'node_memory_MemAvailable_bytes', 'job': 'node-exporter'}, True),
+        ({'__name__': 'etcd_disk_wal_fsync_duration_seconds_bucket', 'job': 'etcd'}, True),
+        ({'__name__': 'process_resident_memory_bytes', 'job': 'etcd'}, True),
+        ({'__name__': 'container_cpu_usage_seconds_total', 'job': 'kubelet'}, True),
+        ({'__name__': 'kube_pod_container_resource_requests', 'job': 'kube-state-metrics'}, True),
+        ({'__name__': 'apiserver_request_total', 'job': 'apiserver'}, True),
+        ({'__name__': 'kluster:etcd_wal_fsync_p99:5m'}, True),
+        ({'__name__': 'oci_blockstore_VolumeThrottledIOs', 'job': 'oci'}, True),
+        ({'__name__': 'etcd_debugging_mvcc_keys_total', 'job': 'etcd'}, False),
+        ({'__name__': 'process_resident_memory_bytes', 'job': 'kubelet'}, False),
+        ({'__name__': 'etcd_request_duration_seconds_count', 'job': 'apiserver'}, False),
+        ({'__name__': 'node_memory_Cached_bytes', 'job': 'node-exporter'}, False),
+        ({'__name__': 'vm_rows', 'job': 'vmsingle'}, False),
+        ({'__name__': 'up', 'job': 'kubelet'}, False),
+    ],
+    ids=lambda it: it if isinstance(it, bool) else f'{it.get("job", "")}:{it["__name__"]}',
+)
+def test_the_history_store_is_written_the_class_it_keeps_and_nothing_else(
+    absent: tuple[Run, list[str]], series: dict[str, str], kept: bool
+) -> None:
+    """What a node, etcd or a container consumes and how long the control plane takes; etcd's process, not another's.
+
+    The class of Aetf/kluster-ops#790's design, §2, read through the remote
+    write's relabeling as vmagent applies it to a series it sends.
+    """
+    run, _ = absent
+
+    assert (_relabel(series, _history_write(run)['inlineUrlRelabelConfig']) is not None) is kept
+
+
+def test_vmalerts_recording_rules_reach_the_stores_through_vmagent(absent: tuple[Run, list[str]]) -> None:
+    """Written to vmagent, a rule's series takes the history's relabeling as a scraped one does.
+
+    The chart points vmalert's remote write at vmagent under this value, and at
+    the recent store otherwise (`templates/_helpers.tpl` L79-83 at 0.91.2).
+    """
+    run, _ = absent
+
+    assert _values(run)['vmalert'].get('remoteWriteVMAgent') is True
+
+
+def test_grafana_reads_the_history_store(absent: tuple[Run, list[str]]) -> None:
+    """A datasource of its own, at the address vmagent writes the history to, beside the chart's default."""
+    run, _ = absent
+    extra = _values(run)['defaultDatasources']['extra']
+
+    assert [it['url'] for it in extra if it['type'] == 'prometheus'] == [_history_service(run)]
+    assert not any(it.get('isDefault') for it in extra)
+
+
+#: The release each store and its backups run, as `update_crds` recorded the
+#: stack chart's `appVersion` beside the bundle.
+APP_VERSIONS = ROOT / 'packages' / 'crds' / 'app-versions.json'
+
+
+@pytest.mark.parametrize('pin', ['metrics-history', 'metrics-backup', 'metrics-restore'])
+def test_the_stores_images_are_the_release_the_chart_runs_the_recent_store_at(pin: str) -> None:
+    """`vmbackup` and `vmrestore` read the parts the store writes, and the two stores are one release.
+
+    A chart bump that moves the release is red here once `update_crds` has
+    rewritten the record on its branch. Renovate's `victoriametrics` group
+    moves the chart and the three pins in one pull request, which is red here
+    until a chart release records the images' release.
+    """
+    from kluster.lib.versions import ProjectFile, Versions
+    from kluster.scripts.update_crds import sources
+
+    pinned = Versions(ProjectFile(sources.read_config(ROOT / 'Pulumi.yaml'))).image[pin]
+    recorded = json.loads(APP_VERSIONS.read_text())['versions:chart-victoria-metrics-k8s-stack']['appVersion']
+
+    assert pinned.tag == recorded
+
+
+def test_renovate_moves_the_stores_images_with_the_chart_in_a_group_of_their_own() -> None:
+    """The three images and the chart are one group, apart from the in-cluster one, so a lagging chart holds back four pins.
+
+    The test above is red between an images' release and the chart's taking
+    it, which in the in-cluster group would hold back every chart and image
+    there. The rule sits after the in-cluster rule, which matches the same
+    pins by file and data source: the last matching rule wins a field. No
+    later rule that sets a group names any of them. Renovate reads its
+    configuration from the default branch, so nothing goes red there when
+    this breaks.
+    """
+    from kluster.lib.versions import ProjectFile, Versions
+    from kluster.scripts.update_crds import sources
+
+    pinned = Versions(ProjectFile(sources.read_config(ROOT / 'Pulumi.yaml')))
+    moved = {
+        pinned.chart['victoria-metrics-k8s-stack'].name,
+        *(pinned.image[pin].repository for pin in ('metrics-history', 'metrics-backup', 'metrics-restore')),
+    }
+    rules = package_rules((ROOT / 'renovate.json5').read_text())
+    (own,) = [index for index, rule in enumerate(rules) if set(listed(rule, 'matchDepNames')) & moved]
+    (in_cluster,) = [
+        index
+        for index, rule in enumerate(rules)
+        if scalar(rule, 'groupSlug') == 'in-cluster' and listed(rule, 'matchFileNames') == ['Pulumi.yaml']
+    ]
+    slug = scalar(rules[own], 'groupSlug')
+
+    assert set(listed(rules[own], 'matchDepNames')) == moved
+    assert listed(rules[own], 'matchFileNames') == ['Pulumi.yaml']
+    assert slug is not None
+    assert slug not in {scalar(rule, 'groupSlug') for index, rule in enumerate(rules) if index != own}
+    assert in_cluster < own
+    for later in rules[own + 1 :]:
+        if scalar(later, 'groupSlug') is not None:
+            assert not set(listed(later, 'matchDepNames')) & moved, f'a later rule regroups them:\n{later}'
+
+
+# -- Backups and restores ------------------------------------------------------------
+
+
+def _restores(run: Run) -> dict[str, list[dict[str, Any]]]:
+    """Each store's init containers, by store: the chart's vmsingle and the history store."""
+    return {
+        'recent': _values(run)['vmsingle']['spec'].get('initContainers', []),
+        'history': _history(run)['spec'].get('initContainers', []),
+    }
+
+
+def test_without_the_writer_key_nothing_backs_up_or_restores_and_the_key_is_named(
+    absent: tuple[Run, list[str]],
+) -> None:
+    """The bring-up's tolerance: the stores start empty and are copied nowhere until the key is sealed in."""
+    run, warned = absent
+
+    assert run.monitor.of_type(CRONJOB) == []
+    assert _restores(run) == {'recent': [], 'history': []}
+    assert [it for it in run.monitor.of_type(SEALED_SECRET) if it.inputs['metadata']['name'] == WRITER_KEY.name] == []
+    assert [message for message in warned if repr(WRITER_KEY.name) in message]
+
+
+def _backup_jobs(run: Run) -> dict[str, dict[str, Any]]:
+    """Each backup CronJob's spec, by the claim its pod mounts."""
+    jobs: dict[str, dict[str, Any]] = {}
+    for job in run.monitor.of_type(CRONJOB):
+        pod = job.inputs['spec']['jobTemplate']['spec']['template']['spec']
+        (claim,) = [it['persistentVolumeClaim'] for it in pod['volumes'] if 'persistentVolumeClaim' in it]
+        jobs[claim['claimName']] = job.inputs
+    return jobs
+
+
+def test_each_store_is_backed_up_hourly_from_its_own_claim_read_only(sealed: Run) -> None:
+    """The operator's claim of each store (`vmsingle-<object>`, `factory/vmsingle/vmsingle.go` L59-62), at two minutes.
+
+    Mounted read-only, so the job's pod lands on the store's node with the
+    claim and can write nothing there.
+    """
+    jobs = _backup_jobs(sealed)
+    (history,) = sealed.monitor.of_type(VM_SINGLE)
+    chart_store = f'vmsingle-{conventions.MONITORING_NAMESPACE}-victoria-metrics-k8s-stack'
+
+    assert set(jobs) == {f'vmsingle-{history.inputs["metadata"]["name"]}', chart_store}
+    minutes: set[str] = set()
+    for claim, job in jobs.items():
+        minute, *every = job['spec']['schedule'].split()
+        assert every == ['*'] * 4, claim
+        minutes.add(minute)
+        pod = job['spec']['jobTemplate']['spec']['template']['spec']
+        assert all(it['persistentVolumeClaim']['readOnly'] for it in pod['volumes'] if 'persistentVolumeClaim' in it)
+        assert job['spec']['concurrencyPolicy'] == 'Forbid'
+    assert len(minutes) == len(jobs), 'two backups at one minute'
+
+
+def _pod_containers(job: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """A backup job's containers in the order its pod runs them: the init containers, then the rest."""
+    pod = job['spec']['jobTemplate']['spec']['template']['spec']
+    return [*pod.get('initContainers', []), *pod['containers']]
+
+
+def test_a_backup_run_is_cut_off_before_the_next_is_due(sealed: Run) -> None:
+    """`Forbid` keeps a later run from starting while one runs, so a hung run is bounded inside the period."""
+    from kluster.components.monitoring import stores
+
+    for claim, job in _backup_jobs(sealed).items():
+        deadline = job['spec']['jobTemplate']['spec'].get('activeDeadlineSeconds')
+        assert deadline is not None, claim
+        assert dt.timedelta(seconds=deadline) < stores.BACKUP_PERIOD, claim
+
+
+def test_a_snapshot_a_cut_off_backup_leaves_is_deleted_well_after_any_run_ends(sealed: Run) -> None:
+    """Its hard links would keep every part merged away since on disk; no run loses the snapshot it copies."""
+    from kluster.components.monitoring import BACKUP_DEADLINE
+
+    for spec in (_values(sealed)['vmsingle']['spec'], _history(sealed)['spec']):
+        assert _duration(spec['extraArgs']['snapshotsMaxAge']) > BACKUP_DEADLINE
+
+
+def _env(container: Mapping[str, Any]) -> dict[str, Any]:
+    return {it['name']: it.get('value', it.get('valueFrom')) for it in container['env']}
+
+
+def test_the_writer_key_is_declared_where_the_backups_and_restores_read_it(sealed: Run) -> None:
+    """Sealed in, the key becomes the Secret every backup and restore container reads both halves from."""
+    (secret,) = [
+        it.inputs for it in sealed.monitor.of_type(SEALED_SECRET) if it.inputs['metadata']['name'] == WRITER_KEY.name
+    ]
+    containers = [
+        *[container for job in _backup_jobs(sealed).values() for container in _pod_containers(job)],
+        *[container for restores in _restores(sealed).values() for container in restores],
+    ]
+
+    assert secret['metadata']['namespace'] == conventions.MONITORING_NAMESPACE
+    assert secret['spec']['encryptedData'] == SEALED[WRITER_KEY.name]
+    assert containers
+    for container in containers:
+        env = _env(container)
+        for field in conventions.WRITER_KEY_FIELDS:
+            assert env[field] == {'secretKeyRef': {'name': secret['metadata']['name'], 'key': field}}
+
+
+# -- The scripts, run --------------------------------------------------------------------
+
+#: A B2 account's native API and a store's `/metrics`, answered from a directory:
+#: `bucket/` holds the bucket's current files by name, `metrics` the store's
+#: exposition, `down` makes B2 answer nothing, `list-down` makes it answer the
+#: authorization and nothing after. Its arguments are `curl`'s as the scripts
+#: pass them, each run's appended to `curl.argv`, and a `-H @<file>` reads one
+#: header a line, as `curl` does. B2's answers are the shape its v2 API
+#: documents for `b2_authorize_account`, `b2_list_file_names`,
+#: `b2_get_upload_url` and `b2_upload_file`; an error is `curl --fail`'s exit
+#: status, 22.
+FAKE_CURL = """
+import base64, hashlib, json, os, sys
+from pathlib import Path
+from urllib.parse import urlsplit
+
+state = Path(os.environ['FAKE_STATE'])
+with (state / 'curl.argv').open('a') as log:
+    log.write(json.dumps(sys.argv[1:]) + '\\n')
+args, headers, body, url = sys.argv[1:], {}, None, None
+while args:
+    arg = args.pop(0)
+    if arg == '-H':
+        value = args.pop(0)
+        lines = Path(value[1:]).read_text().splitlines() if value.startswith('@') else [value]
+        for line in lines:
+            name, found = line.split(':', 1)
+            headers[name.strip().lower()] = found.strip()
+    elif arg in ('--data', '--data-binary'):
+        value = args.pop(0)
+        body = Path(value[1:]).read_text() if value.startswith('@') else value
+    elif arg == '--max-time':
+        args.pop(0)
+    elif not arg.startswith('-'):
+        url = arg
+bucket = state / 'bucket'
+path = urlsplit(url).path
+
+
+def refuse(status):
+    print(f'curl: (22) The requested URL returned error: {status}', file=sys.stderr)
+    sys.exit(22)
+
+
+def answer(found):
+    print(json.dumps(found, indent=2))
+    sys.exit(0)
+
+
+if path == '/metrics':
+    sys.stdout.write((state / 'metrics').read_text())
+    sys.exit(0)
+if (state / 'down').exists():
+    refuse(503)
+if path == '/b2api/v2/b2_authorize_account':
+    if headers.get('authorization') != 'Basic ' + base64.b64encode(os.environ['FAKE_KEY'].encode()).decode():
+        refuse(401)
+    answer({
+        'accountId': 'account', 'apiUrl': 'https://api.b2.invalid', 'authorizationToken': 'account-token',
+        'allowed': {'bucketId': 'bucket-id', 'bucketName': 'bucket-name', 'capabilities': ['listFiles'],
+                    'namePrefix': 'vm/monitoring/'},
+        'downloadUrl': 'https://download.b2.invalid', 's3ApiUrl': 'https://s3.b2.invalid',
+    })
+if (state / 'list-down').exists():
+    refuse(503)
+if headers.get('authorization') not in ('account-token', 'upload-token'):
+    refuse(401)
+if path == '/b2api/v2/b2_list_file_names':
+    request = json.loads(body)
+    assert request['bucketId'] == 'bucket-id'
+    names = sorted(str(it.relative_to(bucket)) for it in bucket.rglob('*') if it.is_file())
+    listed = [name for name in names if name.startswith(request['prefix'])][: request['maxFileCount']]
+    answer({'files': [{'fileName': name, 'action': 'upload'} for name in listed], 'nextFileName': None})
+if path.startswith('/file/bucket-name/'):
+    found = bucket / path.removeprefix('/file/bucket-name/')
+    if not found.is_file():
+        refuse(404)
+    sys.stdout.write(found.read_text())
+    sys.exit(0)
+if path == '/b2api/v2/b2_get_upload_url':
+    answer({'bucketId': 'bucket-id', 'uploadUrl': 'https://pod.b2.invalid/upload', 'authorizationToken': 'upload-token'})
+if path == '/upload':
+    assert headers['authorization'] == 'upload-token'
+    assert headers['x-bz-content-sha1'] == hashlib.sha1(body.encode()).hexdigest()
+    target = bucket / headers['x-bz-file-name']
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(body)
+    answer({'fileName': headers['x-bz-file-name']})
+refuse(400)
+"""
+
+#: `vmrestore` and `vmbackup`: each records its arguments, and fails where its
+#: name is in the state directory's `fails`; `vmrestore` writes a part into
+#: the data directory its arguments name.
+FAKE_BINARY = """
+import os, sys
+from pathlib import Path
+
+state = Path(os.environ['FAKE_STATE'])
+name = Path(sys.argv[0]).name
+(state / f'{name}.args').write_text('\\n'.join(sys.argv[1:]))
+if (state / 'fails').exists() and name in (state / 'fails').read_text().split():
+    sys.exit(1)
+for arg in sys.argv[1:]:
+    if name == 'vmrestore' and arg.startswith('-storageDataPath='):
+        (Path(arg.split('=', 1)[1]) / 'restored-part').write_text('part')
+"""
+
+#: The writer key the fake bucket admits, `id:secret`, and the tokens it hands
+#: out: every credential a script holds.
+FAKE_KEY = ('key-id', 'key-secret')
+FAKE_TOKENS = ('account-token', 'upload-token')
+
+#: The bound on one script's run, which takes a fraction of a second.
+SHELL_TIMEOUT = 30
+
+#: The package `mise.toml` pins the busybox of the images the scripts run in
+#: from, and the binary in it.
+BUSYBOX_PACKAGE = 'busybox-static.apk'
+BUSYBOX_BINARY = 'bin/busybox.static'
+
+
+@pytest.fixture(scope='module', name='busybox')
+def busybox_fixture(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """A directory of the pinned busybox's applets, each a link to it, as the images lay them out under one `PATH`.
+
+    The package is Alpine's: three gzip members, each a tar stream, the last
+    holding the files.
+    """
+    package = Path(pinned_tools.located(BUSYBOX_PACKAGE))
+    applets = tmp_path_factory.mktemp('busybox')
+    with tarfile.open(package, 'r:gz', ignore_zeros=True) as archive:
+        member = archive.getmember(BUSYBOX_BINARY)
+        extracted = archive.extractfile(member)
+        assert extracted is not None
+        binary = applets / 'busybox'
+        binary.write_bytes(extracted.read())
+    binary.chmod(0o755)
+    listed = process_sessions.run([str(binary), '--list'], text=True, timeout=SHELL_TIMEOUT, check=True)
+    for applet in listed.stdout.split():
+        if applet != 'busybox':
+            (applets / applet).symlink_to(binary)
+    return applets
+
+
+class Pod:
+    """A store's restore or backup pod, its containers run in order under the pinned busybox against the fakes.
+
+    The init containers run as the kubelet runs them, one after another, the
+    next only once the one before it has succeeded, and then the pod's main
+    container. The kubelet starts a pod's main containers together, which a
+    sequence does not model, so a pod with more than one is refused. A
+    restore's pod is its store's, whose main container, the store itself,
+    is not run. `PATH` is the fakes and the busybox applets alone, as the
+    images hold no other tool.
+    """
+
+    def __init__(
+        self,
+        tmp_path: Path,
+        busybox: Path,
+        init: Sequence[Mapping[str, Any]],
+        main: Sequence[Mapping[str, Any]] = (),
+    ) -> None:
+        from kluster.components.monitoring import stores
+
+        assert len(main) <= 1, f'the kubelet runs {len(main)} main containers together, which a sequence does not model'
+        containers = [*init, *main]
+
+        self.state = tmp_path / 'state'
+        self.data = tmp_path / 'data'
+        self.work = tmp_path / 'work'
+        self.bucket = self.state / 'bucket'
+        shell, fakes = tmp_path / 'shell', tmp_path / 'bin'
+        for directory in (self.state, self.data, self.work, self.bucket, shell, fakes):
+            directory.mkdir(parents=True, exist_ok=True)
+        for name, text in stores.SHELL.items():
+            (shell / name).write_text(text)
+        for name, text in (('curl', FAKE_CURL), ('vmrestore', FAKE_BINARY), ('vmbackup', FAKE_BINARY)):
+            binary = fakes / name
+            binary.write_text(f'#!{sys.executable}\n{text}')
+            binary.chmod(0o755)
+        self.local = {
+            stores.SHELL_DIR: str(shell),
+            stores.DATA_DIR: str(self.data),
+            stores.WORK_DIR: str(self.work),
+            '/vmrestore-prod': str(fakes / 'vmrestore'),
+            '/vmbackup-prod': str(fakes / 'vmbackup'),
+            '/bin/sh': str(busybox / 'sh'),
+        }
+        self.path = f'{fakes}:{busybox}'
+        self.containers = containers
+        self.key = ':'.join(FAKE_KEY)
+
+    def _here(self, value: str) -> str:
+        for remote, path in self.local.items():
+            value = value.replace(remote, path)
+        return value
+
+    def _env(self, container: Mapping[str, Any]) -> dict[str, str]:
+        halves = dict(zip(sorted(conventions.WRITER_KEY_FIELDS), FAKE_KEY, strict=True))
+        return {
+            'PATH': self.path,
+            'FAKE_STATE': str(self.state),
+            'FAKE_KEY': self.key,
+            **{
+                it['name']: self._here(it['value']) if 'value' in it else halves.get(it['name'], 'the-snapshot-key')
+                for it in container.get('env', [])
+            },
+        }
+
+    def run(self) -> list[subprocess.CompletedProcess[str]]:
+        """Each container's run, up to and including the first that fails."""
+        runs: list[subprocess.CompletedProcess[str]] = []
+        for container in self.containers:
+            argv = [self._here(arg) for arg in container['command']]
+            completed = process_sessions.run(argv, env=self._env(container), text=True, timeout=SHELL_TIMEOUT)
+            runs.append(completed)
+            if completed.returncode != 0:
+                break
+        return runs
+
+    def succeeded(self) -> bool:
+        runs = self.run()
+        self.stderr = '\n'.join(it.stderr for it in runs)
+        return len(runs) == len(self.containers) and all(it.returncode == 0 for it in runs)
+
+    def ran(self, binary: str) -> list[str] | None:
+        """The arguments `binary` was run with, `None` where it was not run."""
+        found = self.state / f'{binary}.args'
+        return found.read_text().split('\n') if found.exists() else None
+
+    def curl_arguments(self) -> list[list[str]]:
+        found = self.state / 'curl.argv'
+        return [json.loads(line) for line in found.read_text().splitlines()] if found.exists() else []
+
+
+def _restore_pod(run: Run, store: str, tmp_path: Path, busybox: Path) -> Pod:
+    return Pod(tmp_path, busybox, _restores(run)[store])
+
+
+def _backup_pod(run: Run, store: str, tmp_path: Path, busybox: Path) -> Pod:
+    from kluster.components.monitoring import stores
+
+    (job,) = [
+        it.inputs
+        for it in run.monitor.of_type(CRONJOB)
+        if it.inputs['metadata']['name'] == f'{stores.BACKUP_JOB_PREFIX}{store}'
+    ]
+    pod = job['spec']['jobTemplate']['spec']['template']['spec']
+    return Pod(tmp_path, busybox, pod.get('initContainers', []), pod['containers'])
+
+
+def _prefix(pod: Pod) -> str:
+    (check, *_) = pod.containers
+    return _env(check)['PREFIX']
+
+
+def _record(pod: Pod) -> Path:
+    (check, *_) = pod.containers
+    return pod.bucket / _env(check)['RECORD']
+
+
+def _backed_up(pod: Pod, prefix: str) -> None:
+    """A complete backup under `prefix`, as `vmbackup` leaves one."""
+    for name in ('backup_complete.ignore', 'data/small/2026_11/part/index.bin'):
+        target = pod.bucket / prefix / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text('')
+
+
+@pytest.mark.parametrize('store', ['recent', 'history'])
+def test_an_empty_store_with_a_backup_is_restored(sealed: Run, tmp_path: Path, busybox: Path, store: str) -> None:
+    """From its own prefix, by the `vmrestore` command the container declares, into the store's data directory."""
+    pod = _restore_pod(sealed, store, tmp_path, busybox)
+    _backed_up(pod, _prefix(pod))
+
+    assert pod.succeeded(), pod.stderr
+    args = pod.ran('vmrestore')
+    assert args is not None
+    assert f'-storageDataPath={pod.data}' in args
+    assert any(arg.startswith('-src=s3://') and arg.endswith('/' + _prefix(pod).rstrip('/')) for arg in args)
+    assert (pod.data / 'restored-part').exists()
+
+
+def test_an_empty_store_with_no_backup_starts_empty(sealed: Run, tmp_path: Path, busybox: Path) -> None:
+    """The first install: nothing at the store's prefix, whatever another store's prefix holds."""
+    pod = _restore_pod(sealed, 'history', tmp_path, busybox)
+    _backed_up(pod, 'vm/monitoring/recent/')
+
+    assert pod.succeeded(), pod.stderr
+    assert pod.ran('vmrestore') is None
+    assert list(pod.data.iterdir()) == []
+
+
+def test_a_store_holding_data_starts_on_it_without_reading_the_bucket(
+    sealed: Run, tmp_path: Path, busybox: Path
+) -> None:
+    """A restarted store keeps what it holds, with the bucket unreachable all the while."""
+    pod = _restore_pod(sealed, 'history', tmp_path, busybox)
+    _backed_up(pod, _prefix(pod))
+    (pod.data / 'flock.lock').write_text('')
+    (pod.state / 'down').write_text('')
+
+    assert pod.succeeded(), pod.stderr
+    assert pod.ran('vmrestore') is None
+
+
+@pytest.mark.parametrize('failure', ['bucket down', 'key refused', 'listing fails', 'restore fails', 'data unreadable'])
+def test_a_backup_that_cannot_be_read_keeps_the_store_from_starting(
+    sealed: Run, tmp_path: Path, busybox: Path, failure: str
+) -> None:
+    """Whatever stops the read -- the bucket, the key, its listing, `vmrestore`, the data directory -- the store waits.
+
+    A listing that fails after the key is authorized reads as nothing listed
+    unless its failure stops the container, and nothing listed starts the
+    store empty over the backup that exists.
+    """
+    pod = _restore_pod(sealed, 'history', tmp_path, busybox)
+    _backed_up(pod, _prefix(pod))
+    if failure == 'bucket down':
+        (pod.state / 'down').write_text('')
+    elif failure == 'key refused':
+        pod.key = 'another-id:another-secret'
+    elif failure == 'listing fails':
+        (pod.state / 'list-down').write_text('')
+    elif failure == 'restore fails':
+        (pod.state / 'fails').write_text('vmrestore')
+    else:
+        pod.data.rmdir()
+
+    assert not pod.succeeded()
+    assert (pod.ran('vmrestore') is not None) is (failure == 'restore fails')
+    assert not pod.data.exists() or list(pod.data.iterdir()) == []
+
+
+@pytest.mark.parametrize('held', [True, False])
+def test_a_restore_that_did_not_finish_is_run_again_and_never_started_on(
+    sealed: Run, tmp_path: Path, busybox: Path, held: bool
+) -> None:
+    """`vmrestore`'s lock file left in the directory: restored again, or refused where the backup is gone."""
+    pod = _restore_pod(sealed, 'history', tmp_path, busybox)
+    if held:
+        _backed_up(pod, _prefix(pod))
+    (pod.data / 'restore-in-progress').write_text('')
+
+    assert pod.succeeded() is held, pod.stderr
+    assert (pod.ran('vmrestore') is not None) is held
+
+
+def _metrics(pod: Pod, rows: int) -> None:
+    """The store's exposition with `rows` rows across its parts, beside its index's items, which are not rows."""
+    small, big = rows // 3, rows - rows // 3
+    (pod.state / 'metrics').write_text(
+        f'vm_rows{{type="indexdb/file"}} 999999999\n'
+        f'vm_rows{{type="storage/inmemory"}} 0\n'
+        f'vm_rows{{type="storage/small"}} {small}\n'
+        f'vm_rows{{type="storage/big"}} {big}\n'
+        'vm_rows_ignored_total{reason="too_many_labels"} 7\n'
+    )
+
+
+def _recorded(pod: Pod, text: str) -> Path:
+    record = _record(pod)
+    record.parent.mkdir(parents=True, exist_ok=True)
+    record.write_text(text)
+    return record
+
+
+@pytest.mark.parametrize('recorded', [None, 41_000_000_000, 42_000_000_000])
+def test_the_history_store_is_backed_up_and_its_rows_recorded_where_it_holds_no_fewer(
+    sealed: Run, tmp_path: Path, busybox: Path, recorded: int | None
+) -> None:
+    """The backup runs against the store's snapshot endpoint, and the count read becomes the record."""
+    from kluster.components.monitoring import stores
+
+    pod = _backup_pod(sealed, 'history', tmp_path, busybox)
+    _metrics(pod, 42_000_000_000)
+    if recorded is not None:
+        _ = _recorded(pod, str(recorded))
+
+    assert pod.succeeded(), pod.stderr
+    args = pod.ran('vmbackup')
+    assert args is not None
+    assert any(
+        arg.startswith('-snapshot.createURL=http://')
+        and arg.endswith(f'/snapshot/create?authKey=%{{{stores.SNAPSHOT_KEY_ENV}}}')
+        for arg in args
+    )
+    assert _record(pod).read_text() == '42000000000'
+
+
+@pytest.mark.parametrize('failure', ['fewer rows', 'listing fails', 'record not a number', 'record empty'])
+def test_the_history_store_is_not_backed_up_where_its_record_does_not_clear_it(
+    sealed: Run, tmp_path: Path, busybox: Path, failure: str
+) -> None:
+    """Fewer rows than the record, a record that cannot be listed, or one that is no count: no backup, the record kept.
+
+    An empty record that is listed is no count either, rather than no record.
+
+    A store that started without its history would otherwise overwrite the
+    history in the bucket, and lower the record so that every later run
+    passes. A listing that fails after the key is authorized reads as no
+    record unless its failure stops the container.
+    """
+    pod = _backup_pod(sealed, 'history', tmp_path, busybox)
+    _metrics(pod, 1_000)
+    held = {'record not a number': 'some rows', 'record empty': ''}.get(failure, '42000000000')
+    record = _recorded(pod, held)
+    if failure == 'listing fails':
+        (pod.state / 'list-down').write_text('')
+
+    assert not pod.succeeded()
+    assert pod.ran('vmbackup') is None
+    assert record.read_text() == held
+
+
+def test_a_failed_backup_records_nothing(sealed: Run, tmp_path: Path, busybox: Path) -> None:
+    """The record is of the last backup that completed, so a count is never recorded for a backup that is not there."""
+    pod = _backup_pod(sealed, 'history', tmp_path, busybox)
+    _metrics(pod, 1_000)
+    (pod.state / 'fails').write_text('vmbackup')
+
+    assert not pod.succeeded()
+    assert not _record(pod).exists()
+
+
+def test_the_recent_store_is_backed_up_whatever_it_holds(sealed: Run, tmp_path: Path, busybox: Path) -> None:
+    """Its rows age out with its retention, so its count falls, and its backup reads neither the store nor a record."""
+    pod = _backup_pod(sealed, 'recent', tmp_path, busybox)
+    (pod.state / 'down').write_text('')
+
+    assert pod.succeeded(), pod.stderr
+    assert pod.ran('vmbackup') is not None
+    assert pod.curl_arguments() == []
+
+
+def test_no_credential_is_an_argument_of_any_process_the_scripts_start(
+    sealed: Run, tmp_path: Path, busybox: Path
+) -> None:
+    """The node exporter reads every process's arguments on the node; the key and B2's tokens reach `curl` as files.
+
+    Every call the restore and the history's backup make, recorded by the
+    fake `curl`, is read for the key's two halves, the Basic credential made
+    of them, and each token the fake bucket hands out. The files they are
+    written to instead are their owner's alone, since the node exporter
+    reads the host's filesystem too.
+    """
+    basic = base64.b64encode(':'.join(FAKE_KEY).encode()).decode()
+    secrets = (*FAKE_KEY, basic, *FAKE_TOKENS)
+    restore = _restore_pod(sealed, 'history', tmp_path / 'restore', busybox)
+    _backed_up(restore, _prefix(restore))
+    backup = _backup_pod(sealed, 'history', tmp_path / 'backup', busybox)
+    _metrics(backup, 1_000)
+    _ = _recorded(backup, '1')
+
+    assert restore.succeeded(), restore.stderr
+    assert backup.succeeded(), backup.stderr
+    calls = [*restore.curl_arguments(), *backup.curl_arguments()]
+    assert len(calls) >= 6
+    for call in calls:
+        assert not [secret for secret in secrets if any(secret in arg for arg in call)], call
+    written = [path for pod in (restore, backup) for path in pod.work.iterdir()]
+    assert written
+    for path in written:
+        assert path.stat().st_mode & 0o077 == 0, f'{path.name} is readable beyond its owner'
+
+
+def test_no_container_is_handed_a_secret_in_its_command(sealed: Run) -> None:
+    """The snapshot key and the writer key reach every container through its environment, from their Secrets."""
+    from kluster.components.monitoring import AUTH_KEYS_SECRET
+
+    containers = [
+        *[container for job in _backup_jobs(sealed).values() for container in _pod_containers(job)],
+        *[container for restores in _restores(sealed).values() for container in restores],
+    ]
+    keyed = {
+        it['name']: it['valueFrom']['secretKeyRef']
+        for container in containers
+        for it in container.get('env', [])
+        if 'valueFrom' in it
+    }
+
+    assert {ref['name'] for ref in keyed.values()} == {WRITER_KEY.name, AUTH_KEYS_SECRET}
+    for container in containers:
+        assert not [arg for arg in container['command'] if 'generated-in-state' in arg or 'AgB-sealed' in arg]
+
+
+# -- The backups' freshness --------------------------------------------------------------
+
+
+def test_a_backup_job_that_stopped_succeeding_or_never_did_raises_an_alert(absent: tuple[Run, list[str]]) -> None:
+    """Some rule reads each backup CronJob's last success, and its creation where it has none, against `max_age`."""
+    from kluster.components.monitoring import stores
+
+    run, _ = absent
+    threshold = backup.duration(backup.max_age(stores.BACKUP_PERIOD))
+    reading = [
+        rule['alert']
+        for rule in _declared_rules(run)
+        if 'kube_cronjob_status_last_successful_time' in rule['expr']
+        and 'kube_cronjob_created' in rule['expr']
+        and f'cronjob=~"{stores.BACKUP_JOB_PREFIX}.*"' in rule['expr']
+        and rule['expr'].endswith(f'> {threshold}')
+    ]
+
+    assert reading

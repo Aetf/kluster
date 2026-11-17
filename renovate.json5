@@ -404,6 +404,30 @@
       groupSlug: 'cilium',
     },
     {
+      // The VictoriaMetrics stack chart and the three images the monitoring
+      // component runs at the chart's release, out of the in-cluster group
+      // and into one of their own. A test holds each image to the release the
+      // chart records, and VictoriaMetrics publishes its images before the
+      // chart takes the release, so this group's pull request is red until a
+      // chart release records it; apart from the in-cluster group, it holds
+      // back these four pins alone. The chart's dependency is its pin's key,
+      // as Cilium's is.
+      //
+      // Position is load-bearing, as for the Cilium rule: this sits *after*
+      // the in-cluster rule, so its group wins. A test holds the order.
+      matchFileNames: [
+        'Pulumi.yaml',
+      ],
+      matchDepNames: [
+        'victoria-metrics-k8s-stack',
+        'docker.io/victoriametrics/victoria-metrics',
+        'docker.io/victoriametrics/vmbackup',
+        'docker.io/victoriametrics/vmrestore',
+      ],
+      groupName: 'victoriametrics',
+      groupSlug: 'victoriametrics',
+    },
+    {
       // kubeseal, out of the toolchain group and into the in-cluster one,
       // beside the chart whose controller it seals for. `mise.toml` pins the
       // tool `credentials` seals the cluster's values with, and a test holds

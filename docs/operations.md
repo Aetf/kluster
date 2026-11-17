@@ -573,7 +573,13 @@ from an HTTP repository, which offers nothing to check a download against
     gateway to withdraw. A rebuild after stage 6 also takes stage 6's
     sealing sitting again, with `bgp seal` and never `bgp record`, which
     would draw a new password and rewrite the gateway's BGP
-    configuration. Once an application holds data, its data comes back
+    configuration. A rebuild after stage 9 also seals the writer keys
+    again, with `credentials derived b2-writer seal`, in the same
+    sitting. Until that sitting, both metrics stores wait in `Init` for
+    the monitoring namespace's writer key. Once it has run, each store
+    restores itself from the backup bucket before it starts
+    (storage.md §5), and the readings below hold the history to its
+    baseline. Once an application holds data, its data comes back
     by the restores of storage.md §5. This procedure carries neither.
 
     **A1 capacity is the risk it takes.** It gives up, by construction,
@@ -609,6 +615,9 @@ from an HTTP repository, which offers nothing to check a download against
         anchors() { for n in kluster.hosts vip1.hosts; do for t in A AAAA; do echo "$n $t $(mise x -- doggo --short "$n.unlimited-code.works" "$t" @1.1.1.1 | sort | tr '\n' ' ')"; done; done; }
         sealing() { mise x -- kubeseal --kubeconfig ~/.kube/kluster --fetch-cert \
             $(mise x uv -- uv run python -c 'from kluster import conventions as c; print("--controller-namespace", c.SEALING_NAMESPACE, "--controller-name", c.SEALING_CONTROLLER)'); }
+        history() { kubectl --kubeconfig ~/.kube/kluster get --raw "/api/v1/namespaces/monitoring/services/vmsingle-history:http/proxy/$1"; }
+        metrics() { history metrics | awk '/^vm_rows\{type="storage\// { n += $2 } END { printf "rows %.0f\n", n }'
+            history 'api/v1/query?query=min(tfirst_over_time(node_load1%5B100y%5D))' | mise x -- jq -r '"earliest \(.data.result[0].value[1])"'; }
 
     `SCOPE` matches every resource the run changes, and nothing else:
     the cloud nodes with what hangs off them, the attachment, the
@@ -618,6 +627,11 @@ from an HTTP repository, which offers nothing to check a download against
     because a component's registered outputs change with what it holds.
     Each component sits at the top of the stack, so the pattern anchors
     on `::` before its type (§3.1).
+
+    `metrics` reads the history store through the API server's service
+    proxy: the rows it holds, the count its backup job compares, and the
+    time of its earliest sample, of `node_load1`, which every node has
+    reported since the history began.
 
     `outside` prints a digest of every other resource's entry, secrets
     included, so that only the digest leaves the pipe. It leaves out the
@@ -637,7 +651,30 @@ from an HTTP repository, which offers nothing to check a download against
         for s in dns k8s-base apps; do mise x -- pulumi preview --refresh --expect-no-changes --stack "$s"; done
         physical stack export > "$D/export.json"
         protected > "$D/protected"; outside > "$D/outside"; anchors > "$D/anchors"; ids > "$D/ids"; sealing > "$D/sealing.pem"
+        metrics > "$D/metrics"
+        k() { kubectl --kubeconfig ~/.kube/kluster -n monitoring "$@"; }
+        k patch cronjob vmbackup-recent vmbackup-history -p '{"spec":{"suspend":true}}'
+        until active=$(k get jobs -o jsonpath='{.items[?(@.status.active)].metadata.name}') && [ -z "$active" ]; do sleep 10; done
+        k create job drill-history --from=cronjob/vmbackup-history
+        until k get job drill-history -o jsonpath='{.status.succeeded}{.status.failed}' | grep -q .; do sleep 10; done
+        k get job drill-history -o jsonpath='{.status.succeeded}'
         for o in cluster_endpoint cluster_endpoint_v6 vip1 worker_gua; do echo "$o $(physical stack output "$o")"; done > "$D/outputs"
+
+    After bring-up stage 9, the history is backed up once more after its
+    baseline is read, so the backup a rebuild restores holds at least the
+    baseline's rows. Both backup schedules are suspended first, and the
+    drill's own job is created only once no backup job is running: a
+    job created from a CronJob runs beside the CronJob's own, which
+    `Forbid` does not stop, and two runs copying one store from two
+    snapshots each delete what the other uploads, so the last to finish
+    marks complete a set neither snapshot held. Suspended, neither runs
+    again before step 3, so the loss cuts no run off. The wait ends when
+    the job succeeds or fails, and the last line prints `1` for a
+    success. Both schedules go with etcd at step 3, and the rebuilt
+    cluster declares them anew, running; a run that does not go resumes
+    them, beside enabling `deploy.yml` again, with the same `patch`
+    and `"suspend":false`. Before stage 9 there is no backup job, and the
+    `kubectl` lines are left out.
 
     Disabling `deploy.yml` is bring-up stage 4's way back used as a
     freeze: a merge, a Renovate automerge among them, would otherwise
@@ -646,7 +683,8 @@ from an HTTP repository, which offers nothing to check a download against
     diff is its own. `gateway-health` is clean (physical/gateway.md
     §1.6). A deliberate run then takes §3.4's capacity reading, and goes
     only if every AD passes; otherwise it waits for another day, with
-    nothing changed but the workflow, which is enabled again.
+    nothing changed but the workflow and the two backup schedules, which
+    are enabled and resumed again.
 
     **Step 1: the day-1 chain leaves state.**
 
@@ -768,8 +806,13 @@ from an HTTP repository, which offers nothing to check a download against
     `up-apps` are both stacks' first `up` on an empty cluster.
 
     **Step 9:** bring-up stage 5's gate on the rebuilt cluster, the
-    sealing certificate differing from `$D/sealing.pem`; then the pass
-    readings.
+    sealing certificate differing from `$D/sealing.pem`. Where the run
+    is after bring-up stage 9, the sealing sitting of the paragraph on
+    stage 6 above follows, and its pull request commits
+    `Pulumi.k8s-base.yaml` and `Pulumi.apps.yaml`. Once its merge has
+    applied `k8s-base`, both stores leave `Init`, and `metrics` prints
+    the baseline's earliest sample and at least the baseline's rows.
+    Then the pass readings.
 
     **It passes when each of these holds:**
 
@@ -791,7 +834,12 @@ from an HTTP repository, which offers nothing to check a download against
             --stack dns` exits 0, the four outputs equal `$D/outputs`,
             and `anchors` prints what `$D/anchors` holds;
         -   every plan read during the run passed the scope check.
-    5.  `deploy.yml` is enabled again, and `.claude/drill/` is deleted.
+    5.  **The metrics history came back**, where the run is after bring-up
+        stage 9: `metrics` prints the earliest sample `$D/metrics` holds,
+        and no fewer rows, and the history's backup job succeeds on its
+        next run (§6.2). Before stage 9, no key backs the stores up, and
+        both start empty.
+    6.  `deploy.yml` is enabled again, and `.claude/drill/` is deleted.
 
     **What a failure leaves running.** Through step 2, the old cluster,
     whole: steps 1 and 2 changed state alone, and they run in the same
@@ -894,6 +942,7 @@ every recovery path on this table an assumed-broken one.
 | State-backend rebuild — scratch micro from Butane → restore latest dump (drill key) → verify → destroy (state-backend.md §7.3) | Quarterly | Ops-repo workflow, alert on failure |
 | etcd snapshot restore-verify — latest B2 snapshot into a scratch etcd, health + key sanity | Monthly | Ops-repo workflow, alert on failure |
 | VolSync spot-restore — rotating PVC into a scratch namespace, checksum, and for an embedded database the rule below, tear down | Monthly | In-cluster workflow, alert on failure |
+| Metrics-history restore — both stores restore themselves on the rebuilt cluster, and the history's earliest sample and rows match the baseline (§3.5, pass condition 5) | Each whole-cluster rebuild (§3.5) | The rebuild drill's readings |
 | Orphan-volume audit, target zero (storage.md §3.3) | Quarterly | In-cluster workflow, alert only on findings |
 | Credential expiry tripwires (credentials.md §4) | Continuous (scheduled probes) | Ops-repo probes; `actionable` alert when an expiry approaches |
 | **Offline day**: age key rotation (proves offline custody, state-backend.md §7.4) + full cold-standby reverse bootstrap on homelab libvirt (nodes.md §5) + offline-kit verification against the register (credentials.md §2.1) + a `pulumi preview` against the Vultr-fallback stack config (nodes.md §3.1 — proves the scripted fallback still computes, creating nothing) + anything the probes can't reach | Yearly | One `actionable` issue, human-run |
@@ -1049,7 +1098,7 @@ Owning docs keep the content — the index only locates it.
 | Backup restores (CNPG, VolSync, etcd) | storage.md §5; the drills are §4 here |
 | Alert-channel failure (HA push down → meta-alert; GitHub leg down; a scheduled ops-repo workflow that stopped checking in) | architecture.md §4.3; the contract and the dead-man are §4 here |
 | CI alerts (a red `checks` or `images` run; a drift diff) | framework/ci.md §3.1 and §3.2 |
-| The metrics store (rows it ignores) | §6 here |
+| The metrics stores (rows a store ignores; a backup gone stale, refused, or a store that does not restore) | §6 here |
 
 vmalert rule families adopt this index as they are ported: an alert
 that cannot point at a row (or at its owner doc's census) does not
@@ -1097,3 +1146,97 @@ than sparse, and every reading over it reads nothing.
 4. **Confirm**: `increase(vm_rows_ignored_total[30m])` reads 0 for
    every reason, the series the log named is present, and the alert
    resolves 30 minutes after the last ignored row.
+
+### 6.2 A metrics store's backup is stale
+
+**Trigger**: `MetricsBackupStale`, `actionable`. The backup CronJob the
+alert names, `vmbackup-recent` or `vmbackup-history`, has not succeeded
+for an hour and a half, the one rule for stale over its hourly period
+(`conventions.backup.max_age`), or has never succeeded since it was
+created that long ago. The bucket's copy of that store is falling
+behind, and a rebuild would restore it only as far as its last success
+(storage.md §5).
+
+**Gist**:
+
+1. **Read the last run.**
+   `kubectl -n monitoring get jobs -l batch.kubernetes.io/cronjob=<job>`
+   lists the runs; the newest's pod log, `kubectl -n monitoring logs
+   <pod> --all-containers`, says where it stopped. Each line before the
+   failure names the step it starts.
+2. **A pod that never started.** It waits on what it mounts or reads:
+   the writer key's Secret, `writer-vm-monitoring`, which a SealedSecret
+   the controller cannot open never creates, and which the sealing
+   sitting of bring-up stage 9 (physical/bring-up.md §2) seals again
+   after a rebuild (§3.5); or the scripts' `ConfigMap`, `metrics-backup-shell`. `kubectl -n
+   monitoring describe pod` names which.
+3. **The store did not answer.** The snapshot is taken through the
+   store's Service, so a store that is down fails every backup. A store
+   whose pod sits in `Init` is its restore, step 5.
+4. **The history store's backup refused.** The log reads `holds <n>
+   rows, fewer than the <m> the last backup recorded at
+   vm/monitoring/history.rows`. Its retention keeps every row, so a
+   store holding fewer started without its history, and its backup
+   would overwrite the history in the bucket. Restore it: delete its
+   claim, `kubectl -n monitoring delete pvc vmsingle-history`, and its
+   pod; the operator makes the claim again, empty, when it next
+   reconciles the store, and the restore
+   brings the store back from its last backup, losing only what it took
+   in since it started empty. Where fewer rows are deliberate, series
+   deleted through the store's keyed delete endpoint, the record is
+   hidden instead, in the B2 console, and the next run records afresh.
+5. **A store that does not restore** sits in `Init`, one of its two
+   restore containers failing: `kubectl -n monitoring logs <pod> -c
+   restore-check`, then `-c restore`. The first fails where the bucket
+   or the key does not answer; the second where `vmrestore` refuses the
+   backup, which it does for one whose last run was cut off part way.
+   The store does not start meanwhile, by design: an empty store would
+   start over the history the bucket holds. vmagent queues what it
+   scrapes for that store, up to 1 GiB, until it starts. Where the
+   bucket or the key was what failed, nothing more is needed: the pod
+   runs its restore containers again, and the next attempt that reads
+   the bucket restores.
+
+   **A backup cut off part way**, by the worker's loss during a run or
+   by the run's deadline, is one `vmrestore` refuses. Where the store
+   still runs, its next successful run completes the backup again and
+   nothing more is needed. Where the store is to be restored from it,
+   the backup is repaired first, in the B2 console, as the account's
+   owner, since no key in automation deletes. `vmbackup` hides the
+   completion marker, `backup_complete.ignore`, before it changes
+   anything, then hides the parts the new snapshot lacks and uploads
+   the new ones. Each partition's `parts.json` and `appliedRetention.txt`
+   are among both, on every run: their contents change, so `vmbackup`
+   never matches them against the destination's copy, and hides that
+   copy and uploads the file again under the same name
+   (`lib/backup/common/part.go`, `key`, at v1.150.0). So under the
+   store's prefix, `vm/monitoring/history/` or `vm/monitoring/recent/`,
+   with file versions shown, the cut-off run is every hide marker and
+   every upload from the moment the marker was hidden, and for a name
+   the run both hid and uploaded, its three newest versions are the
+   earlier upload, the run's hide marker, and the run's upload. To bring the last
+   completed backup back:
+
+   1. delete the hide marker of every file the run hid, the completion
+      marker among them;
+   2. delete every file version the run uploaded, rather than hiding
+      it: a name the run both hid and uploaded, each partition's
+      `parts.json` among them, then shows its earlier version again,
+      where a hide would take that version back out of the backup;
+   3. delete the store's pod; the restore runs again on the lock file
+      `vmrestore` left in the data directory, and the store starts on the
+      backup as it stood before the cut-off run.
+
+   **The clock**: a hidden version is purged by the bucket's lifecycle
+   rule `BACKUP_VERSION_RETENTION_DAYS`, 30 days, after it was hidden
+   (storage.md §4). The repair has to come inside those 30 days of the
+   cut-off run, or the history it hid is gone. For the recent store,
+   whose loss costs a month of detail, the store may start empty
+   instead: hide everything under its prefix, then delete its claim,
+   `kubectl -n monitoring delete pvc
+   vmsingle-monitoring-victoria-metrics-k8s-stack`, and its pod, since
+   the claim holds the lock file, and the restore refuses a lock with
+   no backup behind it.
+6. **Confirm**: the next run's log ends with the backup, and for the
+   history with `recorded <n> rows`; the alert resolves at the next
+   evaluation.
