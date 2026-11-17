@@ -126,6 +126,13 @@ BUCKET_BACKUP = 'aetf-kluster-backup'
 #: be recoverable before it ages out (storage.md §4).
 BACKUP_VERSION_RETENTION_DAYS = 30
 
+#: How long an etcd snapshot under `ETCD_SNAPSHOT_PREFIX` stays current before
+#: the bucket hides it (storage.md §4, §5 item 1). Retention of the snapshots
+#: is the bucket's job rather than a prune's: each snapshot is a whole backup
+#: on its own, so its age alone says it is no longer needed. A hidden snapshot
+#: then ages out on `BACKUP_VERSION_RETENTION_DAYS` like any other version.
+ETCD_SNAPSHOT_RETENTION_DAYS = 14
+
 
 class BackupFamily(StrEnum):
     """What fills a namespace's prefix of the bucket, one writer key each.
