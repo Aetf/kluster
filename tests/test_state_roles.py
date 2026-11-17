@@ -71,6 +71,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any, cast
 from urllib import parse as urllib_parse
 
+import host_ports
 import process_sessions
 import pytest
 from root_credentials import fake
@@ -558,8 +559,8 @@ def _joined(created: list[str], netns: str) -> list[str]:
     return [*created[:1], '--network', f'ns:{netns}', *created[1:]]
 
 
-def _published() -> list[str]:
-    """The arguments that publish the box port on a free port of `ADDRESS`, through pasta.
+def _published(port: int) -> list[str]:
+    """The arguments that publish the box port on `port` of `ADDRESS`, through pasta.
 
     **The module needs pasta, so it names it** rather than take the network
     a container gets without `--network`, which is the host's
@@ -571,36 +572,32 @@ def _published() -> list[str]:
     nothing, and a podman without pasta fails the command naming it rather
     than a case failing later on a refused connection.
     """
-    return ['--network', 'pasta', '--publish', f'{ADDRESS}::{settings.PORT}']
+    return ['--network', 'pasta', '--publish', f'{ADDRESS}:{port}:{settings.PORT}']
 
 
-def _network_container(name: str) -> list[str]:
-    """The `podman run` of the container whose network a box joins, with the box port published."""
-    return _bounded('run', '--detach', *_published(), '--name', name, '--entrypoint', 'sleep', IMAGE, 'infinity')
+def _network_container(name: str, port: int) -> list[str]:
+    """The `podman run` of the container whose network a box joins, with the box port published on `port`."""
+    return _bounded('run', '--detach', *_published(port), '--name', name, '--entrypoint', 'sleep', IMAGE, 'infinity')
 
 
 def _network(name: str) -> tuple[str, int]:
     """Start a box's network as the container `name`: the namespace's path, and the host port it is published on.
 
-    **podman chooses a free host port at `create` and binds it only when it
-    sets up the network, at `init` or `start`.** Its `getRandomHostPort`
-    (`pkg/specgen/generate/ports.go`) takes the port from
-    `utils.GetRandomPort`, which listens on port 0 and closes the listener
-    straight away, and the choice is written into the container's
-    configuration; pasta binds the configuration's ports when the network
-    comes up (`libpod/networking_pasta_linux.go`). A box is created, then
-    filled with `podman cp`, then started, and the port its `create` chose
-    would be free for anything else on the machine to take until the
-    start -- a run beside this one included, whose podman can be handed the
-    same port -- and then pasta could not bind it and the start would fail.
+    **The port is one this case reserved** (`host_ports`), held until the
+    `podman run` that publishes it has returned, and never one podman picks:
+    podman picks a free port and pasta binds it later, and anything that
+    binds port 0 in between can be handed the same port (podman#19048,
+    framework/testing.md §1.2).
 
-    So the port is published by a container of its own, which `podman run`
-    creates and starts in one command, and a box joins that container's
-    network namespace by its path. The port is bound before this returns
-    it, so no box is created on a port nothing holds. podman still chooses
-    before pasta binds inside that one command, so a port taken there fails
-    this `podman run` with pasta's message: a window of podman's own, which
-    no step of a box widens.
+    **pasta binds a published port only when podman sets up the network,
+    at `init` or `start`**, not at `create` (`libpod/networking_pasta_linux.go`).
+    A box is created, then filled with `podman cp`, then started, and a port
+    its `create` named would be free for anything else on the machine to
+    take until the start, and then pasta could not bind it and the start
+    would fail. So the port is published by a container of its own, which
+    `podman run` creates and starts in one command, and a box joins that
+    container's network namespace by its path. The port is bound before this
+    returns it, so no box is created on a port nothing holds.
 
     The path rather than `--network container:<name>`, because the second
     makes the box a dependent of this container, and podman removes no
@@ -609,10 +606,10 @@ def _network(name: str) -> tuple[str, int]:
     and a teardown that removes it first would be refused.
     `test_a_network_is_removed_while_a_box_joined_to_it_exists` holds it.
     """
-    _ = _podman(*_network_container(name))
+    with host_ports.reserved(ADDRESS) as port:
+        _ = _podman(*_network_container(name, port))
     netns = _podman('container', 'inspect', '--format', '{{.NetworkSettings.SandboxKey}}', name).decode().strip()
-    published = _podman('port', name, f'{settings.PORT}/tcp').decode().split()[0]
-    return netns, int(published.rsplit(':', 1)[1])
+    return netns, port
 
 
 def _client(name: str) -> list[str]:
@@ -931,27 +928,31 @@ def test_every_container_ends_by_itself_and_mounts_no_named_volume(
     name = f'kluster-test-volumes-{uuid.uuid4().hex[:12]}'
     source = f'{name}-source'
     start.containers.extend((name, source))
-    argv = {
-        'appliance': lambda: _named(_unit_container(ignition, UNIT)[0], name),
-        'pooler': lambda: _named(_unit_container(ignition, POOLER_UNIT, source)[0], name),
-        'superusers': lambda: _named(_superusers(), name),
-        'network': lambda: _network_container(name),
-        'client': lambda: _client(name),
-    }[container]()
-    image = {'pooler': POOLER_IMAGE}.get(container, IMAGE)
-    try:
-        if container == 'pooler':
-            _ = _podman(*_named(_unit_container(ignition, UNIT)[0], source))
-        _ = _podman(*argv)
-        made = json.loads(_podman('container', 'inspect', name))[0]
-        mounted = _volume_mounts(name)
-        sourced = _volume_mounts(source) if container == 'pooler' else mounted
-        anonymous = {
-            volume: json.loads(_podman('volume', 'inspect', volume))[0].get('Anonymous', False) for volume in mounted
-        }
-    finally:
-        _remove(name)
-        _remove(source)
+    # `port` is for the network container, the one of these that publishes a
+    # port, and is held until that container's `podman run` has returned.
+    with host_ports.reserved(ADDRESS) as port:
+        argv = {
+            'appliance': lambda: _named(_unit_container(ignition, UNIT)[0], name),
+            'pooler': lambda: _named(_unit_container(ignition, POOLER_UNIT, source)[0], name),
+            'superusers': lambda: _named(_superusers(), name),
+            'network': lambda: _network_container(name, port),
+            'client': lambda: _client(name),
+        }[container]()
+        image = {'pooler': POOLER_IMAGE}.get(container, IMAGE)
+        try:
+            if container == 'pooler':
+                _ = _podman(*_named(_unit_container(ignition, UNIT)[0], source))
+            _ = _podman(*argv)
+            made = json.loads(_podman('container', 'inspect', name))[0]
+            mounted = _volume_mounts(name)
+            sourced = _volume_mounts(source) if container == 'pooler' else mounted
+            anonymous = {
+                volume: json.loads(_podman('volume', 'inspect', volume))[0].get('Anonymous', False)
+                for volume in mounted
+            }
+        finally:
+            _remove(name)
+            _remove(source)
     declared: dict[str, Any] = json.loads(_podman('image', 'inspect', image))[0]['Config'].get('Volumes') or {}
     shares = sorted(inside for host, inside, _ in _volumes(ignition, UNIT) if host in _shared(ignition))
 
@@ -1026,7 +1027,7 @@ def test_the_port_a_box_is_reached_on_is_bound_before_the_box_is_created() -> No
 
     A box is created, filled and started after this, and nothing outside
     can take its port in between: a bind of it from here is refused. A port
-    a `podman create` chose is not taken yet, so the same bind succeeds,
+    a `podman create` publishes is not taken yet, so the same bind succeeds,
     and the `podman start` after it fails with pasta's `Address already in
     use`.
     """
@@ -1038,6 +1039,22 @@ def test_the_port_a_box_is_reached_on_is_bound_before_the_box_is_created() -> No
     finally:
         _remove(name)
     assert refused.value.errno == errno.EADDRINUSE
+
+
+def test_the_port_a_box_is_reached_on_lies_outside_the_ephemeral_range() -> None:
+    """No process is handed the box's host port by binding port 0 or by connecting.
+
+    The range is this process's network namespace's, which is where a case
+    dials `ADDRESS`. A port podman picks lies inside it.
+    """
+    name = f'kluster-test-pgnetwork-{uuid.uuid4().hex[:12]}'
+    try:
+        _, port = _network(name)
+    finally:
+        _remove(name)
+    low, high = (int(field) for field in Path('/proc/sys/net/ipv4/ip_local_port_range').read_text().split())
+
+    assert not low <= port <= high, (port, low, high)
 
 
 def test_a_network_is_removed_while_a_box_joined_to_it_exists() -> None:
