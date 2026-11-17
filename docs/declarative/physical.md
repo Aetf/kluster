@@ -1104,7 +1104,7 @@ fdatasync` for each write-ahead-log sync that takes longer than a
 second. For each control plane, with the cluster's talosconfig:
 
 ```sh
-talosctl -n <node> logs etcd | grep -c 'slow fdatasync'
+mise x -- talosctl -n <node> logs etcd | grep -c 'slow fdatasync'
 ```
 
 It passes when every control plane prints `0`. The item passes when
@@ -1122,8 +1122,8 @@ plane, one at a time, and go on to the next only once the rebooted
 member is back in a healthy quorum:
 
 ```sh
-talosctl -n <node> reboot
-talosctl -n <node> etcd status      # every member listed, none reporting an error
+mise x -- talosctl -n <node> reboot
+mise x -- talosctl -n <node> etcd status      # every member listed, none reporting an error
 ```
 
 The local-path volume (§2) is first exercised there as well:

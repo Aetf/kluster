@@ -137,13 +137,13 @@ from an HTTP repository, which offers nothing to check a download against
     checkout, with `<node>` the address `talosctl` names that node by.
     The first reads the installer the node holds and prints it:
 
-        installer="$( { talosctl -n <node> get machineconfig persistent -o jsonpath='{.spec}' 2>/dev/null || talosctl -n <node> get machineconfig v1alpha1 -o jsonpath='{.spec}'; } | mise x uv -- uv run python -c 'import sys, yaml; print(next(d for d in yaml.safe_load_all(sys.stdin) if d and "machine" in d)["machine"]["install"]["image"])')" && echo "$installer"
+        installer="$( { mise x -- talosctl -n <node> get machineconfig persistent -o jsonpath='{.spec}' 2>/dev/null || mise x -- talosctl -n <node> get machineconfig v1alpha1 -o jsonpath='{.spec}'; } | mise x uv -- uv run python -c 'import sys, yaml; print(next(d for d in yaml.safe_load_all(sys.stdin) if d and "machine" in d)["machine"]["install"]["image"])')" && echo "$installer"
 
     It prints `factory.talos.dev/<platform>-installer/<schematic
     id>:<release>`. The tag is the release the upgrade installs, so the
     second command runs only once the tag is the new pin:
 
-        talosctl -n <node> upgrade --image "$installer"
+        mise x -- talosctl -n <node> upgrade --image "$installer"
 
     The first command reads the `persistent` configuration where the
     node has one, and the active `v1alpha1` otherwise. An apply that
