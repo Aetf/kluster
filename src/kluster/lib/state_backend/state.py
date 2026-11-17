@@ -553,12 +553,21 @@ SESSION_OPTIONS_ENV = 'PGOPTIONS'
 _READ_ONLY = {SESSION_OPTIONS_ENV: '-c default_transaction_read_only=on'}
 
 
-def _psql(target: Connection, sql: str, *, what: str, variables: Mapping[str, str], env: Mapping[str, str]) -> object:
-    """One script through `psql` over the bundle's connection, its one value read back as JSON.
+def query(
+    target: Connection,
+    sql: str,
+    *,
+    what: str,
+    variables: Mapping[str, str],
+    env: Mapping[str, str] | None = None,
+) -> object:
+    """One script through `psql` over the query form of the connection, its one value read back as JSON.
 
     The script travels on standard input, which is where `psql` interpolates
     `variables` -- quoted as literals, `:'name'` -- so no key is spliced into
-    SQL text here.
+    SQL text here. `env` is overlaid on the connection's own variables, as
+    the census's read-only session setting is. `what` names the statement in
+    a refusal.
     """
     argv = [
         PSQL,
@@ -576,7 +585,7 @@ def _psql(target: Connection, sql: str, *, what: str, variables: Mapping[str, st
         what=what,
         timeout=LISTING_TIMEOUT,
         stdin=sql,
-        env={**target.env, CONNECT_TIMEOUT_ENV: str(CONNECT_TIMEOUT), **env},
+        env={**target.env, CONNECT_TIMEOUT_ENV: str(CONNECT_TIMEOUT), **(env or {})},
     )
     try:
         return json.loads(printed)
@@ -598,7 +607,7 @@ def census(target: Connection) -> list[Row]:
         endpoint(target.url),
     )
     what = f'the census of {STATE_TABLE}'
-    listing = _psql(target, CENSUS_QUERY, what=what, variables={}, env=_READ_ONLY)
+    listing = query(target, CENSUS_QUERY, what=what, variables={}, env=_READ_ONLY)
     if not isinstance(listing, list):
         raise StateError(f'{what} printed a {type(listing).__name__}, not a list of keys')
     found: list[Row] = []
@@ -629,7 +638,7 @@ def prune(target: Connection, keys: Sequence[str]) -> list[str]:
         'copies': json.dumps(list(COPIES.values())),
         'formats': json.dumps(['', *COMPRESSED]),
     }
-    deleted = _psql(target, PRUNE_STATEMENT, what=f'the prune of {STATE_TABLE}', variables=variables, env={})
+    deleted = query(target, PRUNE_STATEMENT, what=f'the prune of {STATE_TABLE}', variables=variables)
     if not isinstance(deleted, list) or not all(isinstance(key, str) for key in cast('list[object]', deleted)):
         raise StateError(f'the prune of {STATE_TABLE} answered something other than the keys it deleted: {deleted!r}')
     return cast('list[str]', deleted)

@@ -33,6 +33,12 @@ and a preview that failed, which fails the job rather than reading as a diff.
 Every job that runs the program installs its plugins first, authenticated with
 the job's token, and that token reaches no step that runs the program.
 
+And every `Up` step of the merge chain hands `release-lock` the stack it
+applied, the pid its `pulumi` ran as and a time no later than its start, once
+that `pulumi` has exited by itself, and never after a signal it does not trap
+ended it (framework/ci.md §3.3), held by running the step against stand-ins
+for `mise`, `pulumi` and `uv`.
+
 The workflow files are read the way the other seams read them, through the
 loaders in `workflow_files`.
 """
@@ -42,6 +48,7 @@ from __future__ import annotations
 import os
 import re
 import shlex
+import shutil
 import tomllib
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -975,6 +982,183 @@ def test_a_plan_that_failed_fails_its_job_by_name_and_proposes_nothing(tmp_path:
     assert code != 0, output
     assert written == {}
     assert f'::error::the physical preview failed (exit {preview_exit}), so it proposed no plan to approve' in output
+
+
+#: Stand-ins for what a deploy's `Up` step runs. `mise x -- <command>` runs the
+#: command. `pulumi` logs its own pid, the time it started in seconds and what
+#: it was asked to run, then exits with `UP_EXIT`, or kills itself with the
+#: signal `UP_SIGNAL` names. `uv` logs what it was asked to run and exits with
+#: `RELEASE_EXIT`.
+MISE_STAND_IN = """#!/bin/sh
+[ "$1" = x ] && [ "$2" = -- ] || exit 90
+shift 2
+exec "$@"
+"""
+PULUMI_STAND_IN = """#!/bin/sh
+printf 'pulumi %s %s %s\\n' "$$" "$(date +%s)" "$*" >> "$STAND_IN_LOG"
+[ -z "$UP_SIGNAL" ] || kill -s "$UP_SIGNAL" $$
+exit "$UP_EXIT"
+"""
+UV_STAND_IN = """#!/bin/sh
+printf 'uv %s\\n' "$*" >> "$STAND_IN_LOG"
+exit "$RELEASE_EXIT"
+"""
+#: The step's bound in a case: every stand-in exits at once.
+UP_STEP_TIMEOUT = 20
+
+
+def _up_steps() -> dict[str, dict[str, object]]:
+    """Every step of `deploy.yml` that runs `pulumi up`, by its job's name."""
+    where = github_name(DEPLOY)
+    found: dict[str, dict[str, object]] = {}
+    for name, job in workflow_jobs(read_workflow(DEPLOY), where).items():
+        for entry in cast('list[object]', job.get('steps') or []):
+            step = mapping(entry, f'{where}: {name} step')
+            if any(command.subcommand == 'up' for command in _step_pulumi_commands(step, f'{where}: {name}')):
+                found[name] = step
+    # A read that stopped finding the applies would pass on nothing.
+    assert 'up-physical' in found, found
+    return found
+
+
+@dataclass(frozen=True)
+class StandInRun:
+    """One run of the `pulumi` stand-in: the pid it ran as, the second it started in, and what it was asked."""
+
+    pid: int
+    started: int
+    command: PulumiCommand
+
+
+@dataclass(frozen=True)
+class UpStepRun:
+    """What an `Up` step did: its exit and output, each `pulumi` it ran, and each `release-lock` it ran."""
+
+    code: int
+    output: str
+    pulumi: list[StandInRun]
+    releases: list[list[str]]
+
+
+def _run_up_step(
+    tmp_path: Path, step: dict[str, object], *, up_exit: int, signal: str = '', release_exit: int = 0
+) -> UpStepRun:
+    assert 'shell' not in step, 'the Up step names a shell, which this case does not model'
+    run = step.get('run')
+    assert isinstance(run, str)
+    bin_dir = tmp_path / 'bin'
+    bin_dir.mkdir(parents=True)
+    for name, text in {'mise': MISE_STAND_IN, 'pulumi': PULUMI_STAND_IN, 'uv': UV_STAND_IN}.items():
+        _ = (bin_dir / name).write_text(text)
+        (bin_dir / name).chmod(0o755)
+    runner_temp = tmp_path / 'runner-temp'
+    runner_temp.mkdir()
+    log = tmp_path / 'log'
+    log.touch()
+    env = {
+        'PATH': f'{bin_dir}:{os.environ["PATH"]}',
+        'HOME': str(tmp_path),
+        'RUNNER_TEMP': str(runner_temp),
+        'STAND_IN_LOG': str(log),
+        'UP_EXIT': str(up_exit),
+        'UP_SIGNAL': signal,
+        'RELEASE_EXIT': str(release_exit),
+    }
+    # A step that names no shell runs as `bash -e {0}` on a Linux runner.
+    done = process_sessions.run(['bash', '-e', '-c', run], cwd=tmp_path, env=env, text=True, timeout=UP_STEP_TIMEOUT)
+    pulumi: list[StandInRun] = []
+    releases: list[list[str]] = []
+    for line in log.read_text().splitlines():
+        tool, rest = line.split(' ', 1)
+        if tool == 'pulumi':
+            pid, started, asked = rest.split(' ', 2)
+            command = PulumiCommand('the stand-in log', tuple(shlex.split(asked)))
+            pulumi.append(StandInRun(pid=int(pid), started=int(started), command=command))
+        else:
+            releases.append(shlex.split(rest))
+    return UpStepRun(code=done.returncode, output=done.stdout + done.stderr, pulumi=pulumi, releases=releases)
+
+
+def _released(release: list[str]) -> tuple[str, int, int]:
+    """The stack a `uv run state-backend release-lock …` names, and the pid and time in the file it names."""
+    assert release[:3] == ['run', 'state-backend', 'release-lock'], release
+    options = dict(zip(release[3::2], release[4::2], strict=True))
+    pid, started = (int(field) for field in Path(options['--start-file']).read_text().split())
+    return options['--stack'], pid, started
+
+
+#: Statuses `pulumi` exits with by itself, from the exit-code table of the
+#: pinned CLI (`pkg/cmd/pulumi/cmd/exit_codes.go` at 3.274.1): success, a
+#: generic error, `ExitCancelled` and `ExitInternalError`.
+PULUMI_EXITS = (0, 1, 8, 255)
+
+
+@pytest.mark.parametrize('up_exit', PULUMI_EXITS)
+def test_an_up_that_exits_by_itself_has_the_lock_its_pulumi_left_released(tmp_path: Path, up_exit: int) -> None:
+    """A `pulumi` reports a failed delete of its own lock as a diagnostic, and exits as its update made it.
+
+    So the step hands `release-lock` the stack it applied, the pid that
+    `pulumi` ran as and a time no later than its start, after a success as
+    after a failure, and keeps the status `pulumi` gave (framework/ci.md
+    §3.3).
+    """
+    for job, step in _up_steps().items():
+        ran = _run_up_step(tmp_path / job, step, up_exit=up_exit)
+
+        assert ran.code == up_exit, f'{job}: {ran.output}'
+        (pulumi,) = ran.pulumi
+        assert pulumi.command.subcommand == 'up'
+        ((stack, pid, started),) = [_released(release) for release in ran.releases]
+        assert (stack, pid) == (pulumi.command.stack, pulumi.pid), job
+        assert started <= pulumi.started, job
+
+
+def test_mise_x_runs_its_command_as_its_own_process() -> None:
+    """The pid an `Up` step records is `pulumi`'s only because `mise x` replaces itself with what it runs.
+
+    The stand-in above does the same, so the cases above hold the step to
+    that pid and this one holds the `mise` on `PATH` -- the pinned release, on
+    a runner -- to the stand-in. A `mise` that ran its command as a child
+    instead would hand `release-lock` a pid no lock names, and every lock a
+    deploy left would wait for the hand procedure.
+    """
+    mise = shutil.which('mise')
+    if mise is None:
+        pytest.skip('mise is not on PATH')
+    with process_sessions.started(
+        [mise, 'x', '--', 'sh', '-c', 'echo "$$"'], cwd=ROOT, stdout=process_sessions.PIPE, text=True
+    ) as command:
+        printed, _ = command.communicate(timeout=UP_STEP_TIMEOUT)
+
+    assert command.returncode == 0
+    assert int(printed.split()[-1]) == command.pid
+
+
+#: Signals the pinned `pulumi` does not trap during an update: it traps SIGINT
+#: and SIGTERM there, cancels and exits by itself (`signal.Notify` in
+#: `pkg/backend/cancellation_scope.go` at 3.274.1).
+UNTRAPPED_SIGNALS = ('KILL', 'HUP')
+
+
+@pytest.mark.parametrize('signal', UNTRAPPED_SIGNALS)
+def test_an_up_a_signal_ended_leaves_its_lock_to_the_hand_procedure(tmp_path: Path, signal: str) -> None:
+    """A killed apply never tried its own delete, and may have hung where the next one would (§3.3)."""
+    for job, step in _up_steps().items():
+        ran = _run_up_step(tmp_path / job, step, up_exit=0, signal=signal)
+
+        assert ran.code > 128, f'{job}: {ran.output}'
+        assert ran.releases == [], job
+
+
+@pytest.mark.parametrize('up_exit', [0, 4])
+def test_a_lock_left_uncleared_fails_the_step_by_name(tmp_path: Path, up_exit: int) -> None:
+    """The next `up` refuses on a lock left behind, so a release that could not finish fails the apply that took it."""
+    for job, step in _up_steps().items():
+        ran = _run_up_step(tmp_path / job, step, up_exit=up_exit, release_exit=1)
+
+        assert ran.code == (up_exit or 1), f'{job}: {ran.output}'
+        (pulumi,) = ran.pulumi
+        assert f'::error::the lock this run took on {pulumi.command.stack} may be left' in ran.output, ran.output
 
 
 #: The `pulumi` subcommands that run the program, and with it every plugin it

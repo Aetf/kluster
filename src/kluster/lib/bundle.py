@@ -69,7 +69,7 @@ class Purpose(enum.Enum):
     #: `PULUMI_BACKEND_URL`: the stored string with `binary_parameters=yes`
     #: (`pulumi_url`).
     PULUMI = 'pulumi'
-    #: A libpq tool's query, the census's: the stored string as it is.
+    #: A libpq tool's query: the stored string as it is.
     QUERY = 'query'
     #: `pg_dump` and `pg_restore`: the stored string naming the pooler's
     #: session entry as its database (`dump_url`).

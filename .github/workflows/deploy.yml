@@ -171,11 +171,33 @@ jobs:
         # bound sits far above a slow healthy apply. An apply that exceeds it
         # fails the job and `notify-failure` fires; framework/ci.md §3.3 is
         # what follows.
+        #
+        # `pulumi` runs as the subshell that recorded its pid and the time
+        # before it started: the subshell `exec`s `mise x`, which `exec`s
+        # `pulumi` in turn. Once `pulumi` has exited by itself, failed or not,
+        # `release-lock` deletes the lock it still holds on the stack, which is
+        # there when the backend did not answer `pulumi`'s own delete, and it
+        # deletes no lock but one that names this runner and that pid and was
+        # taken after that time. `pulumi` traps SIGINT and SIGTERM during an
+        # update, cancels and exits by itself, so a status above 128 is a
+        # signal it does not trap, in practice SIGKILL: a killed apply, which
+        # never tried its own delete, and whose lock is left for the hand
+        # procedure (framework/ci.md §3.3). 255 is the one status above 128
+        # that is `pulumi`'s own, an internal error (`exit_codes.go`).
         timeout-minutes: 120
         env:
           # `physical`'s own passphrase, as in `plan-physical`.
           PULUMI_CONFIG_PASSPHRASE: ${{ secrets.PULUMI_CONFIG_PASSPHRASE }}
-        run: mise x -- pulumi up --stack physical --yes --diff
+        run: |
+          status=0
+          (echo "$BASHPID $(date +%s)" > "$RUNNER_TEMP/pulumi.start" && exec mise x -- pulumi up --stack physical --yes --diff) \
+            || status=$?
+          if { [ "$status" -le 128 ] || [ "$status" -eq 255 ]; } \
+            && ! mise x -- uv run state-backend release-lock --stack physical --start-file "$RUNNER_TEMP/pulumi.start"; then
+            echo "::error::the lock this run took on physical may be left, so the next up refuses: framework/ci.md §3.3"
+            [ "$status" -ne 0 ] || status=1
+          fi
+          exit "$status"
 
   up-dns:
     needs: [plan-physical, up-physical]
@@ -242,10 +264,32 @@ jobs:
         # bound sits far above a slow healthy apply. An apply that exceeds it
         # fails the job and `notify-failure` fires; framework/ci.md §3.3 is
         # what follows.
+        #
+        # `pulumi` runs as the subshell that recorded its pid and the time
+        # before it started: the subshell `exec`s `mise x`, which `exec`s
+        # `pulumi` in turn. Once `pulumi` has exited by itself, failed or not,
+        # `release-lock` deletes the lock it still holds on the stack, which is
+        # there when the backend did not answer `pulumi`'s own delete, and it
+        # deletes no lock but one that names this runner and that pid and was
+        # taken after that time. `pulumi` traps SIGINT and SIGTERM during an
+        # update, cancels and exits by itself, so a status above 128 is a
+        # signal it does not trap, in practice SIGKILL: a killed apply, which
+        # never tried its own delete, and whose lock is left for the hand
+        # procedure (framework/ci.md §3.3). 255 is the one status above 128
+        # that is `pulumi`'s own, an internal error (`exit_codes.go`).
         timeout-minutes: 120
         env:
           PULUMI_CONFIG_PASSPHRASE: ${{ secrets.PULUMI_CONFIG_PASSPHRASE }}
-        run: mise x -- pulumi up --stack dns --yes --diff
+        run: |
+          status=0
+          (echo "$BASHPID $(date +%s)" > "$RUNNER_TEMP/pulumi.start" && exec mise x -- pulumi up --stack dns --yes --diff) \
+            || status=$?
+          if { [ "$status" -le 128 ] || [ "$status" -eq 255 ]; } \
+            && ! mise x -- uv run state-backend release-lock --stack dns --start-file "$RUNNER_TEMP/pulumi.start"; then
+            echo "::error::the lock this run took on dns may be left, so the next up refuses: framework/ci.md §3.3"
+            [ "$status" -ne 0 ] || status=1
+          fi
+          exit "$status"
 
   up-k8s-base:
     # After `up-dns` whatever its result, as `up-apps` is: a name a cut hands
@@ -293,10 +337,32 @@ jobs:
         # bound sits far above a slow healthy apply. An apply that exceeds it
         # fails the job and `notify-failure` fires; framework/ci.md §3.3 is
         # what follows.
+        #
+        # `pulumi` runs as the subshell that recorded its pid and the time
+        # before it started: the subshell `exec`s `mise x`, which `exec`s
+        # `pulumi` in turn. Once `pulumi` has exited by itself, failed or not,
+        # `release-lock` deletes the lock it still holds on the stack, which is
+        # there when the backend did not answer `pulumi`'s own delete, and it
+        # deletes no lock but one that names this runner and that pid and was
+        # taken after that time. `pulumi` traps SIGINT and SIGTERM during an
+        # update, cancels and exits by itself, so a status above 128 is a
+        # signal it does not trap, in practice SIGKILL: a killed apply, which
+        # never tried its own delete, and whose lock is left for the hand
+        # procedure (framework/ci.md §3.3). 255 is the one status above 128
+        # that is `pulumi`'s own, an internal error (`exit_codes.go`).
         timeout-minutes: 120
         env:
           PULUMI_CONFIG_PASSPHRASE: ${{ secrets.PULUMI_CONFIG_PASSPHRASE }}
-        run: mise x -- pulumi up --stack k8s-base --yes --diff
+        run: |
+          status=0
+          (echo "$BASHPID $(date +%s)" > "$RUNNER_TEMP/pulumi.start" && exec mise x -- pulumi up --stack k8s-base --yes --diff) \
+            || status=$?
+          if { [ "$status" -le 128 ] || [ "$status" -eq 255 ]; } \
+            && ! mise x -- uv run state-backend release-lock --stack k8s-base --start-file "$RUNNER_TEMP/pulumi.start"; then
+            echo "::error::the lock this run took on k8s-base may be left, so the next up refuses: framework/ci.md §3.3"
+            [ "$status" -ne 0 ] || status=1
+          fi
+          exit "$status"
 
   up-apps:
     needs: [up-k8s-base, up-dns]
@@ -339,10 +405,32 @@ jobs:
         # bound sits far above a slow healthy apply. An apply that exceeds it
         # fails the job and `notify-failure` fires; framework/ci.md §3.3 is
         # what follows.
+        #
+        # `pulumi` runs as the subshell that recorded its pid and the time
+        # before it started: the subshell `exec`s `mise x`, which `exec`s
+        # `pulumi` in turn. Once `pulumi` has exited by itself, failed or not,
+        # `release-lock` deletes the lock it still holds on the stack, which is
+        # there when the backend did not answer `pulumi`'s own delete, and it
+        # deletes no lock but one that names this runner and that pid and was
+        # taken after that time. `pulumi` traps SIGINT and SIGTERM during an
+        # update, cancels and exits by itself, so a status above 128 is a
+        # signal it does not trap, in practice SIGKILL: a killed apply, which
+        # never tried its own delete, and whose lock is left for the hand
+        # procedure (framework/ci.md §3.3). 255 is the one status above 128
+        # that is `pulumi`'s own, an internal error (`exit_codes.go`).
         timeout-minutes: 120
         env:
           PULUMI_CONFIG_PASSPHRASE: ${{ secrets.PULUMI_CONFIG_PASSPHRASE }}
-        run: mise x -- pulumi up --stack apps --yes --diff
+        run: |
+          status=0
+          (echo "$BASHPID $(date +%s)" > "$RUNNER_TEMP/pulumi.start" && exec mise x -- pulumi up --stack apps --yes --diff) \
+            || status=$?
+          if { [ "$status" -le 128 ] || [ "$status" -eq 255 ]; } \
+            && ! mise x -- uv run state-backend release-lock --stack apps --start-file "$RUNNER_TEMP/pulumi.start"; then
+            echo "::error::the lock this run took on apps may be left, so the next up refuses: framework/ci.md §3.3"
+            [ "$status" -ne 0 ] || status=1
+          fi
+          exit "$status"
 
   notify-failure:
     # Nothing stands between a merge and a live apply, so a broken chain is

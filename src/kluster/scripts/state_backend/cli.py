@@ -8,8 +8,11 @@ of which verifies rather than reports, and the restore a run of the stack
 owes after a replacement it took no dump for. `census` reads what the state
 table holds and prunes the rows nothing reads, `render` renders a scratch
 box for the rebuild drill, `ssh` logs in for diagnosis, `bundle` writes a
-client bundle, and `pins` checks the pinned artifacts. `probe` is the one command written to run somewhere other than a workstation:
-the scheduled checks on the certificate and the dumps (`probe.py`).
+client bundle, and `pins` checks the pinned artifacts. `probe` and
+`release-lock` are the commands written to run somewhere other than a
+workstation: the scheduled checks on the certificate and the dumps
+(`probe.py`), and the step of a deploy job that deletes the lock its own
+`pulumi up` left (`locks.py`).
 """
 
 from __future__ import annotations
@@ -17,6 +20,7 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+import socket
 import sys
 import tempfile
 from pathlib import Path
@@ -25,7 +29,7 @@ from kluster.conventions import CompartmentMissing
 from kluster.lib import config as lib_config
 from kluster.lib import stack_environment
 from kluster.lib.pulumi_cli import PulumiRefused
-from kluster.lib.state_backend import committed, render, settings, state
+from kluster.lib.state_backend import committed, readiness, render, settings, state
 from kluster.lib.state_backend.state import StateError
 from kluster.scripts.credentials import escrow, pki, workstation
 from kluster.scripts.credentials.age import AgeError
@@ -35,7 +39,7 @@ from kluster.scripts.credentials.masters import CredentialRejected
 from kluster.scripts.credentials.pulumi_config import SlotRefused
 from kluster.scripts.credentials.workstation import WorkstationError
 
-from . import census, config, probe, provision
+from . import census, config, locks, probe, provision
 
 log = logging.getLogger(__name__)
 
@@ -130,6 +134,36 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=workstation.bundle_dir(),
         help='the client bundle whose connection string to read the state table over',
+    )
+
+    # What a deploy's `Up` step runs after its `pulumi up` (framework/ci.md
+    # §3.3). Needs no offline database: the client bundle is the whole
+    # credential.
+    releasing = actions.add_parser(
+        'release-lock',
+        help='delete the lock a stack holds for the pulumi process this machine started, and no other',
+        description=locks.__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            'exit status: 0 the backend answered, and the stack holds no lock that process took; '
+            f'1 the backend did not answer within {readiness.duration(locks.WAIT)}, or the bundle is missing.'
+        ),
+    )
+    _ = releasing.add_argument('--stack', required=True, help='the stack, as `pulumi --stack` names it')
+    _ = releasing.add_argument(
+        '--start-file',
+        type=Path,
+        required=True,
+        help=(
+            'the file recorded before the pulumi process started: its pid, then the time in seconds since the '
+            'epoch, on one line; a missing one proves no lock'
+        ),
+    )
+    _ = releasing.add_argument(
+        '--bundle',
+        type=Path,
+        default=workstation.bundle_dir(),
+        help='the client bundle whose connection string to read the locks over',
     )
 
     restore = actions.add_parser('restore', help='feed a dump into a box that serves no stack')
@@ -274,7 +308,7 @@ def main(argv: list[str] | None = None) -> int:
         parser.error('--yes deletes what --prune-superseded lists, and is nothing without it')
 
     # One dispatch, and the kit is opened by the arms that need it rather than
-    # before them: `pins`, `ssh`, `probe`, `census` and a drill's `restore
+    # before them: `pins`, `ssh`, `probe`, `census`, `release-lock` and a drill's `restore
     # --identity-file` run on machines that have no offline database, and
     # asking for one would fail before the command started.
     def kit() -> KdbxStore:
@@ -294,6 +328,13 @@ def main(argv: list[str] | None = None) -> int:
             case 'census':
                 return census.run(
                     state.connection(args.bundle), prune=args.prune_superseded, yes=args.yes, out=sys.stdout
+                )
+            case 'release-lock':
+                return locks.release(
+                    state.connection(args.bundle),
+                    stack=args.stack,
+                    start=locks.read_start(args.start_file),
+                    hostname=socket.gethostname(),
                 )
             case 'restore' if args.identity_file is not None:
                 return _restore(
