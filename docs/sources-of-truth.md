@@ -535,9 +535,9 @@ physical() { (cd ~/kluster && mise x -- env -u PULUMI_CONFIG_PASSPHRASE PULUMI_C
 h="$(sha256sum Pulumi.physical.yaml)"; ZT="$(physical config get zerotierApiToken)"; [ "$h" = "$(sha256sum Pulumi.physical.yaml)" ] && echo "stack file unchanged"
 N="$(mise x uv -- uv run python -c 'from kluster.conventions import overlay; print(overlay.NETWORK_ID)')"
 # Z2
-printf 'Authorization: bearer %s\n' "$ZT" | curl -sS -H @- "https://my.zerotier.com/api/network/$N" | jq '{name, rulesSource, routes: .config.routes, dns: .config.dns, pools: .config.ipAssignmentPools, v6: .config.v6AssignMode}'
+printf 'Authorization: token %s\n' "$ZT" | curl -sS -H @- "https://api.zerotier.com/api/v1/network/$N" | jq '{name: .config.name, rulesSource, routes: .config.routes, dns: .config.dns, pools: .config.ipAssignmentPools, v6: .config.v6AssignMode}'
 # Z3
-printf 'Authorization: bearer %s\n' "$ZT" | curl -sS -H @- "https://my.zerotier.com/api/network/$N/member" | jq -r '.[] | [.name, .nodeId, .config.authorized, (.config.ipAssignments // [] | join(","))] | @tsv' | sort
+printf 'Authorization: token %s\n' "$ZT" | curl -sS -H @- "https://api.zerotier.com/api/v1/network/$N/member" | jq -r '.[] | [.name, .nodeId, .config.authorized, (.config.ipAssignments // [] | join(","))] | @tsv' | sort
 # Z4
 mise x uv -- uv run python -c 'from kluster.conventions import overlay; [print(m.name, getattr(m, "node_id", None) or "-", m.address, sep="\t") for m in overlay.ROSTER]' | sort
 ```
@@ -546,8 +546,12 @@ mise x uv -- uv run python -c 'from kluster.conventions import overlay; [print(m
 -   `physical()` is physical/gateway-cutover.md's function. Its
     `config get` decrypts one value under `physical`'s passphrase,
     guarded the way C0 is.
--   **Z2 and Z3** are GET requests, on the paths and with the header that
-    `zerotier/go-ztcentral`, the client under the provider, uses.
+-   **Z2 and Z3** are GET requests to Central's v1 API, at the host and
+    with the `token` header that ZeroTier's documentation of that API
+    gives, the form the runbooks of physical/gateway.md and
+    physical/gateway-cutover.md send. The token reaches `curl` on its
+    standard input, where the shell's own `printf` writes it, rather than
+    on its command line.
 -   Z3 against Z4 says whether Central agrees with the roster.
 
 #### O — OCI and B2, in their consoles

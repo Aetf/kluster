@@ -21,13 +21,16 @@ not have.
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import os
 import re
+import shlex
 import subprocess as sp
 import tomllib
 from pathlib import Path
 
+import pinned_tools
 import process_sessions
 import pytest
 from state_dump_box import (
@@ -45,6 +48,7 @@ from state_dump_box import (
     PREAMBLE,
     SCRIPT,
     SERVING,
+    SHEBANG,
     UNOPENED,
     UPLOAD_TARGET,
     Box,
@@ -102,26 +106,91 @@ def _left_nothing_behind(box: Box) -> None:
     assert box.spooled() == []
 
 
+def _keeping_curl_input(box: Box) -> Path:
+    """Put a stand-in ahead of the box's `curl` that keeps what each call reads on standard input.
+
+    The script hands every B2 call its `Authorization` header there, and the
+    fake records a call's arguments and wiring alone. The stand-in copies its
+    input to a file numbered for the call -- `01` for the first `curl` -- in
+    the directory it returns, then runs the fake with that input spent.
+    """
+    kept = box.record.parent / 'curl-input'
+    kept.mkdir()
+    fake = box.bin / 'curl'
+    recording = fake.rename(box.bin / 'curl-recording')
+    into = shlex.quote(str(kept))
+    _ = fake.write_text(
+        f'#!{SHEBANG}\n'
+        'set -euo pipefail\n'
+        'shopt -s nullglob\n'
+        f'earlier=({into}/*)\n'
+        f'cat > {into}/"$(printf %02d $(( ${{#earlier[@]}} + 1 )))"\n'
+        f'exec {shlex.quote(str(recording))} "$@" < /dev/null\n'
+    )
+    fake.chmod(0o755)
+    return kept
+
+
+def _authorization(given: bytes) -> str | None:
+    """The `Authorization` header among the header lines a call read on standard input."""
+    for line in given.decode().splitlines():
+        name, _, value = line.partition(':')
+        if name.strip().lower() == 'authorization':
+            return value.strip()
+    return None
+
+
+def _recording_jq(box: Box) -> Path:
+    """Put a stand-in ahead of the pinned `jq` that keeps each call's argument list, then runs it.
+
+    `jq` is a real tool here rather than one of the box's fakes, so nothing
+    else records what it was handed, and the key passes through it on the
+    way to its basic authentication. Each call's arguments land, NUL-separated,
+    in a file of their own in the directory this returns; the call itself is
+    the pinned binary's, standard input and all.
+    """
+    kept = box.record.parent / 'jq-arguments'
+    kept.mkdir()
+    stand_in = box.bin / 'jq'
+    _ = stand_in.write_text(
+        f'#!{SHEBANG}\n'
+        f'printf \'%s\\0\' "$@" > {shlex.quote(str(kept))}/$$\n'
+        f'exec {shlex.quote(pinned_tools.located("jq"))} "$@"\n'
+    )
+    stand_in.chmod(0o755)
+    return kept
+
+
+#: The key's basic authentication as B2 documents it for `b2_authorize_account`.
+BASIC = base64.b64encode(f'{ENV["B2_KEY_ID"]}:{ENV["B2_KEY"]}'.encode()).decode()
+
+
 def test_upload_walks_authorize_then_get_url_then_put(tmp_path: Path) -> None:
     box = Box(tmp_path)
+    given = _keeping_curl_input(box)
 
     ran = box.run()
 
     assert ran.returncode == 0, ran.stderr
     authorize, get_url, put = box.of('curl')
     assert authorize.argv[-1].startswith(AUTHORIZATION_ROOT) and authorize.argv[-1].endswith('/b2_authorize_account')
-    # Basic auth is the key id and secret, not a token.
-    assert authorize.argv[authorize.argv.index('-u') + 1] == 'key-id:key-secret'
+    # Every call reads its headers on standard input as well as from its arguments.
+    assert all(('-H', '@-') in zip(call.argv, call.argv[1:], strict=False) for call in (authorize, get_url, put))
+    # Basic auth is the key id and secret, not a token; each later call
+    # carries the token the call before it answered with.
+    assert [_authorization(path.read_bytes()) for path in sorted(given.iterdir())] == [
+        f'Basic {BASIC}',
+        ACCOUNT['authorizationToken'],
+        UPLOAD_TARGET['authorizationToken'],
+    ]
 
     # The api url comes from the authorize response, never hardcoded.
     api_url = ACCOUNT['apiInfo']['storageApi']['apiUrl']
     assert get_url.argv[-1].startswith(f'{api_url}/b2api/') and get_url.argv[-1].endswith('/b2_get_upload_url')
-    assert get_url.header('Authorization') == 'account-token'
     # Addressed by id: the writeFiles-only key cannot resolve a bucket name.
     assert get_url.argv[get_url.argv.index('--data') + 1] == '{"bucketId":"bucket-id"}'
 
     assert put.argv[-1] == UPLOAD_TARGET['uploadUrl']
-    assert put.header('Authorization') == 'upload-token'
     assert put.sent == CIPHERTEXT
     assert put.header('X-Bz-Content-Sha1') == hashlib.sha1(CIPHERTEXT).hexdigest()
     # The body is the file itself, so curl sets the length B2 validates.
@@ -132,6 +201,37 @@ def test_upload_walks_authorize_then_get_url_then_put(tmp_path: Path) -> None:
     assert deadlines[2] > deadlines[0] == deadlines[1], deadlines
     # The failure the unit's timeout would otherwise be the only account of.
     assert all('--fail-with-body' in call.argv for call in (authorize, get_url, put))
+
+
+def test_no_credential_is_an_argument_of_any_call(tmp_path: Path) -> None:
+    """The key, and the tokens B2 answers with, never reach a command line (credentials.md §4).
+
+    An argument is in the process table, which every account on the box
+    reads through `/proc`, for as long as the call runs -- the upload's for
+    as long as the state takes to send. The box's fakes record every argument
+    list the run hands `podman`, `age` and `curl`, and a stand-in ahead of
+    the pinned `jq` records the ones `jq` is handed: the key passes through
+    it, and the script builds other values with `jq --arg`, which is where a
+    value sits on the command line.
+    """
+    box = Box(tmp_path)
+    jq = _recording_jq(box)
+
+    ran = box.run()
+
+    assert ran.returncode == 0, ran.stderr
+    assert box.of('curl'), 'the run made its B2 calls'
+    handed = [(call.tool, call.argv) for call in box.calls]
+    handed += [('jq', path.read_bytes().decode().split('\0')[:-1]) for path in jq.iterdir()]
+    assert any(tool == 'jq' for tool, _ in handed), 'the run reached jq'
+    credentials = (ENV['B2_KEY'], BASIC, ACCOUNT['authorizationToken'], UPLOAD_TARGET['authorizationToken'])
+    exposed = [
+        (tool, argument)
+        for tool, argv in handed
+        for argument in argv
+        if any(credential in argument for credential in credentials)
+    ]
+    assert exposed == []
 
 
 def test_the_stacks_multi_bucket_dump_key_authorizes_and_uploads(tmp_path: Path) -> None:

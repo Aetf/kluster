@@ -2152,7 +2152,7 @@ not answer.
 of its halves: the reading of etcd's fsync histogram against
 cluster/nodes.md §1's criterion, and the `slow fdatasync` tripwire
 beside it. Run them here, with the kubeconfig the setup wrote and with
-`tal` for `talosctl`, over `"${CP[@]}"`.
+`tal` for `mise x -- talosctl`, over `"${CP[@]}"`.
 
 **The node volumes.** Each row of `conventions.NODE_VOLUMES` names a
 volume and the node it attaches to:

@@ -174,14 +174,26 @@ dump() {
   rm -f "$archive"
 }
 
-# One B2 call. All three of them are JSON-in/JSON-out under a deadline, the
-# upload included; curl's `--fail-with-body` keeps B2's error document, whose
-# `code` is the diagnosis a bare status would lose.
+# One B2 call, `b2 <deadline> <authorization> <curl argument>...`, where
+# `<authorization>` is the `Authorization` header's value rather than the
+# whole header line. All three of them are JSON-in/JSON-out under a deadline,
+# the upload included; curl's `--fail-with-body` keeps B2's error document,
+# whose `code` is the diagnosis a bare status would lose.
+#
+# **No credential is ever an argument** (credentials.md §4): an argument is in
+# the process table, which every account on the box reads through `/proc`. So
+# each call's `Authorization` header -- the key itself on the first call, a
+# token B2 handed back on the others -- reaches curl on its standard input,
+# which `-H @-` reads headers from, and the shell's own here-string writes it
+# there. Standard input is therefore spoken for, and no curl argument a caller
+# passes may read it (`--data @-`, `-T -`): `-H @-` has already read it to its
+# end, so the request would go out with an empty body. Every other tool that
+# touches the key takes it on standard input too.
 b2() {
-  local deadline=$1
-  shift
+  local deadline=$1 authorization=$2
+  shift 2
   local answer
-  if ! answer=$(curl -sS --fail-with-body --max-time "$deadline" "$@"); then
+  if ! answer=$(curl -sS --fail-with-body --max-time "$deadline" -H @- "$@" <<< "Authorization: $authorization"); then
     die "B2 refused: $answer"
   fi
   printf '%s' "$answer"
@@ -189,16 +201,20 @@ b2() {
 
 upload() {
   local path=$1 name=$2
-  local account api_url token target upload_url upload_token sha1 encoded
+  local basic account api_url token target upload_url upload_token sha1 encoded
 
+  # HTTP basic authentication, as B2 documents `b2_authorize_account`: the key
+  # id and the key, joined by a colon and base64-encoded. `printf` is the
+  # shell's own, and jq reads the pair on its standard input.
   log 'authorizing with B2'
-  account=$(b2 120 -u "$B2_KEY_ID:$B2_KEY" "$AUTHORIZE_URL")
+  basic=$(printf '%s:%s' "$B2_KEY_ID" "$B2_KEY" | jq -Rr '@base64')
+  account=$(b2 120 "Basic $basic" "$AUTHORIZE_URL")
   api_url=$(jq -er '.apiInfo.storageApi.apiUrl' <<< "$account")
   token=$(jq -er '.authorizationToken' <<< "$account")
 
   # Addressed by id: the writeFiles-only key cannot resolve a bucket name.
   log 'asking B2 for an upload URL'
-  target=$(b2 120 -H "Authorization: $token" -H 'Content-Type: application/json' \
+  target=$(b2 120 "$token" -H 'Content-Type: application/json' \
     --data "$(jq -cn --arg id "$B2_BUCKET_ID" '{bucketId: $id}')" \
     "$api_url/$NATIVE_API_PATH/b2_get_upload_url")
   upload_url=$(jq -er '.uploadUrl' <<< "$target")
@@ -209,7 +225,7 @@ upload() {
   encoded=$(jq -rn --arg name "$name" '$name | @uri' | sed 's|%2F|/|g')
   sha1=$(sha1sum "$path" | cut -d ' ' -f 1)
   log "uploading $(stat -c %s "$path") bytes as $name"
-  b2 600 -H "Authorization: $upload_token" -H "X-Bz-File-Name: $encoded" \
+  b2 600 "$upload_token" -H "X-Bz-File-Name: $encoded" \
     -H 'Content-Type: application/octet-stream' -H "X-Bz-Content-Sha1: $sha1" \
     --data-binary "@$path" "$upload_url" > /dev/null
 }
