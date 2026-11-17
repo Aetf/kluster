@@ -18,7 +18,10 @@ stack `physical` -- and in its dependency shape:
 
 -   `CloudNodes`: one instance per control plane, and one balancer backend per
     node, per forwarded port and per family, each naming its instance's id
-    (`components/cloud/nodes.py`).
+    (`components/cloud/nodes.py`). Each declares the options the real fleet
+    registers under its type and name (`fleet_registrations`), so the
+    instances are protected as the fleet's are, and the run replaces one
+    only once the runbook has lifted that protection.
 -   `TalosDay1`: one configuration apply per node, naming the node's private
     address and depending on every backend (`stacks/physical.py`).
 -   `Gateway` and `Overlay`: a device file, and the overlay's network adopted
@@ -45,6 +48,8 @@ from pathlib import Path
 
 import process_sessions
 import pytest
+import pytest_asyncio
+from fleet_registrations import fleet_options
 from scratch_projects import scratch_project
 
 #: How long the case may take: its project's set-up and every command it runs.
@@ -142,6 +147,7 @@ main(sys.argv[1:], '0.0.1', StandIn())
 """
 
 PROGRAM = """\
+import json
 import os
 import pathlib
 
@@ -149,6 +155,9 @@ import pulumi
 from pulumi.dynamic import CreateResult, Resource, ResourceProvider
 
 LOG = pathlib.Path(os.environ['PROBE_LOG'])
+#: Each fleet stand-in's options, as the real fleet registers them under its
+#: type and name (`fleet_registrations`).
+OPTIONS = json.loads(os.environ['PROBE_OPTIONS'])
 NODES = ('cp1', 'cp2', 'cp3')
 #: Two of the ports the balancer forwards, each on both families, as
 #: `components/cloud/nodes.py` names a backend: the field alone for IPv4.
@@ -193,11 +202,16 @@ class Overlay(pulumi.ComponentResource):
         self.register_outputs({})
 
 
+def registered(typ, name, opts):
+    return pulumi.ResourceOptions.merge(opts, pulumi.ResourceOptions(**OPTIONS[f'{typ}::{name}']))
+
+
 class Instance(pulumi.CustomResource):
     private_ip: pulumi.Output[str]
 
     def __init__(self, name, opts):
-        super().__init__('oci:Core/instance:Instance', name, {'display_name': name, 'private_ip': None}, opts)
+        typ = 'oci:Core/instance:Instance'
+        super().__init__(typ, name, {'display_name': name, 'private_ip': None}, registered(typ, name, opts))
 
 
 class CloudNodes(pulumi.ComponentResource):
@@ -211,7 +225,7 @@ class CloudNodes(pulumi.ComponentResource):
                 'oci:NetworkLoadBalancer/backend:Backend',
                 f'{name}-nlb-{forward}-{node}',
                 {'target_id': instance.id, 'forward': forward},
-                child,
+                registered('oci:NetworkLoadBalancer/backend:Backend', f'{name}-nlb-{forward}-{node}', child),
             )
             for forward in FORWARDS
             for node, instance in self.instances.items()
@@ -300,14 +314,21 @@ def _ran(result: sp.CompletedProcess[str]) -> str:
     return result.stdout + result.stderr
 
 
+@pytest_asyncio.fixture
+async def options() -> str:
+    """The fleet's registered options, as the program reads them."""
+    return json.dumps(await fleet_options())
+
+
 @pytest.fixture
-def tonight(tmp_path: Path) -> Engine:
+def tonight(tmp_path: Path, options: str) -> Engine:
     """The stack the failed first form leaves: the fleet, the gateway and the adopted network, and no day 1."""
     log_file = tmp_path / 'engine.log'
     scratch = scratch_project(
         tmp_path, PROGRAM, name=PROJECT, providers=dict.fromkeys(('oci', 'talos', 'zerotier'), PROVIDER)
     )
-    engine = Engine(project=scratch.directory, env=scratch.env | {'PROBE_LOG': str(log_file)}, log_file=log_file)
+    env = scratch.env | {'PROBE_LOG': str(log_file), 'PROBE_OPTIONS': options}
+    engine = Engine(project=scratch.directory, env=env, log_file=log_file)
     initialized = engine.pulumi('stack', 'init', STACK)
     assert initialized.returncode == 0, initialized.stderr
     applied = process_sessions.run(
@@ -327,8 +348,8 @@ def test_the_recoverys_first_run_replaces_cp3_whole_and_writes_nothing_else(toni
     It has to leave no pending delete -- the original instance, and every
     backend the replacement moved, gone from the state -- and to have deleted
     the original, so that nothing named `kluster-cp3` survives into the run
-    that bootstraps. And it writes nothing to Talos, the gateway or the
-    overlay.
+    that bootstraps. It writes nothing to Talos, the gateway or the overlay,
+    and the replacement is protected again, as the program declares it.
     """
     before = len(tonight.log())
 
@@ -340,7 +361,9 @@ def test_the_recoverys_first_run_replaces_cp3_whole_and_writes_nothing_else(toni
     assert not [line for line in written if line.split(' ')[1].startswith(UNTOUCHED)], written
     exported = tonight.pulumi('stack', 'export')
     assert exported.returncode == 0, exported.stderr
-    pending = [
-        resource['urn'] for resource in json.loads(exported.stdout)['deployment']['resources'] if resource.get('delete')
+    resources = json.loads(exported.stdout)['deployment']['resources']
+    assert [resource['urn'] for resource in resources if resource.get('delete')] == []
+    (replacement,) = [
+        resource for resource in resources if resource['type'] == INSTANCE and resource['urn'].endswith('::kluster-cp3')
     ]
-    assert pending == []
+    assert replacement.get('protect') is True

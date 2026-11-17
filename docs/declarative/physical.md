@@ -182,6 +182,22 @@ credential (`ci_zerotier_identity_physical`,
 -   **Protection**: data- and identity-bearing resources here — block
     volumes and their attachments, the reserved public IP,
     `machine_secrets` — carry `protect=True` per storage.md §3.3.
+    **Each node's instance carries it too, for another reason: the
+    program neither replaces nor deletes a node's instance, and an
+    instance leaves the state only through a refresh that reads it
+    gone** (operations.md §3.1). A control plane's replacement is an
+    operation with an order of its own, which the engine cannot hold
+    (Aetf/kluster-ops#742), so the engine refuses it before it creates
+    anything: a replacement the provider plans for a changed input,
+    such as the placement read from the region at apply time, and one
+    that `--replace` or `--target-replace` asks for. An update in place
+    passes, a resize among them (operations.md §3.4), and a refresh
+    drops an instance that reads back without an ID whatever its
+    `protect`. A runbook that does replace an instance lifts the
+    protection first, for that instance alone, with `physical state
+    unprotect`, and the replacement is created protected
+    (physical/gateway-cutover.md §5). `tests/test_node_loss_engine.py`
+    holds the refusal and the refresh against the pinned CLI.
 -   **Guardrails**: compartment quotas pinning creatable shapes to the
     envelope the design is budgeted against, plus a budget with alert
     rules (nodes.md §3.2).

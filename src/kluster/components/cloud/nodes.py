@@ -399,12 +399,23 @@ class CloudNodes(Component, pulumi_type='kluster:cloud:CloudNodes'):
                 #     STATE on its launch-time `user_data`, and all three at
                 #     once.
                 #
-                # A replacement, whether another input forces it or
-                # `--target-replace` does, is created from the program's
-                # current values all the same: the engine checks the
-                # program's inputs afresh for it, which
-                # `test_state_backend_engine` holds against the pinned CLI.
-                opts=self.child_opts(ignore_changes=['metadata.user_data', 'sourceDetails.sourceId']),
+                # Protected, because a control plane's replacement is an
+                # operation with an order of its own -- what etcd tolerates
+                # while a member is missing, whether two machines carry one
+                # name, whether the node's A1 capacity is held -- which the
+                # engine cannot hold. So the engine refuses to replace the
+                # instance, whether an input forces it or `--replace` or
+                # `--target-replace` asks for it, before it creates anything,
+                # and the instance leaves the state only through a refresh
+                # that reads it gone (declarative/physical.md §1). An update
+                # in place, a resize, passes. `test_node_loss_engine` holds
+                # both against the pinned CLI.
+                #
+                # A replacement run once the state's protection is lifted by
+                # name is created from the program's current values all the
+                # same: the engine checks the program's inputs afresh for it,
+                # which `test_state_backend_engine` holds.
+                opts=self.child_opts(protect=True, ignore_changes=['metadata.user_data', 'sourceDetails.sourceId']),
             )
 
         # The one node the dedicated VIP is mapped onto. That is one

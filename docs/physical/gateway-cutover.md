@@ -1487,8 +1487,16 @@ CP3=$(physical stack --show-urns | sed -n 's/.*URN: \(urn:pulumi:.*Instance::klu
 printf '%s\n' "$CP3"             # exactly one line, an oci:Core/instance:Instance URN
 printf '%s\n' "${TARGETS[@]}"    # --target, then a URN: the instance and each backend named for cp3
 
+physical state unprotect "$CP3"
 physical up "${TARGETS[@]}" --replace "$CP3"
 ```
+
+Every node's instance is protected, so the engine refuses its
+replacement before it creates anything (declarative/physical.md §1).
+`state unprotect` lifts that for `$CP3` alone, in the state, and the
+replacement is created protected, from the program. An `up` that is
+not confirmed leaves the original unprotected in the state until the
+next `up` that runs, which writes the program's protection back.
 
 The preview reads one replacement of `kluster-cp3`'s instance, a
 replacement or an update of each balancer backend named for `cp3`, and
