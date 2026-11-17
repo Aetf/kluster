@@ -236,6 +236,44 @@ def test_the_kubelet_reserves_room_for_the_node() -> None:
     assert merged('machine')['kubelet']['extraConfig']['systemReserved']
 
 
+@pytest.mark.parametrize('shape', [shape for shape, arguments in SHAPES.items() if arguments.get('role') != 'worker'])
+def test_a_control_plane_pulls_as_many_images_at_once_as_its_boot_volume_takes(shape: str) -> None:
+    """The kubelet's pull bound is the one the boot volume's two rates give, beside its reservation.
+
+    Unset, the kubelet pulls every image a burst of scheduling asks for at
+    once, and their unpacks stretch etcd's syncs on the same disk into
+    seconds (nodes.md §1.2).
+    """
+    kubelet = merged('machine', **SHAPES[shape])['kubelet']['extraConfig']
+    assert kubelet['maxParallelImagePulls'] == talos.image_pull_bound(
+        talos.BOOT_VOLUME_SAFE_WRITE_MBPS, talos.BOOT_VOLUME_ONE_WRITER_MBPS
+    )
+    assert kubelet['systemReserved']
+
+
+@pytest.mark.parametrize(
+    ('safe_mbps', 'writer_mbps'),
+    [(12.0, 51.7), (12.0, 12.0), (12.0, 5.0), (12.0, 3.0), (48.0, 12.0), (1.0, 0.3)],
+)
+def test_the_pulls_at_once_write_within_the_safe_rate_or_are_the_kubelets_fewest(
+    safe_mbps: float, writer_mbps: float
+) -> None:
+    """As many pulls at once as fit within the safe rate, each at one writer's rate, and never fewer than one.
+
+    The rates are invented apart from the first pair: what is held is how
+    any two rates size the bound, and which rates the boot volume has is
+    the component's to say.
+    """
+    bound = talos.image_pull_bound(safe_mbps, writer_mbps)
+    # The kubelet refuses a bound under one (its `maxParallelImagePulls`).
+    assert bound >= 1
+    if writer_mbps <= safe_mbps:
+        assert bound * writer_mbps <= safe_mbps
+        assert (bound + 1) * writer_mbps > safe_mbps
+    else:
+        assert bound == 1
+
+
 def test_kubernetes_secrets_are_encrypted_at_rest() -> None:
     # etcd sits in a $0-trust tenancy and its snapshots are designed to leave
     # the site every hour (storage.md §5, nodes.md §5 Tier 0): unencrypted
@@ -420,9 +458,10 @@ def test_the_link_is_selected_rather_than_named(shape: str) -> None:
 def test_a_control_plane_serves_etcds_metrics_where_the_node_proxy_reaches_them(shape: str) -> None:
     """Every control plane's etcd answers plain HTTP on every address of the node.
 
-    The reader is the API server's node proxy (declarative/physical.md §6),
-    which speaks the `http:` scheme the reading names and dials the node's
-    internal address, so a loopback listener would not answer it. Either
+    Its readers are the API server's node proxy (declarative/physical.md
+    §6) and vmagent's node scrape from the worker over KubeSpan
+    (`components.monitoring`). Both speak the `http:` scheme and dial the
+    node's internal address, so a loopback listener would answer neither. Either
     family's unspecified address does: etcd listens on `tcp`, where an
     unspecified host is one dual-stack socket. A worker runs no etcd and
     carries none of it (the case below).
@@ -448,6 +487,10 @@ def test_a_worker_carries_no_control_plane_configuration() -> None:
     # What it does share: the mesh, the subnets, and the kubelet's reservation.
     assert ip_network(cluster['network']['podSubnets'][0]).version == 4
     assert of_kind('KubeSpanConfig', role='worker')[0]['enabled'] is True
+    # Its disk holds no etcd, so nothing bounds the images its kubelet pulls.
+    kubelet = merged('machine', role='worker')['kubelet']['extraConfig']
+    assert kubelet['systemReserved']
+    assert 'maxParallelImagePulls' not in kubelet
 
 
 def test_ingress_enumerates_host_ports_only() -> None:

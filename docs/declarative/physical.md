@@ -223,7 +223,10 @@ machine_secrets
     `ETCD_METRICS_PORT` (2381) at every address of the node, both
     families, which serves the fsync histogram §6 reads; kubelet system-reserved so
     eviction actually works (the legacy CP-starvation lesson,
-    architecture.md §6.5); the **Talos ingress firewall** (the next
+    architecture.md §6.5); on the control planes, **one image pull at a
+    time**, because the images unpack onto the disk etcd syncs to and a
+    burst of unpacks stretches its syncs into seconds
+    (cluster/nodes.md §1.2, which sizes the bound); the **Talos ingress firewall** (the next
     item); kube-apiserver `anonymous-auth=false` pinned and audit
     logging on (a public 6443 warrants both, defaults notwithstanding);
     the dedicated-VIP node's secondary private IP on its physical link;
@@ -420,7 +423,10 @@ machine_secrets
 
     Everything else stays in `v1alpha1`, because v1.13 has no document
     for it: the node label as `machine.nodeLabels` and the kubelet's
-    reservations as `machine.kubelet.extraConfig` among it. v1.14
+    reservations and pull bound as `machine.kubelet.extraConfig` among it.
+    A change to `machine.kubelet` applies to a running node without a
+    reboot, since Talos applies that field immediately
+    (`CanApplyImmediate`), and the kubelet restarts under it. v1.14
     deprecates much of that for documents of their own — the two named
     for a `KubeNodeConfig` and a `KubeletConfig` — and a base generated
     for its contract already carries those documents, so the move comes
