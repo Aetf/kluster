@@ -7,6 +7,11 @@ repository's own packages therefore comes from `[project] dependencies`,
 never from the dev group, where `uv run`'s default install would hide the
 gap until an install without it.
 
+One script is the exception, and goes with the layer it belongs to:
+`typecheck` runs the gate's type checker, which the dev group installs, as
+`python -m basedpyright` rather than importing it, so it runs only where the
+gate runs (`kluster.scripts.typecheck`).
+
 The census reads every module under `src/kluster/scripts/` from its syntax
 tree: an import inside a function is one, and an import under
 `if TYPE_CHECKING:` is not, since nothing runs it. A module is third-party

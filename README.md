@@ -42,7 +42,7 @@ mise x uv -- uv sync
 timeout 1200 mise x uv -- uv run pytest   # the outer hang guard; the per-case
                                           # bound is pyproject.toml's
 mise x uv -- uv run ruff check .
-mise x uv -- uv run basedpyright
+mise x uv -- uv run typecheck
 mise x -- pulumi preview --stack <stack>   # any stack but physical and the operator stacks
 mise x -- env -u PULUMI_CONFIG_PASSPHRASE PULUMI_CONFIG_PASSPHRASE_FILE=.credentials/physical.passphrase \
     pulumi preview --stack physical         # physical, under its own passphrase

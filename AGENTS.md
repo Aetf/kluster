@@ -28,11 +28,14 @@ A change is done when every one of these passes. CI runs the same set,
 except where a bullet says otherwise:
 
 * `mise x uv -- uv run ruff check` and `ruff format --check`
-* `mise x uv -- uv run basedpyright` — strict, clean, judged by exit
-  status 0 and not by the `0 errors` line, which prints beside status 3
-  when `basedpyright` logs an error of its own; the environment may be
-  kept outside the workspace
-  ([dispatch.md](docs/framework/dispatch.md) §1.2)
+* `mise x uv -- uv run typecheck` — `basedpyright` strict and clean,
+  under a heap a full run of the tree does not exhaust, judged by exit
+  status 0 and not by the `0 errors` line, which also prints beside a
+  failing status: 3, when `basedpyright` logs an error of its own, and
+  5, when the run emptied its type cache anyway, which drops the report
+  of a `# pyright: ignore` that suppresses nothing
+  (`kluster.scripts.typecheck`). The environment may be kept outside the
+  workspace ([dispatch.md](docs/framework/dispatch.md) §1.2).
 * `mise x uv -- uv run lint-imports` — the layering contract below
 * `timeout 1200 mise x uv -- uv run pytest` — a per-case bound inside
   the run (`pytest-timeout`, configured in `pyproject.toml`) fails a hung
@@ -92,8 +95,9 @@ documentation the change makes true ships with it rather than after it.
   handful of lines with no logic, or a context with no interpreter). They
   live under `src/kluster/scripts/` and are exposed as console scripts in
   `pyproject.toml` (`update_crds`, `credentials`, `state-backend`,
-  `operator-stack`, `stack-plan`), the same way for every script; `just` recipes or
-  symlinks are for convenience on top, never the home of the logic.
+  `operator-stack`, `stack-plan`, `typecheck`), the same way for every
+  script; `just` recipes or symlinks are for convenience on top, never the
+  home of the logic.
 * How code and prose are written — naming, comments, component and
   provider architecture — is `docs/style/`, and a reviewer holds every
   change to it.
