@@ -270,6 +270,7 @@ class Dispatch:
             (cli.derived, 'cloudflare_zones', None),
             (cli.derived, 'cloudflare_gateway_acme', 'token-id'),
             (cli.derived, 'cloudflare_dns01', 'token-id'),
+            (cli.derived, 'oci_metrics', 'ocid1.user.test'),
             (cli.derived, 'oci_physical', 'ocid1.user.test'),
             (cli.derived, 'oci_state_backend', 'ocid1.user.test'),
             (cli.derived, 'b2_management', 'key-id'),
@@ -579,6 +580,11 @@ def test_the_zones_row_is_pushed_into_every_stack_its_slot_map_row_names(dispatc
             '--compartment',
             id='drill-credentials',
         ),
+        # The metrics reader reads the block volumes where `physical` declares
+        # them, which is the compartment `conventions` records for it; a key
+        # confined to any other reads series no volume of this installation
+        # publishes, and the run would still retire the reader's live key.
+        pytest.param(['derived', 'oci-metrics', 'mint', '--compartment', 'ocid1.x'], '--compartment', id='oci-metrics'),
     ],
 )
 def test_a_row_has_no_flag_that_would_aim_it_elsewhere(

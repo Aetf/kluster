@@ -15,7 +15,8 @@ holds the arguments to what the pinned `pulumi` accepts.
 
 The Cloudflare mint runs against the fake platform the derived rows use
 (`cloudflare_api`), so the token's scope is read back as the token itself
-sees it.
+sees it; the OCI mint, against the fake tenancy the OCI rows use
+(`oci_tenancy`), so the sealed key is held to the tenancy that accepts it.
 """
 
 from __future__ import annotations
@@ -32,6 +33,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal, cast
 
+import oci_clock
 import pinned_tools
 import process_sessions
 import pytest
@@ -44,13 +46,15 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import NameOID
 from fake_pulumi import RecordedPulumi, Unanswering
 from memory_kit import MemoryKit
+from oci_conventions import with_recorded_compartment, with_tenancy_ocid
+from oci_tenancy import ROOT_USER, TENANCY, Tenancy
 from pulumi.runtime import rpc
 from scratch_projects import cli_directories, scrubbed
 
 from kluster import conventions
 from kluster.conventions.backup import BACKED_NAMESPACES, writer_scope
 from kluster.lib import pulumi_cli
-from kluster.scripts.credentials import cloudflare, derived, devices, escrow, pulumi_config, sealing
+from kluster.scripts.credentials import cloudflare, derived, devices, escrow, masters, oci_iam, pulumi_config, sealing
 from kluster.scripts.credentials.kdbx import KdbxStore
 from kluster.scripts.credentials.pulumi_config import SlotRefused
 from kluster.stacks import physical
@@ -560,6 +564,109 @@ def test_rotating_the_dns01_token_retires_the_one_it_replaces(
 
     assert second != first
     assert _dns01_live(api) == [second]
+
+
+# -- the metrics reader's mint ------------------------------------------------
+
+
+@pytest.fixture
+def tenancy(monkeypatch: pytest.MonkeyPatch) -> Tenancy:
+    """The fake account as the one `conventions` records, with `physical`'s compartment recorded and held.
+
+    The state an installation is in by the time anything is sealed: `physical`
+    has been minted for, so its compartment exists under the OCID the census
+    records. The waits for a key to propagate run on the simulated clock.
+    """
+    _ = oci_clock.install(monkeypatch)
+    with_tenancy_ocid(monkeypatch, TENANCY)
+    held = Tenancy()
+    held.identity.hold(with_recorded_compartment(monkeypatch, conventions.PHYSICAL, 'ocid1.compartment.oc1..physical'))
+    return held
+
+
+@pytest.fixture
+def oci_kit(tenancy: Tenancy) -> KdbxStore:
+    """A kit holding the OCI seed, created the way a bring-up creates it."""
+    store = MemoryKit()
+    root = masters.Credential(
+        root=masters.ROOTS[masters.OCI],
+        values={
+            masters.OCI_TENANCY: TENANCY,
+            masters.OCI_USER: ROOT_USER,
+            masters.OCI_PRIVATE_KEY: oci_iam.generate_key().private_pem,
+        },
+    )
+    _ = oci_iam.create_seed(root=root, seeds=store, seed_entry=derived.OCI_SEED_ENTRY, connect=tenancy)
+    return store
+
+
+def _reader_keys(tenancy: Tenancy) -> list[str]:
+    """The fingerprints the reader's user holds, or none while there is no such user."""
+    name = oci_iam.Identity.name_for(oci_iam.METRICS_READER)
+    users = [user.id for user in tenancy.identity.users.values() if user.name == name]
+    return [key for user in users for key in tenancy.identity.keys.get(user, [])]
+
+
+def test_the_metrics_reader_is_sealed_for_the_pull_in_monitoring_and_signs_as_the_reader(
+    tenancy: Tenancy, oci_kit: KdbxStore, sealer: sealing.Sealer, stacks: Stacks, kubeseal: str, key_pair: KeyPair
+) -> None:
+    value = conventions.sealed.OCI_METRICS
+
+    user = derived.oci_metrics(oci_kit, sealer=sealer, connect=tenancy)
+
+    # Written into `k8s-base`'s configuration, the stack that declares the
+    # monitoring namespace's Secrets, and opening there under the row's name:
+    # what comes out is a signing configuration the tenancy accepts, as the
+    # reader's own user, with the fingerprint of the key beside it.
+    assert written(stacks, value).keys() == set(value.keys)
+    opened = unseal(kubeseal, key_pair, value, written(stacks, value), namespace=conventions.MONITORING_NAMESPACE)
+    assert opened['user'] == user
+    assert opened['fingerprint'] == oci_iam.fingerprint(opened['key_content'])
+    assert _reader_keys(tenancy) == [opened['fingerprint']]
+    session = oci_iam.Iam.authorize(TENANCY, opened['user'], opened['key_content'], connect=tenancy)
+    assert session.key_fingerprints(opened['user']) == [opened['fingerprint']]
+
+
+def test_the_metrics_reader_mint_refuses_a_missing_declaring_stack_before_anything_is_minted(
+    tenancy: Tenancy, oci_kit: KdbxStore, sealer: sealing.Sealer, stacks: Stacks
+) -> None:
+    stacks.runner(K8S_BASE).stacks.clear()
+
+    with pytest.raises(pulumi_config.StackMissing) as refused:
+        _ = derived.oci_metrics(oci_kit, sealer=sealer, connect=tenancy)
+    assert refused.value.stack == K8S_BASE
+    assert _reader_keys(tenancy) == []
+
+
+def test_a_metrics_reader_seal_that_fails_leaves_the_key_already_sealed_live(
+    tenancy: Tenancy, oci_kit: KdbxStore, stacks: Stacks
+) -> None:
+    sealer = sealing.Sealer(certificate='', open_stack=stacks.open, run=fake_kubeseal)
+    _ = derived.oci_metrics(oci_kit, sealer=sealer, connect=tenancy)
+    (live,) = _reader_keys(tenancy)
+    stacks.runner(K8S_BASE).misreports = 'value'
+
+    with pytest.raises(pulumi_config.ReadBackRefused):
+        _ = derived.oci_metrics(oci_kit, sealer=sealer, connect=tenancy)
+
+    # The key the cluster holds is retired only once its successor is written,
+    # so a write that does not take leaves it standing beside the new one.
+    held = _reader_keys(tenancy)
+    assert live in held
+    assert len(held) == 2
+
+
+def test_rotating_the_metrics_reader_retires_the_key_it_replaces(
+    tenancy: Tenancy, oci_kit: KdbxStore, stacks: Stacks
+) -> None:
+    sealer = sealing.Sealer(certificate='', open_stack=stacks.open, run=fake_kubeseal)
+    _ = derived.oci_metrics(oci_kit, sealer=sealer, connect=tenancy)
+    (first,) = _reader_keys(tenancy)
+
+    _ = derived.oci_metrics(oci_kit, sealer=sealer, connect=tenancy)
+
+    (second,) = _reader_keys(tenancy)
+    assert second != first
 
 
 # -- the rows made by hand ----------------------------------------------------

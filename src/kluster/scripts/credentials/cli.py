@@ -203,6 +203,7 @@ _ORDER = """when to run what:
          the second milestone's first step, and again whenever physical's
          kubeconfig changes. Commit both stack files when it writes them.
    11. credentials derived cloudflare-dns01 mint
+       credentials derived oci-metrics mint
        credentials derived bgp seal
        credentials derived alert-webhook record
          The values the cluster consumes, once physical has brought the
@@ -211,12 +212,14 @@ _ORDER = """when to run what:
          the kubeconfig in physical's state, and its ciphertext -- which
          anyone may read and only the cluster can open -- written into the
          k8s-base stack's config: cert-manager's DNS-01 token, scoped to
-         the zones the cluster serves; the BGP session password stage 8
-         recorded, read back out of physical's config; and alertmanager's
-         own Home Assistant webhook, made by the operator in Home
-         Assistant. Commit the stack file; the next k8s-base apply hands
-         each to what reads it. Re-running the first rotates the token;
-         a `bgp record` from here on seals in the same run.
+         the zones the cluster serves; the OCI key that reads the block
+         volumes' metrics in physical's compartment, minted from the OCI
+         seed; the BGP session password stage 8 recorded, read back out of
+         physical's config; and alertmanager's own Home Assistant webhook,
+         made by the operator in Home Assistant. Commit the stack file;
+         the next k8s-base apply hands each to what reads it. Re-running
+         either mint rotates what it minted; a `bgp record` from here on
+         seals in the same run.
    12. credentials derived b2-writer seal
          The backup bucket's writer keys, at the hand-over to the first
          wave: after the legacy sealing key is carried into the cluster and
@@ -407,7 +410,7 @@ def _add_bundle_dir(command: argparse.ArgumentParser) -> None:
 
 
 def _add_oci_mint_options(command: argparse.ArgumentParser, consumer: str) -> None:
-    """The two arguments every minted OCI row takes.
+    """The two arguments every OCI row that mints a stack's own compartment administrator takes.
 
     The seed the mint reads and the compartment it confines the result to are
     the same question for each consumer; where the rows differ is where the
@@ -1006,6 +1009,43 @@ def build_parser() -> argparse.ArgumentParser:
         help=f'the kit entry the seed is read from (default: {derived.CLOUDFLARE_SEED_ENTRY})',
     )
     _add_bundle_dir(dns01_mint)
+
+    metrics = rows.add_parser(
+        derived.OCI_METRICS_ROW,
+        help="the OCI key the cluster reads the block volumes' metrics with, sealed to the cluster",
+        description=(
+            "The OCI credential the cluster's block-volume metrics pull signs with: its own IAM user, whose one "
+            "statement reads the metrics OCI publishes for the block and boot volumes of the physical stack's "
+            'compartment, and nothing else -- not the volumes themselves, nothing in the tenancy, nothing its '
+            'policy lets it change; like every OCI user, it manages its own API keys. Its one consumer is in the '
+            "cluster, so it is sealed to the cluster's certificate rather than "
+            'written as a stack secret. Which stack takes it is not a choice -- the user is named after its role, '
+            'and minting retires every other key of that name.'
+        ),
+    )
+    metrics_verbs = metrics.add_subparsers(dest='action', required=True, metavar='<verb>')
+    metrics_mint = metrics_verbs.add_parser(
+        'mint',
+        help="mint the user, group, policy and key from the seed and seal them into the k8s-base stack's config",
+        description=(
+            "Fetch the sealing certificate from the cluster's sealed-secrets controller, with the kubeconfig in "
+            "the physical stack's state; sign as the OCI seed to create the user, its group and the policy that "
+            "lets that group read the block-volume metrics of the physical stack's compartment, and a key, which "
+            'is used before anything else happens to it; seal the user, the fingerprint and the key with kubeseal '
+            "for the Secret the pull reads, bound to that Secret's name and namespace; and write the ciphertext in "
+            'the clear into the config of the stack that declares the pull, reading it back. The tenancy, the '
+            'region and the compartment do not travel with the credential: each is a constant `conventions` '
+            'names. Everything that can refuse -- the cluster, the stack, a compartment not recorded yet, the '
+            'account -- refuses before the key exists, and a live key of the same name is retired only once the '
+            'ciphertext is written. The stack file is then committed. Re-running this is the rotation.'
+        ),
+    )
+    _ = metrics_mint.add_argument(
+        '--entry',
+        default=derived.OCI_SEED_ENTRY,
+        help=f'the kit entry the seed is read from (default: {derived.OCI_SEED_ENTRY})',
+    )
+    _add_bundle_dir(metrics_mint)
 
     writer = rows.add_parser(
         derived.B2_WRITER_ROW,
@@ -2009,6 +2049,8 @@ def main(argv: list[str] | None = None) -> int:
                 _ = derived.cloudflare_dns01(
                     store, sealer=_sealer(_opener(args, store, registry)), seed_entry=args.entry
                 )
+            case ('derived', derived.OCI_METRICS_ROW, 'mint'):
+                _ = derived.oci_metrics(store, sealer=_sealer(_opener(args, store, registry)), seed_entry=args.entry)
             # Out of `physical`'s state rather than minted here: the stack's
             # apply mints the keys, and the certificate is fetched first, so a
             # cluster that cannot be reached refuses the run before the state

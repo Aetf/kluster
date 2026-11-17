@@ -1520,6 +1520,26 @@ def test_the_dns01_row_on_a_machine_with_no_bundle_mints_nothing(api: FakeApi, k
 
 
 @needs_age
+def test_the_oci_metrics_row_on_a_machine_with_no_bundle_mints_nothing(
+    oci_kit: KdbxStore, tenancy: Tenancy, tmp_path: Path
+) -> None:
+    """The dns01 row's case for the OCI row that seals: the declaring stack is asked for before the seed is read."""
+    open_stack, runners = _stacks_on(_with_no_bundle(oci_kit, tmp_path))
+    sealer = sealing.Sealer(certificate='', open_stack=open_stack, run=_never_sealed)
+    users = dict(tenancy.identity.users)
+    keys = {user: list(held) for user, held in tenancy.identity.keys.items()}
+
+    with pytest.raises(pulumi_config.SlotRefused) as refused:
+        _ = derived.oci_metrics(oci_kit, sealer=sealer, connect=tenancy)
+
+    assert tenancy.identity.users == users
+    assert tenancy.identity.keys == keys
+    assert runners, 'the row opened no stack, so nothing held it to its backend'
+    assert all(runner.invocations == [] for runner in runners.values())
+    _refused_for_its_backend(refused.value, open_stack(conventions.sealed.OCI_METRICS.stack), tmp_path)
+
+
+@needs_age
 def test_the_state_backend_rows_need_no_bundle(
     b2_api_fake: b2_api.FakeApi,
     b2_kit: KdbxStore,

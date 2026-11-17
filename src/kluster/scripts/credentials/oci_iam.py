@@ -19,7 +19,10 @@ Three credentials, three lifetimes:
     and the mint creates the one that is not there yet — which is what the
     seed's `manage compartments` is for. A consumer whose stack has to declare
     something in the tenancy's root compartment holds the families that takes
-    as well, and only those (`TENANCY_POLICIES`).
+    as well, and only those (`TENANCY_POLICIES`). The **metrics reader** (§3)
+    has this lifetime and this delivery too, and administers nothing: its one
+    statement reads the block-volume metrics of `physical`'s compartment
+    (`mint_metrics_reader`).
 
 **An OCI API key is five things, and the row stores three** (§2): the user
 OCID as `UserName`, the private key as an attachment because it is a file, and
@@ -123,6 +126,17 @@ KEY_QUOTA = 3
 SEED_POLICY = 'templates/seed-policy.oci.j2'
 CONSUMER_POLICY = 'templates/consumer-policy.oci.j2'
 GUARDRAILS_POLICY = 'templates/guardrails-policy.oci.j2'
+METRICS_READER_POLICY = 'templates/metrics-reader-policy.oci.j2'
+
+#: What the metrics reader's user, group and policy are named after
+#: (`Identity.name_for`): a role rather than a consumer's compartment, since
+#: the reader administers none.
+METRICS_READER = 'metrics-reader'
+
+#: The metric namespace OCI publishes the block and boot volumes' series in
+#: (its Block Volume metrics reference), and the whole of what the reader's
+#: policy lets it read.
+BLOCKSTORE_METRICS = 'oci_blockstore'
 
 #: What a consumer holds in the tenancy itself, beside its compartment, by
 #: consumer: the policy file whose statements its group carries as well. A
@@ -159,6 +173,13 @@ class _ConsumerPolicyParams:
 @dataclass(frozen=True)
 class _TenancyPolicyParams:
     group: str
+
+
+@dataclass(frozen=True)
+class _MetricsReaderPolicyParams:
+    group: str
+    compartment_id: str
+    namespace: str
 
 
 def _statements(policy: str, params: object) -> tuple[str, ...]:
@@ -203,10 +224,14 @@ class Identity:
     descriptions say in the console what the register says here, because a
     principal nobody can explain is a principal nobody dares delete.
 
-    Two kinds exist. The seed's (§2) may manage users, groups and policies
-    across the tenancy, which is what makes it able to mint the other kind;
+    Three kinds exist. The seed's (§2) may manage users, groups and policies
+    across the tenancy, which is what makes it able to mint the other two;
     a consumer's (§3) may do anything it likes inside one compartment, and
-    outside it only what `TENANCY_POLICIES` names for that consumer.
+    outside it only what `TENANCY_POLICIES` names for that consumer; and the
+    metrics reader's (§3) may read one metric namespace of one compartment and
+    nothing else. The seed's is the constant `SEED`; each of the other two is
+    built by its own constructor, and every statement is rendered from a policy
+    file under `templates/`.
 
     One of the provider roles credentials.md §3 describes, in this platform's
     own vocabulary.
@@ -227,14 +252,14 @@ class Identity:
     statements: tuple[str, ...]
 
     @staticmethod
-    def name_for(consumer: str) -> str:
-        """The one name a consumer's user, group and policy all carry.
+    def name_for(holder: str) -> str:
+        """The one name a user, its group and its policy all carry.
 
         Derived rather than stored, so a caller that only needs to say which
         principal it is talking about -- a log line, a delivery -- does not
         have to know a compartment first.
         """
-        return f'{CLUSTER_NAME}-{consumer}'
+        return f'{CLUSTER_NAME}-{holder}'
 
     @classmethod
     def for_consumer(cls, consumer: str, *, compartment_id: str) -> Identity:
@@ -253,6 +278,30 @@ class Identity:
         statements = _statements(CONSUMER_POLICY, _ConsumerPolicyParams(group=name, compartment_id=compartment_id))
         if (tenancy_policy := TENANCY_POLICIES.get(consumer)) is not None:
             statements += _statements(tenancy_policy, _TenancyPolicyParams(group=name))
+        return cls(
+            name=name,
+            email=f'{name}@{conventions.OCI_TENANCY.user_email_domain}',
+            section='§3',
+            statements=statements,
+        )
+
+    @classmethod
+    def metrics_reader(cls, *, compartment_id: str, namespace: str) -> Identity:
+        """The identity the metrics puller's key belongs to (§3): one metric namespace of one compartment, read.
+
+        `read metrics` is the lowest verb that covers `SummarizeMetricsData`,
+        and the condition narrows it to `namespace`, so the key reads the
+        series OCI publishes there and no others, and not the resources they
+        describe: a volume's series names it by OCID alone, and the key cannot
+        read the volume behind one. Nothing in the tenancy, and nothing its
+        policy lets it change anywhere: like every OCI user, it manages its own
+        API keys and other user credentials with no policy at all.
+        """
+        name = cls.name_for(METRICS_READER)
+        statements = _statements(
+            METRICS_READER_POLICY,
+            _MetricsReaderPolicyParams(group=name, compartment_id=compartment_id, namespace=namespace),
+        )
         return cls(
             name=name,
             email=f'{name}@{conventions.OCI_TENANCY.user_email_domain}',
@@ -1776,12 +1825,40 @@ def mint_api_key(
     _ = seed.iam.policy(SEED)
 
     compartment = ensure_compartment(seed.iam, consumer, override=compartment_id)
-    identity = Identity.for_consumer(consumer, compartment_id=compartment)
+    return _mint_for(seed, Identity.for_consumer(consumer, compartment_id=compartment))
 
+
+def mint_metrics_reader(kit: KdbxStore, *, seed_entry: str, connect: Connect = identity_client) -> Delivery[ApiKey]:
+    """Mint the metrics reader's API key from the seed, with the IAM objects under it.
+
+    The reader reads `BLOCKSTORE_METRICS` in `physical`'s compartment
+    (`Identity.metrics_reader`), because that is where the volumes are. The
+    compartment is `physical`'s to create, so this mint creates none: it
+    refuses by naming `physical`'s mint while `conventions` records no OCID
+    for it, and is otherwise held to that OCID the way any mint is
+    (`ensure_compartment`), each before anything is created. No
+    drill override, since a reader of a compartment no stack declares into
+    reads nothing.
+
+    The account is proven before anything is created, as `mint_api_key`
+    proves it, and the rest is that function's: converged rather than
+    created, verified by being used, and swept only once delivered.
+    """
+    compartment = conventions.OCI_TENANCY.compartments[conventions.PHYSICAL]
+    _ = compartment.require()
+    log.info('opening the OCI seed from the kit')
+    seed = _seed_session(kit, seed_entry, connect=connect)
+    verify_tenancy(seed.row.tenancy)
+    found = ensure_compartment(seed.iam, conventions.PHYSICAL)
+    return _mint_for(seed, Identity.metrics_reader(compartment_id=found, namespace=BLOCKSTORE_METRICS))
+
+
+def _mint_for(seed: _SeedSession, identity: Identity) -> Delivery[ApiKey]:
+    """Converge `identity` under the seed and mint it a verified key, its predecessors swept once delivered."""
     log.info('converging the user, group and policy for %s', identity.name)
     user = ensure(seed.iam, identity)
-    # No `live` key: this consumer's credential is in a slot this program
-    # never reads, delivered there as a secret.
+    # No `live` key: this credential is in a slot this program never reads,
+    # delivered there as a secret.
     _room_for_one_more(seed.iam, user.ocid, name=identity.name, live=None)
     private_pem = _mint_verified(seed.iam, user, name=identity.name)
 
@@ -1792,7 +1869,9 @@ def mint_api_key(
     # upload and push -- asks nothing of the seed's policy. Which session may
     # sweep is this module's knowledge, which is why the caller is handed a
     # closure rather than a rule it would have to follow.
-    minted_session = Iam.authorize(seed.row.tenancy, user.ocid, private_pem, connect=connect, domain_url=seed.domain)
+    minted_session = Iam.authorize(
+        seed.row.tenancy, user.ocid, private_pem, connect=seed.iam.connect, domain_url=seed.domain
+    )
     return Delivery.of(
         ApiKey(tenancy=seed.row.tenancy, user=user.ocid, private_key=private_pem),
         lambda: _sweep(minted_session, user.ocid, fingerprint(private_pem)),
