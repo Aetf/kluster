@@ -563,7 +563,9 @@ but `archive.archlinux.org` among the hosts Trusted allows too (its cloud
 environments page, "Default allowed domains"); it scopes the GitHub
 proxy's repository check to API requests. Release downloads from
 `github.com` pass at Full as measured in a cloud session. The other hosts
-have not been measured from one.
+have not been measured from one. A measurement of them goes the way the
+script's own downloads go, through whatever proxy the environment sets,
+because its subject is the session's reach rather than the host (§4).
 
 ## 2. Concurrent dispatchers
 
@@ -770,6 +772,32 @@ merge can report once:
     rule 8), and it is why `git rev-parse HEAD` is not used inside a
     workspace, where it answers for the workspace's `@-` rather than
     for the branch (§1.2).
+-   **A probe of an address bypasses any HTTP proxy, and a failed
+    probe is recorded with the client's error text.** A probe — an HTTP
+    request, a TLS handshake, a connection to a port — is taken with no
+    proxy between the client and the address: `curl --noproxy '*'`, or,
+    for a client without that option, `env -u` on each proxy variable
+    the environment carries (the `*_proxy` family, lower case and upper). In a
+    session whose environment carries proxy variables, a probe taken any
+    other way measures the proxy instead of the address: a proxy that
+    refuses `CONNECT` to an IPv6 literal while forwarding plain HTTP
+    itself makes port 80 answer and port 443 fail on an address that
+    serves both. The exit code does not tell the two apart — every code
+    curl gives a `CONNECT` the proxy refused or dropped is one it also
+    gives a failure of the address itself — so the recorded result
+    carries the error line the client printed, which names the `CONNECT`
+    where the proxy answered or closed it. A proxy that resets it prints
+    the line a resetting address prints, which is why the bypass comes
+    first and the error line second. Every
+    brief that asks an agent to probe an address inherits this rule,
+    which it need not repeat. A measurement whose subject is the
+    session's own reach, such as the hosts a cloud session's network
+    access allows (§1.4), is the exception: it keeps the proxy, which
+    is part of what it measures. A session whose only route out is a
+    proxy, which is what the Claude Code documentation says of a cloud
+    session (its cloud environments page, "Security proxy"), probes no
+    address: its report says that, and records neither the proxy's
+    answer nor the bypass's failure as the address's.
 -   **Findings become issues, not comments in passing.** An agent's
     unpredicted discovery — a mismatch, a dead mechanism, a stale
     document — is filed as its own issue, labeled and put on a
