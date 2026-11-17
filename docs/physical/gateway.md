@@ -2442,7 +2442,7 @@ CI's first join.
 -   `nc -w 5 10.144.1.1 22 </dev/null` prints the device's `SSH-2.0-`
     banner, and `nc -w 5 10.144.180.10 22 </dev/null` prints the homelab
     host's.
--   `curl -sk -o /dev/null -w '%{http_code}\n' https://10.144.1.1/`
+-   `curl --noproxy '*' -sk -o /dev/null -w '%{http_code}\n' https://10.144.1.1/`
     prints a status: the controller answers at its overlay address over
     a handshake that verifies nothing, the connection
     `controller_provider` builds (item 8, first part). The provider's
@@ -2451,7 +2451,7 @@ CI's first join.
 -   On the device: find its ZeroTier interface by `10.144.1.1`, run
     `ip neigh del <reader> dev <it>`, then
     `tcpdump -ni <it> 'arp and host <reader>'`. Meanwhile, the reader's
-    `curl -s -o /dev/null -w '%{http_code}\n'` to `http://10.0.5.3/`
+    `curl --noproxy '*' -s -o /dev/null -w '%{http_code}\n'` to `http://10.0.5.3/`
     and to `http://10.0.5.4/` each prints a status, and every ARP
     request in the capture reads `who-has <reader> tell 10.144.1.1`
     (item 8, second part). The capture is on the device because the

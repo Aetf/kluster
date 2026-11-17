@@ -31,7 +31,7 @@ owns sequencing, data movement, and teardown.
         rewrite names it, so the name still resolves where the legacy
         estate publishes it.
     -   **Verify.** The name is requested at the cluster's front door,
-        `curl --resolve <name>:443:<address>`, at the balancer's address
+        `curl --noproxy '*' --resolve <name>:443:<address>`, at the balancer's address
         for a row on `internet` and at the VIP of each home Gateway the
         row sets, which reaches the new application exactly as a
         client's request will after the cut.
