@@ -315,6 +315,15 @@ are the container service's rather than the case's, so it is the one kind of
 process that ends by itself however the test process ends, and the label is
 the census of what is left.
 
+**And it mounts no named volume.** A named volume outlives every container
+that mounts it and holds one of the host's podman locks until something
+removes it by name, which a killed run never does. A directory two
+containers share is an anonymous volume of one of them, which the other
+mounts with `--volumes-from`: podman removes an anonymous volume with the
+last container that mounts it, the removal `--rm` makes at the container's
+`--timeout` included. `tests/test_state_roles.py` holds both halves for the
+directory its box shares with the pooler.
+
 **A call that starts a process any other way says why at the call.** A test
 module that reaches one -- calls it, or hands it on as a value -- carries
 `# outside process_sessions -- <reason>` on the line that names it, or among

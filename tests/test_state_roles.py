@@ -8,9 +8,9 @@ names, the port the pooler is published on and the network it is reached
 through, which is a third container's (`_network`), the delivered
 directories, which are copied into each container rather than mounted from a
 host that does not have them, the directory the two units share for
-Postgres's socket, which is a volume of the box's own (`Launcher.appliance`),
-and a data directory on a tmpfs, which starts empty and goes away with the
-container. So what is exercised is the image's own initialization mechanism
+Postgres's socket, which is an anonymous volume of the Postgres container's
+that the pooler mounts from it (`_unit_container`), and a data directory on
+a tmpfs, which starts empty and goes away with the container. So what is exercised is the image's own initialization mechanism
 (`/docker-entrypoint-initdb.d`), the pooler's own authentication and cap, the
 server's own authorization, and real clients: `pulumi` from this
 workstation, and the Postgres client tools from the same image, which are the
@@ -121,12 +121,17 @@ LABEL = f'kluster-test={Path(__file__).stem}'
 
 #: Each image's own `VOLUME`s. A container is given an anonymous volume for
 #: each one nothing is mounted on, so each is mounted as a tmpfs instead;
-#: `test_every_container_ends_by_itself_and_mounts_no_volume` holds this to
-#: the images.
+#: `test_every_container_ends_by_itself_and_mounts_no_named_volume` holds this
+#: to the images.
 IMAGE_VOLUMES = {
     IMAGE: (PurePosixPath('/var/lib/postgresql/data'),),
     POOLER_IMAGE: (),
 }
+
+#: The file `_own` leaves in each directory a box shares with its pooler, so
+#: that podman meets the volume with something in it and leaves its owners
+#: alone.
+OWNED = '.kluster-test-owned'
 
 #: The variables a client tool is handed from the case's environment, where it
 #: has them: the bundle's three files, which every connection reads, and the
@@ -355,8 +360,22 @@ def _shared(ignition: dict[str, Any]) -> list[str]:
     return sorted(host for host, _, _ in _volumes(ignition, POOLER_UNIT) if host in postgres)
 
 
+def _anonymous(inside: str, options: list[str]) -> list[str]:
+    """The `--mount` of an anonymous volume at `inside`, with a unit's `--volume` options in `--mount`'s words.
+
+    `--volume` names an anonymous volume only by its path alone, which
+    leaves no place for options, so the options are translated: an option
+    with no translation here fails, naming itself, rather than being dropped.
+    """
+    words = {'z': 'relabel=shared', 'Z': 'relabel=private', 'ro': 'ro', 'rw': 'rw'}
+    given = [option for joined in options for option in joined.split(',') if option]
+    unknown = [option for option in given if option not in words]
+    assert not unknown, unknown
+    return ['--mount', ','.join(['type=volume', f'destination={inside}', *(words[option] for option in given)])]
+
+
 def _unit_container(
-    ignition: dict[str, Any], name: str = UNIT, shared: dict[str, str] | None = None
+    ignition: dict[str, Any], name: str = UNIT, source: str | None = None
 ) -> tuple[list[str], list[File]]:
     """A unit's `podman run` as a `podman create`, and what to copy in.
 
@@ -364,17 +383,37 @@ def _unit_container(
     which the caller gives; the published port, which the box does without,
     since it is reached through the network the caller joins it to
     (`_network`); each volume a delivered file sits under, which becomes a
-    copy of those files at the path the volume mounts them on; a directory
-    `shared` names, which becomes the volume it maps it to; and the one
-    volume nothing is delivered into, which is the box's own state and starts
-    here empty, as the tmpfs `_bounded` mounts on the path the image's own
-    `VOLUME` names. `_bounded`'s arguments are added.
+    copy of those files at the path the volume mounts them on; each directory
+    the two units share (`_shared`); and the one volume nothing is delivered
+    into, which is the box's own state and starts here empty, as the tmpfs
+    `_bounded` mounts on the path the image's own `VOLUME` names.
+    `_bounded`'s arguments are added.
+
+    **A shared directory is an anonymous volume of the Postgres container's,
+    and the pooler mounts it from that container.** With no `source`, each
+    one becomes an anonymous volume at the path the unit mounts it on; given
+    `source`, the container the unit's shared directories are mounted from,
+    they become `--volumes-from` that container. podman removes an anonymous
+    volume with the last container that mounts it, `--rm` at a container's
+    `--timeout` included, so a run killed before its teardown leaves no
+    volume once its containers have ended, where a named volume would stay
+    for good. `--volumes-from` rather than the volume's name, because a
+    mount by name of a volume that is gone creates a named volume of that
+    name, and a pooler created after its Postgres container ended would make
+    one; `--volumes-from` a container that is gone fails the `create`
+    instead, and records no dependency that would hold either container's
+    `--rm` (`test_a_box_left_without_its_teardown_goes_with_its_volume`).
+    `--volumes-from` mounts each volume at the path the source mounts it on,
+    so the two units name the same path.
     """
     argv = _unit_command(ignition, name)
     assert argv[:2] == ['/usr/bin/podman', 'run'], argv
     delivered = _delivered(ignition)
+    shared = _shared(ignition)
+    owned = {host: inside for host, inside, _ in _volumes(ignition, UNIT)}
     created = _bounded('create', image=_unit_image(ignition, name))
     copies: list[File] = []
+    joined = False
     rest = iter(argv[2:])
     for arg in rest:
         match arg:
@@ -386,8 +425,14 @@ def _unit_container(
                 _ = next(rest)
             case '--volume':
                 host, inside, *options = next(rest).split(':')
-                if shared is not None and host in shared:
-                    created += ['--volume', ':'.join([shared[host], inside, *options])]
+                if host in shared:
+                    if source is None:
+                        created += _anonymous(inside, options)
+                        continue
+                    assert inside == owned[host], (host, inside, owned[host])
+                    if not joined:
+                        created += ['--volumes-from', ':'.join([source, *options])]
+                        joined = True
                     continue
                 under = [file for file in delivered if file.path.is_relative_to(host)]
                 if not under:
@@ -483,12 +528,13 @@ def _await_ready(name: str, *, timeout: float = COMMAND_TIMEOUT) -> None:
 
 
 def _remove(name: str) -> None:
-    """Remove a container these cases started, and any anonymous volume it mounted.
+    """Remove a container these cases started, and any anonymous volume it mounted that no other container does.
 
-    `_bounded` gives a container none, and `--volumes` is the guard for one
-    the image's `VOLUME`s would add if `IMAGE_VOLUMES` fell behind them: a
-    container that `podman rm` removes keeps its anonymous volumes without
-    it, `--rm` notwithstanding.
+    A container that `podman rm` removes keeps its anonymous volumes without
+    `--volumes`, `--rm` notwithstanding. The one a box's two containers
+    share (`_unit_container`) goes with whichever of them is removed last,
+    and the flag is the guard for one the image's `VOLUME`s would add if
+    `IMAGE_VOLUMES` fell behind them.
 
     A refusal fails the caller: a container still there stays until
     `CONTAINER_TIMEOUT`, and a network container keeps its host port until
@@ -591,16 +637,43 @@ def _directory(ignition: dict[str, Any], path: str) -> tuple[int, int, int]:
     return int(entry.get('mode', 0o755)), user, group
 
 
-def _remove_volume(name: str) -> None:
-    """Remove a volume these cases created; one already gone is no refusal."""
-    _ = _podman('volume', 'rm', '--force', name)
-
-
 def _fill(name: str, created: list[str], copies: list[File]) -> None:
     """Create the container `name` and copy its delivered files in."""
     _ = _podman(*_named(created, name))
     if copies:
         _ = _podman('cp', '--archive=false', '-', f'{name}:/', stdin=_archive(copies))
+
+
+def _own(ignition: dict[str, Any], box: str) -> None:
+    """Give each directory `box` shares with its pooler the mode and owners the Ignition gives it.
+
+    The directory is an anonymous volume (`_unit_container`), which takes no
+    owners as options, so a container that mounts it from `box` sets them
+    from inside, before `box` starts. **That container also leaves a file
+    there, `OWNED`, because podman hands an empty volume to the user of every
+    container that mounts it** (`fixVolumePermissionsUnlocked` in
+    `libpod/container_internal_common.go`): at each mount it changes the
+    owner of a volume that is empty to the container's user, and stops only
+    once it meets the volume with something in it. Postgres's container runs
+    as root, and its server puts its socket there only after the start, so
+    without the file the start would give the directory back to root, and
+    the server, which is not root, could not write its socket into it.
+    """
+    owned = {host: inside for host, inside, _ in _volumes(ignition, UNIT)}
+    for host in _shared(ignition):
+        mode, user, group = _directory(ignition, host)
+        inside = owned[host]
+        _ = _podman(
+            *_bounded('run', '--volumes-from', box, '--entrypoint', 'sh', IMAGE),
+            '-c',
+            'install -d -o "$1" -g "$2" -m "$3" "$4" && touch "$4/$5"',
+            'sh',
+            str(user),
+            str(group),
+            f'{mode:o}',
+            inside,
+            OWNED,
+        )
 
 
 class Launcher:
@@ -609,14 +682,14 @@ class Launcher:
     Called, it starts one container as a box of its own. `appliance` starts
     the two the appliance's Ignition defines: Postgres, which has no
     network, and the pooler, which joins the box's network and is published
-    there; the directory the two units share is a volume made for the box,
-    with the mode and owners the Ignition gives the directory, labelled and
-    removed with the box.
+    there; the directory the two units share is an anonymous volume of the
+    Postgres container's, which the pooler mounts from it, with the mode and
+    owners the Ignition gives the directory (`_own`), and which goes with the
+    last of the two containers.
     """
 
     def __init__(self) -> None:
         self.containers: list[str] = []
-        self.volumes: list[str] = []
 
     def __call__(self, created: list[str], copies: list[File], superuser: str) -> Box:
         name = f'kluster-test-pgstate-{uuid.uuid4().hex[:12]}'
@@ -627,27 +700,6 @@ class Launcher:
         _ = _podman('start', name)
         _await_ready(name)
         return Box(name=name, port=port, superuser=superuser)
-
-    def shared(self, ignition: dict[str, Any], name: str) -> dict[str, str]:
-        """A volume for each directory the two units share, made the way the Ignition makes the directory.
-
-        The owners are the volume's own options rather than a `chown` inside
-        it: podman hands a volume without them to the user of the first
-        container that mounts it.
-        """
-        volumes: dict[str, str] = {}
-        for at, host in enumerate(_shared(ignition)):
-            volume = f'{name}-shared-{at}'
-            self.volumes.append(volume)
-            mode, user, group = _directory(ignition, host)
-            _ = _podman('volume', 'create', '--label', LABEL, '--opt', f'o=uid={user},gid={group}', volume)
-            _ = _podman(
-                *_bounded('run', '--volume', f'{volume}:/shared', '--entrypoint', 'chmod', IMAGE),
-                f'{mode:o}',
-                '/shared',
-            )
-            volumes[host] = volume
-        return volumes
 
     def appliance(self, ignition: dict[str, Any], *, held: File | None = None) -> Box:
         """The appliance's Postgres and its pooler, as the Ignition builds them.
@@ -662,21 +714,21 @@ class Launcher:
         network, pooler = f'{name}-network', f'{name}-pooler'
         self.containers.extend((network, name, pooler))
         netns, port = _network(network)
-        shared = self.shared(ignition, name)
-        created, copies = _unit_container(ignition, UNIT, shared)
+        created, copies = _unit_container(ignition, UNIT)
         _fill(name, created, [*copies, *([held] if held else [])])
+        _own(ignition, name)
         _ = _podman('start', name)
         superuser = _unit_env(ignition)['POSTGRES_USER']
         if held is not None:
             return Box(name=name, port=port, superuser=superuser, pooler=pooler)
         _await_ready(name)
-        self.pooler(ignition, Box(name=name, port=port, superuser=superuser, pooler=pooler), netns, shared)
+        self.pooler(ignition, Box(name=name, port=port, superuser=superuser, pooler=pooler), netns)
         return Box(name=name, port=port, superuser=superuser, pooler=pooler)
 
-    def pooler(self, ignition: dict[str, Any], box: Box, netns: str, shared: dict[str, str]) -> None:
-        """Start `box`'s pooler in the network at `netns`."""
+    def pooler(self, ignition: dict[str, Any], box: Box, netns: str) -> None:
+        """Start `box`'s pooler in the network at `netns`, with the directories it shares mounted from `box`."""
         assert box.pooler is not None
-        created, copies = _unit_container(ignition, POOLER_UNIT, shared)
+        created, copies = _unit_container(ignition, POOLER_UNIT, box.name)
         _fill(box.pooler, _joined(created, netns), copies)
         _ = _podman('start', box.pooler)
         _await_log(box.pooler, (POOLER_UP,))
@@ -688,11 +740,6 @@ class Launcher:
                 _remove(name)
             except AssertionError as refusal:
                 refused.append(f'{name}: {refusal}')
-        for volume in self.volumes:
-            try:
-                _remove_volume(volume)
-            except AssertionError as refusal:
-                refused.append(f'{volume}: {refusal}')
         assert not refused, refused
 
 
@@ -855,44 +902,121 @@ def _pulumi(target: state.Connection, project: Path, args: list[str], env: dict[
     )
 
 
+def _volume_mounts(name: str) -> dict[str, str]:
+    """The volumes the container `name` mounts, by name, and the path each is mounted on."""
+    made = json.loads(_podman('container', 'inspect', name))[0]
+    return {mount['Name']: mount['Destination'] for mount in made['Mounts'] if mount['Type'] == 'volume'}
+
+
+def _exists(kind: str, name: str) -> bool:
+    """Whether podman knows the container or volume `name`, `kind` saying which."""
+    return process_sessions.run(['podman', kind, 'exists', name], timeout=COMMAND_TIMEOUT).returncode == 0
+
+
 @pytest.mark.parametrize('container', ['appliance', 'pooler', 'superusers', 'network', 'client'])
-def test_every_container_ends_by_itself_and_mounts_no_volume(
+def test_every_container_ends_by_itself_and_mounts_no_named_volume(
     start: Start, ignition: dict[str, Any], container: str
 ) -> None:
-    """Each container these cases start is bounded, removed when it ends, labelled, and given no anonymous volume.
+    """Each container these cases start is bounded, removed when it ends, labelled, and mounts no named volume.
 
     Read from the container podman made of the arguments rather than from
     the arguments: what podman does with them is what leaves a lock or a
-    volume behind. The one volume a box's container mounts is the directory
-    the two units share, which `Launcher` makes, labels and removes itself.
+    volume behind. The volumes a box's two containers mount are the
+    directories the two units share, each an anonymous volume of the
+    Postgres container's, which the pooler's mounts from it; no other
+    container mounts a volume at all.
     """
     name = f'kluster-test-volumes-{uuid.uuid4().hex[:12]}'
-    start.containers.append(name)
-    shared = start.shared(ignition, name)
+    source = f'{name}-source'
+    start.containers.extend((name, source))
     argv = {
-        'appliance': lambda: _named(_unit_container(ignition, UNIT, shared)[0], name),
-        'pooler': lambda: _named(_unit_container(ignition, POOLER_UNIT, shared)[0], name),
+        'appliance': lambda: _named(_unit_container(ignition, UNIT)[0], name),
+        'pooler': lambda: _named(_unit_container(ignition, POOLER_UNIT, source)[0], name),
         'superusers': lambda: _named(_superusers(), name),
         'network': lambda: _network_container(name),
         'client': lambda: _client(name),
     }[container]()
     image = {'pooler': POOLER_IMAGE}.get(container, IMAGE)
     try:
+        if container == 'pooler':
+            _ = _podman(*_named(_unit_container(ignition, UNIT)[0], source))
         _ = _podman(*argv)
         made = json.loads(_podman('container', 'inspect', name))[0]
+        mounted = _volume_mounts(name)
+        sourced = _volume_mounts(source) if container == 'pooler' else mounted
+        anonymous = {
+            volume: json.loads(_podman('volume', 'inspect', volume))[0].get('Anonymous', False) for volume in mounted
+        }
     finally:
         _remove(name)
+        _remove(source)
     declared: dict[str, Any] = json.loads(_podman('image', 'inspect', image))[0]['Config'].get('Volumes') or {}
+    shares = sorted(inside for host, inside, _ in _volumes(ignition, UNIT) if host in _shared(ignition))
 
     # The premise: the Postgres image declares volumes, so a container given
-    # none is one whose tmpfs covers each, and `IMAGE_VOLUMES` names them all.
+    # none is one whose tmpfs covers each, and `IMAGE_VOLUMES` names them all;
+    # and the two units share a directory.
     assert IMAGE_VOLUMES[IMAGE]
     assert sorted(declared) == sorted(str(volume) for volume in IMAGE_VOLUMES[image])
-    own = set(shared.values()) if container in {'appliance', 'pooler'} else set[str]()
-    assert {mount['Name'] for mount in made['Mounts'] if mount['Type'] == 'volume'} == own
+    assert shares
+
+    assert sorted(mounted.values()) == (shares if container in {'appliance', 'pooler'} else [])
+    assert mounted == sourced
+    assert all(anonymous.values()), anonymous
     assert made['Config']['Timeout'] == CONTAINER_TIMEOUT
     assert made['HostConfig']['AutoRemove'] is True
     assert LABEL in {f'{key}={value}' for key, value in made['Config']['Labels'].items()}
+
+
+def test_a_box_left_without_its_teardown_goes_with_its_volume(ignition: dict[str, Any]) -> None:
+    """A box whose run was killed before its teardown leaves no container and no volume once its containers end.
+
+    A kill -- SIGKILL, or the outer `timeout`'s SIGTERM -- runs no teardown,
+    so here the launcher that started the box is never closed. Each of the
+    box's containers is then ended the way its `--timeout` ends it, a kill
+    of its process, which conmon answers by removing the container (`--rm`)
+    whoever sent the kill; the timer itself is held by
+    `test_every_container_ends_by_itself_and_mounts_no_named_volume`.
+
+    The Postgres container ends first, while its pooler runs: `--volumes-from`
+    records no dependency that would refuse its removal, and the volume the
+    two share stays for the pooler. The volume goes with the pooler, the
+    last container that mounts it.
+    """
+    left = Launcher()
+    try:
+        box = left.appliance(ignition)
+        assert box.pooler is not None
+        volumes = _volume_mounts(box.name)
+        pooled = _volume_mounts(box.pooler)
+
+        _ = _podman('kill', '--signal', 'KILL', box.name)
+        _ = _until(
+            lambda: _exists('container', box.name),
+            lambda there: not there,
+            'the Postgres container removed while its pooler runs',
+        )
+        kept = [volume for volume in volumes if _exists('volume', volume)]
+        _ = _podman('kill', '--signal', 'KILL', *(name for name in left.containers if name != box.name))
+        remaining = _until(
+            lambda: [
+                *(container for container in left.containers if _exists('container', container)),
+                *(volume for volume in volumes if _exists('volume', volume)),
+            ],
+            lambda remaining: not remaining,
+            'every container and volume of the box gone',
+        )
+    finally:
+        # A stop-loss for a case that fails before its containers end; on
+        # one that passes, every name is already gone.
+        left.close()
+
+    # The premise: the two containers share a volume, which the first of them
+    # to go leaves to the other.
+    assert volumes
+    assert pooled == volumes
+    assert kept == list(volumes)
+    assert remaining == []
 
 
 def test_the_port_a_box_is_reached_on_is_bound_before_the_box_is_created() -> None:
