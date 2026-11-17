@@ -30,6 +30,7 @@ import pytest
 import pytest_asyncio
 from mock_monitor import Recorder, declaring, run_under_backstop, the_run_failed_with_each
 from pulumi.output import UNKNOWN
+from referenced_stack import reading_back
 
 from kluster import conventions
 from kluster.components.dns.base import overlay_label
@@ -125,20 +126,9 @@ async def declare(published: dict[str, Any], *, preview: bool) -> Run:
 
 
 async def declare_reading(output: str, value: object, *, preview: bool) -> Run:
-    """The program against a `physical` whose `output` reads back as `value`, the other anchors' as addresses.
-
-    The read is answered here rather than by the mock monitor for `output`,
-    because the mock drops an output that is `None` or unknown on its way to
-    the reader, and so can only present an absence.
-    """
-    original = pulumi.StackReference.get_output
-
-    def read_back(reference: pulumi.StackReference, name: pulumi.Input[str]) -> pulumi.Output[Any]:
-        return pulumi.Output.from_input(value) if name == output else original(reference, name)
-
+    """The program against a `physical` whose `output` reads back as `value`, the other anchors' as addresses."""
     published = {name: address for name, (_, address) in ANCHOR_OUTPUTS.items()}
-    with pytest.MonkeyPatch.context() as patch:
-        patch.setattr(pulumi.StackReference, 'get_output', read_back)
+    with reading_back({output: value}):
         return await declare(published, preview=preview)
 
 
