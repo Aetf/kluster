@@ -52,6 +52,7 @@ import datetime as dt
 import errno
 import gzip
 import io
+import itertools
 import json
 import os
 import re
@@ -61,18 +62,20 @@ import socket
 import ssl
 import struct
 import subprocess as sp
+import sys
 import tarfile
 import time
 import uuid
-from collections.abc import Callable, Iterator
-from contextlib import ExitStack
+from collections.abc import Callable, Generator, Iterator, Mapping
+from contextlib import ExitStack, contextmanager, suppress
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import Any, cast
+from typing import Any, NoReturn, cast
 from urllib import parse as urllib_parse
 
 import host_ports
 import process_sessions
+import psutil
 import pytest
 from root_credentials import fake
 from scratch_projects import cli_directories
@@ -612,6 +615,11 @@ def _network(name: str) -> tuple[str, int]:
     return netns, port
 
 
+def _network_name(box: str) -> str:
+    """The name of the container whose network the box `box` joins (`_network`)."""
+    return f'{box}-network'
+
+
 def _client(name: str) -> list[str]:
     """The `podman run` of the container that serves the image's client tools."""
     return _bounded('run', '--detach', '--network', 'host', '--name', name, '--entrypoint', 'sleep', IMAGE, 'infinity')
@@ -692,7 +700,7 @@ class Launcher:
 
     def __call__(self, created: list[str], copies: list[File], superuser: str) -> Box:
         name = f'kluster-test-pgstate-{uuid.uuid4().hex[:12]}'
-        network = f'{name}-network'
+        network = _network_name(name)
         self.containers.extend((network, name))
         netns, port = _network(network)
         _fill(name, _joined(created, netns), copies)
@@ -710,7 +718,7 @@ class Launcher:
         it serves, and with no pooler started.
         """
         name = f'kluster-test-pgstate-{uuid.uuid4().hex[:12]}'
-        network, pooler = f'{name}-network', f'{name}-pooler'
+        network, pooler = _network_name(name), f'{name}-pooler'
         self.containers.extend((network, name, pooler))
         netns, port = _network(network)
         created, copies = _unit_container(ignition, UNIT)
@@ -721,8 +729,9 @@ class Launcher:
         if held is not None:
             return Box(name=name, port=port, superuser=superuser, pooler=pooler)
         _await_ready(name)
-        self.pooler(ignition, Box(name=name, port=port, superuser=superuser, pooler=pooler), netns)
-        return Box(name=name, port=port, superuser=superuser, pooler=pooler)
+        box = Box(name=name, port=port, superuser=superuser, pooler=pooler)
+        self.pooler(ignition, box, netns)
+        return box
 
     def pooler(self, ignition: dict[str, Any], box: Box, netns: str) -> None:
         """Start `box`'s pooler in the network at `netns`, with the directories it shares mounted from `box`."""
@@ -928,31 +937,27 @@ def test_every_container_ends_by_itself_and_mounts_no_named_volume(
     name = f'kluster-test-volumes-{uuid.uuid4().hex[:12]}'
     source = f'{name}-source'
     start.containers.extend((name, source))
-    # `port` is for the network container, the one of these that publishes a
-    # port, and is held until that container's `podman run` has returned.
-    with host_ports.reserved(ADDRESS) as port:
-        argv = {
-            'appliance': lambda: _named(_unit_container(ignition, UNIT)[0], name),
-            'pooler': lambda: _named(_unit_container(ignition, POOLER_UNIT, source)[0], name),
-            'superusers': lambda: _named(_superusers(), name),
-            'network': lambda: _network_container(name, port),
-            'client': lambda: _client(name),
-        }[container]()
-        image = {'pooler': POOLER_IMAGE}.get(container, IMAGE)
-        try:
-            if container == 'pooler':
-                _ = _podman(*_named(_unit_container(ignition, UNIT)[0], source))
-            _ = _podman(*argv)
-            made = json.loads(_podman('container', 'inspect', name))[0]
-            mounted = _volume_mounts(name)
-            sourced = _volume_mounts(source) if container == 'pooler' else mounted
-            anonymous = {
-                volume: json.loads(_podman('volume', 'inspect', volume))[0].get('Anonymous', False)
-                for volume in mounted
-            }
-        finally:
-            _remove(name)
-            _remove(source)
+    run: Callable[[], object] = {
+        'appliance': lambda: _podman(*_named(_unit_container(ignition, UNIT)[0], name)),
+        'pooler': lambda: _podman(*_named(_unit_container(ignition, POOLER_UNIT, source)[0], name)),
+        'superusers': lambda: _podman(*_named(_superusers(), name)),
+        'network': lambda: _network(name),
+        'client': lambda: _podman(*_client(name)),
+    }[container]
+    image = {'pooler': POOLER_IMAGE}.get(container, IMAGE)
+    try:
+        if container == 'pooler':
+            _ = _podman(*_named(_unit_container(ignition, UNIT)[0], source))
+        _ = run()
+        made = json.loads(_podman('container', 'inspect', name))[0]
+        mounted = _volume_mounts(name)
+        sourced = _volume_mounts(source) if container == 'pooler' else mounted
+        anonymous = {
+            volume: json.loads(_podman('volume', 'inspect', volume))[0].get('Anonymous', False) for volume in mounted
+        }
+    finally:
+        _remove(name)
+        _remove(source)
     declared: dict[str, Any] = json.loads(_podman('image', 'inspect', image))[0]['Config'].get('Volumes') or {}
     shares = sorted(inside for host, inside, _ in _volumes(ignition, UNIT) if host in _shared(ignition))
 
@@ -1057,6 +1062,63 @@ def test_the_port_a_box_is_reached_on_lies_outside_the_ephemeral_range() -> None
     assert not low <= port <= high, (port, low, high)
 
 
+def test_remove_the_reserved_ports_once_podman_holds_the_port_it_picks() -> None:
+    """The tripwire on `host_ports`: red on CI's runner once its podman holds the port it picks from the moment it picks it.
+
+    A container is created with the box port published on a port podman
+    picks, and never started. podman#19048's window is that podman records
+    the port it picked at `create` while nothing holds it until pasta binds
+    it at start. So the probe reads the port the container records and
+    binds it from this process with `SO_REUSEADDR`, as pasta binds it.
+
+    -   **A port is recorded, and the bind succeeds: the case passes.** The
+        window is open, and the reservation is needed.
+    -   **No port is recorded before the start, or the bind is refused**:
+        the case fails on CI's runner, naming the layer to remove
+        (`host_ports`' docstring lists it), and skips anywhere else, naming
+        what it found. A refused bind can also be another process taking
+        that one port between the two steps, the race itself, which the
+        message names too.
+    """
+    name = f'kluster-test-pickedport-{uuid.uuid4().hex[:12]}'
+    try:
+        _ = _podman(
+            *_bounded('create', '--network', 'pasta', '--publish', f'{ADDRESS}::{settings.PORT}', '--name', name),
+            '--entrypoint',
+            'sleep',
+            IMAGE,
+            'infinity',
+        )
+        bindings: dict[str, list[dict[str, str]]] | None = json.loads(
+            _podman('container', 'inspect', '--format', '{{json .HostConfig.PortBindings}}', name)
+        )
+        recorded = [binding.get('HostPort', '') for binding in (bindings or {}).get(f'{settings.PORT}/tcp') or []]
+        picked = int(recorded[0]) if recorded and recorded[0] not in {'', '0'} else None
+        # The probe runs while the container exists: a podman that holds the
+        # port it picks holds it for as long as the container does.
+        if picked is not None:
+            with socket.socket() as probe:
+                probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                try:
+                    probe.bind((ADDRESS, picked))
+                except OSError as refused:
+                    if refused.errno != errno.EADDRINUSE:
+                        raise
+                else:
+                    return
+    finally:
+        _remove(name)
+
+    if picked is None:
+        found = f'a container only created records no host port for {settings.PORT}/tcp: {bindings!r}'
+    else:
+        found = (
+            f'a bind of port {picked}, which a container only created records, is refused: '
+            'podman holds the port it picks, or another process took that one port in between'
+        )
+    _runners_verdict(found, 'the reserved ports, the workaround layer `host_ports` lists, and this case')
+
+
 def test_a_network_is_removed_while_a_box_joined_to_it_exists() -> None:
     """A box records no dependency on the container whose network it joins, so that container's `--rm` stands.
 
@@ -1151,11 +1213,28 @@ def test_remove_the_archive_workaround_once_the_runners_copier_drains_its_stream
     if copied.returncode != 0:
         return
     buildah = _podman('info', '--format', '{{.Host.BuildahVersion}}').decode().strip()
-    found = f'podman cp read past the end-of-archive blocks on buildah {buildah}'
+    _runners_verdict(
+        f'podman cp read past the end-of-archive blocks on buildah {buildah}',
+        'the `_archive` workaround (containers/buildah#6573) and this case',
+    )
+
+
+def _on_ci_runner() -> bool:
+    """Whether this run is a job on CI's runner, whose podman and pasta every change runs this module on."""
     # GitHub sets `GITHUB_ACTIONS` on every job's runner.
-    if os.environ.get('GITHUB_ACTIONS') != 'true':
-        pytest.skip(f"{found}: the `_archive` workaround is unneeded here, and CI's runner decides its removal")
-    pytest.fail(f"{found} on CI's runner: remove the `_archive` workaround (containers/buildah#6573) and this case")
+    return os.environ.get('GITHUB_ACTIONS') == 'true'
+
+
+def _runners_verdict(found: str, remove: str) -> NoReturn:
+    """A workaround's tripwire found the defect gone: fail on CI's runner, naming what to remove, and skip anywhere else.
+
+    The runner's podman and pasta are the ones every change runs this
+    module on, and a workstation's run sees only its own, so its finding
+    cannot clear a workaround for the runner.
+    """
+    if not _on_ci_runner():
+        pytest.skip(f"{found}: the workaround is unneeded here, and CI's runner decides the removal of {remove}")
+    pytest.fail(f"{found} on CI's runner: remove {remove}")
 
 
 def test_a_box_silent_before_it_serves_fails_the_wait_naming_the_follower() -> None:
@@ -2332,17 +2411,342 @@ def test_a_certificate_names_the_one_role_it_logs_in_as_on_both_entries(
             _ = _psql(clients, state.Connection(url=posing.form(purpose), env=posing.env), 'SELECT 1')
 
 
+# -- workaround: pasta drops the data a reset follows ------------------------------
+#
+# Everything between this marker and the one that ends the layer is a
+# workaround for one defect of pasta's. On a connection pasta splices from
+# host loopback, data the namespace's side sends just before it resets the
+# connection is dropped whenever pasta handles the data and the reset in one
+# wakeup: `tcp_splice_sock_handler` (passt's `tcp_splice.c`) tests `EPOLLERR`
+# before anything else, and `tcp_splice_rst` closes both sides with
+# `SO_LINGER` 0 and the data unread. The client then reads the connection's
+# end and nothing before it, which load makes more likely. The pooler refuses a
+# certificate exactly that way: under TLS 1.3 the client's startup follows
+# its handshake before the pooler has judged its certificate, so the pooler
+# sends its alert and closes with the startup unread, and its kernel resets.
+#
+# So a case whose evidence is data the pooler sends before it resets reaches
+# the pooler inside the box's own network namespace, where no relay sits
+# between the two and the kernel delivers the data before the reset:
+# `_psql_in_namespace`, which the stranger-CA case below runs. The layer is
+# that function, that case's call of it in place of `_psql` over `_bundle`,
+# and the tripwire with its helpers. They reach the box's network container
+# through `_network_name`, which `Launcher` names it with. framework/testing.md
+# §1.2 describes the tripwire in the sentences, beside the container
+# paragraph, on a pasta a case has stopped; those go with the layer. Its
+# §1 sentence on the tripwire of each workaround covers this one without
+# naming it.
+#
+# **It is removed once the pasta on CI's runner forwards what a socket has
+# queued before it propagates that socket's reset**; the tripwire fails there
+# then, and skips anywhere else, since a workstation's pasta moves on a
+# schedule of its own. The stranger-CA case goes back to `_psql` over
+# `_bundle`, and everything else between the markers goes whole.
+
+
+def _psql_in_namespace(box: Box, directory: Path, url: str, env: Mapping[str, str], sql: str) -> str:
+    """The image's `psql`, run in `box`'s network container, over the bundle in `directory`, at `url`.
+
+    The network container runs the box's image, so its `psql` is the
+    server's own release, and it shares the pooler's network namespace, so
+    `url` is a bundle's own, naming `settings.PORT` on `ADDRESS`. The bundle
+    is copied in at the same path, the way `tools` hands its tools a
+    directory, so `env`'s paths mean the same inside.
+    """
+    network = _network_name(box.name)
+    _ = _podman('exec', network, 'mkdir', '-p', str(directory))
+    _ = _podman('cp', f'{directory}/.', f'{network}:{directory}')
+    done = process_sessions.run(
+        ['podman', 'exec', *(f'--env={name}={value}' for name, value in env.items()), network]  # noqa: RUF005 -- keeps -c beside its value
+        + ['psql', '--no-psqlrc', '-v', 'ON_ERROR_STOP=1', '-At', f'--dbname={url}', '-c', sql],
+        text=True,
+        timeout=COMMAND_TIMEOUT,
+    )
+    if done.returncode != 0:
+        raise state.StateError(done.stderr.strip())
+    return done.stdout.strip()
+
+
 def test_a_certificate_another_authority_signed_is_refused_in_the_handshake(
     box: Box, roots: config.Roots, clients: Path
 ) -> None:
-    """A client role's name, in a certificate the box's CA did not sign, gets no further than the handshake."""
+    """A client role's name, in a certificate the box's CA did not sign, gets no further than the handshake.
+
+    The refusal is the pooler's TLS alert, read inside the box's namespace,
+    where nothing between the client and the pooler drops it.
+    """
     stranger = config.Roots(ca=pki.Authority.from_pem(pki.generate_ca_key()), age_recipients=(RECIPIENT,))
-    target = _bundle(stranger, box, clients, settings.CI_ROLE)
+    issued = config.client_bundle(stranger.ca, name=settings.CI_ROLE, address=ADDRESS)
+    directory = clients / settings.CI_ROLE
+    config.write_client_bundle(issued, directory)
+    env = ssl_env(directory)
     # The client trusts the box's CA, so the refusal is the box's and not the client's.
-    _ = Path(target.env[CA_ENV]).write_bytes(roots.ca.certificate().cert_pem)
+    _ = Path(env[CA_ENV]).write_bytes(roots.ca.certificate().cert_pem)
 
     with pytest.raises(state.StateError, match=r'SSL error|alert'):
-        _ = _psql(clients, target, 'SELECT 1')
+        _ = _psql_in_namespace(box, directory, issued.url(), env, 'SELECT 1')
+
+
+#: The states of a TCP socket that `/proc/net/tcp` names, in its own
+#: hexadecimal: one end of a connection still open, and the states a close
+#: with a FIN leaves the two ends in.
+ESTABLISHED = 0x01
+CLOSED_WITH_A_FIN = {0x04: 'FIN_WAIT1', 0x05: 'FIN_WAIT2', 0x08: 'CLOSE_WAIT', 0x09: 'LAST_ACK', 0x0B: 'CLOSING'}
+
+#: The protocol's request for TLS, which the pooler answers with `S`.
+SSL_REQUEST = struct.pack('!ii', 8, 80877103)
+
+#: The watchdog that resumes a stopped pasta once this process is gone. It
+#: ignores the signals that end a session's processes together -- SIGTERM,
+#: SIGHUP, SIGINT -- and reads its stdin, which only this process holds open,
+#: until EOF, which comes when the block that started it ends, or when this
+#: process dies however it dies. Then it sends SIGCONT to the process
+#: `argv[1]` names, if that process is still the one that started at
+#: `argv[2]`.
+WATCHDOG = """
+import signal
+import sys
+import psutil
+for ending in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
+    signal.signal(ending, signal.SIG_IGN)
+sys.stdin.read()
+process = psutil.Process(int(sys.argv[1]))
+if process.create_time() == float(sys.argv[2]):
+    process.resume()
+"""
+
+
+@dataclass(frozen=True)
+class TcpSocket:
+    """One TCP socket in a network namespace, as `/proc/net/tcp` lists it: its two ports, its state, and its unread bytes."""
+
+    local: int
+    remote: int
+    state: int
+    unread: int
+
+
+def _namespace_sockets(box: Box) -> list[TcpSocket]:
+    """Every IPv4 TCP socket listed in `box`'s network namespace, read from inside it.
+
+    IPv4 alone, because the pooler listens on `0.0.0.0` and pasta reaches it
+    from the namespace's IPv4 loopback for a client on the host's.
+    """
+    listed = _podman('exec', _network_name(box.name), 'cat', '/proc/net/tcp').decode().splitlines()[1:]
+    found: list[TcpSocket] = []
+    for line in listed:
+        _, local, remote, state_, queues, *_ = line.split()
+        found.append(
+            TcpSocket(
+                local=int(local.rsplit(':', 1)[1], 16),
+                remote=int(remote.rsplit(':', 1)[1], 16),
+                state=int(state_, 16),
+                unread=int(queues.split(':')[1], 16),
+            )
+        )
+    return found
+
+
+def _pasta(netns: str) -> psutil.Process | None:
+    """The pasta that forwards the ports of the network namespace at `netns`, where this process can see it.
+
+    podman records no pid for the pasta it starts, and pasta hides its own
+    sockets (it is not dumpable, so no other process reads its `/proc/<pid>/fd`),
+    so the process cannot be found as the listener on the box's host port.
+    What ties it to the box is the namespace podman hands it, `--netns` and
+    the network container's own `SandboxKey`: one argument compared whole,
+    which no other box's pasta carries, and a second process that carries it
+    fails the case rather than being stopped. The command is told by the name it
+    was started as, since pasta goes on to run a build of `passt` that names
+    the process after itself.
+    """
+    found: list[psutil.Process] = []
+    for process in psutil.process_iter(['cmdline']):
+        argv: list[str] = process.info['cmdline'] or []
+        named = bool(argv) and PurePosixPath(argv[0]).name == 'pasta'
+        if named and ('--netns', netns) in itertools.pairwise(argv):
+            found.append(process)
+    assert len(found) <= 1, f'more than one pasta names {netns}: {[process.pid for process in found]}'
+    return found[0] if found else None
+
+
+def _pasta_release(pasta: psutil.Process) -> str:
+    """The first line `--version` prints for the command `pasta` was started as, which names its release."""
+    printed = process_sessions.run([pasta.cmdline()[0], '--version'], text=True, timeout=COMMAND_TIMEOUT)
+    return (printed.stdout.splitlines() or [f'pasta ({printed.stderr.strip()})'])[0]
+
+
+def _unobserved(why: str) -> NoReturn:
+    """The tripwire cannot hold pasta still here: skip, except on CI's runner, where its verdict is read, and fail."""
+    if _on_ci_runner():
+        pytest.fail(f"{why}, on CI's runner, where the tripwire's verdict is read")
+    pytest.skip(why)
+
+
+@contextmanager
+def _stopped(pasta: psutil.Process) -> Generator[None]:
+    """`pasta` stopped with SIGSTOP for the block, and resumed with SIGCONT on every way out of it.
+
+    The `finally` covers every way out the test process lives through: a
+    failure, the case bound. The watchdog (`WATCHDOG`) covers this process
+    ended without one, killed outright or by a signal it does not handle:
+    its stdin closes with this process, and it sends the SIGCONT. It leads a
+    POSIX session of its own, so the outer `timeout`'s signal to the run's
+    process group does not reach it, and it ignores SIGTERM, SIGHUP and
+    SIGINT, so a stop of the cgroup it shares with this process -- systemd's
+    `KillMode=control-group` sends SIGTERM to every process in it -- ends
+    this process and leaves the watchdog to read the EOF. pasta runs in the
+    container service's cgroup and is not reached by that stop.
+
+    What remains is a SIGKILL that reaches the watchdog before it reads the
+    EOF: a SIGKILL of the cgroup, or an OOM kill of the whole group. That
+    leaves `pasta` stopped, and a stopped pasta does not end with its
+    container, since only its own event loop notices the namespace going.
+    It keeps listening on the box's reserved port, accepting connections it
+    never serves, until something kills it; `host_ports` passes over that
+    port.
+    """
+    with process_sessions.started(
+        [sys.executable, '-c', WATCHDOG, str(pasta.pid), repr(pasta.create_time())], stdin=process_sessions.PIPE
+    ):
+        try:
+            try:
+                pasta.suspend()
+            except psutil.AccessDenied as denied:
+                _unobserved(f'this process may not stop pasta {pasta.pid}: {denied}')
+            yield
+        finally:
+            # A SIGCONT to a pasta that was never stopped does nothing; one
+            # this process may not signal, or one that is gone, needs none.
+            with suppress(psutil.AccessDenied, psutil.NoSuchProcess):
+                pasta.resume()
+
+
+def _startup(user: str) -> bytes:
+    """The protocol's startup message, for `user` on the state's database."""
+    body = b''.join(f'{key}\0{value}\0'.encode() for key, value in (('user', user), ('database', settings.DATABASE)))
+    body += b'\0'
+    return struct.pack('!ii', 8 + len(body), 196608) + body
+
+
+def _drained(raw: socket.socket) -> bytes:
+    """Everything `raw` reads before it ends, with a reset or with the end of the stream."""
+    read = b''
+    with suppress(ConnectionResetError):
+        while chunk := raw.recv(4096):
+            read += chunk
+    return read
+
+
+def test_remove_the_in_namespace_client_once_pasta_forwards_the_data_a_reset_follows(
+    start: Start, ignition: dict[str, Any], roots: config.Roots, clients: Path
+) -> None:
+    """The tripwire on the layer above: red on CI's runner once its pasta forwards the pooler's alert ahead of the reset.
+
+    The loss is held still rather than raced. The case completes a TLS 1.3
+    handshake with a certificate from a stranger CA through the box's host
+    port, and holds back its final flight and its startup. It pauses the
+    pooler, sends what it held, and waits until it is all in the pooler's
+    receive queue. It stops the box's own pasta, unpauses the pooler, and
+    waits until neither end of the connection is established in the
+    namespace: the pooler has refused, and pasta's end has received the
+    alert and the reset behind it, with pasta asleep. Then pasta runs again
+    and handles both at once, and the client reads what pasta forwards until
+    the connection ends: with `ECONNRESET` from a pasta that passes the
+    reset on, and with the end of the stream from one that closes instead.
+
+    -   **Nothing: the case passes.** pasta drops the alert, and the layer
+        is needed.
+    -   **The alert, on CI's runner: the case fails**, naming the layer to
+        remove. The runner's run is the verdict, being the pasta every
+        change runs this module on.
+    -   **The alert anywhere else: the case skips**, naming what it found.
+        A workstation's pasta moves on a schedule of its own, so its finding
+        cannot clear the workaround for the runner.
+
+    The premise is that the pooler reset the connection: no end of it is
+    left in the namespace, which a close with a FIN would leave in
+    `CLOSE_WAIT` or a `FIN_WAIT`. The control for the refusal itself is the
+    stranger-CA case, which reads the alert inside the namespace. Every wait
+    is a condition read from `/proc/net/tcp`, with `COMMAND_TIMEOUT` as the
+    stop-loss. Where the box's pasta is not visible from this process, as
+    where podman's service runs on another machine, or this process may not
+    stop it, the case skips, and fails on CI's runner, where its verdict is
+    read.
+    """
+    box = start.appliance(ignition)
+    assert box.pooler is not None
+    netns = (
+        _podman('container', 'inspect', '--format', '{{.NetworkSettings.SandboxKey}}', _network_name(box.name))
+        .decode()
+        .strip()
+    )
+    pasta = _pasta(netns)
+    if pasta is None:
+        _unobserved(f'no pasta that names {netns} is visible from this process')
+    stranger = config.Roots(ca=pki.Authority.from_pem(pki.generate_ca_key()), age_recipients=(RECIPIENT,))
+    target = _bundle(stranger, box, clients, settings.CI_ROLE)
+    context = ssl.create_default_context(cadata=roots.ca.certificate().cert_pem.decode())
+    context.minimum_version = ssl.TLSVersion.TLSv1_3
+    context.load_cert_chain(target.env[CERT_ENV], target.env[KEY_ENV])
+
+    with socket.create_connection((ADDRESS, box.port), timeout=COMMAND_TIMEOUT) as raw:
+        raw.sendall(SSL_REQUEST)
+        assert raw.recv(1) == b'S'
+        incoming, outgoing = ssl.MemoryBIO(), ssl.MemoryBIO()
+        tls = context.wrap_bio(incoming, outgoing, server_hostname=ADDRESS)
+        while True:
+            try:
+                tls.do_handshake()
+                break
+            except ssl.SSLWantReadError:
+                raw.sendall(outgoing.read())
+                answer = raw.recv(65536)
+                assert answer, 'the pooler closed the connection inside the handshake'
+                incoming.write(answer)
+        _ = tls.write(_startup(settings.CI_ROLE))
+        held = outgoing.read()
+
+        _ = _podman('pause', box.pooler)
+        paused = True
+        try:
+            raw.sendall(held)
+            queued = _until(
+                lambda: _namespace_sockets(box),
+                lambda found: any(
+                    end.local == settings.PORT and end.state == ESTABLISHED and end.unread == len(held) for end in found
+                ),
+                "the held bytes in the pooler's receive queue",
+            )
+            (pooled,) = [end for end in queued if end.local == settings.PORT and end.state == ESTABLISHED]
+            with _stopped(pasta):
+                _ = _podman('unpause', box.pooler)
+                paused = False
+                left = _until(
+                    lambda: [
+                        end
+                        for end in _namespace_sockets(box)
+                        if {end.local, end.remote} == {settings.PORT, pooled.remote}
+                    ],
+                    lambda ends: all(end.state != ESTABLISHED for end in ends),
+                    'both ends of the connection out of the established state',
+                )
+        finally:
+            if paused:
+                _ = _podman('unpause', box.pooler)
+        read = _drained(raw)
+
+    assert left == [], (
+        f'the pooler closed rather than reset: {[CLOSED_WITH_A_FIN.get(end.state, end.state) for end in left]}'
+    )
+    if read:
+        _runners_verdict(
+            f'{_pasta_release(pasta)} forwarded the {len(read)} bytes the pooler sent ahead of its reset',
+            "the workaround for pasta's dropped data and this case, as the comment that opens it says",
+        )
+
+
+# -- end of the workaround for pasta's dropped data ---------------------------------
 
 
 def test_a_client_that_presents_no_certificate_is_refused(box: Box, roots: config.Roots, clients: Path) -> None:

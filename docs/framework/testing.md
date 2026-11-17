@@ -42,9 +42,10 @@ the summary `pytest` gives by default, failures and errors, with every
 skipped case and its reason added. `tests/test_state_roles.py` skips
 where the Postgres image it runs is not local, and runs on CI as it does
 on a workstation, because `checks` pulls that image before the tests
-([ci.md](ci.md) §3), apart from the tripwire on its `_archive`
-workaround, whose verdict is the runner's: where podman's copier drains
-its stream, that case fails on CI and skips anywhere else.
+([ci.md](ci.md) §3), apart from the tripwire on each of its workarounds,
+whose verdict is the runner's: where the podman or pasta it runs on no
+longer has the defect a workaround answers, that tripwire fails on CI and
+skips anywhere else.
 
 A coroutine that never resolves its futures hangs forever instead of failing,
 and the run is bounded twice against that, at two scales:
@@ -313,9 +314,16 @@ terminal. A fake reads its stdin only where the tool it stands in for does.
 bound, and the test label**, `--label kluster-test=<module>`. Its processes
 are the container service's rather than the case's, so it is the one kind of
 process that ends by itself however the test process ends, and the label is
-the census of what is left.
+the census of what is left. The exception is a pasta a case has stopped. The
+tripwire on the pasta workaround in `tests/test_state_roles.py` stops its own
+box's pasta with SIGSTOP and resumes it on every way out, and a watchdog
+resumes it once the test process is gone. A SIGKILL that reaches the
+watchdog before it can, such as a SIGKILL of the control group the two
+share, leaves that pasta stopped, and pasta, once stopped, does not end with
+its container: it keeps the box's port, listening and never serving, until
+something kills it.
 
-**And it mounts no named volume.** A named volume outlives every container
+**A container a case starts mounts no named volume.** A named volume outlives every container
 that mounts it and holds one of the host's podman locks until something
 removes it by name, which a killed run never does. A directory two
 containers share is an anonymous volume of one of them, which the other
@@ -325,14 +333,18 @@ last container that mounts it, the removal `--rm` makes at the container's
 directory its box shares with the pooler.
 
 **A container a case publishes a port from is published on a port the case
-reserved through `tests/host_ports.py`, never on one podman picks.** podman
-picks a free port when it creates the container, and pasta binds it later.
-Anything that binds port 0 in between can be handed the same port,
-`pulumi`'s servers among them (podman#19048). A reserved port lies outside
-the network namespace's ephemeral range, where no process lands by chance,
-and the reservation keeps two runs off the same port. The reservation is
-held until the `podman run` that publishes the port has returned, by which
-point pasta holds the port.
+reserved through `tests/host_ports.py`, never on one podman picks**, for as
+long as podman picks a port before anything holds it: it listens on port 0,
+reads the port and closes the listener, and pasta binds the port later, so
+anything that binds port 0 in between can be handed it, `pulumi`'s servers
+among them (podman#19048). A reserved port lies outside the network
+namespace's ephemeral range, where no process lands by chance, and the
+reservation keeps two runs off the same port. It is held until the
+`podman run` that publishes the port has returned, by which point pasta
+holds the port. The reservation is a workaround layer
+([style/README.md](../style/README.md)), and this paragraph is one of its
+members: `tests/host_ports.py` names the rest and the condition that
+removes them, which its tripwire reports from CI's runner.
 
 **A call that starts a process any other way says why at the call.** A test
 module that reaches one -- calls it, or hands it on as a value -- carries
