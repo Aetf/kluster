@@ -117,6 +117,17 @@
     for good. Both are backed up hourly to the backup bucket by
     `vmbackup` and restore themselves before they start
     (declarative/cluster-infra.md §1 item 6).
+*   **Updated:** 2026-11-17 — §4.4, §5.1, §5.3 and §14 slice 13, as
+    [Aetf/kluster-ops#796](https://github.com/Aetf/kluster-ops/issues/796)
+    read the balancer: OCI accepts the IPv6 backends, named by GUA, in a
+    set that preserves the source, so both fronts record the client's
+    address and no fallback turns preservation off on IPv6; whether the
+    console guide's contrary sentence binds an IPv4 backend named by
+    address is unread. A node's connection to the IPv6 front fails from
+    every node, because KubeSpan carries the backend's answer to the
+    node's GUA past the balancer, and its connection to the IPv4 front
+    answers from every node, OCI's limit on a backend acting as a client
+    not binding there.
 *   **Authority:** AGENTS.md,
     [framework/dispatch.md](../framework/dispatch.md),
     [framework/rfc.md](../framework/rfc.md) and the style rules
@@ -683,16 +694,23 @@ members. What the design adds:
     sentinel, which a StackReference reads back as absent or unknown, and
     a pool built from that would carry `None` as an address.
 *   **The balancer's two addresses are a member class of their own,
-    answered for connections that start in the cluster.** OCI's balancer
-    does not let a backend reach its own front: "The backend server
-    cannot function as both a client and a backend simultaneously as
-    it's unable to start traffic to the network load balancer's virtual
-    IP (VIP)"
+    answered for connections that start in the cluster.** A node's
+    connection to the balancer's IPv6 front fails, from every node, the
+    worker included: KubeSpan carries every packet addressed to a node's
+    address, in both families, so the backend's answer to the caller's
+    GUA, which the balancer kept as the source, returns over `kubespan`
+    from the backend's address rather than through the balancer
+    (architecture.md §3.2 item 3). Its connection to the IPv4 front
+    answers, since it arrives from a NAT address no node holds, and OCI's
+    limit on a backend acting as a client, "The backend server cannot
+    function as both a client and a backend simultaneously as it's
+    unable to start traffic to the network load balancer's virtual IP
+    (VIP)"
     ([OCI: Network Load Balancer](https://docs.oracle.com/en-us/iaas/Content/NetworkLoadBalancer/introduction.htm)),
-    and every cloud node is a backend. A pod on a cloud node resolving
-    one of the cluster's names that bypass Cloudflare's proxy gets the
-    balancer's address, and its connection would leave the node and
-    fail. With the two addresses in the pool, each Service whose census
+    does not bind there. A pod resolving one of the cluster's names that
+    bypass Cloudflare's proxy gets the balancer's addresses, and its
+    connection to the IPv6 one would leave the node and fail. With the
+    two addresses in the pool, each Service whose census
     row the balancer fronts asks for them beside the node addresses, LB
     IPAM writes them into the Service's status, and Cilium installs them
     as frontends on every node: the connection is answered on the
@@ -735,16 +753,17 @@ which is why it stays a bootstrap verification (physical.md §6). Its
 recorded fallback stays the reserved address per node, and it costs the
 client's address. The balancer's IPv4 backends would then name those
 addresses rather than the instances, whose backend stands for the
-primary private address (`components/cloud/nodes.py`), and OCI refuses
-an address-named backend in a set that preserves the source: "Preserve
-source IP must be disabled in the backend set to add an IP
-address-based backend server"
+primary private address (`components/cloud/nodes.py`), and OCI's
+console guide says an address-named backend cannot join a set that
+preserves the source: "Preserve source IP must be disabled in the
+backend set to add an IP address-based backend server"
 ([OCI: Adding a backend server](https://docs.oracle.com/en-us/iaas/Content/NetworkLoadBalancer/BackendServers/create-backend-server.htm)).
-Under the fallback, Envoy and every backend see the balancer's address
-on IPv4 too, and the exit criterion's client-address check is given up
-with it. Node address
-allocation (`loadBalancerClass: io.cilium/node`) is not a second
-fallback: it hands out node addresses only, so the dedicated VIP could
+The IPv6 sets, whose backends are named by address, contradict it on
+IPv6 (physical.md §6); on IPv4 it is unread. Where it holds, Envoy and
+every backend see the balancer's address on IPv4 under the fallback,
+and the exit criterion's client-address check is given up with it.
+Node address allocation (`loadBalancerClass: io.cilium/node`) is not a
+second fallback: it hands out node addresses only, so the dedicated VIP could
 not be one of them
 ([`node-ipam.rst` L12–20](https://github.com/cilium/cilium/blob/v1.20.1/Documentation/network/node-ipam.rst#L12-L20)).
 
@@ -902,17 +921,13 @@ access log records the client's address through the balancer's IPv4
 front. Through the IPv6 front, a request answers at all — the Service's
 placeholder endpoint is IPv4 alone
 ([`translator.go` L410](https://github.com/cilium/cilium/blob/v1.20.1/operator/pkg/model/translation/gateway-api/translator.go#L410)),
-so the gate asks — and Envoy records the client's address only where
-the balancer's IPv6 sets kept source preservation. Each IPv6 backend
-names a GUA, which OCI refuses in a set that preserves the source, and
-physical.md §6's recorded fallback turns preservation off on the IPv6
-sets. Under that fallback the IPv6 front records the balancer's address
-by design: the cost physical.md §6 accepts for the apiserver's audit
-log, accepted here for Envoy's too. **There is no traffic-policy
+so the gate asks — and Envoy records the client's address there too:
+each IPv6 backend names a GUA, and OCI accepts it in a set that
+preserves the source (physical.md §6). **There is no traffic-policy
 fallback.** `Local` could not be allocated beside the raw Services and
-would not move the handoff to the proxy, so a client address lost on the
-IPv4 front is a defect of the datapath or of the balancer, filed as its
-own issue; the balancer's own fallback is architecture.md §3.2's.
+would not move the handoff to the proxy, so a client address lost on
+either front is a defect of the datapath or of the balancer, filed as
+its own issue; the balancer's own fallback is architecture.md §3.2's.
 
 ### 5.2 Listeners and certificates
 
@@ -1000,10 +1015,9 @@ gain what those readers need:
 **Every census backend set preserves the client's address**
 (`is_preserve_source`), as the management sets do
 (`components/cloud/nodes.py`): §5.1's client-address argument and the
-exit criterion both rest on it on IPv4. Its IPv6 half inherits the
-fallback physical.md §6 records for the management sets' IPv6 backends,
-which name the nodes' GUAs, and with it that fallback's cost: the
-balancer's address in place of the client's (§5.1).
+exit criterion both rest on it. Its IPv6 half holds as the management
+sets' does: their backends name the nodes' GUAs, which OCI accepts in a
+set that preserves the source (physical.md §6).
 
 The backend set checks the row's port over TCP. A UDP check needs a
 request the application answers with a known reply
@@ -1956,9 +1970,7 @@ item fails. **After** slices 10, 11 and 12.
     443 answers through the balancer, and an undeclared port at a node's
     public address does not; Envoy's log shows the client's address
     through the balancer's IPv4 front; a request answers through its
-    IPv6 front, whose log shows the client's address where physical.md
-    §6's IPv6 item kept source preservation and the balancer's address
-    where its fallback was taken, that fallback's accepted cost (§5.1);
+    IPv6 front, whose log shows the client's address too (§5.1);
     the cluster DNS resolves through host DNS with the baseline on, and a
     pod's request to `169.254.169.254` is refused (§4.5); a renewal
     cert-manager is made to perform is served by every Gateway with no
@@ -1968,8 +1980,8 @@ item fails. **After** slices 10, 11 and 12.
     balancer's two addresses, a request answers on each family, and the
     client the echo server reports is the pod's own address, while ten
     connections on each family from a pod under the baseline alone to
-    the balancer's 6443 fail from each cloud node and answer from the
-    worker (§4.4); an
+    the balancer's 6443 answer on IPv4 from every node and fail on IPv6
+    from every node, the worker included (§4.4); an
     alert raised through alertmanager reaches the phone, and stopping
     vmalert pushes the missed check-in (§7.3). A transcript per item on
     the ops issue; an item that fails is its own issue, and a fallback it

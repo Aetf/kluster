@@ -399,6 +399,19 @@ def kubespan_document() -> dict[str, Any]:
     traffic to a peer that is down does not bypass the mesh, and no extra
     endpoints are harvested.
 
+    `filters` is unset as well, so a node advertises every address it holds
+    as its peers' allowed IPs, in both families alike: KubeSpan carries every
+    packet addressed to a node's address, the GUA as the private IPv4, in
+    both directions of a flow. Its one cost is a node's connection to the
+    balancer's IPv6 front, whose answer, addressed to the caller's GUA, a
+    backend sends over the mesh rather than back through the balancer, and
+    nothing a node runs dials that front (declarative/physical.md §2,
+    cluster/architecture.md §3.2). Excluding the GUAs
+    (`excludeAdvertisedNetworks`) would make IPv6 a case of its own, and move
+    node-to-node IPv6 off the mesh: onto the internet between the worker and
+    the cloud nodes, and into the ingress firewall, whose cluster ranges name
+    no GUA block and cannot name the worker's, which is the home provider's.
+
     It is a document of its own because the pinned release deprecates
     `machine.network.kubespan` for it, and a configuration carrying both is
     refused: the document's own validation rejects a `v1alpha1` that also

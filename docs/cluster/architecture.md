@@ -243,26 +243,48 @@ Internet ingress is two layers, both free:
     which takes the traffic on the node it arrives at, sees the client's
     through the pass-through NLB under either policy (rfc-007 §5.1).
 3.  **The NLB's own two addresses are pool members too, for traffic
-    that starts inside the cluster.** OCI's NLB lets no backend reach
-    its front ("The backend server cannot function as both a client and
-    a backend simultaneously"), and every cloud node is a backend, so a
-    pod on a cloud node resolving one of the cluster's public names that
-    bypass Cloudflare's proxy would reach for the NLB and fail. So the
-    `internet` pool holds the NLB's public IPv4 and IPv6, and **a
-    Service whose port the NLB fronts asks for them beside the
-    node addresses**: Cilium then installs them as frontends on every
-    node, and such a connection is answered on the caller's own node —
-    handed to that node's Envoy, or translated to a backend pod — and
-    never reaches the NLB. They match no arriving traffic, since the NLB
-    rewrites the destination to the backend's address and its
-    transparent mode stays off; they exist for connections that start in
-    the cluster, and only on the Gateways' and the raw ports (6443 and
-    50000 stay on
-    the cloud path, which no workload takes and KubePrism does without).
-    On a port those frontends do not cover, the worker, which is no NLB
-    backend, reaches the NLB as any internet client does. Design and
-    sources:
-    [Aetf/kluster-ops#493](https://github.com/Aetf/kluster-ops/issues/493).
+    that starts inside the cluster.** A connection from a cluster
+    member to the NLB's IPv6 front fails, from every node, the worker
+    included. KubeSpan carries every packet addressed to an address a
+    member holds, in both families (declarative/physical.md §2): the
+    connection leaves from the caller's GUA, the NLB forwards it with
+    that source kept, and the backend's answer, addressed to a member,
+    enters `kubespan` and reaches the caller from the backend's address
+    rather than the NLB's, matching no connection. A member's connection
+    to the IPv4 front answers, because it reaches the NLB from a NAT
+    address no member holds — a cloud node's public IPv4, the worker's
+    home address — and the answer returns through the NLB; on IPv4 a
+    cloud node is answered even by its own backend, so OCI's limit on a
+    backend acting as a client ("The backend server cannot function as
+    both a client and a backend simultaneously") does not bind there,
+    and on IPv6 the rule above fails the connection first. So a pod
+    resolving one of the cluster's public names that bypass Cloudflare's
+    proxy would fail on the AAAA, and the `internet` pool holds the
+    NLB's public IPv4 and IPv6: **a Service whose port the NLB fronts
+    asks for them beside the node addresses**. Cilium then installs
+    them as frontends on every node, and such a connection is answered
+    on the caller's own node — handed to that node's Envoy, or
+    translated to a backend pod — and never reaches the NLB: on IPv6
+    the one path there is, on IPv4 the shorter one. They match no
+    arriving traffic, since the NLB rewrites the destination to the
+    backend's address and its transparent mode stays off; they exist
+    for connections that start in the cluster, and only on the
+    Gateways' and the raw ports.
+
+    **6443 and 50000 stay on the cloud path**, and nothing a member
+    runs dials either at the IPv6 front. The cluster endpoint, the
+    talosconfig's endpoint and the certificate SANs name the IPv4 front
+    alone, which answers from every member; KubePrism's upstreams are
+    that front and every control plane's own addresses; and the
+    kubelet, Cilium and every pod reach the API through KubePrism or the
+    `kubernetes` Service. The one connection the KubeSpan rule fails is
+    one that starts on a member, from the host or from a pod, whose
+    egress leaves as its node's address, and reaches the NLB's IPv6
+    address on a port no Service claims at that address. A member
+    reaches the IPv4 front on such a port as an internet client does.
+    Design and sources:
+    [Aetf/kluster-ops#493](https://github.com/Aetf/kluster-ops/issues/493),
+    [Aetf/kluster-ops#796](https://github.com/Aetf/kluster-ops/issues/796).
 
 Datapath-wise the node-side half is identical to `externalIPs` handling
 (KPR treats both frontend classes the same, claiming only declared
@@ -271,16 +293,20 @@ Caveats accepted knowingly, each with a cheap fallback:
 
 -   Cilium doesn't officially bless a pool containing node IPs (LB IPAM
     validates only pool-vs-pool overlap) — **verify at bootstrap**;
-    fallback is a reserved additional IP per node ($0 on OCI). It costs
-    the client's address: the NLB's IPv4 backends would then name those
-    addresses rather than the instances, and OCI refuses an
-    address-named backend in a set that preserves the source, so under
-    the fallback Envoy and every backend see the NLB's address on IPv4
-    too (rfc-007 §4.4).
--   NLB dual-stack (v6 listener) and exact source-preservation semantics
-    on a dual-stack VCN — **verify at bootstrap**; fallback is
-    multi-A/AAAA DNS straight at the three node primary IPs (loses
-    health-checked failover, keeps everything else).
+    fallback is a reserved additional IP per node ($0 on OCI). It may
+    cost the client's address: the NLB's IPv4 backends would then name
+    those addresses rather than the instances, and OCI's console guide
+    says an address-named backend cannot join a set that preserves the
+    source. The IPv6 sets, address-named and preserving, show OCI
+    accepting one on IPv6 (declarative/physical.md §6); on IPv4 it is
+    unread, and where the guide holds, Envoy and every backend see the
+    NLB's address on IPv4 under the fallback (rfc-007 §4.4).
+-   NLB dual-stack (v6 listener) and source preservation on a
+    dual-stack VCN — both fronts answer, each carrying the client's
+    address to the backend, read at bring-up and again at every rebuild
+    by declarative/physical.md §6's fronts item; fallback, should a
+    front stop answering, is multi-A/AAAA DNS straight at the three node
+    primary IPs (loses health-checked failover, keeps everything else).
 
 **Dedicated VIPs for same-IP workloads (hath).** Some protocols require
 inbound and *outbound* on one stable IP — no NLB can satisfy that
@@ -305,8 +331,9 @@ reserved-IP↔secondary-private-IP NAT semantics.
 **The management plane rides the same NLB**: listeners for 6443
 (kube-apiserver) and 50000 (Talos apid) across the three CP nodes give
 kubectl/talosctl one stable, health-checked, mTLS-authenticated public
-endpoint (cert SANs include the NLB IP). No home-side path is involved
-in managing the cluster.
+endpoint at its IPv4 (cert SANs include the NLB's IPv4, and no
+certificate names its IPv6). No home-side path is involved in managing
+the cluster.
 
 **Escape hatch — client-IP-sensitive non-HTTP on the homelab pool**: if a
 raw TCP/UDP service ever both needs real client IPs *and* must run

@@ -659,9 +659,10 @@ from an HTTP repository, which offers nothing to check a download against
 
     -   the reserved VIP, which the A record of `vip1.hosts` names and
         hath registers with a third party;
-    -   the cluster endpoint, the balancer's two addresses: the records
-        of `kluster.hosts`, every apid SAN and every machine
-        configuration, and the server of the kubeconfig;
+    -   the balancer's two addresses, which the records of
+        `kluster.hosts` name, and the IPv4 among them the cluster
+        endpoint: the certificate SANs of every control plane and every
+        machine configuration, and the server of the kubeconfig;
     -   the worker's IPv4, a convention, which the gateway's BGP
         neighbor names; its MAC and the link-local derived from it, the
         gateway's IPv6 next hop; and its GUA, which the gateway's
@@ -899,8 +900,13 @@ from an HTTP repository, which offers nothing to check a download against
     output: `version` answers from every node at the pin; the worker's
     link-local is the convention's, and the worker holds `worker_gua`;
     the etcd fsync item passes, both halves, every boot volume being new
-    (declarative/physical.md §6); the node volume's first item passes,
-    `ids` printing what `$D/ids` holds; `u-storage` is ready on every
+    (declarative/physical.md §6); the fronts item of the same section
+    passes, an anonymous `GET /version` on 6443 reading `401` at each of
+    the balancer's addresses, from a host that is no cluster member and
+    reaches the internet in each family, taken directly and never
+    through an HTTP proxy, the IPv4 address under the cluster's CA and
+    the IPv6 address with verification off; the node volume's first
+    item passes, `ids` printing what `$D/ids` holds; `u-storage` is ready on every
     node; and the node label sits on `cp1`. The volume's other items ran
     at bring-up and are not repeated.
 

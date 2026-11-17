@@ -70,6 +70,12 @@
     the monitoring stack's backups and restores
     (`conventions.sealed.WRITER_KEY_STACKS`,
     declarative/cluster-infra.md §1.1).
+*   **Updated:** 2026-11-17. §4.1's sentence on the fallbacks that turn
+    source preservation off follows
+    [Aetf/kluster-ops#796](https://github.com/Aetf/kluster-ops/issues/796):
+    OCI preserves the source on the IPv6 sets, so the fallback rfc-007
+    §5.1 recorded for that front is gone, and the one that remains is
+    architecture.md §3.2's reserved address per node, on IPv4.
 *   **Authority:** AGENTS.md,
     [framework/dispatch.md](../framework/dispatch.md),
     [framework/rfc.md](../framework/rfc.md) and the style rules
@@ -1135,12 +1141,14 @@ sender on the worker that posts to that address directly sends no
 header, and Home Assistant then processes none, so Alertmanager's posts
 are untouched.
 
-The first two rows hold where the balancer preserves the source. Under
-either recorded fallback that turns preservation off on a front
-(rfc-007 §5.1, architecture.md §3.2), the entry Envoy appends there is
-the balancer's own address, which is no trusted proxy, so Home Assistant
-takes the balancer as the client of every request through that front,
-and a grant or a ban on an address acts on the balancer.
+The first two rows hold where the balancer preserves the source, which
+it does on both fronts as built. Under a recorded fallback that turns
+preservation off on a front (architecture.md §3.2, rfc-007 §4.4: today
+the reserved address per node, on the IPv4 front and only where OCI's
+console guide holds), the entry Envoy appends there is the balancer's
+own address, which is no trusted proxy, so Home Assistant takes the
+balancer as the client of every request through that front, and a grant
+or a ban on an address acts on the balancer.
 
 Two residuals stand, and each matters wherever Home Assistant grants on
 address. Every pod on the worker leaves by the worker's address and
