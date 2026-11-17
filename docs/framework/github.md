@@ -202,9 +202,12 @@ a stack declares from. It also carries the switches a workflow
 branches on: the labels it reads — `expect-changes` on this
 repository (ci.md §3), `alert` on the ops repository (operations.md
 §4) — and the identities it tests a pull request's author against — today
-renovate's — and the repository variables it reads, today the dispatch
-App's client id (`DISPATCH_APP_CLIENT_ID`, ci.md §3). Each is held no
-shorter than what the workflows actually read by a test. A label and a
+renovate's — and the repository variables it reads, today the client id
+of each App on the repository whose workflow mints that App's token: the
+dispatch App's on this one (`DISPATCH_APP_CLIENT_ID`, ci.md §3) and the
+trigger App's on the ops repository (`TRIGGER_APP_CLIENT_ID`,
+credentials.md §3). Each is held no shorter than what this
+repository's workflows actually read by a test. A label and a
 variable are declared as resources like everything else below; an
 author is named to nothing, because the only thing that reads one is a
 workflow comparing a login against a string. The Apps themselves are
@@ -294,17 +297,22 @@ in the component. It is the same shape, and the same name, as the
     which today is `DISPATCH_APP_CLIENT_ID` on `kluster` — the dispatch
     App's client id, which `sdk-regenerate.yml` and `alert.yml` hand to
     the action that mints the App's token beside the key (ci.md §3) —
-    and nothing on `kluster-ops`. The value is public: a client id names the App
-    and authenticates as nothing, so it is a census fact in the clear
-    (`conventions.forge.DISPATCH_APP`), and the variable is spelled from
-    it rather than typed into the console. A value that would have to
+    and `TRIGGER_APP_CLIENT_ID` on `kluster-ops`, the trigger App's
+    client id, which the ops repository's weekly drift trigger is
+    designed to hand to the same action (credentials.md §3). A variable
+    sits on the repository whose workflow reads it rather than on the
+    one the minted token acts on: the drift trigger runs in
+    `kluster-ops` and mints a token for `kluster`. The value is public:
+    a client id names the App and authenticates as nothing, so it is a
+    census fact in the clear (`conventions.forge.App`), and the
+    variable is spelled from it rather than typed into the console. A value that would have to
     be a secret is never a variable; it is a register row
     `credentials derived sync` pushes (credentials.md §3). The failure a
     declared variable prevents is the label's: a workflow reading a
     variable nobody set receives an empty string, and the step that
-    needed it fails on its own terms. The variable did not exist on
-    GitHub before this program declared it, so its create is a plain
-    create; one set by hand first would be refused as a duplicate at
+    needed it fails on its own terms. No variable existed on GitHub
+    before this program declared it, so each create is a plain create;
+    one set by hand first would be refused as a duplicate at
     the create, and an `import` under the repository's URN would be
     owed the way §3.1's label import is.
 -   **Branch protection on `main`**: `checks` and `changes` as required
