@@ -26,6 +26,7 @@ from k8s_base_installation import PUBLISHED, VERSIONS_CONFIG, Physical, release_
 from mock_monitor import declaring, run_under_backstop
 from pulumi.output import UNKNOWN
 from pulumi.runtime.rpc import UNKNOWN as UNKNOWN_SENTINEL
+from referenced_stack import reading_back
 
 from kluster import conventions, stacks
 from kluster.lib.k8s import KUBECONFIG_KEY, UnusableKubeconfig
@@ -349,19 +350,10 @@ async def test_a_front_apps_reads_that_is_not_an_address_stops_its_run_by_name(
 
     No component is wired to hand them to, and the run stops all the same:
     a Service declared from what a targeted apply of `physical` left behind
-    would carry `"None"` as its address. The read is answered here rather
-    than by the mock monitor, which drops an output that is `None` or
-    unknown on its way to the reader.
+    would carry `"None"` as its address.
     """
-    original = pulumi.StackReference.get_output
-
-    def read_back(reference: pulumi.StackReference, name: pulumi.Input[str]) -> pulumi.Output[Any]:
-        return pulumi.Output.from_input(value) if name == output else original(reference, name)
-
-    with pytest.MonkeyPatch.context() as patch:
-        patch.setattr(pulumi.StackReference, 'get_output', read_back)
-        with pytest.raises(UnusableAddressOutput) as refused:
-            _ = await declare(conventions.STACK_NAMES.apps, preview=value is UNKNOWN)
+    with reading_back({output: value}), pytest.raises(UnusableAddressOutput) as refused:
+        _ = await declare(conventions.STACK_NAMES.apps, preview=value is UNKNOWN)
 
     assert repr(output) in str(refused.value)
     assert (refused.value.output, refused.value.held) == (output, held)

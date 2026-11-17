@@ -121,3 +121,9 @@ async def test_an_update_hands_the_check_the_named_output_or_its_absence() -> No
     assert await classified({'the_output': 'x'}, preview=False) is None
 
     assert await classified({'another_output': 'x'}, preview=False) is Held.ABSENT
+
+
+@pytest.mark.asyncio
+async def test_a_preview_hands_the_check_the_absence_of_an_output_the_stack_does_not_publish() -> None:
+    """An output the stack does not publish is absent in a preview too, never unknown."""
+    assert await classified({'another_output': 'x'}, preview=True) is Held.ABSENT

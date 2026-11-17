@@ -46,6 +46,7 @@ from k8s_base_installation import (
 )
 from mock_monitor import Declaration, declaring, run_under_backstop
 from pulumi.output import UNKNOWN
+from referenced_stack import reading_back
 
 from kluster import conventions
 from kluster.components import talos
@@ -431,17 +432,9 @@ async def test_an_output_that_is_not_an_address_stops_the_run_by_name(
 ) -> None:
     """A pool is declared from nothing a StackReference can read back in place of an address.
 
-    The read is answered here rather than by the mock monitor for `output`,
-    because the mock drops an output that is `None` or unknown on its way to
-    the reader. The pool reading it is never declared with what the output held.
+    The pool reading `output` is never declared with what the output held.
     """
-    original = pulumi.StackReference.get_output
-
-    def read_back(reference: pulumi.StackReference, name: pulumi.Input[str]) -> pulumi.Output[Any]:
-        return pulumi.Output.from_input(value) if name == output else original(reference, name)
-
-    with pytest.MonkeyPatch.context() as patch:
-        patch.setattr(pulumi.StackReference, 'get_output', read_back)
+    with reading_back({output: value}):
         run = await declare(Physical(), preview=preview)
 
     assert run.refused is not None
