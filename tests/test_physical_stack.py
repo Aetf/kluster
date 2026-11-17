@@ -77,6 +77,7 @@ from kluster.components.talos import image as talos_image
 from kluster.components.talos.image import TalosArtifact
 from kluster.conventions import backup as backup_conventions
 from kluster.conventions.backup import BackupFamily, writer_scope
+from kluster.conventions.outputs import BOOT_VOLUME
 from kluster.lib import config as lib_config
 from kluster.providers.talos_factory import FactoryImage
 from kluster.stacks import physical
@@ -946,6 +947,64 @@ async def test_every_cloud_nodes_gua_is_exported_under_its_name(
     assert {node: await gua.future() for node, gua in exports.items()} == {
         node: guas[f'ocid1.vnic.{conventions.CLUSTER_NAME}-{node}_id'] for node in conventions.CLOUD_NODES
     }
+
+
+@pytest.mark.asyncio
+async def test_every_cloud_nodes_volumes_are_exported_under_the_node_that_holds_them(
+    setup: Installation, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """What names a block-volume series by node and volume, which OCI names by the volume's OCID alone.
+
+    Every cloud node carries its boot volume under `BOOT_VOLUME`, each one the
+    OCID its own instance reports, and every block volume sits under the node
+    its attachment lands on, carrying the OCID that attachment attaches. The
+    installation answers no boot volume at all, so this case gives each
+    instance one of its own. The committed table attaches one volume, so this
+    case adds a row on a node the table leaves bare, and the volumes are then
+    on two nodes: a map that handed every node one node's boot volume, or
+    filed a block volume under a node it is not attached to, fails on the
+    entry that carries it.
+    """
+    bare = [
+        node
+        for node in conventions.CLOUD_NODES
+        if node not in {row.attached_node for row in conventions.NODE_VOLUMES.values()}
+    ]
+    monkeypatch.setattr(
+        conventions,
+        'NODE_VOLUMES',
+        {**conventions.NODE_VOLUMES, 'scratch': conventions.NodeVolumeEntry(node=bare[-1], size_gb=10)},
+    )
+    computed = setup.computed
+
+    def own_boot_volumes(args: pulumi.runtime.MockResourceArgs) -> dict[str, Any]:
+        fields = computed(args)
+        if args.typ == 'oci:Core/instance:Instance':
+            return fields | {'bootVolumeId': f'ocid1.bootvolume.{args.name}'}
+        return fields
+
+    monkeypatch.setattr(setup, 'computed', own_boot_volumes)
+    exported: dict[str, object] = {}
+
+    def record(name: str, value: object) -> None:
+        exported[name] = value
+
+    monkeypatch.setattr(physical.pulumi, 'export', record)
+
+    async with declaring():
+        await physical.main()
+
+    node_of_instance = {instance: node for node, instance in INSTANCE_IDS.items()}
+    expected = {
+        node: {BOOT_VOLUME: f'ocid1.bootvolume.{conventions.CLUSTER_NAME}-{node}'} for node in conventions.CLOUD_NODES
+    }
+    for name in conventions.NODE_VOLUMES:
+        attachment = setup.inputs_of(f'{conventions.CLUSTER_NAME}-{name}-attachment')
+        expected[node_of_instance[attachment['instanceId']]][name] = attachment['volumeId']
+    exports = cast('dict[str, dict[str, pulumi.Output[str]]]', exported[conventions.PHYSICAL_OUTPUTS.volume_ids])
+    assert {
+        node: {volume: await ocid.future() for volume, ocid in volumes.items()} for node, volumes in exports.items()
+    } == expected
 
 
 @on_the_runs_loop

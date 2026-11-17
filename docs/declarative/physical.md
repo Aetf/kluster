@@ -47,7 +47,14 @@ private IPv4s, `vip1_private` and the NLB's two addresses, the
 cluster network's /64 of the site's delegated prefix, which the run
 reads off the gateway, §4, and so
 always present — the worker's own pool in `k8s-base` and a
-`SiteForward` port's Service in `apps` read it; rfc-008 §4.1), both
+`SiteForward` port's Service in `apps` read it; rfc-008 §4.1), each
+cloud node's volumes by name to the OCID OCI generated for each
+(`volume_ids` — the node's boot volume under `boot`, and each row of
+`conventions.NODE_VOLUMES` under its own name on the node it is
+attached to, §1, so no row may be named `boot`; OCI's block-volume
+metrics name a volume by its OCID alone, and the map is what turns
+one back into a node and a name; a reader takes it through
+`kluster.lib.stack_volumes`), both
 of the NLB's public addresses (IPv4 and IPv6 — the cluster anchor in
 `dns` carries an A and an AAAA), the
 dedicated-VIP addresses (reserved public + secondary private), the
