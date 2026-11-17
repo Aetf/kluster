@@ -335,7 +335,12 @@ whole, so the value's size is what every statement against the state
 costs the appliance; why, and the census and prune of the rows a change
 of suffix leaves behind, are
 [physical/state-backend.md](../physical/state-backend.md) §2. An
-operator stack keeps the uncompressed checkpoint its checks read (§3.3).
+operator stack kept in that backend is stored the same way: its run
+starts with none of its caller's `PULUMI_` variables, and is given the
+switches `mise.toml` sets, read from that file. The stack whose
+state is committed is the one stored plain, as `<stack>.json` with no
+`backups/` copy, because git reads that checkpoint: it is tracked, the
+checks before a push read it, and a reviewer reads its diff (§3.3).
 
 ### 3.1 Cross-stack data
 
@@ -534,21 +539,26 @@ through `mise.toml`'s `[env]`, and no `mise` task runs one
     `operator` client bundle's connection string, given to `pulumi` with
     `binary_parameters=yes` added as every run started from a slot is
     ([physical/state-backend.md](../physical/state-backend.md) §7.5),
-    and its three files, or
+    and its three files, plus every switch `mise.toml` sets to a
+    literal value for the runs it starts, read from that file
+    (`stack_environment.state_switches`), so the stack is stored as the
+    stacks CI deploys are (§3); or
     `file://<checkout>/checkpoints?metadata=skip` with
-    `PULUMI_DIY_BACKEND_DISABLE_CHECKPOINT_BACKUPS` set. The process
+    `PULUMI_DIY_BACKEND_DISABLE_CHECKPOINT_BACKUPS` set and no
+    compression, since git reads that checkpoint. The process
     starts with none of the caller's variables that can steer `pulumi`
     or its backend: nothing under `PULUMI_`, libpq's `PG`, or the
     cloud-bucket backends' credentials (`AWS_`, `AZURE_STORAGE_`,
     `GOOGLE_APPLICATION_CREDENTIALS`), but `PULUMI_HOME` and
     `PULUMI_SKIP_UPDATE_CHECK`, which hold nothing of the stack's. So
-    neither the stack passphrase nor the compression switch `mise.toml`
-    exports ever reaches it, a backend a shell exported does not either,
-    and neither does any other switch that would compress the checkpoint
-    or keep copies of it where the checks do not look — including one a
-    later CLI release adds. A `credentials` command's run against an
-    operator stack starts from the same environment, which its runner
-    takes whole rather than laying it over the caller's
+    none of the caller's values for those reaches it: not the stack
+    passphrase, not a backend a shell exported, and not a switch that
+    would compress the checkpoint or keep copies of it — including one a
+    later CLI release adds. How an estate stack is stored is the
+    mapping's to give, and a committed checkpoint is given no such
+    switch. A `credentials` command's run against an operator stack
+    starts from the same environment, which its runner takes whole
+    rather than laying it over the caller's
     (`pulumi_cli.WholeEnvironment`), and for `github` it carries the
     three files of the bundle its URL was read from.
 -   **The stack is the driver's first argument, never a flag it passes

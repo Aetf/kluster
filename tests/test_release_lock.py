@@ -32,9 +32,9 @@ from pathlib import Path
 
 import process_sessions
 import pytest
-from scratch_projects import PASSPHRASE, cli_directories, mise_switches, scrubbed
+from scratch_projects import PASSPHRASE, cli_directories, scrubbed
 
-from kluster.lib import bundle
+from kluster.lib import bundle, stack_environment
 from kluster.lib.state_backend import settings, state
 from kluster.scripts.state_backend import cli, locks
 
@@ -191,7 +191,7 @@ def _leave_lock(box: Box, root: Path) -> Left:
     env = (
         scrubbed(os.environ)
         | cli_directories(root / f'{stack}-cli')
-        | mise_switches()
+        | stack_environment.state_switches()
         | {
             'PULUMI_BACKEND_URL': bundle.pulumi_url(box.url(WRITER)),
             'PULUMI_CONFIG_PASSPHRASE': PASSPHRASE,

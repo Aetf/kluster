@@ -32,6 +32,16 @@ an operator stack (`kluster.scripts.credentials.pulumi_config`), a
 `pulumi_cli.WholeEnvironment` that the runner does not lay over its caller's,
 so a switch `mise.toml` or a shell exports reaches such a run by neither
 path.
+
+**Where a stack keeps its state decides how it is stored.** One in the
+estate's backend is stored the way the stacks CI deploys are: the switches
+`mise.toml` sets for every run it starts (`state_switches`), read from that
+file rather than taken from the caller, so the operator's shell decides
+nothing and the two kinds of stack are stored alike there. One whose state
+is committed is stored plain, as `<stack>.json`, because git reads that file:
+it is tracked, the checks before a push read it, and a reviewer reads its
+diff. It is written with no `backups/` copy either, since such a copy never
+leaves the machine (framework/pulumi.md §3.3).
 """
 
 from __future__ import annotations
@@ -39,6 +49,7 @@ from __future__ import annotations
 import enum
 import getpass
 import sys
+import tomllib
 from collections.abc import Callable, Mapping
 from pathlib import Path
 
@@ -51,6 +62,10 @@ PASSPHRASE_ENV = 'PULUMI_CONFIG_PASSPHRASE'
 #: Turns off the `backups/` copy a `file://` backend writes beside every update
 #: (framework/pulumi.md §3.3); set for a committed stack.
 DISABLE_BACKUPS_ENV = 'PULUMI_DIY_BACKEND_DISABLE_CHECKPOINT_BACKUPS'
+#: The file, at the root of the checkout this package runs from, whose `[env]`
+#: every `mise x` is started under: every CI job's `pulumi` run and a
+#: workstation's.
+MISE_TOML = 'mise.toml'
 
 #: The prefixes of the variables that can steer `pulumi` or its backend.
 #: `PULUMI_` is the CLI's own namespace, where every release can add a switch
@@ -173,20 +188,50 @@ def checkpoint(checkout: Path, stack: str) -> Path | None:
     return found[0] if found else None
 
 
+def state_switches() -> dict[str, str]:
+    """How every run `mise.toml` starts writes a stack's state: the `PULUMI_` variables its `[env]` sets to a literal value.
+
+    Today the checkpoint compressed, as `<stack>.json.zst`, and no `backups/`
+    copy (physical/state-backend.md §2). A literal renders to itself, so these
+    are what every `mise x -- pulumi` is given, a CI job's included; the
+    templates beside them name the backend and the passphrase, which a run
+    against an operator stack takes from this module instead. Read from the
+    `mise.toml` of the checkout this package runs from, which is the one
+    definition: a switch added there, or a value changed, reaches an operator
+    stack in the estate's backend as it reaches the stacks CI deploys.
+    """
+    table: Mapping[str, object] = tomllib.loads((workstation.repo_root() / MISE_TOML).read_text())['env']
+    return {
+        name: value
+        for name, value in table.items()
+        if name.startswith('PULUMI_') and isinstance(value, str) and '{{' not in value and '{%' not in value
+    }
+
+
 def backend_variables(stack: str, *, checkout: Path | None, estate_url: str | None) -> dict[str, str]:
-    """The backend a run against `stack` is pointed at: the committed one, or the estate's.
+    """The backend a run against `stack` is pointed at, and how the run stores the state there.
 
     `estate_url` is the appliance's connection string where the caller has
     one, read from its client bundle, and the run is given it in the form
     meant for `pulumi` alone (`bundle.Purpose.PULUMI`), which a URL read in
-    that form already is; a stack whose state is committed ignores it, and
-    needs `checkout` instead, since its backend is a directory there.
+    that form already is. An operator stack kept there is also given
+    `state_switches`, so it is stored as the stacks CI deploys are; any other
+    stack's run takes those from its caller, which `mise.toml` gave them.
+
+    A stack whose state is committed ignores `estate_url`, and needs
+    `checkout` instead, since its backend is a directory there. Its checkpoint
+    is written plain because git reads it, and with no `backups/` copy, which
+    would never leave the machine.
     """
-    if home(stack) is identity.StateHome.COMMITTED:
+    where = home(stack)
+    if where is identity.StateHome.COMMITTED:
         if checkout is None:
             raise EnvironmentRefused(f'the {stack} stack keeps its state in a checkout, and none was named')
         return {BACKEND_URL_ENV: committed_url(checkout), DISABLE_BACKUPS_ENV: 'true'}
-    return {} if estate_url is None else {BACKEND_URL_ENV: bundle.form(estate_url, bundle.Purpose.PULUMI)}
+    if estate_url is None:
+        return {}
+    backend = {BACKEND_URL_ENV: bundle.form(estate_url, bundle.Purpose.PULUMI)}
+    return backend | state_switches() if where is identity.StateHome.BACKEND else backend
 
 
 #: How the chain's last layer asks: the question in, the answer out, or None
