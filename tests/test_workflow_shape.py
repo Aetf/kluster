@@ -37,7 +37,9 @@ And every `Up` step of the merge chain hands `release-lock` the stack it
 applied, the pid its `pulumi` ran as and a time no later than its start, once
 that `pulumi` has exited by itself, and never after a signal it does not trap
 ended it (framework/ci.md §3.3), held by running the step against stand-ins
-for `mise`, `pulumi` and `uv`.
+for `mise`, `pulumi` and `uv`. And every `Up` step that applies a stack whose
+objects start pods on the control planes runs `pulumi up` at the parallelism
+the workflow's own `env` holds (cluster/nodes.md §1.2), held the same way.
 
 The workflow files are read the way the other seams read them, through the
 loaders in `workflow_files`.
@@ -786,6 +788,10 @@ class PulumiCommand:
         return self._option('--stack', '-s')
 
     @property
+    def parallel(self) -> str | None:
+        return self._option('--parallel', '-p')
+
+    @property
     def refreshes(self) -> bool:
         """`pulumi refresh`, or an update or preview told to refresh first."""
         if self.subcommand == 'refresh':
@@ -1041,8 +1047,15 @@ class UpStepRun:
 
 
 def _run_up_step(
-    tmp_path: Path, step: dict[str, object], *, up_exit: int, signal: str = '', release_exit: int = 0
+    tmp_path: Path,
+    step: dict[str, object],
+    *,
+    up_exit: int,
+    signal: str = '',
+    release_exit: int = 0,
+    workflow_env: Mapping[str, str] | None = None,
 ) -> UpStepRun:
+    """The step run against the stand-ins, with `workflow_env` in its environment as the runner gives a step its `env`."""
     assert 'shell' not in step, 'the Up step names a shell, which this case does not model'
     run = step.get('run')
     assert isinstance(run, str)
@@ -1056,6 +1069,7 @@ def _run_up_step(
     log = tmp_path / 'log'
     log.touch()
     env = {
+        **(workflow_env or {}),
         'PATH': f'{bin_dir}:{os.environ["PATH"]}',
         'HOME': str(tmp_path),
         'RUNNER_TEMP': str(runner_temp),
@@ -1159,6 +1173,56 @@ def test_a_lock_left_uncleared_fails_the_step_by_name(tmp_path: Path, up_exit: i
         assert ran.code == (up_exit or 1), f'{job}: {ran.output}'
         (pulumi,) = ran.pulumi
         assert f'::error::the lock this run took on {pulumi.command.stack} may be left' in ran.output, ran.output
+
+
+#: The variable of `deploy.yml`'s own `env` that holds how many resource
+#: operations an apply of a stack in `CLUSTER_OBJECT_STACKS` runs at once.
+APPLY_PARALLEL = 'CLUSTER_APPLY_PARALLEL'
+#: The stacks whose objects start pods on the control planes, so whose first
+#: `up` writes beside etcd on their boot volumes (cluster/nodes.md §1.2).
+CLUSTER_OBJECT_STACKS = frozenset({conventions.STACK_NAMES.k8s_base, conventions.STACK_NAMES.apps})
+
+
+def _written_env(block: object, where: str) -> dict[str, str]:
+    """The variables of an `env:` block whose values are written out, as the runner hands them to a step: as text."""
+    if block is None:
+        return {}
+    return {name: str(value) for name, value in mapping(block, where).items() if '${{' not in str(value)}
+
+
+def test_every_up_of_a_stack_that_starts_pods_runs_at_the_workflows_apply_parallelism(tmp_path: Path) -> None:
+    """`--parallel` bounds how many workloads start together on a control plane's boot volume (nodes.md §1.2).
+
+    The bound is held in one place, the workflow's own `env`, so each case
+    runs every `Up` step with that variable set to a value the workflow does
+    not hold, layered under the job's and the step's own `env` as the runner
+    layers them: an apply of a stack in `CLUSTER_OBJECT_STACKS` passes that
+    value, and so reads the bound from that place rather than from a copy of
+    it, in its command or in a job's `env`.
+    """
+    where = github_name(DEPLOY)
+    workflow = read_workflow(DEPLOY)
+    held = _written_env(workflow.get('env'), f'{where} env:')
+    assert APPLY_PARALLEL in held, f'{where} holds no {APPLY_PARALLEL} in its own env'
+    stand_in = str(int(held[APPLY_PARALLEL]) + 1)
+    jobs = workflow_jobs(workflow, where)
+    applied: set[str] = set()
+    for job, step in _up_steps().items():
+        env = {
+            **held,
+            APPLY_PARALLEL: stand_in,
+            **_written_env(jobs[job].get('env'), f'{where}: {job} env:'),
+            **_written_env(step.get('env'), f'{where}: {job} Up env:'),
+        }
+        ran = _run_up_step(tmp_path / job, step, up_exit=0, workflow_env=env)
+
+        assert ran.code == 0, f'{job}: {ran.output}'
+        (pulumi,) = ran.pulumi
+        if pulumi.command.stack in CLUSTER_OBJECT_STACKS:
+            applied.add(pulumi.command.stack)
+            assert pulumi.command.parallel == stand_in, f'{job}: {pulumi.command.arguments}'
+    # A read that stopped finding these applies would pass on nothing.
+    assert applied == CLUSTER_OBJECT_STACKS
 
 
 #: The `pulumi` subcommands that run the program, and with it every plugin it

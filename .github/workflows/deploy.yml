@@ -25,6 +25,14 @@ concurrency:
 permissions:
   contents: read
 
+# How many resource operations `pulumi up` runs at once in the stacks whose
+# objects start pods on the control planes, `k8s-base` and `apps`: each of
+# their `Up` steps passes it as `--parallel`. It bounds how many workloads start
+# together beside etcd on a control plane's boot volume, and is chosen in
+# cluster/nodes.md §1.2.
+env:
+  CLUSTER_APPLY_PARALLEL: 4
+
 jobs:
   plan-physical:
     runs-on: ubuntu-26.04
@@ -355,7 +363,7 @@ jobs:
           PULUMI_CONFIG_PASSPHRASE: ${{ secrets.PULUMI_CONFIG_PASSPHRASE }}
         run: |
           status=0
-          (echo "$BASHPID $(date +%s)" > "$RUNNER_TEMP/pulumi.start" && exec mise x -- pulumi up --stack k8s-base --yes --diff) \
+          (echo "$BASHPID $(date +%s)" > "$RUNNER_TEMP/pulumi.start" && exec mise x -- pulumi up --stack k8s-base --yes --diff --parallel "$CLUSTER_APPLY_PARALLEL") \
             || status=$?
           if { [ "$status" -le 128 ] || [ "$status" -eq 255 ]; } \
             && ! mise x -- uv run state-backend release-lock --stack k8s-base --start-file "$RUNNER_TEMP/pulumi.start"; then
@@ -423,7 +431,7 @@ jobs:
           PULUMI_CONFIG_PASSPHRASE: ${{ secrets.PULUMI_CONFIG_PASSPHRASE }}
         run: |
           status=0
-          (echo "$BASHPID $(date +%s)" > "$RUNNER_TEMP/pulumi.start" && exec mise x -- pulumi up --stack apps --yes --diff) \
+          (echo "$BASHPID $(date +%s)" > "$RUNNER_TEMP/pulumi.start" && exec mise x -- pulumi up --stack apps --yes --diff --parallel "$CLUSTER_APPLY_PARALLEL") \
             || status=$?
           if { [ "$status" -le 128 ] || [ "$status" -eq 255 ]; } \
             && ! mise x -- uv run state-backend release-lock --stack apps --start-file "$RUNNER_TEMP/pulumi.start"; then
