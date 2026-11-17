@@ -189,6 +189,9 @@ absence the reader handles itself. For an address that check is
 `kluster.lib.stack_addresses`, which refuses an absent, an unknown or an
 elided output by name, in a preview as in an update, and an address one
 stack reads out of another is read through it.
+Every reader of that kind is built on `kluster.lib.stack_outputs`, the one
+home of what a StackReference hands back in place of a value and of the read
+that checks it.
 
 ## Data: conventions, configuration, censuses
 

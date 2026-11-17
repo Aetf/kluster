@@ -1,11 +1,9 @@
 """Volume OCIDs read across a StackReference: each thing it can hand back in place of the map is refused by name.
 
-What a StackReference reads back in place of an output's value -- `None` for
-an absent output, an unknown in a preview of a producer holding Pulumi's
-unknown sentinel, `{}` for a secret the reader cannot decrypt
-(framework/pulumi.md §1.4, §3.1), and a node without its boot volume for a
-boot volume the producer holds as null, since the SDK drops a null's key --
-and the ordinary mistakes of shape besides: a node or a volume keyed by
+What a StackReference reads back in place of an output's value
+(`kluster.lib.stack_outputs`) -- a node without its boot volume among them,
+for a boot volume the producer holds as null, since the SDK drops a null's
+key -- and the ordinary mistakes of shape besides: a node or a volume keyed by
 something other than a name, a node mapped straight to an OCID, and a volume
 mapped to a string that is not one. A refusal says what it found by its
 fields, names the output and the entries at fault, and never quotes what it
@@ -19,12 +17,9 @@ it.
 
 from __future__ import annotations
 
-import pulumi
 import pytest
-from google.protobuf import struct_pb2
-from mock_monitor import Recorder, declaring, run_with
 from pulumi.output import UNKNOWN
-from pulumi.runtime import rpc
+from referenced_stack import deserialized, read_through
 
 from kluster.conventions.outputs import BOOT_VOLUME
 from kluster.lib.stack_volumes import Held, UnusableVolumeOutput, usable_volume_ids, volume_ids
@@ -104,16 +99,11 @@ def test_a_map_of_volume_ocids_is_handed_on_as_it_is() -> None:
 def test_a_null_boot_volume_reads_back_as_a_node_without_it_and_is_refused() -> None:
     """What a StackReference hands over for a producer whose state holds a node's boot volume as null.
 
-    A reference's outputs are deserialized by the SDK's own
-    `deserialize_properties`, which drops every key whose value is null, at
-    every depth, so the reader never sees the null itself: the node arrives
-    holding only its block volume. The first assertion is the SDK's half: the
-    reason the reader looks for a missing key rather than for a null.
+    The SDK drops the null's key on the way (`kluster.lib.stack_outputs`), so
+    the node arrives holding only its block volume, and the reader looks for
+    the missing key rather than for a null.
     """
-    published = struct_pb2.Struct()
-    published.update({'the_output': {'node-a': {BOOT_VOLUME: None, 'cache': BLOCK}}})
-    read_back = rpc.deserialize_properties(published)['the_output']
-    assert read_back == {'node-a': {'cache': BLOCK}}
+    read_back = deserialized({'the_output': {'node-a': {BOOT_VOLUME: None, 'cache': BLOCK}}})['the_output']
 
     with pytest.raises(UnusableVolumeOutput) as refused:
         _ = usable_volume_ids('the_output', read_back)
@@ -122,22 +112,10 @@ def test_a_null_boot_volume_reads_back_as_a_node_without_it_and_is_refused() -> 
 
 
 async def read(value: object, *, preview: bool) -> object:
-    """`value`, read back as an output of a referenced stack through the module, in a preview or an update.
-
-    The reference's output is answered here rather than by the mock monitor,
-    because the mock drops an output that is `None` or unknown on its way to
-    the reader.
-    """
-    _ = await run_with(Recorder(), stack='reader', preview=preview)
-
-    def read_back(reference: pulumi.StackReference, name: pulumi.Input[str]) -> pulumi.Output[object]:
-        return pulumi.Output.from_input(value)
-
-    with pytest.MonkeyPatch.context() as patch:
-        patch.setattr(pulumi.StackReference, 'get_output', read_back)
-        checked = volume_ids(pulumi.StackReference('producer'), 'the_output')
-        async with declaring():
-            return await checked.future()
+    """`value`, read back as the output `the_output` of a referenced stack through the module."""
+    return await read_through(
+        lambda reference: volume_ids(reference, 'the_output'), {'the_output': value}, preview=preview
+    )
 
 
 @pytest.mark.asyncio
