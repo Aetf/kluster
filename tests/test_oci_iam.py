@@ -1319,6 +1319,33 @@ def test_rotation_retires_through_the_domain_the_row_names(
     assert successor.attribute(SEED_ENTRY, entries.OCI_DOMAIN_ATTRIBUTE) == DOMAIN_URL
 
 
+def test_a_re_mint_retires_its_predecessor_through_the_domain_the_seed_row_names(
+    kit: KdbxStore, root: masters.Credential
+) -> None:
+    tenancy = Tenancy(identity=RefusingIdentity())
+    _ = oci_iam.create_seed(root=root, seeds=kit, seed_entry=SEED_ENTRY, connect=tenancy)
+    drill = 'ocid1.compartment.oc1..drill'
+    previous = _delivered(
+        oci_iam.mint_api_key(
+            kit, consumer=conventions.PHYSICAL, compartment_id=drill, seed_entry=SEED_ENTRY, connect=tenancy
+        )
+    )
+
+    current = _delivered(
+        oci_iam.mint_api_key(
+            kit, consumer=conventions.PHYSICAL, compartment_id=drill, seed_entry=SEED_ENTRY, connect=tenancy
+        )
+    )
+
+    # The sweep signs as the consumer's new key, and that session speaks the
+    # domain the seed's row names: the legacy delete is refused for everyone
+    # here, so a sweep without the domain would leave the predecessor on the
+    # user, and every later rotation would add one more until the quota
+    # refuses the mint.
+    assert previous.fingerprint != current.fingerprint
+    assert tenancy.identity.keys[current.user] == [current.fingerprint]
+
+
 def test_a_row_written_before_the_domain_finds_it_at_rotation(kit: KdbxStore, root: masters.Credential) -> None:
     hidden = HiddenDomains()
     user_id = oci_iam.create_seed(root=root, seeds=kit, seed_entry=SEED_ENTRY, connect=Tenancy(identity=hidden))

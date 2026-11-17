@@ -666,14 +666,16 @@ def test_the_drill_identity_is_drawn_only_where_its_recipient_file_is_in_the_che
 def test_the_drill_credentials_reach_their_mint_with_both_seeds_as_the_admin_token(dispatch: Dispatch) -> None:
     assert cli.main(['derived', 'drill-credentials', 'mint']) == 0
     assert cli.main(['derived', 'drill-credentials', 'mint', '--only', 'b2', '--b2-entry', 'seeds/other']) == 0
+    assert cli.main(['derived', 'drill-credentials', 'mint', '--only', 'oci', '--oci-entry', 'seeds/other']) == 0
 
     # Both halves by default and one on request; each seed from the entry its
     # own flag names; the push authenticates as the token `derived sync` uses,
     # read out of the `github` stack rather than from anything in the shell.
     calls = [(args, kwargs) for name, args, kwargs in dispatch.calls if name == 'derived.drill_credentials']
-    assert [kwargs['only'] for _, kwargs in calls] == [None, 'b2']
-    assert [kwargs['b2_seed_entry'] for _, kwargs in calls] == [entries.SEEDS['b2'].entry, 'seeds/other']
-    assert {kwargs['oci_seed_entry'] for _, kwargs in calls} == {entries.SEEDS['oci'].entry}
+    assert [kwargs['only'] for _, kwargs in calls] == [None, 'b2', 'oci']
+    b2, oci = entries.SEEDS['b2'].entry, entries.SEEDS['oci'].entry
+    assert [kwargs['b2_seed_entry'] for _, kwargs in calls] == [b2, 'seeds/other', b2]
+    assert [kwargs['oci_seed_entry'] for _, kwargs in calls] == [oci, oci, 'seeds/other']
     assert {args[1].token for args, _ in calls} == {'a-token'}
     assert {type(args[0]) for args, _ in calls} == {KdbxStore}
 
@@ -689,6 +691,54 @@ def test_the_freshness_key_reaches_its_mint_with_the_seed_as_the_admin_token(dis
     assert [kwargs['seed_entry'] for _, kwargs in calls] == [entries.SEEDS['b2'].entry, 'seeds/other']
     assert {args[1].token for args, _ in calls} == {'a-token'}
     assert {type(args[0]) for args, _ in calls} == {KdbxStore}
+
+
+#: A kit entry no register row names, so a mint that reads its seed there can
+#: only have been pointed at it.
+ELSEWHERE_ENTRY = 'seeds/elsewhere'
+
+
+def _entry_commands() -> list[list[str]]:
+    """Every `derived` command whose parser takes `--entry`, as the argv that reaches it.
+
+    Read off the command's surface rather than off the function it reaches,
+    so a row leaves the census only when its flag leaves the CLI: a function
+    whose parameter is renamed stays in, and fails its own case by name.
+    """
+    parser = cli.build_parser()
+    return [
+        argv
+        for argv in commands()
+        if argv[:1] == ['derived'] and not parser.parse_known_args([*argv, '--entry', ELSEWHERE_ENTRY])[1]
+    ]
+
+
+ENTRY_COMMANDS = _entry_commands()
+# A census that collects nothing reports green, so its emptiness is refused
+# here, before collection, where no case could catch it.
+assert ENTRY_COMMANDS, 'no `derived` command takes `--entry`, so the census of its forwarding collects nothing'
+
+
+@pytest.mark.parametrize('argv', ENTRY_COMMANDS, ids=lambda argv: argv[1])
+def test_a_mint_command_hands_its_function_the_entry_it_names(argv: list[str], dispatch: Dispatch) -> None:
+    target = expected(argv)
+    assert target is not None
+
+    assert cli.main([*argv, '--entry', ELSEWHERE_ENTRY]) == 0
+
+    # `--entry` is how a mint is pointed at a seed kept anywhere but its
+    # register row's entry. A dispatch that dropped it would hand the row's
+    # function nothing, and the default it falls back to is that entry: the
+    # mint would read the installation's own seed instead of the one named,
+    # and mint and retire in that seed's account. Defaults applied, so a
+    # dropped flag reads as the entry the function is left holding. The
+    # function is a stub here: that it opens the entry it is handed is the
+    # function's own claim, not the dispatch's.
+    (bound,) = [
+        dispatch.signatures[name].bind(*args, **kwargs) for name, args, kwargs in dispatch.calls if name == target
+    ]
+    bound.apply_defaults()
+    assert bound.arguments.get('seed_entry') == ELSEWHERE_ENTRY
 
 
 def test_a_half_the_drill_does_not_have_is_refused_by_the_parser(capsys: pytest.CaptureFixture[str]) -> None:
