@@ -13,7 +13,6 @@ bundle is `test_conventions`', beside the other generated SDKs.
 
 from __future__ import annotations
 
-import fnmatch
 import json
 import logging
 import os
@@ -30,7 +29,7 @@ import process_sessions
 import pytest
 import requests
 import ruamel.yaml.main as ruamel_yaml_main
-from renovate_text import as_python_spells_it, as_renovate_spells_it, group, listed, package_rules, scalar
+from renovate_text import as_python_spells_it, as_renovate_spells_it, group, listed, package_rules, reaches, scalar
 from tqdm import tqdm
 
 from kluster.lib import source_files
@@ -1287,29 +1286,6 @@ def test_fetch_helm_refuses_an_archive_that_is_not_the_pinned_one(
     assert list(tmp_path.iterdir()) == []
 
 
-def _reaches_cilium(rule: str) -> bool:
-    """Whether `rule` could match the Cilium chart pin, by every matcher it sets.
-
-    A matcher this scan cannot read is taken as matching, so a rule is only
-    cleared by one that provably misses.
-    """
-    presents = {
-        'matchDepNames': ('cilium',),
-        'matchPackageNames': ('quay.io/cilium/charts/cilium',),
-        'matchFileNames': ('Pulumi.yaml',),
-        'matchDatasources': ('docker',),
-        'matchManagers': ('custom.regex', 'regex'),
-    }
-    for key in re.findall(r'^\s*((?:match|exclude)\w+):', rule, re.MULTILINE):
-        patterns = listed(rule, key)
-        values = presents.get(key)
-        if values is None or not patterns:
-            continue
-        if not any(fnmatch.fnmatch(value, pattern) for pattern in patterns for value in values):
-            return False
-    return True
-
-
 def test_the_cilium_chart_travels_alone() -> None:
     """A Cilium bump replaces every node's datapath, so it is a pull request of its own, as Talos's is.
 
@@ -1332,10 +1308,17 @@ def test_the_cilium_chart_travels_alone() -> None:
     assert listed(rule, 'matchFileNames') == ['Pulumi.yaml']
     assert own_slug(rules, cilium) not in sibling_slugs(rules, cilium)
     assert in_cluster < cilium
+    presents = {
+        'matchDepNames': ('cilium',),
+        'matchPackageNames': ('quay.io/cilium/charts/cilium',),
+        'matchFileNames': ('Pulumi.yaml',),
+        'matchDatasources': ('docker',),
+        'matchManagers': ('custom.regex', 'regex'),
+    }
     for later in rules[cilium + 1 :]:
         if scalar(later, 'groupName') is None and scalar(later, 'groupSlug') is None:
             continue
-        assert not _reaches_cilium(later), f'a later rule regroups the Cilium chart:\n{later}'
+        assert not reaches(later, presents), f'a later rule regroups the Cilium chart:\n{later}'
 
 
 def test_no_pin_carries_an_annotation_comment() -> None:

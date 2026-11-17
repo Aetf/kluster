@@ -70,15 +70,24 @@ def package_rules(config: str) -> list[str]:
     return [_uncommented(block[found.start() : found.end()]) for found in re.finditer(r'\{[^{}]*\}', _structure(block))]
 
 
+#: What a list holds between its brackets besides commas and whitespace: a
+#: string, a `//` comment, which takes the rest of its line and gives none of
+#: it back, so a `],` it ends with never closes the list, or a `/* … */` comment.
+_LISTED = re.compile(rf'{_STRING.pattern}|//[^\n]*+|/\*(?:[^*]|\*(?!/))*\*/')
+
+
 def listed(rule: str, key: str) -> list[str]:
     """The strings a rule lists under `key`, each as the file writes it between its quotes.
 
-    An entry is read in either quote, so a list mixing the two is read whole.
-    The list is empty without the key, or when an entry holds a `]`, which
-    this scan does not read.
+    An entry is read in either quote, so a list mixing the two is read whole,
+    and a `]` inside an entry is part of it; a comment among the entries is
+    passed over. The list is empty without the key, and when the scan cannot
+    read it whole: an entry that is no string on one line -- a number, a
+    name, a string continued onto the next line -- or a closing `]` not
+    followed by a comma and the end of its line.
     """
-    found = re.search(rf'^\s*{key}: \[([^\]]*)\],$', rule, re.MULTILINE)
-    return [entry[1:-1] for entry in _STRING.findall(found[1])] if found else []
+    found = re.search(rf'^\s*{key}: \[((?:[\s,]|{_LISTED.pattern})*)\],$', rule, re.MULTILINE)
+    return [entry[1:-1] for entry in _LISTED.findall(found[1]) if not entry.startswith('/')] if found else []
 
 
 def scalar(rule: str, key: str) -> str | None:
