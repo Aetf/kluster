@@ -29,7 +29,8 @@ reads it before it can run -- the state-backend appliance's OCI key included,
 which the `state-backend` stack builds its OCI provider from. A credential the
 cluster consumes is sealed to the cluster instead and its ciphertext written
 in the clear into the configuration of the stack that declares it
-(`sealing.py`): the DNS-01 token cert-manager answers challenges with, and
+(`sealing.py`): the DNS-01 token cert-manager answers challenges with, the
+OCI key the block-volume metrics pull reads with (`oci_metrics`), and
 the backup bucket's writer keys, which `physical` mints and this side seals
 out of that stack's state into `apps`, or into `k8s-base` for a namespace
 the platform holds (`b2_writer_seal`); and Authelia's
@@ -243,6 +244,7 @@ DNS01_ROW = 'cloudflare-dns01'
 B2_WRITER_ROW = 'b2-writer'
 OCI_PHYSICAL_ROW = 'oci-physical'
 OCI_STATE_BACKEND_ROW = f'oci-{conventions.STATE_BACKEND}'
+OCI_METRICS_ROW = 'oci-metrics'
 B2_MANAGEMENT_ROW = 'b2-management'
 DRILL_AGE_IDENTITY_ROW = f'{conventions.DRILL}-age-identity'
 DRILL_CREDENTIALS_ROW = f'{conventions.DRILL}-credentials'
@@ -806,6 +808,55 @@ def oci_state_backend(
 
     delivered, _ = pending.deliver(
         lambda key: _push_api_key(stack, key, holds=f'a key for {oci_iam.Identity.name_for(conventions.STATE_BACKEND)}')
+    )
+    return delivered.user
+
+
+def _reader_data(key: oci_iam.ApiKey) -> dict[str, str]:
+    """Which part of a minted key each data key of the sealed reader carries.
+
+    A data key the census row does not name is refused by the seal itself
+    (`sealing.Sealer.seal`), so the two cannot drift apart unseen.
+    """
+    return {'user': key.user, 'fingerprint': key.fingerprint, 'key_content': key.private_key}
+
+
+def oci_metrics(
+    kit: KdbxStore,
+    *,
+    sealer: sealing.Sealer,
+    seed_entry: str = OCI_SEED_ENTRY,
+    connect: oci_iam.Connect = oci_iam.identity_client,
+) -> str:
+    """Mint the metrics reader's OCI user and key, and seal them for the pull. Returns the user OCID.
+
+    The key reads the block-volume metrics of `physical`'s compartment and
+    nothing else (`oci_iam.mint_metrics_reader`). Its consumer is in the
+    cluster, so the delivery is a seal, as `cloudflare_dns01`'s is: the user,
+    the fingerprint and the key sealed strict for the Secret the census row
+    names (`conventions.sealed.OCI_METRICS`), in the monitoring namespace,
+    and the ciphertext written in the clear into `k8s-base`'s configuration.
+    The tenancy, the region and the compartment are not sealed with it:
+    each is a constant `conventions` names.
+
+    **Every refusal the run can know before minting fires before anything is
+    minted**: a declaring stack that does not exist or that this machine has
+    no backend to reach, and -- by the time this is called -- a cluster whose
+    certificate could not be fetched, which is what building `sealer` does;
+    then a compartment `conventions` records no OCID for, and a seed in an
+    account other than the one it records. A live key on the reader's user is
+    retired only once the ciphertext is written, so a run that fails leaves
+    the working key alone.
+    """
+    value = conventions.sealed.OCI_METRICS
+    _ = sealer.stack(value)
+    pending = oci_iam.mint_metrics_reader(kit, seed_entry=seed_entry, connect=connect)
+
+    delivered, _ = pending.deliver(lambda key: sealer.deliver(value, _reader_data(key)))
+    log.info(
+        'the block-volume metrics pull reads as %s from the apply that hands it the sealed %s',
+        delivered.user,
+        value.name,
     )
     return delivered.user
 

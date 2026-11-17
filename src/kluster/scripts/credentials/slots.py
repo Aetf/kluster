@@ -1028,6 +1028,13 @@ ROWS: dict[str, Row] = {
             PulumiConfig(STATE_BACKEND_STACK, derived.OCI_PRIVATE_KEY_KEY),
         ),
     ),
+    derived.OCI_METRICS_ROW: Row(
+        register='OCI API key (metrics reader)',
+        # Sealed in the run that mints it, into the stack that declares the
+        # pull: the one consumer is in the cluster.
+        source=Minted(f'credentials derived {derived.OCI_METRICS_ROW} mint'),
+        targets=(SealedSecret(conventions.sealed.OCI_METRICS),),
+    ),
     derived.ZONES_ROW: Row(
         register='Cloudflare token (zones)',
         source=Minted(f'credentials derived {derived.ZONES_ROW} mint'),

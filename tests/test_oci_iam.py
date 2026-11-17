@@ -799,6 +799,107 @@ def test_a_drill_mint_confines_the_key_to_the_recorded_drill_compartment_and_cre
     assert _policy(tenancy, name) == [f'Allow group {name} to manage all-resources in compartment id {recorded.ocid}']
 
 
+def test_the_metrics_reader_reads_one_namespace_of_the_compartment_it_is_given_and_nothing_else() -> None:
+    identity = oci_iam.Identity.metrics_reader(compartment_id='ocid1.compartment.oc1..given', namespace='a_namespace')
+
+    # One statement, at `read` -- the lowest verb that covers summarizing a
+    # series -- on metrics alone, narrowed to the one namespace and confined
+    # to the one compartment: no resource it can see, change or create, and
+    # nothing in the tenancy.
+    assert identity.statements == (
+        f'Allow group {identity.name} to read metrics in compartment id ocid1.compartment.oc1..given '
+        "where target.metrics.namespace='a_namespace'",
+    )
+
+
+@pytest.fixture
+def physical_recorded(tenancy: Tenancy, monkeypatch: pytest.MonkeyPatch) -> conventions.Compartment:
+    """`physical`'s compartment, recorded in `conventions` and held by the tenancy, as it is once that stack is minted."""
+    recorded = with_recorded_compartment(monkeypatch, conventions.PHYSICAL, 'ocid1.compartment.oc1..physical')
+    tenancy.identity.hold(recorded)
+    return recorded
+
+
+def test_the_metrics_reader_reads_the_block_volumes_of_physicals_compartment(
+    seeded: KdbxStore, tenancy: Tenancy, physical_recorded: conventions.Compartment
+) -> None:
+    minted = _delivered(oci_iam.mint_metrics_reader(seeded, seed_entry=SEED_ENTRY, connect=tenancy))
+
+    # The volumes are `physical`'s, so its compartment is the reader's scope,
+    # and the reader creates none: the tenancy holds the one it held before.
+    name = oci_iam.Identity.name_for(oci_iam.METRICS_READER)
+    assert _policy(tenancy, name) == [
+        f'Allow group {name} to read metrics in compartment id {physical_recorded.ocid} '
+        f"where target.metrics.namespace='{oci_iam.BLOCKSTORE_METRICS}'"
+    ]
+    assert list(tenancy.identity.compartments) == [physical_recorded.ocid]
+    assert minted.user == _user(tenancy, name)
+    assert tenancy.identity.keys[minted.user] == [minted.fingerprint]
+
+
+def _user(tenancy: Tenancy, name: str) -> str:
+    (user_id,) = [user.id for user in tenancy.identity.users.values() if user.name == name]
+    return user_id
+
+
+def test_the_metrics_reader_is_refused_before_physicals_compartment_is_recorded(
+    seeded: KdbxStore, tenancy: Tenancy, unrecorded: None
+) -> None:
+    users = dict(tenancy.identity.users)
+
+    # The compartment is `physical`'s to create, so the refusal names the
+    # command that creates it, and the reader leaves nothing behind -- no
+    # compartment, and no principal confined to one that does not exist.
+    with pytest.raises(conventions.CompartmentMissing) as refused:
+        _ = oci_iam.mint_metrics_reader(seeded, seed_entry=SEED_ENTRY, connect=tenancy)
+    assert named_leaves(str(refused.value)) == [('derived', derived.OCI_PHYSICAL_ROW, 'mint')]
+    assert tenancy.identity.compartments == {}
+    assert tenancy.identity.users == users
+
+
+def test_the_metrics_reader_is_refused_when_physicals_recorded_compartment_is_gone(
+    seeded: KdbxStore, tenancy: Tenancy, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _ = with_recorded_compartment(monkeypatch, conventions.PHYSICAL, 'ocid1.compartment.oc1..gone')
+    users = dict(tenancy.identity.users)
+
+    with pytest.raises(oci_iam.CompartmentGone):
+        _ = oci_iam.mint_metrics_reader(seeded, seed_entry=SEED_ENTRY, connect=tenancy)
+    assert tenancy.identity.compartments == {}
+    assert tenancy.identity.users == users
+
+
+def test_the_metrics_reader_from_a_seed_of_another_tenancy_creates_nothing(
+    seeded: KdbxStore, tenancy: Tenancy, monkeypatch: pytest.MonkeyPatch, physical_recorded: conventions.Compartment
+) -> None:
+    with_tenancy_ocid(monkeypatch, ELSEWHERE)
+    users = dict(tenancy.identity.users)
+    policies = sorted(policy.name for policy in tenancy.identity.policies.values())
+
+    with pytest.raises(oci_iam.TenancyMismatch) as refused:
+        _ = oci_iam.mint_metrics_reader(seeded, seed_entry=SEED_ENTRY, connect=tenancy)
+    assert (refused.value.signs_for, refused.value.recorded) == (TENANCY, ELSEWHERE)
+    assert tenancy.identity.users == users
+    assert sorted(policy.name for policy in tenancy.identity.policies.values()) == policies
+
+
+def test_rotating_the_metrics_reader_retires_its_own_key_and_no_other_principals(
+    seeded: KdbxStore, tenancy: Tenancy, physical_recorded: conventions.Compartment
+) -> None:
+    physical = _delivered(
+        oci_iam.mint_api_key(seeded, consumer=conventions.PHYSICAL, seed_entry=SEED_ENTRY, connect=tenancy)
+    )
+    first = _delivered(oci_iam.mint_metrics_reader(seeded, seed_entry=SEED_ENTRY, connect=tenancy))
+
+    second = _delivered(oci_iam.mint_metrics_reader(seeded, seed_entry=SEED_ENTRY, connect=tenancy))
+
+    # A principal of its own: the re-run converges the same user and leaves it
+    # one key, while the stack whose compartment it reads keeps its own.
+    assert second.user == first.user != physical.user
+    assert tenancy.identity.keys[second.user] == [second.fingerprint]
+    assert tenancy.identity.keys[physical.user] == [physical.fingerprint]
+
+
 def test_a_compartment_named_on_the_command_line_is_taken_as_given(seeded: KdbxStore, tenancy: Tenancy) -> None:
     drill = 'ocid1.compartment.oc1..drill'
 

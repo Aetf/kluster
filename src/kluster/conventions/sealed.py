@@ -52,6 +52,7 @@ __all__ = (
     'CONFIG_KEY',
     'DKIM_EXIM',
     'DNS01_TOKEN',
+    'OCI_METRICS',
     'VALUES',
     'WRITER_KEYS',
     'WRITER_KEY_STACKS',
@@ -155,6 +156,20 @@ ALERT_WEBHOOK = SealedValue(
     stack=STACK_NAMES.k8s_base,
 )
 
+#: The OCI API key the block-volume metrics pull signs with: its own user's,
+#: whose one statement reads the block-volume metrics of `physical`'s
+#: compartment (credentials.md §3). Its data keys are what the OCI SDK's
+#: configuration calls the three parts a key carries -- the user it signs as,
+#: the key's fingerprint and the PEM -- so a reader hands them over by name;
+#: the tenancy and the region are constants of `conventions`, and travel with
+#: no credential.
+OCI_METRICS = SealedValue(
+    name='oci-metrics',
+    namespace=MONITORING_NAMESPACE,
+    keys=('fingerprint', 'key_content', 'user'),
+    stack=STACK_NAMES.k8s_base,
+)
+
 #: The mail relay's DKIM private key, which exim signs every mail zone's `k8s`
 #: selector with and reads as `tls.key`, the key the legacy cluster's
 #: cert-manager Secret holds it under. It is carried from the legacy cluster
@@ -229,6 +244,14 @@ WRITER_KEYS: tuple[SealedValue, ...] = tuple(
 VALUES: Mapping[str, SealedValue] = MappingProxyType(
     {
         value.name: value
-        for value in (DNS01_TOKEN, BGP_PASSWORD, ALERT_WEBHOOK, DKIM_EXIM, AUTHELIA_STORAGE_KEY, *WRITER_KEYS)
+        for value in (
+            DNS01_TOKEN,
+            BGP_PASSWORD,
+            ALERT_WEBHOOK,
+            OCI_METRICS,
+            DKIM_EXIM,
+            AUTHELIA_STORAGE_KEY,
+            *WRITER_KEYS,
+        )
     }
 )

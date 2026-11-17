@@ -1689,6 +1689,26 @@ def test_the_listing_prints_every_row_with_its_source_and_its_slots() -> None:
             assert f'{channel}: {why}' in printed
 
 
+def test_every_row_the_tree_mints_is_listed_as_minted_by_that_command() -> None:
+    """`derived ls` answers for every mint an operator can run, naming the mint as the row's producer.
+
+    The other direction from `test_a_command_a_row_names_is_one_the_tree_carries`:
+    a subcommand added with no map row is a credential the listing never
+    mentions, and §3's register row -- which the map is held to -- would have
+    no machine-readable half.
+    """
+    mints = [
+        path[1] for path in map(tuple, cli_commands()) if len(path) >= 3 and path[0] == 'derived' and 'mint' in path
+    ]
+    assert mints, 'nothing to check: the tree offers no mint'
+
+    for row in mints:
+        assert row in slots.ROWS, f'`credentials derived {row} mint` is in the tree, and `derived ls` has no such row'
+        source = slots.ROWS[row].source
+        assert isinstance(source, slots.Minted), row
+        assert f'credentials derived {row} mint' in source.describe(), row
+
+
 def test_a_stack_encrypted_apart_has_a_row_that_generates_its_passphrase() -> None:
     """The census in `pulumi_config` cannot name a stack the register does not serve.
 
