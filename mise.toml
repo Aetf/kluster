@@ -327,11 +327,14 @@ PGSSLKEY = """
 # compression off its first bytes. Literal values rather than templates,
 # since no slot decides them, so a caller's own setting is overridden too.
 #
-# No operator stack's run is given either: the `operator-stack` driver and a
-# `credentials` command's run against an operator stack both start `pulumi`
-# with none of their caller's `PULUMI_` variables (`stack_environment.process`),
-# so a committed checkpoint stays the `<stack>.json` its checks read
-# (framework/pulumi.md §3.3).
+# An operator stack's run starts with none of its caller's `PULUMI_`
+# variables (`stack_environment.process`), so the `operator-stack` driver and
+# a `credentials` command take these from this table instead: every `PULUMI_`
+# variable it sets to a literal value (`stack_environment.state_switches`).
+# An operator stack kept in the estate's backend is given them, and is written
+# as the stacks CI deploys are. The stack whose state is committed is given
+# neither, and its checkpoint stays the plain `<stack>.json` that git and its
+# checks read (framework/pulumi.md §3.3).
 PULUMI_DIY_BACKEND_ZSTD = "true"
 PULUMI_DIY_BACKEND_DISABLE_CHECKPOINT_BACKUPS = "true"
 # The stack the prose checker's language server runs its threads on. Its

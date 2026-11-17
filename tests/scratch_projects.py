@@ -17,9 +17,10 @@ pytest's clean-up of the case's directory takes them, a run killed
 mid-download included. Every suite that runs the pinned CLI takes both from
 there.
 
-**A run that stands for one of CI's carries `mise.toml`'s switches**
-(`mise_switches`): the `PULUMI_` variables its `[env]` sets to a literal,
-which every `mise x -- pulumi` is given.
+**A run that stands for one of CI's carries `mise.toml`'s switches**, the
+`PULUMI_` variables its `[env]` sets to a literal, which every
+`mise x -- pulumi` is given. The case reads them where the program does,
+`kluster.lib.stack_environment.state_switches`.
 
 **A stand-in the engine imports is a provider plugin of the case's own**
 (`providers`), a Python program in a directory under the case's, run on the
@@ -32,7 +33,6 @@ from __future__ import annotations
 import os
 import site
 import sys
-import tomllib
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -102,26 +102,6 @@ class ScratchProject:
 #: leave behind in `TMPDIR`: a plugin's tarball, an unpacked package, a
 #: provider's kubeconfig, a project environment's lock.
 LEFT_BEHIND = ('pulumi-', 'kubeconfig', 'uv-')
-
-
-#: The checkout's `mise.toml`, whose `[env]` every `mise x -- pulumi` run is
-#: started with -- every CI job's and a workstation's (tests/test_mise_env.py).
-MISE_TOML = Path(__file__).resolve().parents[1] / 'mise.toml'
-
-
-def mise_switches() -> dict[str, str]:
-    """The `PULUMI_` variables `mise.toml`'s `[env]` sets to a literal value, as it sets them.
-
-    A literal renders to itself, so these are what a `pulumi` run under
-    `mise x` is given; the templates beside them are the backend and its
-    passphrase, which a case names for itself.
-    """
-    table: dict[str, str] = tomllib.loads(MISE_TOML.read_text())['env']
-    return {
-        name: value
-        for name, value in table.items()
-        if name.startswith('PULUMI_') and '{{' not in value and '{%' not in value
-    }
 
 
 def cli_directories(root: Path, *, home: Path | None = None) -> dict[str, str]:

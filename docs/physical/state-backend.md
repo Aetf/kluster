@@ -497,22 +497,25 @@ oraclecloud`, x86_64), the qcow2 imports as a custom image
     at the plain size until then, and `github`'s plain checkpoint is
     under 1.48 MB. The settings refuse a cap below one, which the pooler
     would read as no cap at all.
--   **The stacks CI deploys keep their checkpoints compressed, and no
+-   **Every stack kept here stores its checkpoint compressed, and no
     `backups/` copy.** `mise.toml` sets `PULUMI_DIY_BACKEND_ZSTD` and
     `PULUMI_DIY_BACKEND_DISABLE_CHECKPOINT_BACKUPS` for every `pulumi`
     run it starts, and every CI job runs `pulumi` through it, as a
-    workstation does. So a stack's checkpoint is the key
-    `<stack>.json.zst`, written by every save with the `.bak` beside it,
-    and a writing operation adds one copy of it under `history/`, which
-    no switch turns off, and none under `backups/`. A reader needs
-    neither variable: the backend finds a stack's checkpoint under
-    whichever suffix it has and reads the compression off its first
-    bytes. A writer without `PULUMI_DIY_BACKEND_ZSTD` writes the
-    checkpoint back as `<stack>.json`, which every reader reads as well.
-    No operator stack's run is given either: the `operator-stack`
-    driver and a `credentials` command's run against an operator stack
-    both start `pulumi` without their caller's `PULUMI_` variables, so
-    `github`'s checkpoint here stays `github.json`
+    workstation does. An operator stack kept here, `github` today, is
+    given the same switches, read from the same `mise.toml` rather than
+    from its caller: the `operator-stack` driver and a `credentials`
+    command's run against an operator stack both start `pulumi` without
+    their caller's `PULUMI_` variables, and add these back
+    (`stack_environment.backend_variables`). So a stack's checkpoint is
+    the key `<stack>.json.zst`, written by every save with the `.bak`
+    beside it, and a writing operation adds one copy of it under
+    `history/`, which no switch turns off, and none under `backups/`. A
+    reader needs neither variable: the backend finds a stack's
+    checkpoint under whichever suffix it has and reads the compression
+    off its first bytes. A writer without `PULUMI_DIY_BACKEND_ZSTD`
+    writes the checkpoint back as `<stack>.json`, which every reader
+    reads as well. The stack whose state is committed is the one stored
+    plain, as `<stack>.json` under `checkpoints/`, because git reads it
     (framework/pulumi.md §3.3).
 -   **A change of format leaves copies nothing replaces.** A save that
     writes the checkpoint under a new suffix copies the old checkpoint to

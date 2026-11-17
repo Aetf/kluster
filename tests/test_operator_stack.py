@@ -97,11 +97,14 @@ AMBIENT = {
     'PGSSLKEY': '/ambient/client.key',
     'PATH': os.environ.get('PATH', ''),
 }
-#: What the driver sets on a run itself, beside what the caller may keep.
+#: What the driver sets on a run itself, beside what the caller may keep: an
+#: estate stack is also stored as `mise.toml` has every writer of a stack CI
+#: deploys store one (`stack_environment.state_switches`).
 SET_BY_THE_DRIVER = {
     'PULUMI_CONFIG_PASSPHRASE',
     'PULUMI_BACKEND_URL',
     'PULUMI_DIY_BACKEND_DISABLE_CHECKPOINT_BACKUPS',
+    *stack_environment.state_switches(),
     driver.STREAMING_JSON_ENV,
     bundle.CA_ENV,
     bundle.CERT_ENV,

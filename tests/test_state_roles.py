@@ -73,14 +73,15 @@ from urllib import parse as urllib_parse
 import process_sessions
 import pytest
 from root_credentials import fake
-from scratch_projects import cli_directories, mise_switches
+from scratch_projects import cli_directories
 
 from kluster.conventions import identity
-from kluster.lib import bundle, pulumi_cli, stack_environment
+from kluster.lib import bundle, pulumi_cli, stack_environment, workstation
 from kluster.lib.bundle import CA_ENV, CERT_ENV, KEY_ENV, ssl_env
 from kluster.lib.state_backend import render, settings, state
 from kluster.providers import postgres_tls
 from kluster.scripts.credentials import pki, pulumi_config
+from kluster.scripts.operator_stack import driver
 from kluster.scripts.state_backend import census, cli, config, probe
 
 ADDRESS = '127.0.0.1'
@@ -1400,7 +1401,7 @@ def test_a_run_under_mises_environment_keeps_a_compressed_checkpoint_and_no_back
     """
     for variable in STATE_SWITCHES_ENV:
         monkeypatch.delenv(variable, raising=False)
-    switches = mise_switches()
+    switches = stack_environment.state_switches()
     box = _appliance(start, ignition)
     ci = _bundle(roots, box, clients, settings.CI_ROLE)
     project = tmp_path / 'project'
@@ -1443,9 +1444,8 @@ def test_a_switch_to_compression_leaves_plain_copies_and_the_prune_takes_those_a
     own `.bak`, `<stack>.json.bak` and the
     uncompressed `history/` and `backups/` copies its first update wrote,
     and nothing the backend does replaces or removes any of them. A
-    neighbour written uncompressed throughout -- an operator stack's
-    state, which the driver writes so -- keeps the same kinds of copy, in
-    the format its checkpoint is still stored in. The census without
+    neighbour written uncompressed throughout keeps the same kinds of copy,
+    in the format its checkpoint is still stored in. The census without
     `--yes` deletes nothing; with it, exactly the first stack's
     uncompressed copies go, and `pulumi stack history` prints what it
     printed before. Asked by name, the statement deletes no checkpoint, no
@@ -1462,7 +1462,7 @@ def test_a_switch_to_compression_leaves_plain_copies_and_the_prune_takes_those_a
         _up(operator, project, stack)
     plain = _keys(box)
     for _ in range(2):
-        _up(operator, project, STACK, mise_switches())
+        _up(operator, project, STACK, stack_environment.state_switches())
     layout = f'{settings.DATABASE}/.pulumi/'
     stacks = f'{layout}stacks/{project.name}/'
     before = _keys(box)
@@ -1521,7 +1521,7 @@ def test_a_copy_its_stack_is_written_in_again_is_kept_by_the_delete_listed_befor
     project = tmp_path / 'project'
     _stack_init(operator, project, STACK)
     _up(operator, project, STACK)
-    _up(operator, project, STACK, mise_switches())
+    _up(operator, project, STACK, stack_environment.state_switches())
     listing = [row.key for row in state.superseded(state.census(operator), settings.DATABASE)]
     assert listing
 
@@ -1566,6 +1566,64 @@ def test_a_credentials_run_against_an_operator_stack_in_the_box_reaches_it_with_
     assert not slot.exists()
     slot.ensure()
     assert slot.exists()
+
+
+def test_an_operator_stack_in_the_box_is_stored_as_the_stacks_ci_deploys_are(
+    start: Start,
+    ignition: dict[str, Any],
+    roots: config.Roots,
+    clients: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`github`, created by a `credentials` run and updated by the `operator-stack` driver, whatever its caller exports.
+
+    The `credentials` run's `stack init` stores the checkpoint compressed, as
+    `<stack>.json.zst`, and the update the driver starts adds an update record
+    under `history/` and no copy under `backups/`: what `mise.toml` makes of
+    every writer of a stack CI deploys. The caller exports the opposite of
+    each switch, and neither run keeps it, so what the stack is given is the
+    module's to give.
+    """
+    stack = identity.STACK_NAMES.github
+    assert stack_environment.home(stack) is identity.StateHome.BACKEND
+    for variable in STATE_SWITCHES_ENV:
+        monkeypatch.delenv(variable, raising=False)
+    for variable in ('PULUMI_DIY_BACKEND_ZSTD', 'PULUMI_DIY_BACKEND_DISABLE_CHECKPOINT_BACKUPS'):
+        monkeypatch.setenv(variable, 'false')
+    box = _appliance(start, ignition)
+    checkout = tmp_path / 'kluster'
+    checkout.mkdir()
+    _ = (checkout / 'Pulumi.yaml').write_text(f'name: {checkout.name}\nruntime: yaml\n')
+    # The checkout's slots, as `state-backend bundle operator` and the
+    # operator passphrase's `recover` fill them, the URL naming the box's port.
+    slots = workstation.slots(checkout)
+    operator = _bundle(roots, box, clients, settings.OPERATOR_ROLE)
+    shutil.copytree(clients / settings.OPERATOR_ROLE, slots / stack_environment.BUNDLE_SLOT)
+    _ = (slots / stack_environment.BUNDLE_SLOT / bundle.URL_FILE).write_text(operator.url + '\n')
+    _ = (slots / stack_environment.OPERATOR_PASSPHRASE_SLOT).write_text(fake(pulumi_config.PASSPHRASE_ENV) + '\n')
+    environment = pulumi_config.BackendEnvironment(
+        operator=lambda: fake(pulumi_config.PASSPHRASE_ENV),
+        url=operator.url,
+        bundle_dir=slots / stack_environment.BUNDLE_SLOT,
+    )
+    stored = f'{settings.DATABASE}/{BACKEND_STACKS}{checkout.name}/'
+
+    pulumi_config.Stack(name=stack, directory=checkout, environment=environment).ensure()
+
+    checkpoints = {key for key in _keys(box) if state.kind(key, settings.DATABASE) is state.Kind.CHECKPOINT}
+    assert checkpoints == {f'{stored}{stack}.json.zst'}
+
+    run = driver.Run.open(stack, checkout)
+    _ = pulumi_config.run_pulumi(
+        ['up', '--yes', '--skip-preview', '--stack', stack], cwd=checkout, env=run.env, stdin=None
+    )
+
+    keys = _keys(box)
+    checkpoints = {key for key in keys if state.kind(key, settings.DATABASE) is state.Kind.CHECKPOINT}
+    assert checkpoints == {f'{stored}{stack}.json.zst'}
+    assert [key for key in keys if state.kind(key, settings.DATABASE) is state.Kind.HISTORY]
+    assert [key for key in keys if state.kind(key, settings.DATABASE) is state.Kind.BACKUPS] == []
 
 
 @pytest.mark.parametrize('role', CLIENT_ROLES)

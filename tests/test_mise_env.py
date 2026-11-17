@@ -70,20 +70,6 @@ EXPORTED = {
 SLOT_URL = 'postgres://operator@192.0.2.10:5432/pulumi_state'
 
 
-def _state_switches() -> dict[str, str]:
-    """The `PULUMI_` variables `mise.toml`'s `[env]` sets to a literal value: how every run it starts writes a stack's state.
-
-    Which switch is which, and what the pinned `pulumi` writes under them, is
-    `tests/test_state_roles.py`'s, which reads the same entries.
-    """
-    table: dict[str, str] = tomllib.loads(MISE_TOML.read_text())['env']
-    return {
-        name: value
-        for name, value in table.items()
-        if name.startswith('PULUMI_') and '{{' not in value and '{%' not in value
-    }
-
-
 def _checkout(checkout: Path) -> Path:
     """`checkout`, created, holding `mise.toml`'s `[env]` table: its templates and its literal values."""
     config = tomllib.loads(MISE_TOML.read_text())
@@ -258,14 +244,18 @@ def test_every_run_mise_starts_writes_the_state_compressed_and_without_backups(t
     # holds the slots it materializes, a workstation's, and a `jj` workspace
     # under one, where two `mise.toml` render -- the process is given every
     # switch `mise.toml` sets, as it sets it, and a caller's own setting of
-    # one does not turn it off.
+    # one does not turn it off. What mise renders is held to what the Python
+    # side reads out of the same `[env]` (`stack_environment.state_switches`),
+    # which is what an operator stack in the estate's backend is given, so
+    # the two kinds of writer agree. Which switch is which, and what the
+    # pinned `pulumi` writes under them, is `tests/test_state_roles.py`'s.
     primary = _checkout(tmp_path / 'kluster')
     cwd = primary
     if layout != 'checkout without slots':
         _ = _fill_slots(primary)
     if layout == 'workspace under .claude':
         cwd = _checkout(primary / '.claude' / 'workspaces' / 'w')
-    expected = _state_switches()
+    expected = stack_environment.state_switches()
     assert expected, 'mise.toml sets no literal PULUMI_ variable, so nothing would be checked'
     caller = dict.fromkeys(expected, 'false')
 
