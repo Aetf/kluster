@@ -63,9 +63,14 @@ jobs:
         timeout-minutes: 5
         run: mise x uv -- uv run ruff check .
 
+      # basedpyright through `typecheck`, which runs it under a heap a full
+      # run of the tree does not exhaust and exits 5 when a run empties its
+      # type cache anyway: an emptied cache drops the report of a
+      # `# pyright: ignore` that suppresses nothing in every file parsed
+      # again after it (`kluster.scripts.typecheck`).
       - name: Types
         timeout-minutes: 10
-        run: mise x uv -- uv run basedpyright
+        run: mise x uv -- uv run typecheck
 
       # The source layout is a set of layers, and nothing else notices when
       # one of them reaches upwards: a wrong import type-checks and passes

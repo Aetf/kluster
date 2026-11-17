@@ -75,6 +75,7 @@ credentials = 'kluster.scripts.credentials.cli:main'
 state-backend = 'kluster.scripts.state_backend.cli:main'
 operator-stack = 'kluster.scripts.operator_stack.cli:main'
 stack-plan = 'kluster.scripts.stack_plan.cli:main'
+typecheck = 'kluster.scripts.typecheck:main'
 
 [dependency-groups]
 dev = [
@@ -287,14 +288,12 @@ reportUnusedCallResult = false
 
 # A line-level exception stays honest only while it suppresses something:
 # a `# pyright: ignore[<rule>]` naming a rule that hits nothing on its line
-# is an error, as RUF100 makes a `noqa` that suppresses nothing. The report
-# is partial: basedpyright drops it, and only it, for a file it re-parses
-# after emptying its type cache near the Node heap limit, which a run under
-# `--verbose` logs as `Emptying type cache to avoid heap overflow`. A file
-# checked before the last emptying is re-parsed when a later file imports
-# it, and the emptying happens while `src` is checked, so an unused ignore
-# under `tests` is reported and one under `src` almost never is. Making the
-# report whole is Aetf/kluster-ops#826.
+# is an error, as RUF100 makes a `noqa` that suppresses nothing. basedpyright
+# drops this report, and only it, for a file it parses again after emptying
+# its type cache near the Node heap limit, so the report is whole for a run
+# that empties nothing. The gate's run is one: its type check, `typecheck`,
+# runs basedpyright under a heap with which a full run of this tree empties
+# nothing, and fails any run that does (`kluster.scripts.typecheck`).
 reportUnnecessaryTypeIgnoreComment = "error"
 
 ##
