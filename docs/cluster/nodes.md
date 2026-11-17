@@ -612,15 +612,46 @@ derived from a host inventory, not guessed.
 
 **Hardware**: i9-12900KS (16C/24T) with its UHD 770 iGPU, an Arc A380
 discrete GPU (added 2026-10-18), **32 GB RAM** (the binding
-constraint), 465 GB NVMe (system + legacy k3s data; ~85 GB free while the
-legacy cluster still runs), ZFS pool `nas` (80 TB raw, 57 TB used) on the
-JBOD — this host *is* the NAS.
+constraint), and storage on two NVMe disks and the JBOD — this host
+*is* the NAS.
+
+**Storage** (read 2026-11-17), with what each is for in the new
+cluster:
+
+-   **The root btrfs**, on the main partition of a Samsung 980
+    (500 GB, DRAM-less), beside the EFI partition and swap; 216 GiB
+    free. It holds the host's own system, Home Assistant's disk image,
+    and the **worker's disk**: a sparse raw file in the `nodatacow`
+    subvolume `/var/lib/libvirt/kluster` (physical/homelab-host.md §1).
+    For the new cluster it is the worker's whole local disk: every
+    partition Talos makes is in that file, EPHEMERAL carrying the
+    worker's `local-path` claims and container images, and the file
+    grows into this filesystem's free space (§4.2). Every other
+    writer on the host shares the disk (builds, image pulls, block-group
+    relocation), and a DRAM-less drive's write latency climbs under that
+    load, so the legacy cluster's latency-sensitive state sits on
+    `fast` instead.
+-   **`fast`**, a single-disk ZFS pool on an 860 GiB partition of a
+    Samsung PM983 (960 GB, with DRAM and power-loss protection). The
+    rest of that disk is a cache device (L2ARC) for `nas`. The pool's
+    datasets `fast/etcd`, the legacy server's embedded etcd, and
+    `fast/storage`, the legacy cluster's `local-path` volumes, serve the
+    legacy cluster. **The new cluster has nothing on it.** A legacy
+    claim bound for the worker is copied from it onto `nas` at its move
+    (migration.md §3), and what the pool is for once Wave F has removed
+    those two is not decided (Aetf/kluster-ops#803).
+-   **`nas`**, a ZFS pool of eight HDDs in the JBOD, in two raidz2
+    groups of four disks, one of 16 TB disks and one of 14 TB. For the
+    new cluster it is the bulk tier: media, photo originals and the
+    other fixed assets, served to the worker over NFS on the host leg
+    (physical/homelab-host.md §5), and never a database
+    (declarative/workloads.md §2).
 
 **Stays on the host** (never enters the cluster):
 
 | What | Why it stays | RAM budget |
 | --- | --- | --- |
-| ZFS + NFS + Samba serving | the NAS role; the cluster consumes it | ZFS ARC (in-RAM read cache) ≥4 GiB (currently squeezed to ~2) |
+| ZFS + NFS + Samba serving | the NAS role; the cluster consumes it | ZFS ARC (in-RAM read cache) ≥4 GiB (read 2026-11-17: at its floor, about 1 GiB) |
 | HAOS libvirt VM (2 vCPU / 4 GiB, PCIe USB3 + Wi-Fi/BT passthrough) | home automation must survive cluster outages; architecture.md §6.8 | 4 GiB |
 | AdGuard alice/bob run as nspawn containers **on the UDM**, not here; the host's adguardhome-sync **retires** once Pulumi dual-writes both instances (declarative/dns.md §3) | LAN DNS lives on the gateway and must survive cluster (and this host's) outages | ~0 |
 | The *legacy* Pulumi state-backend Postgres (podman) — serves kluster-code until decommission; the new cluster's backend lives on an OCI micro (framework/ci.md §1) | a state backend cannot live inside the cluster it manages | ~0.2 GiB (until Wave F) |
@@ -693,11 +724,13 @@ migration.md Wave C the window).
     LAN, at the static address **`192.168.70.10`** — the network shape
     and the reasons for it are physical/homelab-host.md §2.
 -   **Disk**: target 100+ GB on NVMe (concrete shape — raw sparse file
-    on a nodatacow subvolume, virtio-blk — physical/homelab-host.md §1), but only ~85 GB is free
-    while both clusters coexist. The migration plan must interleave
-    reclamation (legacy images, local-path PVCs, prometheus's 30 GB)
-    with VM growth — start at ~60 GB, grow after cutover. (No etcd on
-    this VM; its disk constraint is ordinary workload I/O.)
+    on a nodatacow subvolume, virtio-blk — physical/homelab-host.md §1),
+    from the ~60 GB it starts at; the free space it grows into is §4.1's
+    reading. migration.md §0 rule 4 interleaves that growth with
+    reclaiming legacy data, on a premise that reading does not bear out:
+    the legacy `local-path` volumes are on `fast`, not on this disk.
+    Whether the rule stands awaits a ruling (Aetf/kluster-ops#804). (No
+    etcd on this VM; its disk constraint is ordinary workload I/O.)
 -   **Optional second worker VM** (2–4 vCPU / 8 GB): **not in the
     initial build**, deferred with criteria in §4.3. RAM is why it
     waits: the end-state ceiling above is already the whole of what
