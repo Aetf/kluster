@@ -258,37 +258,55 @@ from an HTTP repository, which offers nothing to check a download against
     (`cp2`):
 
         urns() { physical stack --show-urns | sed -n 's|.*URN: \(urn:.*\)$|\1|p' | grep -E "$1"; }
-        T=($(urns '\$kluster:cloud:CloudNodes\$oci:(Core/instance:Instance::kluster-<node>|NetworkLoadBalancer/backend:Backend::kluster-nlb-.*-<node>)$'))
-        printf '%s\n' "${T[@]}"                  # the instance, and one backend per forwarded port and family
-        physical refresh --run-program "${T[@]/#/--target=}"
+        S=$(urns '\$oci:NetworkLoadBalancer/backendSet:BackendSet::' | wc -l); echo "$S"
+        T=($(urns '::kluster:cloud:CloudNodes\$oci:(Core/instance:Instance::kluster-<node>|NetworkLoadBalancer/backend:Backend::kluster-nlb-.*-<node>)$'))
+        printf '%s\n' "${T[@]}"                  # the instance, and its backend in each backend set
+        [ "$S" -gt 0 ] && [ ${#T[@]} -eq $((1 + S)) ] && physical refresh --run-program "${T[@]/#/--target=}"
         physical preview --diff
         physical up
 
     A URN carries `$`, which the array keeps as it is, since the output
-    of a command substitution is not expanded again.
+    of a command substitution is not expanded again. A component of
+    `physical` hangs off the stack itself, so its type opens the URN's
+    type chain, after the project's `::`, and a resource it holds
+    follows it after a `$`:
+    `urn:pulumi:physical::kluster-py::kluster:cloud:CloudNodes$oci:Core/instance:Instance::kluster-cp1`.
+    A pattern anchors on the component as `::kluster:cloud:CloudNodes`,
+    never as `$kluster:cloud:CloudNodes`, which no URN of the stack
+    contains.
+
+    **A list goes to a command only at the count the step knows.** `S`
+    counts the balancer's backend sets, one per forwarded port and
+    family, and every node has one backend in each. The `[ … ] &&` runs
+    the refresh only when the list holds that count, because a list
+    that matched nothing leaves the refresh with no `--target`, and a
+    `refresh`, `destroy` or `preview` with no target acts on the whole
+    stack.
 
     On the dedicated VIP's node the targets add the
     `oci:Core/privateIp:PrivateIp` and the `oci:Core/publicIp:PublicIp`
-    under `$kluster:cloud:CloudNodes$`, and the
+    under `kluster:cloud:CloudNodes`, and the
     `oci:Core/volumeAttachment:VolumeAttachment` under
-    `$kluster:cloud:NodeVolume$`. The refresh drops what reads back
+    `kluster:cloud:NodeVolume`: the pattern gains
+    `|::kluster:cloud:CloudNodes\$oci:Core/(privateIp:PrivateIp|publicIp:PublicIp)::|::kluster:cloud:NodeVolume\$oci:Core/volumeAttachment:VolumeAttachment::`
+    and the count is `$((4 + S))`. The refresh drops what reads back
     without an ID: the instance and, on that node, the secondary private
     IP and the attachment, the attachment whatever its `protect`
     (declarative/physical.md §6, whose fallback applies if it stays).
     The reserved IP stays, its `private_ip_id` reading empty. The
-    preview plans the creates of what the refresh dropped, the backends'
-    creates or updates, the reserved IP's one update on that node, and
-    changes to the day-1 resources that name the node's address. Any
-    other plan, the volume itself above all, is a diff nobody expected,
-    and nothing is applied until it has been read. The `up` ends on the
-    Talos health gate, every node named, and §2.5's sync follows it, as
-    it follows every `physical` `up`.
+    backends stay as well, because OCI keeps the backends of a
+    terminated instance. The preview plans the creates of what the
+    refresh dropped, the replacement of each of the node's backends, the
+    reserved IP's one update on that node, and changes to the day-1
+    resources that name the node's address. Any other plan, the volume
+    itself above all, is a diff nobody expected, and nothing is applied
+    until it has been read. The `up` ends on the Talos health gate,
+    every node named, and §2.5's sync follows it, as it follows every
+    `physical` `up`.
 
-    Two facts of this path are not established, and the first recovery
-    reads them: whether OCI removes a backend whose instance is
-    terminated, so that the refresh drops it, or leaves it for the `up`
-    to update; and whether the health gate, which the refresh's run of
-    the program reaches, waits on the lost node and fails the refresh.
+    One fact of this path is not established, and the first recovery
+    reads it: whether the health gate, which the refresh's run of the
+    program reaches, waits on the lost node and fails the refresh.
 
     **A deliberate replacement.** The node is up and is to be replaced:
     drain it, then, with `U` its instance's URN,
@@ -410,46 +428,51 @@ from an HTTP repository, which offers nothing to check a download against
     form is the CLI's documented one,
     [`oci compute compute-capacity-report create`](https://docs.oracle.com/en-us/iaas/tools/oci-cli/latest/oci_cli_docs/cmdref/compute/compute-capacity-report/create.html),
     with `--shape-availabilities` given inline as JSON, whose keys are
-    those of the API's `CreateCapacityReportShapeAvailabilityDetails`:
+    those of the API's `CreateCapacityReportShapeAvailabilityDetails`.
+    With `<tenancy OCID>` from the console's *Tenancy details* page, and
+    `<ocpus>` and `<GB>` the size the instances are to have —
+    `conventions.NODE_OCPUS` and `NODE_MEMORY_GB` as the change declares
+    them — the reading of every availability domain of the region is
+    one loop:
 
-        oci iam availability-domain list --compartment-id <tenancy OCID>
-        oci compute compute-capacity-report create --compartment-id <tenancy OCID> --availability-domain <AD> \
-          --shape-availabilities '[{"instanceShape":"VM.Standard.A1.Flex","instanceShapeConfig":{"ocpus":<ocpus>,"memoryInGBs":<GB>}}]'
+        T='<tenancy OCID>'
+        for AD in $(oci iam availability-domain list --compartment-id "$T" --query "join(' ', data[].name)" --raw-output); do
+          echo "$AD $(oci compute compute-capacity-report create --compartment-id "$T" --availability-domain "$AD" \
+            --shape-availabilities '[{"instanceShape":"VM.Standard.A1.Flex","instanceShapeConfig":{"ocpus":<ocpus>,"memoryInGBs":<GB>}}]' \
+            --query 'data."shape-availabilities"[0].join(`" "`, ["availability-status", to_string("available-count")])' --raw-output)"
+        done
 
-    The first command lists the region's availability domains by `name`;
-    the tenancy's OCID is on the console's *Tenancy details* page. The
-    second runs once per AD the reading covers, with `<ocpus>` and `<GB>`
-    the size the instances are to have: `conventions.NODE_OCPUS` and
-    `NODE_MEMORY_GB` as the change declares them. Its one entry under
-    `shape-availabilities` carries an `availability-status` of
+    It prints a line per AD: its name, the `availability-status` of the
+    report's one entry under `shape-availabilities`, which is
     `AVAILABLE`, `OUT_OF_HOST_CAPACITY` or `HARDWARE_NOT_SUPPORTED`, and
-    an `available-count`, the number of instances of that configuration
+    its `available-count`, the number of instances of that configuration
     the AD can create
     ([`CapacityReportShapeAvailability`](https://docs.oracle.com/en-us/iaas/tools/python/latest/api/core/models/oci.core.models.CapacityReportShapeAvailability.html)).
-    An AD passes at `AVAILABLE` with a count of at least 1. A resize
-    reads each node's AD before that node's `up`, and a node whose AD
-    does not pass waits.
+    For `VM.Standard.A1.Flex` the count comes back `null` beside
+    `AVAILABLE`. **An AD passes at `AVAILABLE`, with a count of at least
+    1 where a count is given.** A resize reads each node's AD before
+    that node's `up`, and a node whose AD does not pass waits.
 
     From the root of the checkout that holds `.credentials/`, with
-    `physical` the function of declarative/physical.md §6, and `tal` and
-    `CPS` the setup of physical/gateway-cutover.md §8.1 (`tal -n "$CPS"`
-    asks every control plane):
+    `physical` the function of declarative/physical.md §6, `urns` the
+    helper of §3.1, and `tal` and `CPS` the setup of
+    physical/gateway-cutover.md §8.1 (`tal -n "$CPS"` asks every control
+    plane):
 
-        urn() { physical stack --show-urns | sed -n "s|.*URN: \(.*[\$]$1::$2\)\$|\1|p"; }
-        Q=$(urn oci:Limits/quota:Quota kluster-quota) && B=$(urn oci:Budget/budget:Budget kluster-budget) && echo "$Q" "$B"
-        physical preview --diff --target "$Q" --target "$B"    # two updates: the quota's statements, the budget's amount
-        physical up --target "$Q" --target "$B"
+        Q=($(urns '\$oci:(Limits/quota:Quota::kluster-quota|Budget/budget:Budget::kluster-budget)$')); printf '%s\n' "${Q[@]}"
+        [ ${#Q[@]} -eq 2 ] && physical preview --diff "${Q[@]/#/--target=}"    # two updates: the quota's statements, the budget's amount
+        physical up "${Q[@]/#/--target=}"
 
     Then, for each node in turn, with `<node>` its name (`cp1`), never
     two at once:
 
-        U=$(urn oci:Core/instance:Instance kluster-<node>) && echo "$U"
-        physical preview --diff --target "$U"    # one update: shapeConfig
-        physical up --target "$U"
+        U=($(urns '\$oci:Core/instance:Instance::kluster-<node>$')); printf '%s\n' "${U[@]}"
+        [ ${#U[@]} -eq 1 ] && physical preview --diff "${U[@]/#/--target=}"    # one update: shapeConfig
+        physical up "${U[@]/#/--target=}"
         tal -n "$CPS" etcd status                # every member listed, none reporting an error
 
-    Each `echo` prints one URN; an empty line is a name that matched
-    nothing, and the command after it would target nothing. Any plan
+    Each list is printed, and its first command runs only at the count
+    the step knows, as in §3.1. Any plan
     other than the one in the comment is a diff nobody expected, and
     nothing is applied until it has been read. The next node waits
     until `etcd status` answers from every control plane, lists every
@@ -461,7 +484,7 @@ from an HTTP repository, which offers nothing to check a download against
     the rollout where it is, with no other node touched, since quorum
     holds at two. The instance's state and shape, in the console, say
     which case it is. `RUNNING` at its old shape is a failed update:
-    nothing changed, `physical refresh --run-program --target "$U"`
+    nothing changed, `physical refresh --run-program "${U[@]/#/--target=}"`
     brings state back to the cloud, and the node is retried later.
     Stopped, it is started from the console. One that does not boot at
     its new shape goes back to its original one, Oracle's instruction
@@ -561,18 +584,32 @@ from an HTTP repository, which offers nothing to check a download against
     that records the run. Steps 1 to 5 run in one sitting.
 
         D=.claude/drill; mkdir -p "$D"
-        SCOPE='\$kluster:cloud:CloudNodes\$|\$kluster:cloud:NodeVolume\$oci:Core/volumeAttachment:|\$kluster:talos:TalosDay1\$|\$kluster:homelab:HomelabHost\$libvirt:index/(domain|volume):|FactoryImage::kluster-worker-nocloud$|pulumi:pulumi:Stack::'
+        SCOPE='::kluster:cloud:CloudNodes(\$|::)|::kluster:cloud:NodeVolume(::|\$oci:Core/volumeAttachment:)|::kluster:talos:TalosDay1(\$|::)|::kluster:homelab:HomelabHost(::|\$libvirt:index/(domain|volume):)|FactoryImage::kluster-worker-nocloud$|pulumi:pulumi:Stack::'
         protected() { physical stack export | jq -r '.deployment.resources[] | select(.protect) | .urn' | sort; }
-        outside() { physical stack export --show-secrets | jq -c --arg s "$SCOPE" '[.deployment.resources[] | select(.urn | test($s) | not) | {urn, inputs, outputs, protect}] | sort_by(.urn)' | sha256sum; }
-        anchors() { for n in kluster.hosts vip1.hosts; do for t in A AAAA; do echo "$n $t $(dig +short @1.1.1.1 "$n.unlimited-code.works" "$t" | sort | tr '\n' ' ')"; done; done; }
+        outside() { physical stack export --show-secrets | jq -c --arg s "$SCOPE" '[.deployment.resources[] | select((.urn | test($s)) or (.urn | endswith("::pulumi:providers:pulumi-python::default")) | not) | {urn, inputs, outputs, protect}] | sort_by(.urn)' | sha256sum; }
+        anchors() { for n in kluster.hosts vip1.hosts; do for t in A AAAA; do echo "$n $t $(mise x -- doggo --short "$n.unlimited-code.works" "$t" @1.1.1.1 | sort | tr '\n' ' ')"; done; done; }
         sealing() { mise x -- kubeseal --kubeconfig ~/.kube/kluster --fetch-cert \
             $(mise x uv -- uv run python -c 'from kluster import conventions as c; print("--controller-namespace", c.SEALING_NAMESPACE, "--controller-name", c.SEALING_CONTROLLER)'); }
 
     `SCOPE` matches every resource the run changes, and nothing else:
     the cloud nodes with what hangs off them, the attachment, the
     day-1 chain, the worker's domain and volumes with its image, and the
-    stack's outputs. `outside` prints a digest of every other resource's
-    entry, secrets included, so that only the digest leaves the pipe.
+    stack's outputs. It matches the components `CloudNodes`,
+    `NodeVolume`, `TalosDay1` and `HomelabHost` themselves as well,
+    because a component's registered outputs change with what it holds.
+    Each component sits at the top of the stack, so the pattern anchors
+    on `::` before its type (§3.1).
+
+    `outside` prints a digest of every other resource's entry, secrets
+    included, so that only the digest leaves the pipe. It leaves out the
+    stack's default `pulumi-python` provider too, the provider of every
+    dynamic resource: its entry records the stack's whole configuration,
+    and any `physical up` rewrites it to the configuration of the commit
+    it runs, so a configuration merged since the last `up` changes the
+    entry with nothing outside the scope changed, and no preview shows
+    the difference. Taking the baseline after an `up` instead would make
+    step 0 a write; the configuration is the commit's, and a review of
+    the commit is where it is read.
 
     **Step 0: the baseline, and the go.**
 
@@ -594,22 +631,31 @@ from an HTTP repository, which offers nothing to check a download against
 
     **Step 1: the day-1 chain leaves state.**
 
-        T=($(urns '\$kluster:talos:TalosDay1\$talos:')); printf '%s\n' "${T[@]}"
-        physical destroy "${T[@]/#/--target=}"
+        T=($(urns '::kluster:talos:TalosDay1\$talos:')); printf '%s\n' "${T[@]}"
+        [ ${#T[@]} -eq 6 ] && physical destroy --run-program "${T[@]/#/--target=}"
 
-    The list and the destroy's preview hold one `ConfigurationApply`
-    per node, the `Bootstrap` and the `Kubeconfig`, and nothing else.
-    Their delete resets nothing, because `on_destroy` keeps `reset` off
-    (`components/talos`): every node still answers
-    `tal -n <node> version`.
+    The list and the destroy's preview hold six resources, one
+    `ConfigurationApply` per node, the `Bootstrap` and the
+    `Kubeconfig`, and nothing else. Their delete resets nothing, because
+    `on_destroy` keeps `reset` off (`components/talos`): every node
+    still answers `tal -n <node> version`.
+
+    The destroy takes `--run-program`, although the worker's disk is
+    not among its targets. The disk's `before_delete` hook (§3.2) is
+    recorded in state with it, and the engine runs no delete hook
+    without the program (declarative/physical.md §3), so a `destroy`
+    without `--run-program` refuses while any resource in the stack's
+    state records a delete hook, whichever resources it targets.
 
     **Step 2:** `physical state unprotect '<worker disk URN>'`, the
     disk of §3.2.
 
     **Step 3: the loss.** For a deliberate run, in the console, in
     `physical`'s compartment, terminate `kluster-cp1`, `kluster-cp2`
-    and `kluster-cp3`, each with its boot volume deleted. The loss is
-    taken in the console rather than by a `destroy`, because a destroy
+    and `kluster-cp3`, each with its boot volume deleted; from Oracle's
+    CLI, `oci compute instance terminate` with `--preserve-boot-volume
+    false` takes the boot volume with the instance. The loss is taken
+    outside the program rather than by a `destroy`, because a destroy
     of `cp1` reaches the reserved IP (§3.1). Readings: the three
     instances are `TERMINATED` and no boot volume of theirs is left;
     `kluster-vip1` is listed as reserved and unassigned;
@@ -618,31 +664,40 @@ from an HTTP repository, which offers nothing to check a download against
 
     **Step 4: the state records the loss.**
 
-        T=($(urns '\$kluster:cloud:CloudNodes\$oci:(Core/instance:Instance|Core/privateIp:PrivateIp|Core/publicIp:PublicIp|NetworkLoadBalancer/backend:Backend)::|\$kluster:cloud:NodeVolume\$oci:Core/volumeAttachment:VolumeAttachment::'))
+        S=$(urns '\$oci:NetworkLoadBalancer/backendSet:BackendSet::' | wc -l); echo "$S"
+        T=($(urns '::kluster:cloud:CloudNodes\$oci:(Core/instance:Instance|Core/privateIp:PrivateIp|Core/publicIp:PublicIp|NetworkLoadBalancer/backend:Backend)::|::kluster:cloud:NodeVolume\$oci:Core/volumeAttachment:VolumeAttachment::'))
         printf '%s\n' "${T[@]}"
-        physical refresh --run-program "${T[@]/#/--target=}"
+        [ "$S" -gt 0 ] && [ ${#T[@]} -eq $((6 + 3 * S)) ] && physical refresh --run-program "${T[@]/#/--target=}"
 
-    Readings: the instances, the secondary private IP and the
-    attachment leave state; the reserved IP stays, its `private_ip_id`
-    reading empty; a backend may leave state or stay, and step 5 handles
-    either; an attachment that stays takes the fallback of
-    declarative/physical.md §6.
+    The list holds the three instances, the secondary private IP, the
+    reserved IP, the attachment, and each node's backend in each of the
+    `S` backend sets (§3.1). Readings: the instances, the secondary
+    private IP and the attachment leave state; the reserved IP stays,
+    its `private_ip_id` reading empty; the backends stay, because OCI
+    keeps the backends of a terminated instance, and step 5 replaces
+    them; an attachment that stays takes the fallback of
+    declarative/physical.md §6. The refresh runs the program to its end
+    with no control plane in existence.
 
     **Step 5: the rebuild.**
 
-        WI=$(urns '::kluster-worker-nocloud$'); WD=$(urns '::kluster-worker-disk$'); echo "$WI" "$WD"
-        physical preview --diff --replace "$WI" --replace "$WD"
-        physical preview --json --replace "$WI" --replace "$WD" | jq -r '.steps[] | select(.op != "same") | .urn' | grep -Ev "$SCOPE"
-        physical up --replace "$WI" --replace "$WD"
+        W=($(urns '::kluster-worker-nocloud$|::kluster-worker-disk$')); printf '%s\n' "${W[@]}"
+        [ ${#W[@]} -eq 2 ] && physical preview --diff "${W[@]/#/--replace=}"
+        physical preview --json "${W[@]/#/--replace=}" | jq -r '.steps[] | select(.op != "same") | .urn' | grep -Ev "$SCOPE"
+        physical up "${W[@]/#/--replace=}"
 
-    The scope check, the second preview through `grep`, prints nothing.
-    The plan holds creates of the three instances, the secondary
-    private IP, the backends, the attachment and the day-1 chain; one
-    update, the reserved IP's `private_ip_id`; replacements of the
-    worker's image, disk, seed and domain; and the stack's outputs.
-    Anything else, the node volume above all, is a diff nobody
+    `W` holds the worker's `FactoryImage` and its disk. The scope check,
+    the second preview through `grep`, prints nothing. The plan holds
+    eleven creates: the three instances, the secondary private IP, the
+    attachment and the six resources of the day-1 chain; one update,
+    the reserved IP's `private_ip_id`; replacements of every backend
+    and of the worker's image, disk, seed and domain; and the stack's
+    outputs. Anything else, the node volume above all, is a diff nobody
     expected, and nothing is applied until it has been read. The `up`
-    ends on the Talos health gate, every node named.
+    ends on the Talos health gate, every node named. The new disk is
+    created at its declared size, which leaves the worker short of disk
+    once step 8 has deployed both stacks onto it: an open gap,
+    Aetf/kluster-ops#787.
 
     **Step 6: `physical` converges.** A further `physical up` reports
     no changes, and `physical preview --refresh --run-program
@@ -670,7 +725,8 @@ from an HTTP repository, which offers nothing to check a download against
 
     Each refresh runs under the committed kubeconfig copy, which
     authenticates, the PKI and the endpoint being kept, and drops every
-    object the rebuilt cluster does not hold. **Without those two
+    object the rebuilt cluster does not hold, a custom resource whose
+    definition went with etcd among them, with no error. **Without those two
     refreshes a plain `up` of either stack creates nothing**: a plain
     `up` diffs the program against the state, which still holds every
     object the old cluster held, and the chain's `up` takes no
@@ -722,20 +778,11 @@ from an HTTP repository, which offers nothing to check a download against
     left half-built. Any other failure is fixed forward in a pull
     request (physical/bring-up.md §3).
 
-    **Not established, and read by the first run:**
+    **Not established, and read by the first run that meets it:**
 
     -   whether a targeted `destroy` of an instance refuses while a
         protected dependent stays outside the targets, or drops it; the
         console termination of step 3 stands either way;
-    -   whether OCI removes a backend whose instance is terminated, for
-        which step 4 is written both ways;
-    -   whether step 4's `refresh --run-program`, run while no control
-        plane exists, skips the invoke of the health gate, which depends on
-        the day-1 resources that step 1 removed;
-    -   whether the refresh of step 8 drops a custom resource whose
-        definition the cluster no longer has, or errors on it; if it
-        errors, the resources it names leave state with
-        `pulumi state delete`;
     -   whether the console deletes boot volumes by default at a
         termination, which step 3 reads either way;
     -   after an actual loss, whether step 1's deletes go through with
