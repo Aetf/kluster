@@ -169,4 +169,21 @@ RULE_GROUPS: Sequence[RuleGroup] = (
         ),
     ),
     RuleGroup('backup-freshness', tuple(_freshness(retention) for retention in backup.RETENTION_CLASSES)),
+    RuleGroup(
+        'metrics-store',
+        (
+            # A row a store accepted over the wire and did not keep, one
+            # series per reason (`lib/timeserieslimits/timeseries_limits.go`
+            # L52-63 and `app/vmstorage/main.go` L489-497 at VictoriaMetrics
+            # v1.150.0). A series is lost whole, and nothing else reports it:
+            # vmagent counts the row as delivered.
+            AlertRule(
+                alert='MetricsDropped',
+                expr='increase(vm_rows_ignored_total[30m]) > 0',
+                tier=Tier.ACTIONABLE,
+                summary='The metrics store is ignoring rows it is sent',
+                playbook=Playbook('docs/operations.md', '6.1'),
+            ),
+        ),
+    ),
 )

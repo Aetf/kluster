@@ -42,7 +42,7 @@ __all__ = ('API_VERSION', 'OperatorKind', 'operator_object', 'type_token')
 API_VERSION = 'operator.victoriametrics.com/v1beta1'
 
 #: The kinds the monitoring component declares.
-type OperatorKind = Literal['VMAlertmanagerConfig', 'VMPodScrape', 'VMRule']
+type OperatorKind = Literal['VMAlertmanagerConfig', 'VMNodeScrape', 'VMPodScrape', 'VMRule']
 
 
 def type_token(kind: OperatorKind) -> str:
