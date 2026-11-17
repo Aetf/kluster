@@ -513,6 +513,30 @@ state and its records; the gateway's UniFi firewall groups and
 device directories; and the site's BGP configuration on the controller,
 whose create adopts an identical object and writes nothing.
 
+**A resource whose replacement is an operation with an order of its own,
+which the engine cannot hold, is protected**, so a replacement the
+provider plans is refused instead of run. Neither order the engine knows
+fits such a replacement: the operation's own steps — a reading, a drain,
+a wait on another system — sit between the delete and the create, and
+either order run straight through skips them. The engine refuses a
+replacement of a resource protected in the program and in the state
+whether the provider plans it, `--replace` or `--target-replace` asks
+for it, or an earlier run left it pending replacement, and in an
+update it stops at that step, before it creates the replacement. An
+update in place
+passes, and a refresh drops the resource when it reads back without an
+ID, whatever its `protect`. So the operation runs outside the program
+and the resource leaves the state through that refresh; a runbook that
+replaces it through the program instead lifts the state's protection
+first, by name, with `state unprotect`. The refusal needs the state's
+protection as well as the program's, and a change to `protect` alone
+plans nothing: a preview reads the resource as unchanged, and the next
+`up` that runs writes the flag into the state. What the option makes
+the engine do is held by an engine case
+(`tests/test_node_loss_engine.py`), not by a test that restates the
+option. Today: a cloud node's instance, whose replacement replaces an
+etcd member ([declarative/physical.md](../declarative/physical.md) §1).
+
 **An object a resource stands for on the machine running the program is
 placed under the project and stack it belongs to.** The identity a
 create records tells its delete whether the object is still that

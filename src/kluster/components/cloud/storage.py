@@ -5,9 +5,13 @@ any backup regime — its redundancy is elsewhere, in the network the dataset
 came from (docs/cluster/storage.md §3.3). That combination is exactly what
 `protect=True` is for. The attachment carries the
 same protection, because detaching a disk and deleting it cost the same thing:
-a node replacement that silently proposes a detach is the failure this catches,
-and node replacement is already an explicit, reviewed procedure (physical.md
-§2).
+a run that proposes a detach is refused. A replacement of the node would be
+one, and the node's instance is protected for its own reasons, so the engine
+refuses that replacement before it reaches the attachment
+(declarative/physical.md §1). A node that is lost leaves the attachment by
+another way: the refresh of its recovery drops an attachment that reads back
+gone, whatever its `protect`, and the `up` after it attaches the volume to the
+re-created node (operations.md §3.1).
 
 A volume is not given a device path. OCI's consistent-device-path feature is
 gated on the image advertising support for it, which a Talos custom image does

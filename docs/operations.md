@@ -202,7 +202,10 @@ from an HTTP repository, which offers nothing to check a download against
 
 -   **§3.1 Cloud CP node.** Trigger: hardware loss, A1 reclamation,
     or deliberate rebuild. **Rule: no instance is destroyed through the
-    program.** A lost node is recovered by a targeted
+    program.** Each node's instance is protected, so the engine refuses
+    to delete it and refuses its replacement, planned or targeted,
+    before it creates anything, while a refresh still drops an instance
+    that reads back gone (declarative/physical.md §1). A lost node is recovered by a targeted
     `refresh --run-program` and an `up`. A deliberate replacement is a
     create-first `up --target-replace`, the order the regional quota is
     sized for: the fleet plus one node (cluster/nodes.md §3.2).

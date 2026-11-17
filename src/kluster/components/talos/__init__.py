@@ -415,13 +415,15 @@ def hostname_document(hostname: str) -> dict[str, Any]:
     (`TalosCluster` passes the node's own name) rather than whatever the
     machine is handed. A static hostname outranks every other source Talos
     reads one from: the hostname OCI's VCN gives a cloud instance, which
-    carries a suffix when the label is still held — by the predecessor of a
-    replacement created before it is deleted — the nocloud seed's
-    `local-hostname`, and the name Talos generates. So a replacement takes its
-    predecessor's name, and while both run they are two nodes of one name; a
-    control plane joining etcd with an empty data directory first removes any
-    member carrying its own hostname, which is why the order of a control
-    plane's replacement is a decision of its own (Aetf/kluster-ops#742).
+    carries a suffix when another instance still holds the label, the nocloud
+    seed's `local-hostname`, and the name Talos generates. So a re-created
+    node takes its predecessor's name, and a control plane joining etcd with
+    an empty data directory first removes any member carrying its own
+    hostname, the one its predecessor left behind among them. One that joins
+    while that predecessor still runs removes a live member, so the program
+    creates no instance beside its predecessor on its own: every node's
+    instance is protected, and the engine refuses its replacement
+    (`components.cloud.nodes`, declarative/physical.md §1).
 
     `auto` is stated `off` because the configuration the provider generates
     for v1.13 already carries a `HostnameConfig` with `auto: stable`; a patch
@@ -1181,8 +1183,10 @@ class TalosDay1(Component, pulumi_type='kluster:talos:TalosDay1'):
                 # `reset` wipes STATE and EPHEMERAL — every partition the node
                 # has (provider issue #205). It stays off on every node,
                 # whatever it carries: replacing a node is an explicit
-                # procedure (drain, etcd leave, destroy, recreate), never
-                # something a destroy of this resource does on its own.
+                # procedure, in which a cloud node's instance leaves the
+                # state only through a refresh that reads it gone
+                # (operations.md §3.1), never something a destroy of this
+                # resource does on its own.
                 on_destroy=machine.ConfigurationApplyOnDestroyArgs(reset=False, graceful=True, reboot=False),
                 opts=self.child_opts(depends_on=[*forward, *previous]),
             )
