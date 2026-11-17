@@ -32,13 +32,13 @@ from mock_monitor import declaring, run_under_backstop
 from section_numbers import sections
 
 from kluster import conventions
-from kluster.components.monitoring import RECEIVER
+from kluster.components.monitoring import DATASOURCES_DIGEST_ENV, RECEIVER, memory, stack_values
 from kluster.components.monitoring.operator_objects import type_token
 from kluster.components.monitoring.rules import HEARTBEAT, HEARTBEAT_TIMER
 from kluster.components.talos import ETCD_METRICS_PORT
 from kluster.conventions.alert import Tier
 from kluster.lib.k8s import KUBECONFIG_KEY
-from kluster.lib.versions import versions
+from kluster.lib.versions import ChartPin, versions
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -669,6 +669,147 @@ def test_each_mutating_endpoint_of_the_store_takes_a_generated_key_no_rendered_o
         keys.append(value)
         assert run.urn(SECRET, secret.name) in run.dependencies(CHART, STACK)
     assert len(set(keys)) == len(keys), 'two endpoints share a key'
+
+
+# -- Memory on the worker -----------------------------------------------------------
+
+#: The logical name of the chart each pin installs, as the program declares it.
+INSTALLED_AS = {memory.STACK_CHART: STACK, memory.METRICS_SERVER_CHART: METRICS_SERVER}
+
+#: The datasources ConfigMap the pinned stack chart renders for the release
+#: `monitoring` (`templates/grafana/datasource.yaml` at 0.91.2), the name it
+#: has on the cluster.
+STACK_DATASOURCES = 'monitoring-victoria-metrics-k8s-stack-grafana-ds'
+
+#: The directory Grafana provisions datasources from at start, which the
+#: chart's own datasource sidecar writes to (`templates/_pod.tpl` L992 at
+#: grafana chart 12.7.3).
+GRAFANA_DATASOURCES_DIR = '/etc/grafana/provisioning/datasources'
+
+
+def _mib(quantity: str) -> int:
+    """A memory quantity in the one unit the program writes, `Mi`."""
+    match = re.fullmatch(r'(\d+)Mi', quantity)
+    assert match, f'{quantity!r} is not in Mi'
+    return int(match[1])
+
+
+def _installed_memory(
+    run: Run, containers: tuple[memory.Container, ...] = memory.WORKER_CONTAINERS
+) -> dict[str, Mapping[str, Any]]:
+    """Each container's `resources`, read where its chart reads them in the values the program installs."""
+    found: dict[str, Mapping[str, Any]] = {}
+    for container in containers:
+        value: Any = run.values(INSTALLED_AS[container.chart])
+        for key in container.path:
+            value = value[key]
+        found[container.name] = value
+    return found
+
+
+def test_the_memory_requests_on_the_worker_fit_monitorings_budget(absent: tuple[Run, list[str]]) -> None:
+    """What the scheduler reserves for monitoring on the worker is within nodes.md §4.4's budget, rfc-008 §6.1's request.
+
+    The requests are those of the containers charged to monitoring's line of
+    nodes.md §4.4, read from the values each chart is installed with, at the
+    path that chart reads each container's memory from. metrics-server is
+    charged to the line for the rest of kube-system.
+    """
+    run, _ = absent
+    charged = memory.charged_to(memory.Line.MONITORING)
+    requested = {name: _mib(it['requests']['memory']) for name, it in _installed_memory(run, charged).items()}
+
+    assert sum(requested.values()) <= memory.BUDGET_MIB, requested
+
+
+def test_every_memory_limit_is_at_least_its_request(absent: tuple[Run, list[str]]) -> None:
+    """A limit under its request is refused by the API server, for the pod, at apply."""
+    run, _ = absent
+    for name, resources in _installed_memory(run).items():
+        if 'limits' in resources:
+            assert _mib(resources['limits']['memory']) >= _mib(resources['requests']['memory']), name
+
+
+def test_every_memory_value_leaves_cpu_to_the_charts_defaults(absent: tuple[Run, list[str]]) -> None:
+    """Only memory is set, so each chart and the operator keep the CPU they would give a container.
+
+    The operator fills each resource it finds unset from its defaults, CPU
+    apart from memory (`build.Resources`, `factory/build/container.go`
+    L97-142 at operator v0.74.0); a chart merges the values handed to it
+    over its own.
+    """
+    run, _ = absent
+    for name, resources in _installed_memory(run).items():
+        assert {key for side in resources.values() for key in side} == {'memory'}, name
+
+
+def test_grafana_reads_the_stacks_datasources_from_a_mount_rather_than_a_sidecar(
+    absent: tuple[Run, list[str]],
+) -> None:
+    """The datasource sidecar is off, the stack still renders its ConfigMap, and Grafana mounts it where it provisions.
+
+    With its datasource sidecar off, the stack renders the ConfigMap only
+    under `forceDeployDatasource` (`templates/grafana/datasource.yaml` L1 at
+    0.91.2).
+    """
+    run, _ = absent
+    grafana = _values(run)['grafana']
+
+    assert grafana['sidecar']['datasources']['enabled'] is False
+    assert grafana['forceDeployDatasource'] is True
+    (mount,) = [it for it in grafana['extraConfigmapMounts'] if it['mountPath'] == GRAFANA_DATASOURCES_DIR]
+    assert mount['configMap'] == STACK_DATASOURCES
+    assert 'subPath' not in mount
+
+
+def test_grafana_installs_no_plugin_at_start(absent: tuple[Run, list[str]]) -> None:
+    """Grafana's preinstall, its download of a plugin set on every start, is off, and no plugin is listed to install.
+
+    `GF_PLUGINS_PREINSTALL_DISABLED` is Grafana's environment form of
+    `[plugins] preinstall_disabled`; the chart installs what `plugins` lists.
+    """
+    run, _ = absent
+    grafana = _values(run)['grafana']
+
+    assert grafana['env']['GF_PLUGINS_PREINSTALL_DISABLED'] == 'true'
+    assert not grafana.get('plugins')
+
+
+def _digest(chart: ChartPin) -> str:
+    return cast('str', cast('dict[str, Any]', stack_values(STACK, chart)['grafana'])['env'][DATASOURCES_DIGEST_ENV])
+
+
+def test_grafanas_pod_changes_when_what_renders_its_datasources_changes(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Grafana reads its datasources at start, so its pod template carries a digest of the chart and the values.
+
+    The same chart and values give the same digest, so a run that changes
+    neither leaves Grafana running; another version of the chart, or another
+    value, gives another, and the Deployment rolls.
+    """
+    pin = ChartPin(
+        name=memory.STACK_CHART,
+        repository='oci://registry.example/charts',
+        version='1.0.0',
+        digest='sha256:a',
+        definitions=True,
+    )
+    bumped = ChartPin(
+        name=memory.STACK_CHART,
+        repository='oci://registry.example/charts',
+        version='1.0.1',
+        digest='sha256:b',
+        definitions=True,
+    )
+    first = _digest(pin)
+
+    assert _digest(pin) == first
+    assert _digest(bumped) != first
+    head, *rest = memory.WORKER_CONTAINERS
+    grown = memory.Container(
+        head.name, head.chart, head.path, memory.Memory(head.memory.request + 1, head.memory.limit)
+    )
+    monkeypatch.setattr(memory, 'WORKER_CONTAINERS', (grown, *rest))
+    assert _digest(pin) != first
 
 
 # -- The rules ---------------------------------------------------------------------
