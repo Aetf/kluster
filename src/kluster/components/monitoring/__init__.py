@@ -20,10 +20,29 @@ moves (rfc-007 §7.4).
 off the upstream projects' default branches at install time, so that what a run
 installs would depend on the day it ran; the default rules and dashboards that
 job would fetch, which have no playbooks here; the scrape jobs for the
-controller manager, the scheduler and etcd, whose metrics Talos does not
-expose to a scraper; and the operator's pre-delete cleanup, a second hook.
+controller manager and the scheduler, which Talos binds to 127.0.0.1, and
+for etcd, which the chart finds as a pod behind a Service and Talos runs as
+a service of the host; and the operator's pre-delete cleanup, a second hook.
 `helm.v4.Chart` drops hooks, so each is off rather than left to vanish
 (cluster-infra.md §1.2).
+
+**What vmagent scrapes** is held to what the store keeps. Every job is
+scraped at one interval, `SCRAPE_INTERVAL`. The chart's kubelet scrapes, the
+kubelet's own metrics and cAdvisor's among them, label a series with its
+node's name and none of the node's labels (`KUBELET_RELABELING`): copied
+onto every series, a node's labels take it past the 40 labels the store
+accepts, and the store ignores the whole row. The API server's scrape drops
+the buckets of the histogram families no reading needs
+(`APISERVER_DROPPED_HISTOGRAMS`). etcd is scraped on its metrics listener on
+each control plane by a node scrape of the component's own
+(`etcd_scrape_spec`), from the worker, over KubeSpan. A row the store
+ignores for any reason raises `MetricsDropped` (`rules`).
+
+**The store's mutating endpoints take keys** (`AUTH_KEYS`): deleting series,
+taking snapshots and forcing merges are otherwise open to any pod that
+reaches the store's Service. Each key is generated into the stack's state
+and reaches vmsingle as a file of a Secret it mounts, so no rendered object
+carries one.
 
 **The operator's webhook certificate is generated at render time and stays
 put** across runs. The provider renders with a server-side dry run, which lets
@@ -86,6 +105,7 @@ from kluster.components import cilium
 from kluster.components.cilium.bgp import CONTROL_PLANE_LABEL
 from kluster.components.monitoring import rules
 from kluster.components.monitoring.operator_objects import operator_object
+from kluster.components.talos import ETCD_METRICS_PORT
 from kluster.conventions import backup
 from kluster.conventions.alert import Tier
 from kluster.lib.k8s import LooserLevel, PodSecurity, helm_chart, namespace, sealed_value
@@ -93,15 +113,23 @@ from kluster.lib.versions import ChartPin
 from putils import Component
 
 __all__ = (
+    'APISERVER_DROPPED_HISTOGRAMS',
+    'AUTH_KEYS',
+    'AUTH_KEYS_SECRET',
     'CILIUM_SCRAPES',
+    'ETCD_DROPPED',
+    'ETCD_JOB',
     'GRAFANA_ADMIN_SECRET',
     'GRAFANA_PASSWORD_KEY',
     'GRAFANA_USER_KEY',
     'HEARTBEAT_GROUP_INTERVAL',
+    'KUBELET_RELABELING',
     'RECEIVER',
+    'SCRAPE_INTERVAL',
     'WORKER_AFFINITY',
     'CiliumScrape',
     'Monitoring',
+    'etcd_scrape_spec',
     'metrics_server_values',
     'receiver_spec',
     'stack_values',
@@ -139,6 +167,71 @@ GRAFANA_ADMIN_USER = 'admin'
 #: `rules.HEARTBEAT_REPEAT` has passed.
 HEARTBEAT_GROUP_INTERVAL = dt.timedelta(minutes=1)
 
+#: How often vmagent scrapes every job, the chart's kubelet scrapes and
+#: etcd's included: one interval, so that a rate over a window reads the same
+#: number of samples whichever source it is computed from.
+SCRAPE_INTERVAL = dt.timedelta(seconds=30)
+
+#: The relabeling of the chart's kubelet scrapes, which the chart builds from
+#: one spec (`kubelet.vmScrape.spec`): the kubelet's own metrics, cAdvisor's,
+#: the probes' and the resource metrics. In place of the chart's, which maps
+#: every node label onto every series. A node carries tens of labels,
+#: node-feature-discovery's most of them, and a series that takes them all
+#: crosses the 40 labels vmsingle accepts (`-maxLabelsPerTimeseries`), which
+#: ignores the whole row. The node's name is the one node label a reading
+#: groups by, and the operator labels every node scrape's targets with it as
+#: `node` already. The other two entries are the chart's, kept.
+KUBELET_RELABELING: tuple[Mapping[str, Any], ...] = (
+    {'sourceLabels': ['__metrics_path__'], 'targetLabel': 'metrics_path'},
+    {'targetLabel': 'job', 'replacement': 'kubelet'},
+)
+
+#: The API server's histogram families whose buckets are dropped at scrape:
+#: the largest of its series, read by no reading the cluster keeps. Their
+#: `_count` and `_sum` stay, so a family's rate and mean are still answered.
+APISERVER_DROPPED_HISTOGRAMS: tuple[str, ...] = (
+    'etcd_request_duration_seconds',
+    'apiserver_request_sli_duration_seconds',
+    'apiserver_request_body_size_bytes',
+    'apiserver_watch_list_duration_seconds',
+    'apiserver_watch_cache_read_wait_seconds',
+    'apiserver_watch_events_sizes',
+    'apiserver_response_sizes',
+)
+
+#: The API server's one scrape endpoint at the chart's values, which the drop
+#: list is added to: Helm replaces a list whole, so the endpoint is restated
+#: rather than amended.
+_APISERVER_ENDPOINT: Mapping[str, Any] = {
+    'bearerTokenFile': '/var/run/secrets/kubernetes.io/serviceaccount/token',
+    'port': 'https',
+    'scheme': 'https',
+    'tlsConfig': {'caFile': '/var/run/secrets/kubernetes.io/serviceaccount/ca.crt', 'serverName': 'kubernetes'},
+}
+
+#: The `job` etcd's series carry. Stated, because the operator's default is the
+#: scrape object's namespace and name, and the object's name is autonamed.
+ETCD_JOB = 'etcd'
+
+#: The families of etcd's metrics listener dropped at scrape, as regular
+#: expressions over the metric's name: the gRPC server's per-method series,
+#: and etcd's debugging series, which etcd itself names unstable. Together
+#: they are most of a member's series.
+ETCD_DROPPED: tuple[str, ...] = ('grpc_server_.*', 'etcd_debugging_.*')
+
+#: The keys vmsingle's mutating endpoints take, by the flag that sets each:
+#: deleting series, taking snapshots, and forcing a merge. A flag left unset
+#: leaves its endpoint open to any caller that reaches the store.
+AUTH_KEYS: tuple[str, ...] = ('deleteAuthKey', 'snapshotAuthKey', 'forceMergeAuthKey')
+
+#: The Secret holding `AUTH_KEYS`, one key of it per flag, which vmsingle
+#: mounts. Named rather than autonamed: the chart's values name it.
+AUTH_KEYS_SECRET = 'vmsingle-auth-keys'
+
+#: Where the operator mounts each Secret a VictoriaMetrics object lists in its
+#: `secrets`, under the Secret's name.
+_SECRETS_DIR = '/etc/vm/secrets'
+
 
 def stack_values() -> dict[str, object]:
     """The VictoriaMetrics stack chart's values: placed on the worker, the chart's extras off, Grafana's admin given."""
@@ -150,12 +243,33 @@ def stack_values() -> dict[str, object]:
         'defaultRules': {'enabled': False},
         'defaultDashboards': {'enabled': False},
         # Talos binds the controller manager and the scheduler to 127.0.0.1,
-        # and etcd's metrics listener is the bring-up's, read through the API
-        # server's node proxy: each job would scrape nothing and alert on its
-        # own absence (rfc-007 §7.1).
+        # and runs etcd as a service of the host rather than a pod, which the
+        # chart's etcd job finds through a Service: each job would scrape
+        # nothing and alert on its own absence (rfc-007 §7.1). etcd is
+        # scraped by the component's own node scrape (`etcd_scrape_spec`).
         'kubeControllerManager': {'enabled': False},
         'kubeScheduler': {'enabled': False},
         'kubeEtcd': {'enabled': False},
+        # Read by every scrape the chart builds from this spec, cAdvisor's among them.
+        'kubelet': {'vmScrape': {'spec': {'relabelConfigs': [dict(entry) for entry in KUBELET_RELABELING]}}},
+        'kubeApiServer': {
+            'vmScrape': {
+                'spec': {
+                    'endpoints': [
+                        {
+                            **_APISERVER_ENDPOINT,
+                            'metricRelabelConfigs': [
+                                {
+                                    'action': 'drop',
+                                    'sourceLabels': ['__name__'],
+                                    'regex': '|'.join(f'{family}_bucket' for family in APISERVER_DROPPED_HISTOGRAMS),
+                                }
+                            ],
+                        }
+                    ],
+                },
+            },
+        },
         'victoria-metrics-operator': {
             # The stack turns the operator chart's pre-delete hook on; a hook
             # is off rather than left to vanish.
@@ -172,9 +286,13 @@ def stack_values() -> dict[str, object]:
                 # claim made before any class is the default would be made with
                 # none, and never bind.
                 'storage': {'storageClassName': conventions.SC_LOCAL_PATH},
+                # Each key read from its file at start, so none is in the
+                # object the operator renders the store's arguments from.
+                'secrets': [AUTH_KEYS_SECRET],
+                'extraArgs': {flag: f'file://{_SECRETS_DIR}/{AUTH_KEYS_SECRET}/{flag}' for flag in AUTH_KEYS},
             },
         },
-        'vmagent': {'spec': {'affinity': WORKER_AFFINITY}},
+        'vmagent': {'spec': {'affinity': WORKER_AFFINITY, 'scrapeInterval': backup.duration(SCRAPE_INTERVAL)}},
         'vmalert': {'spec': {'affinity': WORKER_AFFINITY}},
         'alertmanager': {
             'spec': {
@@ -235,7 +353,10 @@ CILIUM_SCRAPES: tuple[CiliumScrape, ...] = (
 
 
 class Monitoring(Component, pulumi_type='kluster:monitoring:Monitoring'):
-    """The VictoriaMetrics stack and metrics-server, the rules, alertmanager's receiver and Cilium's scrape objects.
+    """The VictoriaMetrics stack and metrics-server, the rules, alertmanager's receiver, and the scrape objects.
+
+    The scrape objects are Cilium's and etcd's. The store's keys are a Secret
+    beside the stack, declared ahead of it, since vmsingle mounts it.
 
     `after` is what the stack is installed behind: Cilium, and the sealing
     controller, whose chart defines the receiver's SealedSecret. It is stated
@@ -282,13 +403,25 @@ class Monitoring(Component, pulumi_type='kluster:monitoring:Monitoring'):
             string_data={GRAFANA_USER_KEY: GRAFANA_ADMIN_USER, GRAFANA_PASSWORD_KEY: self.grafana_password.result},
             opts=self.child_opts(),
         )
+        # A caller passes a key in the query string (`authKey=`), so a key
+        # holds nothing a URL would need escaped.
+        keys = {
+            flag: random.RandomPassword(f'{name}-{flag}', length=48, special=False, opts=behind) for flag in AUTH_KEYS
+        }
+        self.auth_keys = k8s.core.v1.Secret(
+            f'{name}-auth-keys',
+            metadata=k8s.meta.v1.ObjectMetaArgs(name=AUTH_KEYS_SECRET, namespace=self.namespace.metadata.name),
+            string_data={flag: key.result for flag, key in keys.items()},
+            opts=self.child_opts(depends_on=[self.namespace]),
+        )
         self.chart = helm_chart(
             name,
             pin=stack_chart,
             namespace=self.namespace.metadata.name,
             values=stack_values(),
-            # Behind Grafana's Secret as well, which its pod reads at start.
-            opts=self.child_opts(depends_on=[*after, self.grafana_admin]),
+            # Behind Grafana's Secret, which its pod reads at start, and the
+            # store's keys, which vmsingle mounts and does not start without.
+            opts=self.child_opts(depends_on=[*after, self.grafana_admin, self.auth_keys]),
         )
         self.metrics_server = helm_chart(
             f'{name}-metrics-server',
@@ -340,8 +473,36 @@ class Monitoring(Component, pulumi_type='kluster:monitoring:Monitoring'):
             )
             for scrape in CILIUM_SCRAPES
         ]
+        self.etcd_scrape = operator_object(
+            f'{name}-etcd',
+            kind='VMNodeScrape',
+            metadata=k8s.meta.v1.ObjectMetaArgs(namespace=self.namespace.metadata.name),
+            spec=etcd_scrape_spec(),
+            opts=after_the_chart,
+        )
 
         self.register_outputs({})
+
+
+def etcd_scrape_spec() -> dict[str, object]:
+    """The node scrape of etcd's metrics listener: each control plane, on `ETCD_METRICS_PORT`, over plain HTTP.
+
+    The control planes are the nodes carrying `CONTROL_PLANE_LABEL`, selected
+    by its presence: Talos gives it an empty value, and the operator turns a
+    `matchLabels` entry into a relabeling that keeps a target whose label
+    matches the value, which an absent label, read as empty, does too.
+    vmagent runs on the worker (`WORKER_AFFINITY`), so its request reaches a
+    control plane over KubeSpan, which the node firewall accepts ahead of
+    every rule: the port takes no opening (`components.talos.HOST_OPENINGS`).
+    """
+    return {
+        'selector': {'matchExpressions': [{'key': CONTROL_PLANE_LABEL, 'operator': 'Exists'}]},
+        'port': str(ETCD_METRICS_PORT),
+        'path': '/metrics',
+        'scheme': 'http',
+        'relabelConfigs': [{'targetLabel': 'job', 'replacement': ETCD_JOB}],
+        'metricRelabelConfigs': [{'action': 'drop', 'sourceLabels': ['__name__'], 'regex': '|'.join(ETCD_DROPPED)}],
+    }
 
 
 def receiver_spec() -> dict[str, object]:

@@ -35,6 +35,7 @@ from kluster import conventions
 from kluster.components.monitoring import RECEIVER
 from kluster.components.monitoring.operator_objects import type_token
 from kluster.components.monitoring.rules import HEARTBEAT, HEARTBEAT_TIMER
+from kluster.components.talos import ETCD_METRICS_PORT
 from kluster.conventions.alert import Tier
 from kluster.lib.k8s import KUBECONFIG_KEY
 from kluster.lib.versions import versions
@@ -49,6 +50,10 @@ SEALED_SECRET = 'crds:bitnami.com/v1alpha1:SealedSecret'
 VM_RULE = type_token('VMRule')
 VM_ALERTMANAGER_CONFIG = type_token('VMAlertmanagerConfig')
 VM_POD_SCRAPE = type_token('VMPodScrape')
+VM_NODE_SCRAPE = type_token('VMNodeScrape')
+
+#: Every kind of the operator's the component declares.
+OPERATOR_KINDS = (VM_RULE, VM_ALERTMANAGER_CONFIG, VM_POD_SCRAPE, VM_NODE_SCRAPE)
 
 #: The logical names of the component's two charts.
 STACK = 'monitoring'
@@ -62,9 +67,6 @@ TALOS_CONTROL_PLANE_LABEL = 'node-role.kubernetes.io/control-plane'
 #: The label the kubelet gives every node, its own name.
 HOSTNAME_LABEL = 'kubernetes.io/hostname'
 
-#: What the random provider generates for every password, as it would into state.
-GENERATED = 'generated-in-state'
-
 #: How a secret value crosses to the engine: wrapped, under the signature key,
 #: with the secret signature beside it (`pulumi/runtime/rpc.py` L65 and L83).
 SECRET_ENVELOPE = {'4dabf18193072939515e22adb298388d': '1b47061264138c4ac30d75fd1eb44270'}
@@ -75,11 +77,16 @@ PLAYBOOK = re.compile(r'^(?P<document>\S+\.md) §(?P<section>\d+(?:\.\d+)*)$')
 
 
 class Generating(Autonaming):
-    """`Autonaming`, answering a password's `result` as the random provider would."""
+    """`Autonaming`, answering a password's `result` as the random provider would: a value of its own per resource."""
+
+    @staticmethod
+    def generated(name: str) -> str:
+        """What the random provider generates for the password of this name, as it would into state."""
+        return f'generated-in-state-for-{name}'
 
     def computed(self, args: pulumi.runtime.MockResourceArgs) -> dict[str, Any]:
         outputs = super().computed(args)
-        return outputs | {'result': GENERATED} if args.typ == PASSWORD else outputs
+        return outputs | {'result': self.generated(args.name)} if args.typ == PASSWORD else outputs
 
 
 async def declare(*, sealed: dict[str, object] | None) -> tuple[Run, list[str]]:
@@ -214,22 +221,30 @@ def _admits(node: Mapping[str, str], selector: Mapping[str, str], affinity: Mapp
     return any(all(holds(e) for e in term.get('matchExpressions', [])) for term in required['nodeSelectorTerms'])
 
 
-def test_alertmanager_can_schedule_on_the_worker_alone(absent: tuple[Run, list[str]]) -> None:
-    """Alertmanager posts to Home Assistant at an address only the worker reaches (rfc-008 §4.1).
-
-    The nodes are labeled as Talos labels them: every cloud node is a control
-    plane node, and the worker is not.
-    """
-    run, _ = absent
-    spec = _values(run)['alertmanager']['spec']
-    nodes = {
+def _talos_nodes() -> dict[str, dict[str, str]]:
+    """The cluster's nodes, labeled as Talos labels them: every cloud node is a control plane node, the worker is not."""
+    return {
         **{node: {HOSTNAME_LABEL: node, TALOS_CONTROL_PLANE_LABEL: ''} for node in conventions.CLOUD_NODES},
         conventions.HOMELAB_NODE: {HOSTNAME_LABEL: conventions.HOMELAB_NODE},
     }
 
+
+@pytest.mark.parametrize('workload', ['alertmanager', 'vmagent'])
+def test_the_workload_can_schedule_on_the_worker_alone(absent: tuple[Run, list[str]], workload: str) -> None:
+    """Each holds a condition that only the worker meets.
+
+    Alertmanager posts to Home Assistant at an address only the worker
+    reaches (rfc-008 §4.1). vmagent reads etcd's metrics listener on every
+    control plane, which the node firewall admits from KubeSpan alone; from a
+    control plane, its call to its own node's listener would arrive from a
+    pod address, which no opening admits (`components.talos.HOST_OPENINGS`).
+    """
+    run, _ = absent
+    spec = _values(run)[workload]['spec']
+
     schedulable = {
         name
-        for name, labels in nodes.items()
+        for name, labels in _talos_nodes().items()
         if _admits(labels, spec.get('nodeSelector', {}), spec.get('affinity', {}))
     }
 
@@ -271,7 +286,9 @@ def test_grafanas_admin_is_a_secret_the_program_declares_with_a_password_generat
     # The password reaches the engine as a secret, and so state as one.
     assert {key: data[key] for key in SECRET_ENVELOPE} == SECRET_ENVELOPE
     assert admin['userKey'] in data['value']
-    assert data['value'][admin['passwordKey']] == GENERATED
+    assert data['value'][admin['passwordKey']] in {
+        Generating.generated(it.name) for it in run.monitor.of_type(PASSWORD)
+    }
 
 
 def test_the_chart_is_installed_behind_grafanas_secret(absent: tuple[Run, list[str]]) -> None:
@@ -281,6 +298,377 @@ def test_the_chart_is_installed_behind_grafanas_secret(absent: tuple[Run, list[s
     (declared,) = [it for it in run.monitor.of_type(SECRET) if it.inputs['metadata']['name'] == admin['existingSecret']]
 
     assert run.urn(SECRET, declared.name) in run.dependencies(CHART, STACK)
+
+
+# -- What vmagent scrapes ------------------------------------------------------------
+
+#: The number of labels vmsingle accepts on a series, `__name__` counted, when
+#: `-maxLabelsPerTimeseries` is not set; a row with more is ignored whole
+#: (`lib/timeserieslimits/timeseries_limits.go` L30, L86-95 at VictoriaMetrics
+#: v1.150.0).
+STORE_LABEL_LIMIT = 40
+
+#: The kubelet scrapes at the stack chart's own values, which the component's
+#: values are merged over: one spec every scrape starts from, and each scrape's
+#: own (`values.yaml` L2231-2281 at victoria-metrics-k8s-stack 0.91.2).
+CHART_KUBELET: Mapping[str, Any] = {
+    'vmScrapes': {
+        'cadvisor': {'enabled': True, 'spec': {'path': '/metrics/cadvisor'}},
+        'probes': {'enabled': True, 'spec': {'path': '/metrics/probes'}},
+        'resources': {'enabled': True, 'spec': {'path': '/metrics/resource'}},
+        'kubelet': {'spec': {}},
+    },
+    'vmScrape': {
+        'kind': 'VMNodeScrape',
+        'spec': {
+            'scheme': 'https',
+            'interval': '30s',
+            'metricRelabelConfigs': [
+                {'action': 'labeldrop', 'regex': '(uid)'},
+                {'action': 'labeldrop', 'regex': '(id|name)'},
+            ],
+            'relabelConfigs': [
+                {'action': 'labelmap', 'regex': '__meta_kubernetes_node_label_(.+)'},
+                {'sourceLabels': ['__metrics_path__'], 'targetLabel': 'metrics_path'},
+                {'targetLabel': 'job', 'replacement': 'kubelet'},
+            ],
+        },
+    },
+}
+
+#: The interval vmagent scrapes at where nothing sets one, at the stack
+#: chart's own values (`values.yaml`, `vmagent.spec.scrapeInterval`, at
+#: 0.91.2).
+CHART_SCRAPE_INTERVAL = '20s'
+
+#: The API server's scrape endpoint at the stack chart's own values
+#: (`values.yaml` L2289-2297 at 0.91.2).
+CHART_APISERVER_ENDPOINT: Mapping[str, Any] = {
+    'bearerTokenFile': '/var/run/secrets/kubernetes.io/serviceaccount/token',
+    'port': 'https',
+    'scheme': 'https',
+    'tlsConfig': {'caFile': '/var/run/secrets/kubernetes.io/serviceaccount/ca.crt', 'serverName': 'kubernetes'},
+}
+
+#: A cAdvisor series as the kubelet serves it, before any relabeling.
+CADVISOR_SAMPLE = {
+    '__name__': 'container_cpu_usage_seconds_total',
+    'container': 'app',
+    'cpu': 'total',
+    'id': '/kubepods/burstable/pod0/0123',
+    'image': 'docker.io/library/app:1',
+    'name': '0123',
+    'namespace': 'apps',
+    'pod': 'app-0',
+}
+
+
+def _helm_merge(base: Mapping[str, Any], override: Mapping[str, Any]) -> dict[str, Any]:
+    """Values merged as Helm merges them, and as the chart's `mergeOverwrite` does: maps key by key, anything else replaced."""
+    merged = dict(base)
+    for key, value in override.items():
+        if isinstance(value, Mapping) and isinstance(merged.get(key), Mapping):
+            merged[key] = _helm_merge(cast('Mapping[str, Any]', merged[key]), cast('Mapping[str, Any]', value))
+        else:
+            merged[key] = value
+    return merged
+
+
+def _kubelet_scrapes(run: Run) -> dict[str, dict[str, Any]]:
+    """Each kubelet scrape's spec as the chart renders it: the shared spec, each scrape's own merged over it."""
+    kubelet = _helm_merge(CHART_KUBELET, _values(run).get('kubelet', {}))
+    return {
+        name: _helm_merge(kubelet['vmScrape']['spec'], scrape.get('spec', {}))
+        for name, scrape in kubelet['vmScrapes'].items()
+        if scrape.get('enabled', True)
+    }
+
+
+def _sanitized(name: str) -> str:
+    return re.sub(r'[^a-zA-Z0-9_]', '_', name)
+
+
+def _expand(match: re.Match[str], replacement: str) -> str:
+    return re.sub(r'\$\{?(\d+)\}?', lambda ref: match.group(int(ref[1])) or '', replacement)
+
+
+def _relabel(labels: Mapping[str, str], configs: list[Mapping[str, Any]]) -> dict[str, str] | None:
+    """Labels after a relabeling, `None` where it drops them: Prometheus' semantics, which vmagent follows.
+
+    Each regular expression is anchored at both ends; a source label that is
+    absent reads as empty; a replacement that comes out empty removes the label.
+    """
+    out = dict(labels)
+    for config in configs:
+        action = config.get('action', 'replace')
+        regex: re.Pattern[str] = re.compile(config.get('regex', '(.*)'))
+        sources: list[str] = config.get('sourceLabels', config.get('source_labels', []))
+        value = str(config.get('separator', ';')).join(out.get(name, '') for name in sources)
+        if action == 'replace':
+            match = regex.fullmatch(value)
+            if match:
+                target = config.get('targetLabel', config.get('target_label'))
+                replaced = _expand(match, config.get('replacement', '$1'))
+                if replaced:
+                    out[target] = replaced
+                else:
+                    out.pop(target, None)
+        elif action == 'keep':
+            if not regex.fullmatch(value):
+                return None
+        elif action == 'drop':
+            if regex.fullmatch(value):
+                return None
+        elif action == 'labelmap':
+            for name, label in list(out.items()):
+                match = regex.fullmatch(name)
+                if match:
+                    out[_expand(match, config.get('replacement', '$1'))] = label
+        elif action == 'labeldrop':
+            out = {name: label for name, label in out.items() if not regex.fullmatch(name)}
+        else:
+            raise AssertionError(f'no relabeling action {action!r} in this model')
+    return out
+
+
+def _selector_relabeling(selector: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    """A node scrape's selector as the operator turns it into relabeling (`vmscrapes.go` L426-475 at operator v0.74.0)."""
+    configs: list[Mapping[str, Any]] = [
+        {'action': 'keep', 'sourceLabels': [f'__meta_kubernetes_node_label_{_sanitized(key)}'], 'regex': value}
+        for key, value in sorted(selector.get('matchLabels', {}).items())
+    ]
+    for expression in selector.get('matchExpressions', []):
+        label = _sanitized(expression['key'])
+        configs.append(
+            {
+                'In': {'action': 'keep', 'sourceLabels': [f'__meta_kubernetes_node_label_{label}']},
+                'NotIn': {'action': 'drop', 'sourceLabels': [f'__meta_kubernetes_node_label_{label}']},
+                'Exists': {'action': 'keep', 'sourceLabels': [f'__meta_kubernetes_node_labelpresent_{label}']},
+                'DoesNotExist': {'action': 'drop', 'sourceLabels': [f'__meta_kubernetes_node_labelpresent_{label}']},
+            }[expression['operator']]
+            | {'regex': '|'.join(expression.get('values', [])) or 'true'}
+        )
+    return configs
+
+
+def _scraped(
+    spec: Mapping[str, Any], scrape_name: str, node: str, node_labels: Mapping[str, str], sample: Mapping[str, str]
+) -> tuple[dict[str, str], dict[str, str] | None] | None:
+    """What a node scrape makes of one node: its target, and one sample's series; `None` where the node is not scraped.
+
+    The relabeling the operator writes ahead of the spec's own is its selector,
+    `node` from the node's name, and a `job` from the object's namespace and
+    name, and the port where the spec names one (`nodescrape.go` L53-97 at
+    operator v0.74.0). A label of the target's that starts with `__` is gone
+    once relabeling ends, `instance` defaulting to the address. With
+    `honorLabels`, the sample's own labels win over the target's.
+    """
+    target = {
+        '__address__': f'{node}.internal:10250',
+        '__metrics_path__': spec.get('path', '/metrics'),
+        '__scheme__': spec.get('scheme', 'http'),
+        '__meta_kubernetes_node_name': node,
+        **{f'__meta_kubernetes_node_label_{_sanitized(k)}': v for k, v in node_labels.items()},
+        **{f'__meta_kubernetes_node_labelpresent_{_sanitized(k)}': 'true' for k in node_labels},
+    }
+    operator: list[Mapping[str, Any]] = [
+        *_selector_relabeling(spec.get('selector', {})),
+        {'sourceLabels': ['__meta_kubernetes_node_name'], 'targetLabel': 'node'},
+        {'targetLabel': 'job', 'replacement': f'{conventions.MONITORING_NAMESPACE}/{scrape_name}'},
+    ]
+    if spec.get('port'):
+        operator.append(
+            {
+                'sourceLabels': ['__address__'],
+                'targetLabel': '__address__',
+                'regex': '^(.*):(.*)',
+                'replacement': f'${{1}}:{spec["port"]}',
+            }
+        )
+    relabeled = _relabel(target, [*operator, *spec.get('relabelConfigs', [])])
+    if relabeled is None:
+        return None
+    relabeled.setdefault('instance', relabeled['__address__'])
+    kept = {name: value for name, value in relabeled.items() if not name.startswith('__')}
+    series = {**kept, **sample} if spec.get('honorLabels') else {**sample, **kept}
+    return relabeled, _relabel(series, spec.get('metricRelabelConfigs', []))
+
+
+def test_no_kubelet_scrape_maps_the_nodes_labels_onto_its_series(absent: tuple[Run, list[str]]) -> None:
+    """A node's labels are many and grow with what runs there; copied onto every series, they cost the series."""
+    run, _ = absent
+    node_label = '__meta_kubernetes_node_label_feature_node_kubernetes_io_cpu_model_vendor_id'
+    scrapes = _kubelet_scrapes(run)
+
+    assert {'kubelet', 'cadvisor'} <= set(scrapes)
+    for name, spec in scrapes.items():
+        for config in spec.get('relabelConfigs', []):
+            mapped = config.get('action') == 'labelmap' and re.fullmatch(config.get('regex', '(.*)'), node_label)
+            assert not mapped, f'{name} maps every node label: {config}'
+
+
+def test_a_series_from_a_node_with_more_labels_than_the_store_accepts_is_stored_labeled_by_its_node(
+    absent: tuple[Run, list[str]],
+) -> None:
+    """Every kubelet scrape of a node carrying twice the store's limit in labels yields a series the store keeps.
+
+    The series still names its node, the one node label a reading groups by.
+    """
+    run, _ = absent
+    limit = int(_values(run)['vmsingle']['spec'].get('extraArgs', {}).get('maxLabelsPerTimeseries', STORE_LABEL_LIMIT))
+    node = conventions.HOMELAB_NODE
+    labels = {
+        HOSTNAME_LABEL: node,
+        **{f'feature.node.kubernetes.io/feature-{i}': 'true' for i in range(2 * STORE_LABEL_LIMIT)},
+    }
+
+    for name, spec in _kubelet_scrapes(run).items():
+        scraped = _scraped({**spec, 'selector': {}}, name, node, labels, CADVISOR_SAMPLE)
+        assert scraped is not None, name
+        _, series = scraped
+        assert series is not None, name
+        assert len(series) <= limit, f'{name}: {len(series)} labels'
+        assert series['node'] == node, name
+
+
+def test_etcd_is_scraped_on_every_control_plane_and_nowhere_else(absent: tuple[Run, list[str]]) -> None:
+    """On its metrics listener, over plain HTTP, under one `job` whatever name the object is given.
+
+    Talos gives the control plane label an empty value, and the worker none: a
+    selector the operator reads as "the label's value is empty" keeps both.
+    """
+    run, _ = absent
+    (scrape,) = run.monitor.of_type(VM_NODE_SCRAPE)
+    spec = scrape.inputs['spec']
+    sample = {'__name__': 'etcd_disk_wal_fsync_duration_seconds_bucket', 'le': '0.008'}
+
+    scraped = {node: _scraped(spec, scrape.name, node, labels, sample) for node, labels in _talos_nodes().items()}
+    targets = {node: it for node, it in scraped.items() if it is not None}
+
+    assert set(targets) == set(conventions.CLOUD_NODES)
+    jobs: set[str] = set()
+    for node, (target, series) in targets.items():
+        assert target['__address__'].rsplit(':', 1)[1] == str(ETCD_METRICS_PORT), node
+        assert (target['__scheme__'], target['__metrics_path__']) == ('http', '/metrics'), node
+        assert series is not None, node
+        assert series['node'] == node
+        jobs.add(series['job'])
+    (control_plane, *_) = conventions.CLOUD_NODES
+    renamed = _scraped(spec, 'another-name', control_plane, _talos_nodes()[control_plane], sample)
+    assert renamed is not None
+    assert renamed[1] is not None
+    assert jobs == {renamed[1]['job']}, "the job follows the object's name"
+
+
+@pytest.mark.parametrize(
+    ('metric', 'kept'),
+    [
+        ('etcd_disk_wal_fsync_duration_seconds_bucket', True),
+        ('etcd_disk_backend_commit_duration_seconds_bucket', True),
+        ('etcd_server_is_leader', True),
+        ('process_resident_memory_bytes', True),
+        ('process_cpu_seconds_total', True),
+        ('grpc_server_handled_total', False),
+        ('grpc_server_started_total', False),
+        ('etcd_debugging_mvcc_keys_total', False),
+    ],
+)
+def test_etcds_scrape_drops_the_grpc_and_debugging_families_and_keeps_the_rest(
+    absent: tuple[Run, list[str]], metric: str, kept: bool
+) -> None:
+    """etcd's per-method gRPC series and its debugging series are most of a member's; what a reading reads stays."""
+    run, _ = absent
+    (scrape,) = run.monitor.of_type(VM_NODE_SCRAPE)
+
+    series = _relabel({'__name__': metric}, scrape.inputs['spec'].get('metricRelabelConfigs', []))
+
+    assert (series is not None) is kept
+
+
+def test_the_api_servers_dropped_histograms_lose_their_buckets_and_keep_their_count_and_sum(
+    absent: tuple[Run, list[str]],
+) -> None:
+    """The buckets are the series; the count and the sum still answer a rate and a mean, and the endpoint is the chart's."""
+    from kluster.components.monitoring import APISERVER_DROPPED_HISTOGRAMS
+
+    run, _ = absent
+    (endpoint,) = _values(run)['kubeApiServer']['vmScrape']['spec']['endpoints']
+    configs = endpoint.get('metricRelabelConfigs', [])
+
+    assert {key: endpoint.get(key) for key in CHART_APISERVER_ENDPOINT} == dict(CHART_APISERVER_ENDPOINT)
+    assert APISERVER_DROPPED_HISTOGRAMS
+    for family in APISERVER_DROPPED_HISTOGRAMS:
+        assert _relabel({'__name__': f'{family}_bucket', 'le': '1'}, configs) is None, family
+        for kept in ('_count', '_sum'):
+            assert _relabel({'__name__': f'{family}{kept}'}, configs) is not None, family + kept
+    for other in (
+        'apiserver_request_total',
+        'apiserver_current_inflight_requests',
+        'apiserver_request_duration_seconds_bucket',
+    ):
+        assert _relabel({'__name__': other}, configs) is not None, other
+
+
+def test_every_scrape_runs_at_vmagents_one_interval(absent: tuple[Run, list[str]]) -> None:
+    """A rate over a window then reads the same number of samples from every source."""
+    run, _ = absent
+    interval = _values(run)['vmagent']['spec'].get('scrapeInterval', CHART_SCRAPE_INTERVAL)
+    declared = [it.inputs['spec'] for typ in (VM_NODE_SCRAPE, VM_POD_SCRAPE) for it in run.monitor.of_type(typ)]
+    intervals = {
+        **{f'kubelet {name}': spec.get('interval') for name, spec in _kubelet_scrapes(run).items()},
+        **{f'declared {i}': spec.get('interval') for i, spec in enumerate(declared)},
+        **{
+            f'declared {i} endpoint': endpoint.get('interval')
+            for i, spec in enumerate(declared)
+            for endpoint in spec.get('podMetricsEndpoints', [])
+        },
+    }
+
+    assert {name: it or interval for name, it in intervals.items()} == dict.fromkeys(intervals, interval)
+
+
+#: The flags of vmsingle's endpoints that delete or copy what it stores: series
+#: deletion, snapshots, and forced merges (`app/vmselect/main.go` L34 and
+#: `app/vmstorage/main.go` L44-45 at VictoriaMetrics v1.150.0). Each takes a
+#: file's contents where its value is `file://<path>` (`lib/flagutil/password.go`
+#: L21-23, L96-97).
+MUTATING_ENDPOINT_FLAGS = ('deleteAuthKey', 'snapshotAuthKey', 'forceMergeAuthKey')
+
+#: Where the operator mounts each Secret a VictoriaMetrics object lists in its
+#: `secrets` (`docs/api.md` at operator v0.74.0).
+OPERATOR_SECRETS_DIR = '/etc/vm/secrets'
+
+
+def test_each_mutating_endpoint_of_the_store_takes_a_generated_key_no_rendered_object_carries(
+    absent: tuple[Run, list[str]],
+) -> None:
+    """Each flag names a file of a Secret vmsingle mounts, holding a password of its own generated into state.
+
+    The chart is installed behind the Secret, since vmsingle does not start
+    without what it mounts.
+    """
+    run, _ = absent
+    spec = _values(run)['vmsingle']['spec']
+    mounted = set(spec.get('secrets', []))
+    secrets = {
+        (it.inputs['metadata']['namespace'], it.inputs['metadata']['name']): it for it in run.monitor.of_type(SECRET)
+    }
+    generated = {Generating.generated(it.name) for it in run.monitor.of_type(PASSWORD)}
+    keys: list[str] = []
+
+    for flag in MUTATING_ENDPOINT_FLAGS:
+        path = spec.get('extraArgs', {}).get(flag, '')
+        match = re.fullmatch(rf'file://{OPERATOR_SECRETS_DIR}/([^/]+)/([^/]+)', path)
+        assert match, f'{flag}: {path!r} reads no mounted file'
+        secret_name, key = match.groups()
+        assert secret_name in mounted, flag
+        secret = secrets[(conventions.MONITORING_NAMESPACE, secret_name)]
+        # The SDK marks a Secret's `stringData` secret whatever it is given.
+        value = secret.inputs['stringData']['value'][key]
+        assert value in generated, flag
+        keys.append(value)
+        assert run.urn(SECRET, secret.name) in run.dependencies(CHART, STACK)
+    assert len(set(keys)) == len(keys), 'two endpoints share a key'
 
 
 # -- The rules ---------------------------------------------------------------------
@@ -314,15 +702,29 @@ def test_every_declared_rule_carries_a_census_tier_a_summary_and_a_playbook_that
         )
 
 
+#: The counter vmsingle keeps of the rows it received and did not store, one
+#: series per `reason` (`lib/timeserieslimits/timeseries_limits.go` L52-63 and
+#: `app/vmstorage/main.go` L489-497 at VictoriaMetrics v1.150.0).
+IGNORED_ROWS = 'vm_rows_ignored_total'
+
+
+def test_a_row_the_store_ignores_for_any_reason_raises_an_alert(absent: tuple[Run, list[str]]) -> None:
+    """A series the store ignores is lost whole and silently, so some rule reads the counter for every reason.
+
+    A matcher on the counter would narrow the rule to the reasons it names,
+    and a reason the store adds later would go unseen.
+    """
+    run, _ = absent
+    reading = re.compile(rf'\b{IGNORED_ROWS}\b(?!\s*\{{)')
+
+    assert [rule['alert'] for rule in _declared_rules(run) if reading.search(rule['expr'])]
+
+
 def test_the_rules_are_declared_behind_the_chart_that_defines_them(absent: tuple[Run, list[str]]) -> None:
     """pulumi-kubernetes waits for workloads, not for a definition's registration, so the order is declared."""
     run, _ = absent
     chart = run.urn(CHART, STACK)
-    objects = [
-        (typ, declared.name)
-        for typ in (VM_RULE, VM_ALERTMANAGER_CONFIG, VM_POD_SCRAPE)
-        for declared in run.monitor.of_type(typ)
-    ]
+    objects = [(typ, declared.name) for typ in OPERATOR_KINDS for declared in run.monitor.of_type(typ)]
 
     assert objects
     for typ, name in objects:
@@ -533,7 +935,7 @@ def test_every_untyped_operator_object_is_spelled_as_its_definition_declares(
     It goes with `components.monitoring.operator_objects` (Aetf/kluster-ops#720).
     """
     run, _ = absent
-    declared = [it for typ in (VM_RULE, VM_ALERTMANAGER_CONFIG, VM_POD_SCRAPE) for it in run.monitor.of_type(typ)]
+    declared = [it for typ in OPERATOR_KINDS for it in run.monitor.of_type(typ)]
 
     assert declared
     for it in declared:

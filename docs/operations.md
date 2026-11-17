@@ -1006,6 +1006,7 @@ Owning docs keep the content — the index only locates it.
 | Backup restores (CNPG, VolSync, etcd) | storage.md §5; the drills are §4 here |
 | Alert-channel failure (HA push down → meta-alert; GitHub leg down; a scheduled ops-repo workflow that stopped checking in) | architecture.md §4.3; the contract and the dead-man are §4 here |
 | CI alerts (a red `checks` or `images` run; a drift diff) | framework/ci.md §3.1 and §3.2 |
+| The metrics store (rows it ignores) | §6 here |
 
 vmalert rule families adopt this index as they are ported: an alert
 that cannot point at a row (or at its owner doc's census) does not
@@ -1014,3 +1015,42 @@ a test rather than a review question: `tests/test_monitoring.py` holds
 every rule the `k8s-base` program declares to a `playbook` that names a
 document and a section that document has, beside a tier from the
 census and a summary (architecture.md §4.3).
+
+## 6. Metrics store playbooks
+
+What to do when the monitoring stack reports on itself. The stack and
+its scrapes are declared in `components.monitoring`
+([declarative/cluster-infra.md](declarative/cluster-infra.md) §1,
+item 6).
+
+### 6.1 A row the metrics store ignores
+
+**Trigger**: `MetricsDropped`, `actionable`. vmsingle's
+`vm_rows_ignored_total` grew in the last 30 minutes, under the
+`reason` the alert carries. The store received those rows and kept none
+of them. vmagent counts them as delivered, so nothing else shows the
+loss: a series that loses a row in each scrape is missing whole rather
+than sparse, and every reading over it reads nothing.
+
+**Gist**:
+
+1. **Read the reason.** `too_many_labels` is a series past the 40
+   labels vmsingle accepts (`-maxLabelsPerTimeseries`, unset here, so
+   its default). `too_long_label_name` and `too_long_label_value` are a
+   label past 256 characters or a value past 4 KiB. `big_timestamp` and
+   `small_timestamp` are samples stamped far from the store's clock,
+   which is a source's clock and not its labels.
+2. **Find the series.** vmsingle logs at most one ignored series every
+   5 seconds, whole:
+   `kubectl -n monitoring logs -l app.kubernetes.io/name=vmsingle | grep 'ignoring series'`.
+   Its `job` and its name say which scrape produced it.
+3. **Repair the scrape that adds the labels**, in the component that
+   declares it: the chart's scrapes and etcd's in
+   `components.monitoring`, Cilium's there too. The usual cause is a
+   `labelmap` that copies a whole class of the source's metadata, a
+   node's or a pod's labels, onto every series; the repair keeps the
+   one label a reading groups by and drops the rest. A previewed apply
+   of `k8s-base` lands it.
+4. **Confirm**: `increase(vm_rows_ignored_total[30m])` reads 0 for
+   every reason, the series the log named is present, and the alert
+   resolves 30 minutes after the last ignored row.

@@ -126,13 +126,38 @@ classes its objects fall into (§1.2):
     which fetches rules and dashboards off upstream default branches at
     install time and is a hook; the default rules and dashboards it
     would fetch; the operator's pre-delete cleanup, a second hook
-    (§1.2); and the scrape jobs for the controller manager, the
-    scheduler and etcd, whose metrics Talos does not expose to a
-    scraper (rfc-007 §7.1). vmagent keeps the chart's
+    (§1.2); and the scrape jobs for the controller manager and the
+    scheduler, which Talos binds to `127.0.0.1`, and for etcd, which the
+    chart finds as a pod behind a Service while Talos runs it as a
+    service of the host (rfc-007 §7.1). vmagent keeps the chart's
     `selectAllByDefault` and reads every VictoriaMetrics scrape object
     in the cluster. The component declares the scrape objects for
     Cilium's metrics endpoints, which are instances of this chart's
-    definitions and so cannot be Cilium's. metrics-server reads each
+    definitions and so cannot be Cilium's. **What vmagent scrapes is
+    held to what the store keeps.** Every job is scraped every 30 s.
+    The chart's kubelet scrapes, the per-container metrics among them,
+    label a series with its node's name and none of the node's labels:
+    a node carries tens of labels, node-feature-discovery's most of
+    them, and vmsingle ignores the whole row of a series past 40
+    labels, so a series carrying them all is never stored. The API server's scrape drops
+    the buckets of its largest histogram families, which no reading
+    uses, and keeps their `_count` and `_sum`. **etcd is scraped** on
+    its metrics listener (`ETCD_METRICS_PORT`) on every control plane,
+    by a node scrape the component declares, which drops etcd's
+    gRPC-server and debugging families. vmagent runs on the worker, so
+    its request reaches a control plane over KubeSpan, which the node
+    firewall accepts ahead of every rule, and the port takes no
+    opening; that holds while vmagent never runs on a control plane,
+    which a test holds beside alertmanager's placement. **A row the
+    store ignores raises an alert**, `MetricsDropped`
+    ([operations.md](../operations.md) §6.1). **The store's mutating
+    endpoints take keys**: deleting series, taking snapshots and
+    forcing a merge each take a key generated into `k8s-base`'s state,
+    which vmsingle reads from a Secret it mounts, so no rendered object
+    carries one. Without them, code in any pod that reaches the store's
+    Service, which includes code the installation runs and did not
+    write ([threat-model.md](../threat-model.md) §2.6), can delete the
+    cluster's metrics. metrics-server reads each
     kubelet without verifying its certificate, which Talos' kubelet
     signs itself, as the chart's own kubelet scrapes do. **That is
     accepted** under threat-model.md §4, on its first clause: answering
