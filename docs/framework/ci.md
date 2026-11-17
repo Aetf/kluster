@@ -222,7 +222,9 @@ merge   deploy.yml:         plan-physical ──zero diff──→ (up-physical 
                             any of the five failed ──→ notify-failure
 
 weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
-                              (workflow_dispatch only, fired from the ops repo)
+                              (workflow_dispatch only, fired Mondays by
+                               the ops repo's drift-trigger.yml as the
+                               trigger App — see the drift bullet)
                             any entry failed ──→ alert
 
         alert.yml:          dispatch
@@ -783,16 +785,33 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     not carry a commit's `change-id` header onto `main`
     ([dispatch.md](dispatch.md) §1.2).
 -   **Weekly drift check (2026-08-24)**: a `workflow_dispatch`
-    workflow in this repo runs
+    workflow in this repo, `drift.yml`, runs
     `pulumi preview --refresh --expect-no-changes`
     on all four stacks (physical in the ungated `physical-plan`
-    environment — the accepted posture above, zero clicks), fired
-    weekly by the ops repo's scheduler through an installation
-    token from the **trigger App** — a second single-purpose GitHub
+    environment — the accepted posture above, zero clicks). **Its
+    schedule is in the ops repo**, because this repo carries no
+    `schedule:` trigger: GitHub disables a public repository's
+    scheduled workflow after 60 days without activity (the
+    scheduled-census bullet below). There `drift-trigger.yml`, Mondays
+    at 06:17 UTC and by hand, mints an installation token of the
+    **trigger App**, `kluster-trigger` — a second single-purpose GitHub
     App, installed on this repo alone and carrying **Actions: write
-    only**, so it can start runs and never push code. Two Apps
-    rather than one because GitHub scopes permissions per App
-    (register rows in credentials.md). A diff fails the run, and a
+    only**, so it can start runs and never push code — and dispatches
+    `drift.yml` on `main` with it. The App's client id reaches that workflow as the
+    ops repo's `TRIGGER_APP_CLIENT_ID` variable, which the `github`
+    stack writes from `conventions.forge.TRIGGER_APP`, and its key as
+    the ops repo's `TRIGGER_APP_PRIVATE_KEY` secret, which
+    `credentials derived sync --only github-trigger-key` pushes from
+    the escrow (credentials.md §3). Two Apps rather than one because
+    GitHub scopes permissions per App (register rows in
+    credentials.md). The trigger does not wait for the run it starts
+    or read its verdict, which is the drift run's own alert job's to
+    report: the trigger's alert says only whether a run was
+    dispatched, a `heartbeat` when it was and otherwise an
+    `actionable` alert keyed `kluster-ops/drift-trigger` whose
+    playbook is §3.2, posted by its alert job. A run started by hand here, as
+    physical/gateway-cutover.md §8.3 starts one, is the same run with
+    a person in place of the trigger. A diff fails the run, and a
     failed run ends in the alert job (the alert-producer bullet
     above): an `actionable` alert keyed `kluster/drift`, whose
     playbook is §3.2. Keyed by the workflow, a drift that persists is
@@ -801,10 +820,6 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     half built**: the producer posts the alert, and the ops repo's
     dispatch handler that would turn it into a push and an issue does
     not exist, so a diff is a failed workflow run and nothing more.
-    The workflow also runs only when started by hand, as
-    physical/gateway-cutover.md §8.3 starts it, because the ops repo's
-    `drift-trigger.yml`, which would trigger it, is not written
-    (`kluster-ops#57`).
     `--refresh` is load-bearing for the second source: a plain
     preview diffs code against *cached* state and never queries
     providers, so a console hand-edit leaves code == state and
@@ -821,7 +836,8 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     files that only the program writes, which a fresh runner lacks
     (physical/homelab-host.md §6). Every other stack's providers are
     built from values their inputs in state carry whole.
--   **§3.2 A drift alert.** The matrix entry that failed names the
+-   **§3.2 A drift alert.** An alert keyed `kluster/drift` is the
+    drift run's. The matrix entry that failed names the
     stack. Its log ends either in `--expect-no-changes` refusing the
     changes the refreshed preview found — a diff — or in an error
     before the comparison (the ZeroTier join, the state backend, a
@@ -842,6 +858,22 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     state still holds what the last deploy wrote, and only the device
     resources, whose `diff` reads the device (architecture.md §5.2),
     are put back without it.
+
+    An alert keyed `kluster-ops/drift-trigger` is the trigger's: no
+    drift run started that week, and the step that failed in the ops
+    repo's run says why. *The client id and the key are in place*
+    names the empty slot: `operator-stack github up` writes the
+    variable, and `credentials derived sync --only github-trigger-key`
+    refills the secret. A failed mint is a client id or a key that is
+    not the trigger App's — a key replaced on the App's page and not yet
+    recorded and synced (credentials.md §3) — or an installation that
+    is gone from this repo or no longer carries Actions: write, which
+    is refused there because the token is asked for with that
+    permission. A failed dispatch carries GitHub's refusal: a
+    `drift.yml` on `main` that is disabled or has lost its
+    `workflow_dispatch` trigger. Once the cause is gone, fire the trigger by hand,
+    `gh workflow run drift-trigger.yml --repo Aetf/kluster-ops`, and
+    the drift run it dispatches is that week's.
 -   **§3.3 An apply that timed out or was cancelled.** A timed-out
     apply is its `Up` step exceeding its own bound: the annotation, on
     the run summary above the job's steps, reads `The action 'Up' has
@@ -1194,7 +1226,8 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     server-cert expiry probe ≥30 days —
     physical/state-backend.md §6), the issue-sync poller, the
     **slot-drift probe** (credentials.md §4), the **weekly drift
-    trigger** (below), and the unattended
+    trigger** (`drift-trigger.yml`, which fires this repo's
+    `drift.yml` — the drift bullet above), and the unattended
     **drill workflows** (state-backend rebuild, etcd restore-verify
     — operations.md §4) in the ops repo's `drill` Environment.
     Every run of them is to post to the same intake as CI's — the
@@ -1369,9 +1402,13 @@ retire. A red `preview` of any stack on a code change is a review
 finding. The finding below names the condition that deletes it, and the
 rest of the section goes with it.
 
-`drift` runs only when started by hand (§3). Its `dns` entry fails in
+`drift` runs every Monday and whenever it is started by hand (§3). Its `dns` entry fails in
 its *Refresh and compare* step, with the `status` of a `ZoneDnssec` read
 back as `pending` against the declared `active` as its only diff, until
 physical/gateway-cutover.md §8.4 has run for every zone, and
 physical/gateway-cutover.md §8.3 says how that red is told from one at
 the join.
+So until then every weekly run is red here, and its alert is a dispatch
+the producer posts and nothing yet receives (§3), while the trigger's
+own run in the ops repo is green: it reports that the run was
+dispatched, not what the run found.
