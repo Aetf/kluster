@@ -35,14 +35,12 @@ from __future__ import annotations
 
 import logging
 import tempfile
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
 
 import pulumi
 
-from kluster.lib import bundle
 from kluster.lib.state_backend import permission, settings, state
 from putils import background
 
@@ -95,27 +93,6 @@ def _refuse_without_permission(step: str, granted: Callable[[], bool]) -> None:
         )
 
 
-# --- The transition to the pooler ---------------------------------------------
-#
-# A box rendered before the pooler serves Postgres by the database's own name
-# and has no session entry, so the replacement that introduces the pooler
-# dumps it in the query form instead. This block -- the key, the function and
-# the branch in `dump` -- goes once the instance the stack records carries the
-# key in its bill of materials, which is after that one replacement; nothing
-# else reads it.
-
-#: The bill-of-materials component that names the pooler's image
-#: (`render.Machine.pgbouncer_image`): a box whose recorded bill carries it
-#: serves through the pooler.
-POOLER_COMPONENT = 'pgbouncer_image'
-
-
-def serves_through_pooler(old_inputs: Mapping[str, Any] | None) -> bool:
-    """Whether the box being deleted, as the inputs it was created with describe it, has the pooler's session entry."""
-    bill: object = (old_inputs or {}).get('extendedMetadata') or {}
-    return isinstance(bill, Mapping) and POOLER_COMPONENT in bill
-
-
 @dataclass
 class Replacement:
     """The three hooks, and what they share: the bundle they connect with, the dump's recipients and where it goes.
@@ -146,8 +123,8 @@ class Replacement:
         """`permit`'s work: refuse a create without the permission."""
         _refuse_without_permission('create', self.granted)
 
-    def dump_now(self, *, purpose: bundle.Purpose = bundle.Purpose.DUMP) -> Path:
-        """`dump`'s work: refuse without the permission, then dump, in the form `purpose` names. Returns the encrypted dump."""
+    def dump_now(self) -> Path:
+        """`dump`'s work: refuse without the permission, then dump. Returns the encrypted dump."""
         _refuse_without_permission('delete', self.granted)
         destination = self.dump_directory / state.dump_name()
         plaintext = tempfile.TemporaryDirectory(prefix=f'{settings.NAME}-')
@@ -158,7 +135,6 @@ class Replacement:
                 bundle_dir=self.bundle_dir,
                 recipients=self.recipients,
                 archive=Path(plaintext.name) / 'state.dump',
-                purpose=purpose,
             )
         except BaseException:
             plaintext.cleanup()
@@ -203,9 +179,8 @@ class Replacement:
     async def permit(self, _args: pulumi.ResourceHookArgs) -> None:
         await background(self.permit_now)()
 
-    async def dump(self, args: pulumi.ResourceHookArgs) -> None:
-        purpose = bundle.Purpose.DUMP if serves_through_pooler(args.old_inputs) else bundle.Purpose.QUERY
-        _ = await background(self.dump_now)(purpose=purpose)
+    async def dump(self, _args: pulumi.ResourceHookArgs) -> None:
+        _ = await background(self.dump_now)()
 
     async def restore(self, _args: pulumi.ResourceHookArgs) -> None:
         _ = await background(self.restore_now)()

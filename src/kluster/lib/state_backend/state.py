@@ -289,20 +289,19 @@ def _run(
     return proc.stdout
 
 
-def pg_dump(target: Connection, destination: Path, *, purpose: bundle.Purpose = bundle.Purpose.DUMP) -> None:
+def pg_dump(target: Connection, destination: Path) -> None:
     """`pg_dump -Fc` over the bundle's connection, into a local file.
 
     The custom format because that is what the appliance's own timer writes
     and what `pg_restore` can list and reorder. Through the pooler's session
-    entry (`bundle.Purpose.DUMP`), unless `purpose` names another form: the
-    query form reaches a box that serves the database by its own name alone. The archive records whichever
+    entry (`bundle.Purpose.DUMP`). The archive records whichever
     owner the box gave each object; nothing reads it back, because a restore
     hands every object to the owner the box itself names (`pg_restore`).
     """
     log.info(
         'running %s -Fc against %s — tens of MB over TLS, expect seconds to minutes',
         PG_DUMP,
-        endpoint(target.form(purpose)),
+        endpoint(target.form(bundle.Purpose.DUMP)),
         extra={'step': Step.DUMP},
     )
     _ = _run(
@@ -313,9 +312,9 @@ def pg_dump(target: Connection, destination: Path, *, purpose: bundle.Purpose = 
             # password to type: the client certificate is the credential.
             '--no-password',
             f'--file={destination}',
-            f'--dbname={target.form(purpose)}',
+            f'--dbname={target.form(bundle.Purpose.DUMP)}',
         ],
-        what=f'{PG_DUMP} against {endpoint(target.form(purpose))}',
+        what=f'{PG_DUMP} against {endpoint(target.form(bundle.Purpose.DUMP))}',
         timeout=TRANSFER_TIMEOUT,
         env=target.env,
     )
@@ -910,20 +909,18 @@ def take_dump(
     bundle_dir: Path,
     recipients: Sequence[str],
     archive: Path,
-    purpose: bundle.Purpose = bundle.Purpose.DUMP,
 ) -> None:
     """`write_dump`, leaving the plaintext archive at `archive` for the caller.
 
     For the caller that restores what it dumped within its own run, the
     `state-backend` stack's hooks (rfc-006 §4.3): `archive` is in a directory
     that caller made private and removes, and the encrypted `destination` is
-    the dump that outlives the run. `purpose` is the form the dump reaches
-    the box in (`pg_dump`).
+    the dump that outlives the run.
     """
     refuse_to_overwrite(destination)
     target = connection(bundle_dir)
     log.info('dumping the live state over the client bundle in %s', bundle_dir)
-    pg_dump(target, archive, purpose=purpose)
+    pg_dump(target, archive)
     log.info('verifying the archive before calling it a dump')
     _ = verify_dump(archive)
     log.info('encrypting the dump')

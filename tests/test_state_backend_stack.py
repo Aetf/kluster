@@ -60,7 +60,7 @@ from oci.exceptions import ServiceError  # pyright: ignore[reportMissingTypeStub
 from kluster import conventions
 from kluster.components import state_backend as component
 from kluster.components.state_backend import hooks
-from kluster.lib import bundle, stack_environment
+from kluster.lib import stack_environment
 from kluster.lib.state_backend import committed, permission, render, settings, state
 from kluster.providers import oci_objects, postgres_tls
 from kluster.scripts.credentials import derived, escrow, pki
@@ -858,8 +858,6 @@ class Tools:
     restore_lists_nothing: bool = False
     #: The bundle directory every connection was built from.
     bundles: list[Path] = dataclasses.field(default_factory=list[Path])
-    #: The form each dump reached the box in.
-    dumped_in: list[bundle.Purpose] = dataclasses.field(default_factory=list[bundle.Purpose])
 
 
 @pytest.fixture
@@ -870,9 +868,8 @@ def tools(monkeypatch: pytest.MonkeyPatch) -> Tools:
         found.bundles.append(bundle_dir)
         return state.Connection(url=f'postgres://box/{bundle_dir.name}', env={})
 
-    def pg_dump(_target: state.Connection, destination: Path, *, purpose: bundle.Purpose = bundle.Purpose.DUMP) -> None:
+    def pg_dump(_target: state.Connection, destination: Path) -> None:
         found.calls.append('pg_dump')
-        found.dumped_in.append(purpose)
         if found.dump_fails:
             raise state.StateError('pg_dump against postgres://box failed: connection refused')
         _ = destination.write_bytes(b'PGDMP the archive')
@@ -1131,68 +1128,6 @@ async def test_the_hook_that_dumps_runs_before_the_instance_goes_and_the_one_tha
         INSTANCE: {'before_create': [permitting], 'before_delete': [dumping]},
         READINESS: {'after_create': [restoring]},
     }
-
-
-#: The `state-backend` stack's committed checkpoint, which records the
-#: inputs of the box the stack last created.
-COMMITTED_CHECKPOINT = (
-    Path(__file__).parent.parent
-    / stack_environment.CHECKPOINTS
-    / '.pulumi'
-    / 'stacks'
-    / 'kluster-py'
-    / 'state-backend.json'
-)
-
-
-def _recorded_instance_inputs() -> dict[str, Any]:
-    """The inputs the committed checkpoint records for the box."""
-    resources = json.loads(COMMITTED_CHECKPOINT.read_text())['checkpoint']['latest']['resources']
-    (instance,) = [resource for resource in resources if resource['type'] == INSTANCE]
-    return instance['inputs']
-
-
-@pytest.mark.asyncio
-async def test_the_dump_hook_reaches_a_box_through_the_entry_its_recorded_bill_says_it_has(
-    wired: Wired, tools: Tools, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """A box rendered with the pooler is dumped through its session entry; the recorded box, by the database's name.
-
-    The recorded box is the one the stack last created, as its committed
-    checkpoint holds its inputs: a box rendered before the pooler, whose
-    bill of materials names no pooler image. The bill this commit renders
-    does.
-    """
-    monkeypatch.setenv(permission.ENV, permission.GRANTED)
-    rendered = render.bill_of_materials(_render_machine(_machine(tmp_path).keys))
-    for bill in (rendered, _recorded_instance_inputs()['extendedMetadata']):
-        args = pulumi.ResourceHookArgs(
-            urn=f'urn:pulumi:{NAME}::kluster::{INSTANCE}::x',
-            id='x',
-            name='x',
-            type=INSTANCE,
-            old_inputs={'extendedMetadata': bill},
-        )
-        called = wired.run.hooks[f'{NAME}-dump'].callback(args)
-        if inspect.isawaitable(called):
-            await called
-        for dumped in wired.work.glob('*.dump.age'):
-            dumped.unlink()
-
-    assert tools.dumped_in == [bundle.Purpose.DUMP, bundle.Purpose.QUERY]
-
-
-def test_remove_the_transition_once_the_recorded_box_serves_through_the_pooler() -> None:
-    """The tripwire on `hooks`' transition block: red once the box the stack records carries the pooler.
-
-    The block dumps a box rendered before the pooler in the query form. Once
-    the committed checkpoint records a box whose bill of materials names the
-    pooler, no box without it is left to replace, and the block, this case
-    and the one above it go.
-    """
-    assert not hooks.serves_through_pooler(_recorded_instance_inputs()), (
-        "the recorded box serves through the pooler: remove `hooks`' transition block and these cases"
-    )
 
 
 # --------------------------------------------------------------------------
