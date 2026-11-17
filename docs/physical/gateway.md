@@ -2373,12 +2373,13 @@ podman rm --force --volumes kluster-probe-resolver
 podman network rm kluster-probe-lan
 podman ps -a --filter name=kluster-probe    # nothing
 PRODUCTION=$(mise x uv -- uv run python -c 'from kluster.conventions import overlay; print(overlay.NETWORK_ID)')
-if probe stack export | grep -qi "$PRODUCTION"; then
+if ! state=$(probe stack export); then
+    echo 'the probe state did not read: stop'
+elif grep -qi "$PRODUCTION" <<<"$state"; then
     echo 'the probe state holds the production network: stop'
 else
-    probe state unprotect --all && probe destroy --remove
+    probe state unprotect --all && probe destroy --remove && rm -rf "$PROBE"
 fi
-rm -rf "$PROBE"
 ```
 
 **The production network is refused twice.** The program raises
@@ -2388,6 +2389,8 @@ lifts no protection and destroys nothing while the probe's state names
 that id,
 because `destroy` deletes whatever network the state holds, and a
 deleted production network is a new id every member re-joins by hand.
+A state that did not read stops it too: its empty answer names no id,
+which is the answer that would let the destroy go on.
 `rm -rf` runs only once `destroy` has succeeded or its leftovers are
 gone by hand in Central.
 

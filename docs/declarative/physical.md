@@ -1104,10 +1104,13 @@ fdatasync` for each write-ahead-log sync that takes longer than a
 second. For each control plane, with the cluster's talosconfig:
 
 ```sh
-mise x -- talosctl -n <node> logs etcd | grep -c 'slow fdatasync'
+log=$(mise x -- talosctl -n <node> logs etcd) && grep -c 'slow fdatasync' <<<"$log"
 ```
 
-It passes when every control plane prints `0`. The item passes when
+It passes when every control plane prints `0`. `grep` counts only a
+log `talosctl` returned, so a failed read prints `talosctl`'s error and
+no count, rather than the `0` an empty input would give, and a control
+plane that prints no count has not been read. The item passes when
 both halves do.
 
 A new control plane is a new boot volume, so the item runs again

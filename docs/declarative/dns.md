@@ -139,12 +139,12 @@ crt.sh's JSON endpoint — which caps an identity search at 10,000
 matched identities, a few thousand certificates, and says nothing in
 its JSON when it does, so a count in the thousands is itself a finding:
 
-    Z=<zone>; curl -s "https://crt.sh/?q=$Z&match=ILIKE&output=json&deduplicate=Y" \
-      | jq -r --arg z "$Z" --arg since <previous read> '.[]
+    Z=<zone>; out=$(curl -fsS "https://crt.sh/?q=$Z&match=ILIKE&output=json&deduplicate=Y") \
+      && jq -r --arg z "$Z" --arg since <previous read> '[.[]
           | select(.not_before >= $since)
           | .name_value |= (split("\n") | map(select(. == $z or endswith("." + $z))) | join(" "))
-          | select(.name_value != "")
-          | [.id, .issuer_name, .name_value, .not_before] | @tsv'
+          | select(.name_value != "")]
+          | (.[] | [.id, .issuer_name, .name_value, .not_before] | @tsv), "\(length) rows"' <<<"$out"
 
 `match=ILIKE` is a substring match over each certificate's identities,
 so it reaches the apex and every name under the zone; left unset, crt.sh
@@ -161,6 +161,14 @@ identity search. The columns are the crt.sh id, the issuer's name, the
 certificate's names under the zone — crt.sh lists the identities the
 search matched, not the whole subject alternative name set, which is why
 the guard runs over what it lists — and the not-before date.
+
+**A run that does not end on its `<n> rows` line is no reading.** An
+empty answer passes, and it is also what a failed fetch would hand
+`jq`, so the fetch is kept apart from the count: `curl -f` fails on
+an HTTP error rather than passing an error page on, `jq` runs only on
+what `curl` fetched, and what fails prints its error in place of the
+count line. Such a run is taken again, and an answer of no rows is one
+that ends on `0 rows`.
 
 **The expected answer** for a zone in `ZONE_ISSUERS` is that every row's
 issuer is a member of that zone's set, and every name is a name the
