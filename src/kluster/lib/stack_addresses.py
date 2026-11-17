@@ -1,23 +1,11 @@
 """Addresses read out of another stack's outputs, refused unless they are addresses.
 
-A machine fact crosses a stack boundary as a stack output read through a
-`StackReference` (framework/pulumi.md §3.1), and what the reference reads back
-is not always the value the producer meant. Measured at the pinned SDK
-(framework/pulumi.md §1.4, §3.1), in place of an output it can hand over:
-
--   `None`, for an output the producer has not published -- the state of a
-    stack that has never been applied -- and, in an update, for one a targeted
-    apply of the producer wrote as Pulumi's unknown sentinel;
--   an unknown, in a preview, for every output of a producer that holds that
-    sentinel in any of them;
--   `{}`, for a secret the reading stack cannot decrypt.
-
-Carried on unchecked, each of them becomes something a resource takes as an
-address: `str(None)` is `"None"`. So a program that hands an address output to
-a resource reads it through here, and anything but an address of the family it
-needs stops the run at the read, naming the output and what it held and never
-the value itself. The check runs unknowns included (`run_with_unknowns`), so a
-preview refuses what an update would.
+A program that hands an address output to a resource reads it through here,
+and anything a `StackReference` hands back in place of an address
+(`kluster.lib.stack_outputs`, which says what each is and why), or anything
+but an address of the family it needs, stops the run at the read, naming the
+output and what it held and never the value itself. The check runs unknowns
+included, so a preview refuses what an update would.
 
 Two shapes of output are read: one address (`address`), and a mapping from a
 name the producer chose -- a node's -- to one address each
@@ -28,13 +16,13 @@ none.
 
 from __future__ import annotations
 
-import enum
 import ipaddress
 from collections.abc import Mapping
 from typing import Literal, cast
 
 import pulumi
-from pulumi.output import Unknown
+
+from kluster.lib import stack_outputs
 
 __all__ = (
     'Family',
@@ -49,34 +37,25 @@ __all__ = (
 #: An IP version, as `ipaddress` numbers them.
 type Family = Literal[4, 6]
 
-#: Why a value can be absent or unknown, said once for every refusal that finds one.
-_UNAPPLIED = (
-    "a targeted apply of the producing stack wrote it as Pulumi's unknown sentinel (framework/pulumi.md §1.4), "
-    'and the rest of that stack has to be applied first'
-)
 
+class Held(stack_outputs.Kinds):
+    """What an address output held instead of an address, or a mapping of them.
 
-class Held(enum.Enum):
-    """What an address output held instead of an address, or a mapping of them."""
+    The shared kinds mean what `kluster.lib.stack_outputs.Held` says they do;
+    the rest are an address's own.
+    """
 
-    #: Unknown, as a preview reads every output of a stack holding the unknown sentinel.
-    UNKNOWN = enum.auto()
-    #: Absent: not published, or written as the sentinel by a targeted apply.
-    ABSENT = enum.auto()
-    #: An empty mapping, which is also how an undecryptable secret reads back.
-    EMPTY_MAPPING = enum.auto()
-    #: A mapping where an address goes: an undecryptable secret.
-    MAPPING = enum.auto()
+    UNKNOWN = stack_outputs.Held.UNKNOWN
+    ABSENT = stack_outputs.Held.ABSENT
+    EMPTY_MAPPING = stack_outputs.Held.EMPTY_MAPPING
+    MAPPING = stack_outputs.Held.MAPPING
+    NOT_A_NAME = stack_outputs.Held.NOT_A_NAME
+    EMPTY_STRING = stack_outputs.Held.EMPTY_STRING
+    OTHER = stack_outputs.Held.OTHER
     #: An address of the other family.
-    WRONG_FAMILY = enum.auto()
+    WRONG_FAMILY = 'wrong family'
     #: A string that is not an address.
-    NOT_AN_ADDRESS = enum.auto()
-    #: An empty string.
-    EMPTY_STRING = enum.auto()
-    #: A mapping keyed by something other than a name.
-    NOT_A_NAME = enum.auto()
-    #: A value of another type altogether.
-    OTHER = enum.auto()
+    NOT_AN_ADDRESS = 'not an address'
 
 
 class UnusableAddressOutput(ValueError):
@@ -97,16 +76,12 @@ class UnusableAddressOutput(ValueError):
 
 def address(reference: pulumi.StackReference, output: str, family: Family) -> pulumi.Output[str]:
     """The output `output` of the referenced stack, refused unless it is an IPv`family` address."""
-    return reference.get_output(output).apply(
-        lambda value: usable_address(output, family, value), run_with_unknowns=True
-    )
+    return stack_outputs.read(reference, output, lambda value: usable_address(output, family, value))
 
 
 def addresses_by_name(reference: pulumi.StackReference, output: str, family: Family) -> pulumi.Output[dict[str, str]]:
     """The output `output` of the referenced stack, refused unless it maps names to IPv`family` addresses."""
-    return reference.get_output(output).apply(
-        lambda value: usable_addresses(output, family, value), run_with_unknowns=True
-    )
+    return stack_outputs.read(reference, output, lambda value: usable_addresses(output, family, value))
 
 
 def usable_address(output: str, family: Family, value: object) -> str:
@@ -126,18 +101,20 @@ def usable_address(output: str, family: Family, value: object) -> str:
 
 def usable_addresses(output: str, family: Family, value: object) -> dict[str, str]:
     """`value` if it maps names to IPv`family` addresses, else a refusal saying what it is -- never a value in it."""
-    found = _not_a_mapping(value)
+    found = stack_outputs.not_a_mapping(Held, value)
     at: str | None = None
     if found is None:
         entries = cast('Mapping[object, object]', value)
         for name, entry in entries.items():
-            if not isinstance(name, str):
-                found = (Held.NOT_A_NAME, f'a mapping with a {type(name).__name__} key')
+            key_found = stack_outputs.not_a_name(Held, name)
+            if key_found is not None:
+                held, said = key_found
+                found = (held, f'a mapping with {said}')
                 break
             entry_found = _not_an_address(family, entry)
             if entry_found is not None:
                 held, said = entry_found
-                found, at = (held, f'a mapping whose {name!r} entry is {said}'), name
+                found, at = (held, f'a mapping whose {name!r} entry is {said}'), cast('str', name)
                 break
         else:
             return {cast('str', name): cast('str', entry) for name, entry in entries.items()}
@@ -152,45 +129,13 @@ def usable_addresses(output: str, family: Family, value: object) -> dict[str, st
     )
 
 
-def _not_a_mapping(value: object) -> tuple[Held, str] | None:
-    """What `value` is, if it is not a non-empty mapping; `None` if it is one."""
-    if isinstance(value, Mapping):
-        if cast('Mapping[object, object]', value):
-            return None
-        return Held.EMPTY_MAPPING, (
-            'an empty mapping, which is also how a StackReference reads back a secret it could not decrypt: '
-            "either the producing stack published no entries, or this stack cannot open the producer's secrets"
-        )
-    return _absent_or_other(value)
-
-
 def _not_an_address(family: Family, value: object) -> tuple[Held, str] | None:
     """What `value` is, if it is not an IPv`family` address; `None` if it is one."""
-    if isinstance(value, str):
-        try:
-            parsed = ipaddress.ip_address(value)
-        except ValueError:
-            return (
-                (Held.NOT_AN_ADDRESS, 'a string that is not an address')
-                if value
-                else (Held.EMPTY_STRING, 'an empty string')
-            )
-        return None if parsed.version == family else (Held.WRONG_FAMILY, f'an IPv{parsed.version} address')
-    if isinstance(value, Mapping):
-        return Held.MAPPING, (
-            'a mapping, which is how a StackReference reads back a secret it could not decrypt: this stack '
-            "cannot open the producing stack's secrets"
-        )
-    return _absent_or_other(value)
-
-
-def _absent_or_other(value: object) -> tuple[Held, str]:
-    """What `value` is, for a value that is neither a string nor a mapping."""
-    if value is None:
-        return Held.ABSENT, f'absent: the producing stack has not published it, or {_UNAPPLIED}'
-    if isinstance(value, Unknown):
-        return Held.UNKNOWN, (
-            "unknown, which is how a preview reads every output of a stack holding Pulumi's unknown sentinel in any "
-            f'of them: {_UNAPPLIED}'
-        )
-    return Held.OTHER, f'a {type(value).__name__}'
+    found = stack_outputs.not_a_string(Held, value)
+    if found is not None:
+        return found
+    try:
+        parsed = ipaddress.ip_address(cast('str', value))
+    except ValueError:
+        return Held.NOT_AN_ADDRESS, 'a string that is not an address'
+    return None if parsed.version == family else (Held.WRONG_FAMILY, f'an IPv{parsed.version} address')

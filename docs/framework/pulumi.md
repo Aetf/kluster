@@ -371,7 +371,11 @@ different things:
     on unchecked, an absence becomes text — `str(None)` is `"None"` —
     so a reader that hands an output to a resource checks it at the read
     and refuses anything but a usable value by name, unknowns included
-    (`kluster.lib.stack_addresses`, for an address). The
+    (`kluster.lib.stack_addresses`, for an address). What a reference
+    hands back in place of a value, how each is told apart, and the read
+    that runs a reader's check on an unknown as well: all three live
+    once, in `kluster.lib.stack_outputs`, which every such reader is
+    built on. The
     mechanism, and the rule that nothing may read such an output until
     the rest of the producer is applied, are §1.4's "When an awaited
     value is unknown".
