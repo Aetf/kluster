@@ -165,7 +165,7 @@ not moved.
     ```sh
     ADDR=<the committed gatewayBootstrapHost>
     ssh "root@$ADDR" true                                       # the shell door
-    curl -skS -o /dev/null -w '%{http_code}\n' "https://$ADDR/"  # the controller door
+    curl --noproxy '*' -skS -o /dev/null -w '%{http_code}\n' "https://$ADDR/"  # the controller door
     ```
 
     The value is bound once and used twice on purpose: the knob takes
@@ -440,7 +440,7 @@ not moved.
     JQ=$(mise which jq)
     unifi_v2() {    # one read of the controller's v2 API; the key goes on stdin, never the command line
         physical config get unifiApiKey | sed 's/^/X-API-KEY: /' |
-            curl -fsSk -H @- "https://$ADDR/proxy/network/v2/api/site/default/$1"
+            curl --noproxy '*' -fsSk -H @- "https://$ADDR/proxy/network/v2/api/site/default/$1"
     }
     pair_of() {     # every policy from zone $1 to zone $2, whole, as the controller holds it
         unifi_v2 firewall-policies | "$JQ" --argjson zones "$(unifi_v2 firewall/zone)" --arg s "$1" --arg d "$2" '
@@ -1291,9 +1291,15 @@ object with no file behind it and goes at the next boot, or to
     in `handle { abort }` and an unmatched name gets no answer at all:
 
     ```sh
-    curl -sS --resolve unifi.unlimited-code.works:443:10.0.5.180 \
+    curl --noproxy '*' -sS --resolve unifi.unlimited-code.works:443:10.0.5.180 \
         https://unifi.unlimited-code.works/ -o /dev/null -w '%{http_code}\n'
     ```
+
+    `--noproxy '*'` is what makes the pin hold: where the shell's
+    environment names an HTTP proxy, `curl` sends it a `CONNECT` for the
+    name and never uses the address `--resolve` gives, so the status
+    printed would come from wherever that HTTP proxy's own resolver sends
+    the name.
 
     Repeat for each declared vhost and for each legacy vhost the census
     carries. A **new certificate is expected** — the state carried across
@@ -1959,11 +1965,13 @@ policy rules exposed to removal" in gateway.md §3, comes first.
 **After the apply**, the controller holds the configuration, switched
 on, and the controller runs the suite. From the workstation, with
 `ADDR` the address the stack reaches the controller at, a reading that
-prints the object's length and not its text:
+prints the object's length and not its text, and that hands the key to
+`curl` on its standard input as `unifi_v2` in §3 does, so that it is in
+no command line:
 
 ```sh
-curl -sk -H "X-API-KEY: $(physical config get unifiApiKey)" \
-    "https://$ADDR/proxy/network/v2/api/site/default/bgp/config" |
+physical config get unifiApiKey | sed 's/^/X-API-KEY: /' |
+    curl --noproxy '*' -sk -H @- "https://$ADDR/proxy/network/v2/api/site/default/bgp/config" |
     jq '[.[] | {_id, enabled, uploaded_file_name, length: (.frr_bgpd_config | length)}]'
 # one object, enabled true, kluster-frr.conf
 ```

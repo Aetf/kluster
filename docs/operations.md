@@ -261,7 +261,7 @@ from an HTTP repository, which offers nothing to check a download against
     the cluster's `kubectl` under the kubeconfig that setup writes, and
     `<node>` the lost node's name (`cp2`):
 
-        kub() { kubectl --kubeconfig ~/.kube/kluster "$@"; }
+        kub() { mise x -- kubectl --kubeconfig ~/.kube/kluster "$@"; }
         ocid() { physical stack export | jq -r --arg t "$1" --arg n "$2" '.deployment.resources[] | select(.type == $t and .outputs.displayName == $n) | .id'; }
         credentials derived oci-physical read "$(ocid oci:Core/instance:Instance kluster-<node>)"
         kub delete node <node>
