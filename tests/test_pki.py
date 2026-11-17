@@ -2,10 +2,12 @@
 
 The properties worth holding are the ones a silent break would hide — that a
 CA recovered from its PEM is the same CA, that a leaf gets a *fresh* key every
-time (escrowing leaves is what this design deliberately does not do), and that
-openssl itself accepts the chain, under its strict checks.
+time (escrowing leaves is what this design deliberately does not do), that
+openssl itself accepts the chain, under its strict checks, and that a verifier
+whose clock runs behind the issuer's accepts a certificate issued just now.
 """
 
+import datetime as dt
 import ipaddress
 import subprocess as sp
 from pathlib import Path
@@ -15,6 +17,7 @@ import pytest
 from cryptography import x509
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec, rsa
+from cryptography.x509.verification import Criticality, ExtensionPolicy, PolicyBuilder, Store, VerificationError
 
 from kluster.scripts.credentials import pki
 
@@ -194,3 +197,64 @@ def test_openssl_refuses_a_leaf_for_the_other_side_s_purpose(
     assert refused.returncode != 0
     # OpenSSL 3 says `unsuitable`, 1.1 said `unsupported`; the error is 26 in both.
     assert 'certificate purpose' in refused.stdout + refused.stderr
+
+
+# -- validity at the verifier's clock ------------------------------------------
+
+#: The issuance every case below pins, so that no case reads the wall clock.
+ISSUED = dt.datetime(2030, 1, 1, tzinfo=dt.UTC)
+
+#: How far behind the issuer's the verifier's clock runs: past the second a
+#: certificate is stamped with, which is what a coarse clock read in the first
+#: milliseconds of that second, or a host a little behind, amounts to.
+BEHIND = dt.timedelta(seconds=1)
+
+#: Long enough before `ISSUED` that whatever was issued then is valid at any
+#: clock the cases below verify at.
+ESTABLISHED = ISSUED - dt.timedelta(days=1)
+
+
+def _verify_at(authority: pki.Authority, fresh: str, at: dt.datetime) -> None:
+    """Verify a chain at `at`, with the certificate `fresh` names issued at `ISSUED` and the rest at `ESTABLISHED`.
+
+    `cryptography`'s verifier takes the time to verify at as an argument,
+    which is what keeps the clock out of these cases. Its client policy wants
+    a SAN on the leaf, which the client leaf has no use for, so that leaf is
+    held to the web-PKI defaults with the SAN made optional and nothing else
+    relaxed.
+    """
+    ca = x509.load_pem_x509_certificate(authority.certificate(now=ISSUED if fresh == 'ca' else ESTABLISHED).cert_pem)
+    builder = PolicyBuilder().store(Store([ca])).time(at)
+    if fresh == 'client':
+        leaf = x509.load_pem_x509_certificate(authority.issue_client('ci', now=ISSUED).cert_pem)
+        verifier = builder.extension_policies(
+            ca_policy=ExtensionPolicy.webpki_defaults_ca(),
+            ee_policy=ExtensionPolicy.webpki_defaults_ee().may_be_present(
+                x509.SubjectAlternativeName, Criticality.AGNOSTIC, None
+            ),
+        ).build_client_verifier()
+        _ = verifier.verify(leaf, [])
+        return
+    issued = ISSUED if fresh == 'server' else ESTABLISHED
+    leaf = x509.load_pem_x509_certificate(authority.issue_server(ADDRESS, now=issued).cert_pem)
+    _ = builder.build_server_verifier(x509.IPAddress(ipaddress.ip_address(ADDRESS))).verify(leaf, [])
+
+
+@pytest.mark.parametrize('fresh', ['ca', 'server', 'client'])
+def test_a_certificate_issued_just_now_is_valid_to_a_clock_behind_the_issuer_s(
+    authority: pki.Authority, fresh: str
+) -> None:
+    # A certificate stamped valid from the second it was issued in is "not
+    # yet valid" to OpenSSL on the issuing host itself for the first
+    # milliseconds of that second, and to any host whose clock is behind.
+    _verify_at(authority, fresh, ISSUED - BEHIND)
+
+
+@pytest.mark.parametrize('fresh', ['ca', 'server', 'client'])
+def test_a_clock_behind_by_more_than_the_margin_finds_the_certificate_not_yet_valid(
+    authority: pki.Authority, fresh: str
+) -> None:
+    # The control for the case above: a verifier that never looked at
+    # `notBefore` would pass it too.
+    with pytest.raises(VerificationError, match='not valid at validation time'):
+        _verify_at(authority, fresh, ISSUED - pki.NOT_BEFORE_MARGIN - BEHIND)
