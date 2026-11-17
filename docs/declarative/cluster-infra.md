@@ -537,7 +537,15 @@ All decided behavior from architecture.md §3, expressed as config:
     on in every pod: `pmtuDiscovery.packetizationLayerPMTUDMode:
     blackhole`, which after about three seconds of silence drops the
     segment size to 1024 bytes and probes upward. It is the chart's
-    default, and the values state it (rfc-008 §4.1).
+    default, and the values state it (rfc-008 §4.1). **A change to the
+    values rolls the agent, the operator and Envoy.** The agent and the
+    operator read the config map `cilium-config` when they start and not
+    after, and Envoy its bootstrap in the config map
+    `cilium-envoy-config`, so the values turn on the chart's
+    `rollOutCiliumPods`, `operator.rollOutPods` and `envoy.rollOutPods`,
+    which put a checksum of the config map each one reads on its pod
+    template: a change that rewrites one replaces the pods that read it,
+    and an `up` that rewrites neither replaces none.
 -   **No `NodePort`** (Aetf/kluster-ops#397): whatever the datapath
     answers on a node's own address is internet-facing on a cloud
     node, because the subnet narrows no TCP or UDP port in either
