@@ -10,9 +10,11 @@ What every run shares (framework/pulumi.md §3.3):
     and a run refuses inside a `jj` workspace under `.claude/`, where the
     slots do not answer.
 -   **`plan` is a refreshed preview** that exits 0 when nothing is planned
-    and 1 when something is. **`up` refreshes, previews, asks, and applies**,
-    and runs no `up` at all when nothing is planned: an `up` over nothing
-    would still rewrite a committed checkpoint's timestamp and every
+    and 1 when something is. Where the refreshed preview plans no step, a
+    second preview, without a refresh, reads what an `up` would write with
+    no step (`kluster.lib.state_only`). **`up` refreshes, previews, asks, and
+    applies**, and runs no `up` at all when nothing is planned: an `up` over
+    nothing would still rewrite a committed checkpoint's timestamp and every
     ciphertext in it.
 -   **Anything else goes to `pulumi`** under the same environment, but an
     `import` or a `stack import` into a stack whose state is committed, which
@@ -36,6 +38,7 @@ import logging
 import os
 import signal
 import subprocess as sp
+import tempfile
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -43,7 +46,7 @@ from pathlib import Path
 from typing import Any, Protocol, cast
 
 from kluster.conventions import identity
-from kluster.lib import stack_environment
+from kluster.lib import stack_environment, state_only
 from kluster.lib.state_backend import permission
 from kluster.scripts.operator_stack import appliance, checkpoint, progress
 
@@ -73,8 +76,8 @@ NO_CHANGE = frozenset({'same', 'read', 'discard', 'read-replacement'})
 
 #: What makes `pulumi preview --json` print the engine's events, one JSON
 #: object per line, rather than one document at the end: the variable the
-#: flag's own help names. The events are what carry the stack's outputs
-#: before and after, which the single document does not.
+#: flag's own help names. The events are what carry the steps as they are
+#: planned, with the outputs a refresh or an import read.
 STREAMING_JSON_ENV = 'PULUMI_ENABLE_STREAMING_JSON_PREVIEW'
 
 
@@ -118,6 +121,14 @@ class Why(enum.Enum):
     NAMES_A_STACK = 'names a stack'
     #: A passthrough would import into a stack whose state is committed.
     IMPORTS_UNMARKED = 'imports unmarked'
+    #: The preview without a refresh exited with neither 0 nor a step's refusal.
+    UNREFRESHED_FAILED = 'preview without a refresh failed'
+    #: The preview without a refresh does not say what an `up` would write.
+    #: Its reading's own, it goes with `kluster.lib.state_only`.
+    UNREFRESHED_UNREADABLE = 'preview without a refresh unreadable'
+    #: The temporary directory for that preview's event log is inside the
+    #: checkout. Its reading's own, it goes with `kluster.lib.state_only`.
+    UNREFRESHED_LOG_IN_CHECKOUT = 'preview without a refresh logs into the checkout'
 
 
 class Refused(RuntimeError):
@@ -139,8 +150,9 @@ class Pulumi(Protocol):
 
     `doing` is what a run the driver composes is doing, the phrase it logs
     before it starts the run: where it is given, the run's progress is said
-    where `pulumi` does not show it (`progress`). A passed-through command
-    and a query are given none.
+    where `pulumi` does not show it (`progress`). A passed-through command,
+    a query, and the preview without a refresh are given none: that
+    preview's event log is the one the reading needs (`Run._unrefreshed`).
     """
 
     def stream(self, args: Sequence[str], *, cwd: Path, env: Mapping[str, str], doing: str | None = None) -> int:
@@ -162,8 +174,9 @@ class Pulumi(Protocol):
 class Cli:
     """The pinned `pulumi` on `PATH`, started with exactly the environment it is handed.
 
-    **A run handed `doing` is observed** (`progress`): the preview always,
-    since its standard output is the events and `pulumi` shows nothing of it;
+    **A run handed `doing` is observed** (`progress`): the refreshed preview
+    always, since its standard output is the events and `pulumi` shows
+    nothing of it;
     the apply only where `pulumi`'s display is not live, since a line written
     beside a live display is erased by its redraw. The wait on such a run
     ticks at `progress.INTERVAL`, on `communicate`'s own timeout, which loses
@@ -303,48 +316,15 @@ class Preview:
     read: Mapping[str, Mapping[str, object]] = field(default_factory=dict[str, Mapping[str, object]])
     #: The stack's outputs as the program computes them.
     stack_outputs: Mapping[str, object] = field(default_factory=dict[str, object])
-    #: The stack outputs whose value would change. The engine counts no step
-    #: for them — the stack resource is `same` — but an `up` writes them. A
-    #: secret output reads as the same placeholder before and after, so a
-    #: change to one alone is not among these.
-    outputs: tuple[str, ...] = ()
-    #: The resources whose options alone would change, as their URN and the
-    #: option (`OPTIONS`). The engine counts a `same` step for each, and an
-    #: `up` writes the new options.
-    options: tuple[tuple[str, str], ...] = ()
     #: What the engine reported beside the steps: warnings and errors.
     messages: tuple[str, ...] = ()
     #: The same, each with the URN it is about (empty for none).
     diagnostics: tuple[tuple[str, str], ...] = ()
 
     @property
-    def planned(self) -> bool:
-        return (
-            bool(self.outputs)
-            or bool(self.options)
-            or any(count for op, count in self.changes.items() if op not in NO_CHANGE)
-        )
-
-
-#: The options a step event carries in a resource's state before and after:
-#: `apitype.StepEventStateMetadata`, whose other fields are the resource's
-#: identity, its inputs and its outputs. Every other option — `dependsOn`,
-#: `deleteBeforeReplace`, `ignoreChanges`, `replaceOnChanges`,
-#: `additionalSecretOutputs`, `aliases`, `customTimeouts` — is absent from
-#: the events, so a change to one of those alone reads as nothing planned
-#: (framework/pulumi.md §3.3).
-OPTIONS = ('protect', 'retainOnDelete', 'provider', 'parent')
-
-
-def _changed_options(metadata: Mapping[str, Any]) -> list[str]:
-    """The `OPTIONS` a step's state has one value of before it and another after it.
-
-    An option left unset and one set to its default are the same: `protect`
-    absent and `protect: false` both mean unprotected.
-    """
-    old = cast('dict[str, object]', metadata.get('old') or {})
-    new = cast('dict[str, object]', metadata.get('new') or {})
-    return [option for option in OPTIONS if (old.get(option) or None) != (new.get(option) or None)]
+    def stepped(self) -> bool:
+        """Whether the preview plans a step the engine's `HasChanges` counts."""
+        return any(count for op, count in self.changes.items() if op not in NO_CHANGE)
 
 
 #: The type of the resource every stack has, whose outputs are the stack's.
@@ -373,8 +353,6 @@ def read_preview(printed: str) -> Preview:
     details: list[Step] = []
     read: dict[str, Mapping[str, object]] = {}
     stack_outputs: dict[str, object] = {}
-    options: list[tuple[str, str]] = []
-    outputs: set[str] = set()
     messages: list[str] = []
     diagnostics: list[tuple[str, str]] = []
     summary: object = None
@@ -402,15 +380,11 @@ def read_preview(printed: str) -> Preview:
                         diffs=tuple(str(key) for key in cast('list[object]', metadata.get('diffs') or [])),
                     )
                 )
-            if metadata.get('op') == 'same':
-                options += [(str(metadata.get('urn')), option) for option in _changed_options(metadata)]
         if (done := event.get('resOutputsEvent')) is not None:
             metadata = cast('dict[str, Any]', done.get('metadata') or {})
             if metadata.get('type') == STACK_TYPE and metadata.get('op') != 'refresh':
-                old = cast('dict[str, object]', cast('dict[str, Any]', metadata.get('old') or {}).get('outputs') or {})
-                new = cast('dict[str, object]', cast('dict[str, Any]', metadata.get('new') or {}).get('outputs') or {})
-                outputs |= {key for key in old.keys() | new.keys() if old.get(key) != new.get(key)}
-                stack_outputs = dict(new)
+                new = cast('dict[str, Any]', metadata.get('new') or {})
+                stack_outputs = dict(cast('dict[str, object]', new.get('outputs') or {}))
             elif metadata.get('op') in READS:
                 new = cast('dict[str, Any]', metadata.get('new') or {})
                 read[str(metadata.get('urn'))] = cast('dict[str, object]', new.get('outputs') or {})
@@ -442,8 +416,6 @@ def read_preview(printed: str) -> Preview:
         details=tuple(details),
         read=read,
         stack_outputs=stack_outputs,
-        outputs=tuple(sorted(outputs)),
-        options=tuple(options),
         messages=tuple(messages),
         diagnostics=tuple(diagnostics),
     )
@@ -456,17 +428,13 @@ def read_preview(printed: str) -> Preview:
 
 
 def show(preview: Preview) -> None:
-    """Print what `preview` planned: the engine's messages, each changing step, each changed stack output, and the count."""
+    """Print what the refreshed `preview` planned: the engine's messages, each changing step, and the count."""
     for message in preview.messages:
         print(message)
     for op, urn in preview.steps:
         if op not in NO_CHANGE:
             print(f'  {op:>20}  {urn}')
-    for key in preview.outputs:
-        print(f'  {"output changes":>20}  {key}')
-    for urn, option in preview.options:
-        print(f'  {option + " changes":>20}  {urn}')
-    print('  ' + ', '.join(f'{count} {op}' for op, count in sorted(preview.changes.items())))
+    print('  ' + ', '.join(f'{count} {op}' for op, count in sorted(preview.changes.items())), flush=True)
 
 
 @dataclass
@@ -529,7 +497,7 @@ class Run:
         return stack_environment.home(self.stack) is identity.StateHome.COMMITTED
 
     def plan(self) -> int:
-        """Preview with a refresh; 0 when nothing is planned, 1 when something is.
+        """Preview with a refresh, and without one where that plans no step; 0 when nothing is planned, 1 when something is.
 
         A gated stack answers 3 or 4 instead where the estate's backend serves
         no stack or does not answer (`_settle`).
@@ -548,10 +516,10 @@ class Run:
         preview = self._preview()
         if self.gate is not None:
             self.gate.report(preview)
-        return self._settle(PLANNED if preview.planned else NOTHING_PLANNED)
+        return self._settle(PLANNED if preview.stepped or self._unrefreshed() else NOTHING_PLANNED)
 
     def up(self, *, yes: bool, force: bool = False, replace: bool = False) -> int:
-        """Preview with a refresh, and apply what it planned once the operator agrees.
+        """Preview as `plan` does, and apply what is planned once the operator agrees.
 
         With nothing planned no `up` runs, and the answer is `plan`'s — unless
         a committed checkpoint's record stands, in which case the `up` is what
@@ -561,7 +529,9 @@ class Run:
         A gated stack holds a create, replacement or delete of its box for
         `force`, naming what moved, and refuses a create beside a held address
         whatever it is given; `replace` replaces the box whether or not
-        anything moved, and grants the permission as `force` does.
+        anything moved, and grants the permission as `force` does. The
+        preview `replace` makes again plans that replacement, so it is made
+        with no preview without a refresh.
         """
         if (force or replace) and self.gate is None:
             raise Refused(
@@ -598,13 +568,14 @@ class Run:
                     extra={HELD: tuple(movements)},
                 )
                 return PLANNED
-        if not preview.planned and recorded is None:
+        planned = preview.stepped or (not replace and self._unrefreshed())
+        if not planned and recorded is None:
             log.info('nothing is planned for the %s stack; nothing to apply', self.stack)
             return self._settle(NOTHING_PLANNED)
-        if preview.planned and not yes and not self.confirm(f'apply these changes to the {self.stack} stack?'):
+        if planned and not yes and not self.confirm(f'apply these changes to the {self.stack} stack?'):
             log.info('nothing applied to the %s stack', self.stack)
             return PLANNED
-        if not preview.planned:
+        if not planned:
             log.info('nothing is planned, but %s stands: running up to rewrite the checkpoint and check it', recorded)
         doing = f'applying the {self.stack} stack'
         log.info('%s', doing)
@@ -693,6 +664,89 @@ class Run:
         preview = read_preview(printed)
         show(preview)
         return preview
+
+    def _unrefreshed(self) -> bool:
+        """Whether an `up` would write with no step, by a second preview without a refresh, whose answer it shows.
+
+        Made where the refreshed preview plans no step. What it reads is
+        `kluster.lib.state_only`'s: a field it finds is printed under its
+        resource and planned, and so is a step it plans that the refreshed
+        preview did not. Its event log goes in a fresh temporary directory,
+        removed on every way out the driver lives through, and holds every
+        value the program does not mark secret. One that resolves inside the
+        checkout refuses the run, since the reading cannot go on without its
+        log and `jj` would snapshot the log there. Any other exit than 0 and a
+        step's refusal, and a record that does not say what an `up` writes,
+        refuse it too: "nothing to write" is the answer that stays quiet.
+        """
+        # The fields are read off a second preview, without a refresh, and not
+        # off the refreshed one. The comparison is the program's registration
+        # against the state the backend holds, and at the pinned 3.274.1 a
+        # refreshed preview's old state is the provider's reading instead:
+        # `preview --refresh` refreshes the base checkpoint before the program
+        # runs (https://github.com/pulumi/pulumi/blob/v3.274.1/pkg/resource/deploy/deployment_executor.go#L179-L183),
+        # and a refresh takes the inputs the provider's `Read` hands back
+        # (https://github.com/pulumi/pulumi/blob/v3.274.1/pkg/resource/deploy/step.go#L1778-L1782),
+        # so a provider that fills in or normalizes an input would read as a
+        # field every `up` writes. And the JSON document of a refreshed preview
+        # lists the refresh's own steps (`shouldShow`,
+        # https://github.com/pulumi/pulumi/blob/v3.274.1/pkg/backend/display/display.go#L316-L336),
+        # rewriting one whose refresh found a difference into an `update` or a
+        # `delete` (https://github.com/pulumi/pulumi/blob/v3.274.1/pkg/backend/display/json.go#L223-L242),
+        # so drift would read as a field the program changed.
+        log.info(
+            'the refreshed preview of %s plans no step; previewing it again without a refresh, as JSON with an event '
+            'log, for the state an `up` would write with no step; it takes about as long as a preview',
+            self.stack,
+        )
+        with tempfile.TemporaryDirectory(prefix='operator-stack-state-only-') as directory:
+            if Path(directory).resolve().is_relative_to(self.checkout.resolve()):
+                raise Refused(
+                    f'the temporary directory {directory} is inside {self.checkout}, where `jj` would snapshot the '
+                    f'event log of the preview of {self.stack} without a refresh: set TMPDIR outside the checkout',
+                    why=Why.UNREFRESHED_LOG_IN_CHECKOUT,
+                )
+            events = Path(directory) / 'events.jsonl'
+            # No `doing`: `--event-log` names one file, and that file is the
+            # reading's, so `progress` cannot hand the run a log of its own.
+            code, printed = self.pulumi.events(
+                self._with_stack(state_only.arguments(events)),
+                cwd=self.checkout,
+                env=self.env | state_only.ENVIRONMENT,
+            )
+            try:
+                written = state_only.answer(code, printed, events)
+            except state_only.Failed as failed:
+                recorded = [*failed.diagnostics, *([failed.unrecorded] if failed.unrecorded is not None else [])]
+                raise Refused(
+                    '\n'.join(
+                        [
+                            f'the preview of {self.stack} without a refresh failed (exit {failed.status}), so what an '
+                            '`up` would write with no step is unknown',
+                            *recorded,
+                        ]
+                    ),
+                    why=Why.UNREFRESHED_FAILED,
+                ) from failed
+            except state_only.Unreadable as exc:
+                raise Refused(
+                    f'the preview of {self.stack} without a refresh does not say what an `up` would write: {exc}',
+                    why=Why.UNREFRESHED_UNREADABLE,
+                ) from exc
+        match written:
+            case state_only.Stepped():
+                log.warning(
+                    'previewed against the state the backend holds, %s plans a step the refreshed preview does not: '
+                    "that state is behind what the provider reads, and an `up`'s refresh writes it",
+                    self.stack,
+                )
+                return True
+            case state_only.Fields(changes=()):
+                log.info('an `up` of %s would write nothing', self.stack)
+                return False
+            case state_only.Fields(changes=found):
+                print(state_only.section(self.stack, found), flush=True)
+                return True
 
     def _recorded(self) -> Path | None:
         """This stack's record of a failed or unfinished check, where one stands."""

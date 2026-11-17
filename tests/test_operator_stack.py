@@ -4,18 +4,21 @@ Three levels, because they answer different questions:
 
 -   **A fake `pulumi`** that records what it is started with and answers from
     fixtures says what the driver asks for and when: the environment, the
-    arguments, whether an `up` is made at all, and what the checks make of a
-    checkpoint.
+    arguments, whether an `up` is made at all, what the checks make of a
+    checkpoint, and what the driver makes of each answer the preview without
+    a refresh can give.
 -   **A scratch repository** — a bare repository standing for the forge and a
     clone of it standing for the checkout — says the working-copy checks read
     git's own answers the way they are believed to. The checks' `git` and
     `jj` run with none of the caller's configuration or `GIT_` variables,
     and `git` looks no higher than the case's own directory.
--   **The real engine over a scratch `file://` backend**, with a program
-    whose one resource is a dynamic one that needs no credential and so
-    reaches no network, says the driver's handling of a committed checkpoint
+-   **The real engine over a scratch `file://` backend**, with programs of
+    dynamic resources that need no credential and so reach no network,
+    says the driver's handling of a committed checkpoint
     holds against what the pinned CLI actually writes: that the preview's
-    plan is read from its streamed events, that the apply writes to the
+    plan is read from its streamed events, that a change no step carries is
+    planned, shown and applied while a value only the refresh moved is not,
+    that the apply writes to the
     driver's own output, a terminal's or a pipe's, and is still read from
     the events and the state, that no `up` runs over nothing planned, that
     a write over an unchanged deployment keeps the file's bytes, that no
@@ -53,10 +56,11 @@ import site
 import struct
 import subprocess as sp
 import sys
+import tempfile
 import termios
 import time
 from collections.abc import Callable, Iterator, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, cast
 
@@ -68,7 +72,7 @@ from memory_keyring import MemoryKeyring, installed
 from scratch_projects import cli_directories
 
 from kluster.conventions import identity
-from kluster.lib import acquisition, bundle, pulumi_cli, stack_environment, workstation
+from kluster.lib import acquisition, bundle, pulumi_cli, stack_environment, state_only, workstation
 from kluster.lib.state_backend import permission, settings, state
 from kluster.scripts.credentials import derived, escrow
 from kluster.scripts.credentials import workstation as credential_slots
@@ -99,13 +103,15 @@ AMBIENT = {
 }
 #: What the driver sets on a run itself, beside what the caller may keep: an
 #: estate stack is also stored as `mise.toml` has every writer of a stack CI
-#: deploys store one (`stack_environment.state_switches`).
+#: deploys store one (`stack_environment.state_switches`), and the preview
+#: without a refresh takes `--event-log`.
 SET_BY_THE_DRIVER = {
     'PULUMI_CONFIG_PASSPHRASE',
     'PULUMI_BACKEND_URL',
     'PULUMI_DIY_BACKEND_DISABLE_CHECKPOINT_BACKUPS',
     *stack_environment.state_switches(),
     driver.STREAMING_JSON_ENV,
+    state_only.DEBUG_COMMANDS_ENV,
     bundle.CA_ENV,
     bundle.CERT_ENV,
     bundle.KEY_ENV,
@@ -165,6 +171,20 @@ def secret_store(monkeypatch: pytest.MonkeyPatch) -> Iterator[MemoryKeyring]:
         yield backend
 
 
+#: A summary the event log of a preview ends with.
+SUMMARY: dict[str, Any] = {'summaryEvent': {'resourceChanges': {'same': 3}}}
+
+
+@dataclass
+class Unrefreshed:
+    """What the preview without a refresh answers: its exit, its document, and the event log it writes."""
+
+    status: int = 0
+    document: str = json.dumps({'steps': []})
+    #: The event log's lines; `None` writes no log.
+    events: list[dict[str, Any]] | None = field(default_factory=lambda: [SUMMARY])
+
+
 @dataclass
 class FakePulumi:
     """A `pulumi` that runs nothing, records what it was started with, and answers from its fields."""
@@ -187,6 +207,10 @@ class FakePulumi:
     replacing: str | None = None
     #: What a streamed command exits with.
     code: int = 0
+    #: What a preview without a refresh answers.
+    unrefreshed: Unrefreshed = field(default_factory=Unrefreshed)
+    #: The arguments of each preview without a refresh, which `streamed` does not hold.
+    previewed_without_refresh: list[list[str]] = field(default_factory=list[list[str]])
     streamed: list[list[str]] = field(default_factory=list[list[str]])
     captured: list[list[str]] = field(default_factory=list[list[str]])
     envs: list[dict[str, str]] = field(default_factory=list[dict[str, str]])
@@ -205,6 +229,8 @@ class FakePulumi:
         self, args: Sequence[str], *, cwd: Path, env: Mapping[str, str], doing: str | None = None
     ) -> tuple[int, str]:
         args = list(args)
+        if '--refresh' not in args:
+            return self._without_refresh(args, env=env, doing=doing)
         self.streamed.append(args)
         self.doings.append(doing)
         self.envs.append(dict(env))
@@ -215,6 +241,17 @@ class FakePulumi:
         if self.printed is not None:
             return 0, self.printed
         return 0, json.dumps({'summaryEvent': {'resourceChanges': self.changes}}) + '\n'
+
+    def _without_refresh(self, args: list[str], *, env: Mapping[str, str], doing: str | None) -> tuple[int, str]:
+        # Its environment and what it is said to be doing are recorded beside
+        # every other run's; its arguments apart, so `streamed` stays the runs
+        # whose output reaches the operator.
+        self.previewed_without_refresh.append(args)
+        self.envs.append(dict(env))
+        self.doings.append(doing)
+        if self.unrefreshed.events is not None:
+            _ = Path(args[args.index('--event-log') + 1]).write_text(_events(*self.unrefreshed.events))
+        return self.unrefreshed.status, self.unrefreshed.document
 
     def capture(self, args: Sequence[str], *, cwd: Path, env: Mapping[str, str]) -> str:
         args = list(args)
@@ -370,13 +407,15 @@ def test_the_committed_stack_runs_against_the_checkouts_checkpoints(repository: 
 
     assert run.plan() == driver.NOTHING_PLANNED
 
-    (env,) = fake.envs
-    assert (
-        env['PULUMI_BACKEND_URL'] == f'{(repository.checkout / stack_environment.CHECKPOINTS).as_uri()}?metadata=skip'
-    )
-    assert env['PULUMI_DIY_BACKEND_DISABLE_CHECKPOINT_BACKUPS'] == 'true'
-    assert env['PULUMI_CONFIG_PASSPHRASE'] == OPERATOR_PASSPHRASE
-    assert not [value for value in env.values() if 'stack-passphrase' in value or '/ambient/' in value]
+    assert fake.envs, 'the driver started no pulumi, so the environment was never looked at'
+    for env in fake.envs:
+        assert (
+            env['PULUMI_BACKEND_URL']
+            == f'{(repository.checkout / stack_environment.CHECKPOINTS).as_uri()}?metadata=skip'
+        )
+        assert env['PULUMI_DIY_BACKEND_DISABLE_CHECKPOINT_BACKUPS'] == 'true'
+        assert env['PULUMI_CONFIG_PASSPHRASE'] == OPERATOR_PASSPHRASE
+        assert not [value for value in env.values() if 'stack-passphrase' in value or '/ambient/' in value]
 
 
 def test_a_machine_without_the_operator_passphrase_is_refused_naming_the_command(tmp_path: Path) -> None:
@@ -724,27 +763,6 @@ def _step(op: str) -> dict[str, Any]:
 
 
 @pytest.mark.parametrize(
-    ('old', 'new', 'planned'),
-    [
-        ({}, {'protect': True}, True),
-        ({'protect': False}, {'protect': True}, True),
-        ({'retainOnDelete': True}, {}, True),
-        ({'provider': 'urn:a::id'}, {'provider': 'urn:b::id'}, True),
-        ({}, {'protect': False}, False),
-        ({'protect': True}, {'protect': True}, False),
-    ],
-)
-def test_a_same_step_whose_options_change_is_planned(
-    old: dict[str, object], new: dict[str, object], planned: bool
-) -> None:
-    same = {'resourcePreEvent': {'metadata': {'op': 'same', 'urn': 'urn:box', 'old': old, 'new': new}}}
-
-    preview = driver.read_preview(_events(same, {'summaryEvent': {'resourceChanges': {'same': 2}}}))
-
-    assert preview.planned is planned
-
-
-@pytest.mark.parametrize(
     ('printed', 'why'),
     [
         (_events(_step('same')), driver.Why.PREVIEW_UNSUMMARIZED),
@@ -762,6 +780,223 @@ def test_a_preview_whose_plan_cannot_be_read_is_refused(printed: str, why: drive
         _ = driver.read_preview(printed)
 
     assert refused.value.why is why
+
+
+#: A resource of the `github` stack, as the preview without a refresh names it.
+RESOURCE_URN = 'urn:pulumi:github::kluster::github:index/branchProtection:BranchProtection::kluster-main'
+#: Its state as that preview's document serializes it.
+RESOURCE_STATE: dict[str, Any] = {
+    'urn': RESOURCE_URN,
+    'custom': True,
+    'type': 'github:index/branchProtection:BranchProtection',
+    'inputs': {'pattern': 'main'},
+    'dependencies': ['urn:pulumi:github::kluster::github:index/repository:Repository::kluster'],
+}
+RESOURCE_OUTPUTS: dict[str, Any] = {
+    'resOutputsEvent': {
+        'metadata': {
+            'op': 'same',
+            'urn': RESOURCE_URN,
+            'old': {'outputs': {'pattern': 'main'}},
+            'new': {'outputs': {'pattern': 'main'}},
+        }
+    }
+}
+
+
+def _unrefreshed(
+    old: dict[str, Any], new: dict[str, Any], *, events: list[dict[str, Any]] | None = None
+) -> Unrefreshed:
+    """A preview without a refresh whose one step is `same`, between these states; its log as `events` says, or whole."""
+    document = json.dumps({'steps': [{'op': 'same', 'urn': RESOURCE_URN, 'oldState': old, 'newState': new}]})
+    return Unrefreshed(document=document, events=[RESOURCE_OUTPUTS, SUMMARY] if events is None else events)
+
+
+#: A dependency the program added, which the refreshed preview plans no step for.
+DEPENDENCY_ADDED = _unrefreshed(
+    RESOURCE_STATE,
+    RESOURCE_STATE
+    | {
+        'dependencies': [
+            *RESOURCE_STATE['dependencies'],
+            'urn:pulumi:github::kluster::github:index/teamRepository:TeamRepository::kluster-admins',
+        ]
+    },
+)
+
+
+@pytest.mark.parametrize(('yes', 'answer', 'ups'), [(True, False, 1), (False, True, 1), (False, False, 0)])
+def test_a_field_the_preview_without_a_refresh_finds_is_planned_and_applied_once_confirmed(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], yes: bool, answer: bool, ups: int
+) -> None:
+    checkout = tmp_path / 'kluster'
+    _fill_slots(checkout)
+    fake = FakePulumi(unrefreshed=DEPENDENCY_ADDED)
+    asked: list[str] = []
+
+    def confirm(question: str) -> bool:
+        asked.append(question)
+        return answer
+
+    run = driver.Run.open('github', checkout, pulumi=fake, confirm=confirm, base=AMBIENT)
+
+    assert run.plan() == driver.PLANNED
+    shown = capsys.readouterr().out.splitlines()
+    at = [line.strip() for line in shown].index(RESOURCE_URN)
+    assert 'dependencies' in shown[at + 1] and 'kluster-admins' in shown[at + 1], shown
+    assert fake.ups() == []
+
+    assert run.up(yes=yes) == (0 if ups else driver.PLANNED)
+
+    assert [_stack_of(up) for up in fake.ups()] == ['github'] * ups
+    assert len(asked) == (0 if yes else 1)
+
+
+@pytest.mark.parametrize(
+    'unrefreshed',
+    [
+        pytest.param(_unrefreshed(RESOURCE_STATE, RESOURCE_STATE), id='nothing'),
+        pytest.param(
+            _unrefreshed(RESOURCE_STATE | {'dependencies': ['a', 'b']}, RESOURCE_STATE | {'dependencies': ['b', 'a']}),
+            id='the same dependencies in another order',
+        ),
+    ],
+)
+def test_a_preview_without_a_refresh_that_finds_nothing_plans_nothing_and_makes_no_up(
+    tmp_path: Path, unrefreshed: Unrefreshed
+) -> None:
+    checkout = tmp_path / 'kluster'
+    _fill_slots(checkout)
+    fake = FakePulumi(unrefreshed=unrefreshed)
+    run = driver.Run.open('github', checkout, pulumi=fake, base=AMBIENT)
+
+    assert run.plan() == driver.NOTHING_PLANNED
+    assert run.up(yes=True) == driver.NOTHING_PLANNED
+    assert fake.ups() == []
+
+
+def test_a_step_only_the_preview_without_a_refresh_plans_is_planned(tmp_path: Path) -> None:
+    # Previewed against the state the backend holds, the program plans a step
+    # the refreshed preview does not: the stored state is behind what the
+    # provider reads, and an `up`'s refresh writes it.
+    checkout = tmp_path / 'kluster'
+    _fill_slots(checkout)
+    fake = FakePulumi(unrefreshed=Unrefreshed(status=state_only.REFUSED, document='', events=None))
+    run = driver.Run.open('github', checkout, pulumi=fake, base=AMBIENT)
+
+    assert run.plan() == driver.PLANNED
+    assert run.up(yes=True) == 0
+    assert [_stack_of(up) for up in fake.ups()] == ['github']
+
+
+def test_the_preview_without_a_refresh_is_given_no_progress_of_its_own(tmp_path: Path) -> None:
+    # `--event-log` names one file, and that file is the reading's: a run
+    # handed a `doing` would get `progress`'s log as well, and the pinned CLI
+    # writes only the last one it is given.
+    checkout = tmp_path / 'kluster'
+    _fill_slots(checkout)
+    fake = FakePulumi(unrefreshed=DEPENDENCY_ADDED)
+    run = driver.Run.open('github', checkout, pulumi=fake, base=AMBIENT)
+
+    assert run.plan() == driver.PLANNED
+
+    (refreshed, unrefreshed) = fake.doings
+    assert refreshed is not None
+    assert unrefreshed is None
+
+
+def test_a_refreshed_preview_that_plans_a_step_makes_no_preview_without_a_refresh(tmp_path: Path) -> None:
+    # The fields an `up` writes beside a step are not listed: the steps are
+    # what the question is about.
+    checkout = tmp_path / 'kluster'
+    _fill_slots(checkout)
+    fake = FakePulumi(changes={'same': 2, 'update': 1}, unrefreshed=Unrefreshed(status=255, document='', events=None))
+    run = driver.Run.open('github', checkout, pulumi=fake, base=AMBIENT)
+
+    assert run.plan() == driver.PLANNED
+    assert run.up(yes=True) == 0
+    assert fake.previewed_without_refresh == []
+
+
+#: A failed JSON preview's error, which it writes into its document and nowhere else.
+FAILURE = 'error: Program failed with an unhandled exception: RuntimeError: the program raised this'
+
+
+@pytest.mark.parametrize(
+    ('unrefreshed', 'why', 'naming'),
+    [
+        pytest.param(
+            Unrefreshed(
+                status=255,
+                document=json.dumps({'steps': [], 'diagnostics': [{'message': FAILURE + '\n', 'severity': 'error'}]}),
+                events=None,
+            ),
+            driver.Why.UNREFRESHED_FAILED,
+            FAILURE,
+            id='an exit other than 0 and a step',
+        ),
+        pytest.param(
+            Unrefreshed(document='Previewing update (github):'),
+            driver.Why.UNREFRESHED_UNREADABLE,
+            'not JSON',
+            id='a document that is not JSON',
+        ),
+        pytest.param(
+            _unrefreshed(RESOURCE_STATE, RESOURCE_STATE, events=[RESOURCE_OUTPUTS]),
+            driver.Why.UNREFRESHED_UNREADABLE,
+            'cut short',
+            id='an event log that ends before its summary',
+        ),
+        pytest.param(
+            _unrefreshed(RESOURCE_STATE, RESOURCE_STATE, events=[SUMMARY]),
+            driver.Why.UNREFRESHED_UNREADABLE,
+            RESOURCE_URN,
+            id='a step whose resource has no outputs event',
+        ),
+        pytest.param(
+            replace(_unrefreshed(RESOURCE_STATE, RESOURCE_STATE), events=None),
+            driver.Why.UNREFRESHED_UNREADABLE,
+            'event log',
+            id='no event log',
+        ),
+    ],
+)
+def test_a_preview_without_a_refresh_that_does_not_say_what_an_up_writes_is_refused(
+    tmp_path: Path, unrefreshed: Unrefreshed, why: driver.Why, naming: str
+) -> None:
+    # "Nothing to write" is the answer that stays quiet, so each of these is
+    # a refusal, exit 2 at the command line, rather than a plan of nothing.
+    checkout = tmp_path / 'kluster'
+    _fill_slots(checkout)
+    fake = FakePulumi(unrefreshed=unrefreshed)
+    run = driver.Run.open('github', checkout, pulumi=fake, base=AMBIENT)
+
+    for command in (run.plan, lambda: run.up(yes=True)):
+        with pytest.raises(driver.Refused) as refused:
+            _ = command()
+
+        assert refused.value.why is why
+        assert naming in str(refused.value)
+    assert fake.ups() == []
+
+
+def test_the_preview_without_a_refresh_writes_its_event_log_outside_the_checkout_or_refuses(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    checkout = tmp_path / 'kluster'
+    _fill_slots(checkout)
+    inside = checkout / 'tmp'
+    inside.mkdir()
+    monkeypatch.setattr(tempfile, 'tempdir', str(inside))
+    fake = FakePulumi(unrefreshed=DEPENDENCY_ADDED)
+    run = driver.Run.open('github', checkout, pulumi=fake, base=AMBIENT)
+
+    with pytest.raises(driver.Refused) as refused:
+        _ = run.plan()
+
+    assert refused.value.why is driver.Why.UNREFRESHED_LOG_IN_CHECKOUT
+    assert fake.previewed_without_refresh == []
+    assert list(inside.iterdir()) == []
 
 
 # --------------------------------------------------------------------------
@@ -1297,13 +1532,15 @@ def test_a_value_too_short_to_identify_and_pem_armor_are_not_searched_for() -> N
 needs_pulumi = pytest.mark.skipif(shutil.which('pulumi') is None, reason='the pinned pulumi CLI is not on PATH')
 
 #: The bounds a case that runs the real engine runs under, set from measured
-#: durations rather than from the suite's per-case bound (testing.md §8). On a
-#: four-core machine the slowest whole case here -- its stack's set-up and
-#: every command -- took 9 s idle, 25 s with twice as many busy processes as
-#: cores, and 40 s with four times as many. One command is bounded at three
-#: times that worst case, and the case at twice the command, so a stalled
-#: command fails by its own `TimeoutExpired`, naming it, before the case's
-#: bound fires; both are stop-losses, and nothing asserts on elapsed time.
+#: durations rather than from the suite's per-case bound (testing.md §8). On
+#: four cores the slowest whole case here, a change no step carries -- its
+#: stack's set-up and every command, `plan`, `up` and `plan` with two previews
+#: each -- took 19 s idle, 31 s with twice as many busy processes as cores,
+#: and 37 s with four times as many. One command is bounded at that worst case
+#: three times over, rounded up to whole minutes, and the case at twice the
+#: command, so a stalled command fails by its own `TimeoutExpired`, naming
+#: it, before the case's bound fires; both are stop-losses, and nothing
+#: asserts on elapsed time.
 ENGINE_COMMAND_TIMEOUT = 120
 ENGINE_CASE_TIMEOUT = 240
 engine_bound = pytest.mark.timeout(ENGINE_CASE_TIMEOUT)
@@ -1529,6 +1766,237 @@ def test_a_real_change_to_a_resources_protect_alone_is_planned_and_applied(scrat
     ]
     assert box.get('protect') is True
     assert scratch.run.plan() == driver.NOTHING_PLANNED
+
+
+#: The secrets `UNSTEPPED` registers: an input, a stack output, and the
+#: output its component registers under the change
+#: `component output made secret`.
+SECRET_INPUT = 'an-input-nobody-may-read'
+SECRET_OUTPUT = 'an-output-nobody-may-read'
+SECRET_COMPONENT_OUTPUT = 'a-component-output-nobody-may-read'
+
+#: A program of stand-ins for the changes an `up` writes with no step: two
+#: dynamic resources, `first` and `second`, a component, `holder`, that
+#: registers an output, a stack output, and a resource, `gathered`, that
+#: depends on several `part`s, some through `depends_on` and some through its
+#: input, whose state therefore lists several members in each of its
+#: dependency fields. The change a case makes is `settings.json`'s `change`.
+#: `first`'s secret input is the one `additional_secret_outputs` names, so
+#: the checkpoint the driver checks holds it as ciphertext either way.
+UNSTEPPED = f"""\
+import json
+import pathlib
+
+import pulumi
+from pulumi.dynamic import CreateResult, ReadResult, Resource, ResourceProvider
+
+CHANGE = json.loads(pathlib.Path('settings.json').read_text())['change']
+
+
+class Provider(ResourceProvider):
+    def create(self, props):
+        return CreateResult(id_='stand-in', outs=dict(props))
+
+    def read(self, id_, props):
+        return ReadResult(id_=id_, outs=props)
+
+
+class Stand(Resource):
+    def __init__(self, name, props, opts=None):
+        super().__init__(Provider(), name, props, opts)
+
+
+class Holder(pulumi.ComponentResource):
+    def __init__(self, name):
+        super().__init__('probe:index:Holder', name)
+        held = {{
+            'component output': 'changed',
+            'component output made secret': pulumi.Output.secret({SECRET_COMPONENT_OUTPUT!r}),
+        }}.get(CHANGE, 'as it was')
+        self.register_outputs({{'held': held}})
+
+
+holder = Holder('holder')
+
+first_options = {{
+    'protect': pulumi.ResourceOptions(protect=True),
+    'retain on delete': pulumi.ResourceOptions(retain_on_delete=True),
+    'renamed by an alias': pulumi.ResourceOptions(aliases=[pulumi.Alias(name='first')]),
+    'moved under a parent by an alias': pulumi.ResourceOptions(
+        parent=holder, aliases=[pulumi.Alias(parent=pulumi.ROOT_STACK_RESOURCE)]
+    ),
+    'ignore changes': pulumi.ResourceOptions(ignore_changes=['value']),
+    'replace on changes': pulumi.ResourceOptions(replace_on_changes=['value']),
+    'additional secret outputs': pulumi.ResourceOptions(additional_secret_outputs=['token']),
+    'custom timeouts': pulumi.ResourceOptions(custom_timeouts=pulumi.CustomTimeouts(create='5m')),
+}}.get(CHANGE)
+first = Stand(
+    'renamed' if CHANGE == 'renamed by an alias' else 'first',
+    {{'value': 'as it was', 'token': pulumi.Output.secret({SECRET_INPUT!r})}},
+    first_options,
+)
+
+second_options = {{
+    'depends on': pulumi.ResourceOptions(depends_on=[first]),
+    'deleted with': pulumi.ResourceOptions(deleted_with=first),
+}}.get(CHANGE)
+Stand('second', {{'value': 'as it was'}}, second_options)
+
+parts = [Stand(f'part-{{number}}', {{'value': str(number)}}) for number in range(8)]
+Stand(
+    'gathered',
+    {{'value': pulumi.Output.all(*(part.urn for part in parts[4:])).apply(' '.join)}},
+    pulumi.ResourceOptions(depends_on=parts[:4]),
+)
+
+pulumi.export('exported', 'changed' if CHANGE == 'stack output' else 'as it was')
+pulumi.export('token', pulumi.Output.secret({SECRET_OUTPUT!r}))
+"""
+
+
+def _change(scratch: Scratch, change: str) -> None:
+    _ = (scratch.checkout / 'settings.json').write_text(json.dumps({'change': change}))
+
+
+@pytest.fixture
+def unstepped(repository: Repository, committed: str, tmp_path: Path) -> Scratch:
+    """`UNSTEPPED` as `probe`'s program, after its first `up` of the unchanged program."""
+    made = _initialized(repository, committed, tmp_path, UNSTEPPED)
+    _change(made, '')
+    assert made.run.passthrough(['up', '--yes', '--skip-preview']) == 0
+    return made
+
+
+#: Each change of `UNSTEPPED` that an `up` writes and the refreshed preview
+#: plans no step for, as the resource it moves and the state field that
+#: moves. The first eight are outside both the four options a step event
+#: carries before and after and the stack's own outputs; the last four are
+#: inside them.
+STATE_ONLY = {
+    'depends on': ('second', 'dependencies'),
+    'deleted with': ('second', 'deletedWith'),
+    'renamed by an alias': ('renamed', 'aliases'),
+    'ignore changes': ('first', 'ignoreChanges'),
+    'replace on changes': ('first', 'replaceOnChanges'),
+    'additional secret outputs': ('first', 'additionalSecretOutputs'),
+    'custom timeouts': ('first', 'customTimeouts'),
+    'component output': ('holder', 'outputs.held'),
+    'protect': ('first', 'protect'),
+    'retain on delete': ('first', 'retainOnDelete'),
+    'moved under a parent by an alias': ('first', 'parent'),
+    'stack output': (f'{PROBE}-{PROBE}', 'outputs.exported'),
+}
+
+
+@needs_pulumi
+@engine_bound
+@pytest.mark.parametrize(('change', 'moved'), list(STATE_ONLY.items()), ids=list(STATE_ONLY))
+def test_a_real_change_no_step_carries_is_planned_shown_and_applied(
+    unstepped: Scratch, capsys: pytest.CaptureFixture[str], change: str, moved: tuple[str, str]
+) -> None:
+    _change(unstepped, change)
+    _ = capsys.readouterr()
+
+    assert unstepped.run.plan() == driver.PLANNED
+
+    name, moves = moved
+    shown = capsys.readouterr().out.splitlines()
+    (at,) = [number for number, line in enumerate(shown) if line.startswith('  urn:') and line.endswith(f'::{name}')]
+    under = itertools.takewhile(lambda line: line.startswith('      '), shown[at + 1 :])
+    assert any(line.strip().startswith(moves) for line in under), shown
+
+    assert unstepped.run.up(yes=True) == 0
+    # The field settles: an `up` under the driver's refresh writes it, and the
+    # next run does not ask again.
+    assert unstepped.run.plan() == driver.NOTHING_PLANNED
+
+
+@needs_pulumi
+@engine_bound
+def test_an_unchanged_real_program_plans_nothing_whatever_order_its_dependencies_come_in(unstepped: Scratch) -> None:
+    """`gathered`'s dependencies come in a fresh order on every registration, and are the same members."""
+    history = unstepped.history()
+
+    assert unstepped.run.plan() == driver.NOTHING_PLANNED
+    assert unstepped.run.up(yes=True) == driver.NOTHING_PLANNED
+
+    assert unstepped.history() == history
+
+
+@needs_pulumi
+@engine_bound
+def test_a_real_plan_that_rewrites_beside_a_secret_prints_no_secret(
+    unstepped: Scratch, capfd: pytest.CaptureFixture[str], caplog: pytest.LogCaptureFixture
+) -> None:
+    """A component output turned secret is a line of the plan, beside a secret input and a secret stack output."""
+    _change(unstepped, 'component output made secret')
+    _ = capfd.readouterr()
+
+    with caplog.at_level(logging.INFO):
+        assert unstepped.run.plan() == driver.PLANNED
+
+    captured = capfd.readouterr()
+    shown = captured.out + captured.err + caplog.text
+    assert any(line.strip().startswith('outputs.held') for line in captured.out.splitlines()), shown
+    for secret in (SECRET_INPUT, SECRET_OUTPUT, SECRET_COMPONENT_OUTPUT):
+        assert secret not in shown
+
+
+#: A program whose one resource reads a value from `reading.txt` beside it
+#: whenever the provider is asked to read it, as a refresh does, and whose
+#: stack exports that value: an output that moves only when the world, as a
+#: refresh reads it, moves.
+READS = """\
+import pathlib
+
+import pulumi
+from pulumi.dynamic import CreateResult, DiffResult, ReadResult, Resource, ResourceProvider
+
+
+class Provider(ResourceProvider):
+    def diff(self, _id, olds, news):
+        return DiffResult(changes=olds.get('path') != news.get('path'))
+
+    def create(self, props):
+        return CreateResult(id_='reader', outs={**props, 'value': pathlib.Path(props['path']).read_text()})
+
+    def read(self, id_, props):
+        return ReadResult(id_=id_, outs={**props, 'value': pathlib.Path(props['path']).read_text()})
+
+
+class Reader(Resource):
+    value: pulumi.Output[str]
+
+    def __init__(self, name, path):
+        super().__init__(Provider(), name, {'path': path, 'value': None})
+
+
+reader = Reader('reader', str(pathlib.Path('reading.txt').resolve()))
+pulumi.export('read', reader.value)
+"""
+
+
+@needs_pulumi
+@engine_bound
+def test_a_real_stack_output_only_the_refresh_moved_is_not_planned(
+    repository: Repository, committed: str, tmp_path: Path
+) -> None:
+    # The driver plans what the program declares and the state the backend
+    # holds does not hold, or the world does not; an output that differs
+    # from the stored state only because the refresh read the world is
+    # written by the next `up` made for something else (framework/pulumi.md
+    # §3.3).
+    scratch = _initialized(repository, committed, tmp_path, READS)
+    reading = scratch.checkout / 'reading.txt'
+    _ = reading.write_text('as it was')
+    assert scratch.run.passthrough(['up', '--yes', '--skip-preview']) == 0
+    _ = reading.write_text('as the world reads it now')
+    history = scratch.history()
+
+    assert scratch.run.plan() == driver.NOTHING_PLANNED
+    assert scratch.run.up(yes=True) == driver.NOTHING_PLANNED
+
+    assert scratch.history() == history
 
 
 @needs_pulumi
@@ -2162,6 +2630,9 @@ def test_replace_passes_the_instance_urn_and_grants_the_permission(repository: R
     assert again[again.index('--replace') + 1] == INSTANCE_URN
     assert up[up.index('--replace') + 1] == INSTANCE_URN
     assert fake.envs[-1][permission.ENV] == permission.GRANTED
+    # The preview `--replace` makes again plans the replacement, so no
+    # preview without a refresh is made, before it or after it.
+    assert fake.previewed_without_refresh == []
 
 
 @pytest.mark.parametrize('force', [False, True], ids=['plain', 'force'])
@@ -2505,6 +2976,9 @@ class AsTheBox:
         self, args: Sequence[str], *, cwd: Path, env: Mapping[str, str], doing: str | None = None
     ) -> tuple[int, str]:
         code, printed = self.cli.events(args, cwd=cwd, env=env, doing=doing)
+        if env.get(driver.STREAMING_JSON_ENV) != 'true':
+            # One document rather than events: the preview without a refresh.
+            return code, printed
         lines: list[str] = []
         for line in printed.splitlines():
             event = cast('dict[str, Any]', json.loads(line)) if line.strip() else None

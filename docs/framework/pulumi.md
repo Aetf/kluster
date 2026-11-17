@@ -575,24 +575,46 @@ through `mise.toml`'s `[env]`, and no `mise` task runs one
     and 1 when something is. That is also how drift in an operator stack
     is read, since no scheduled job reads it ([ci.md](ci.md) §3). The
     preview is `pulumi preview --refresh --json` with its engine events
-    streamed (`PULUMI_ENABLE_STREAMING_JSON_PREVIEW`, which the flag's own
-    help names), and the driver prints the steps, the changed outputs and
-    the count it read from them. What is planned is counted the way the
-    engine's own `HasChanges` counts it, with two more kinds of change
-    counted too, since the engine counts no step for either and an `up`
-    writes both: a plain stack output, and a resource's `protect`,
-    `retainOnDelete`, `provider` or `parent`, which the step's events
-    carry before and after. **Two changes alone are neither planned nor
-    applied**: one to a secret stack output, which the events show as
-    the same placeholder before and after, and one to an option they do
-    not carry at all — `dependsOn`, `deleteBeforeReplace`,
-    `ignoreChanges`, `replaceOnChanges`, `additionalSecretOutputs`,
-    `aliases`, `customTimeouts`. `operator-stack <stack> pulumi up`
-    applies either. The reading fails closed: events that are not events, no
-    summary, a summary that counts no step at all, or one that counts no
-    change while a step names one are each a refusal rather than an empty
-    plan. A test over the pinned CLI plans a real resource's change, so a
-    release that moves the summary fails there.
+    streamed (`PULUMI_ENABLE_STREAMING_JSON_PREVIEW`, which the flag's
+    own help names), and the driver prints the steps and the count it
+    read from them. What is planned is counted off that preview the way
+    the engine's own `HasChanges` counts it. Where it counts no step, a
+    second preview, without a refresh, reads what an `up` would write
+    with no step — a resource option moved on a `same` step, `dependsOn`
+    and the aliases among them, and an output of a resource, a component
+    or the stack — by the reading `stack-plan` gives the deploy chain
+    (`kluster.lib.state_only`), and the driver prints each such field
+    under its resource, in the section `stack-plan` prints. A field it
+    finds is planned, and so is a step it plans that the refreshed
+    preview did not, which says the stored state is behind what the
+    provider reads, and an `up`'s refresh writes it. The fields are not
+    read off the refreshed preview, since its old state is what the
+    provider reads now rather than what the backend holds: a provider's
+    normalized input would read as a field every `up` writes, and drift
+    as a field the program changed.
+    **The driver plans an `up` for what the program declares and either
+    the world, as the refresh reads it, or the state the backend holds
+    does not hold**: a step the refreshed preview plans, and, where it
+    plans none, a step or a field the second preview finds. A value that
+    differs from the stored state only because the refresh read the
+    world — a resource's outputs, or an output registered from them — is
+    not planned on its own; the driver's next `up`, whatever it is for,
+    writes it. **The one change to what the program declares that is
+    neither planned nor applied** is a secret an `up` writes with no
+    step — in practice an output the stack or a component registers —
+    whose value alone changed, which the second preview prints as the
+    same placeholder before and after;
+    `operator-stack <stack> pulumi up` applies it. The reading fails
+    closed: events that are not events, no summary, a summary that
+    counts no step at all, or one that counts no change while a step
+    names one are each a refusal rather than an empty plan, and so is a
+    second preview that exits with anything but 0 or a step's refusal,
+    or records a document or an event log that does not say what an `up`
+    would write; its event log goes in a temporary directory of its own,
+    and one inside the checkout refuses the run. A test over the pinned
+    CLI plans a real resource's change and each change no step carries,
+    and plans none for an output only the refresh moved, so a release
+    that moves the summary or the second preview's record fails there.
 -   **`up` refreshes, previews, asks, and applies**, and `--yes` skips
     the question. With nothing planned it runs no `up` at all and exits
     as `plan` does.
@@ -606,28 +628,31 @@ through `mise.toml`'s `[env]`, and no `mise` task runs one
     display: the plan comes from the preview's events, and the checks
     from the state. A test over the pinned CLI runs the driver's `up` both
     ways.
--   **What `pulumi` does not show, the driver says.** The preview shows
-    nothing of its own, since its standard output is the events the plan
-    is read from; the apply under the non-interactive display falls silent
-    for as long as a step runs. For each, the driver hands `pulumi`
-    `--event-log` into a temporary directory of its own, outside the
-    checkout, with `PULUMI_DEBUG_COMMANDS=true`, the variable the flag is
-    registered under, and at a display rate (`progress.INTERVAL`) logs on
-    its standard error what the engine's events say is in flight: the
-    custom resources' steps that have run longest, at most
-    `progress.NAMED` of them, each with how long it has run, and a count
-    of the rest; or that the engine has said nothing. The directory goes
-    on every way out the driver lives through; a driver ended by a signal
-    it does not handle (SIGKILL, SIGTERM, a hang-up) leaves it, and the
-    log in it holds every value the program does not mark secret. The
-    apply's narration speaks only
-    when the display has printed nothing since the last line, and the
-    display's dots are suppressed. At a live display the apply is not
-    narrated, since a line written beside it is erased by the redraw. The
-    log reaches nothing the driver acts on, a passed-through command gets
+-   **What `pulumi` does not show, the driver says.** The refreshed
+    preview shows nothing of its own, since its standard output is the
+    events the plan is read from; the apply under the non-interactive
+    display falls silent for as long as a step runs. For each, the
+    driver hands `pulumi` `--event-log` into a temporary directory of
+    its own, outside the checkout, with `PULUMI_DEBUG_COMMANDS=true`,
+    the variable the flag is registered under, and at a display rate
+    (`progress.INTERVAL`) logs on its standard error what the engine's
+    events say is in flight: the custom resources' steps that have run
+    longest, at most `progress.NAMED` of them, each with how long it has
+    run, and a count of the rest; or that the engine has said nothing.
+    The directory goes on every way out the driver lives through; a
+    driver ended by a signal it does not handle (SIGKILL, SIGTERM, a
+    hang-up) leaves it, and the log in it holds every value the program
+    does not mark secret. The apply's narration speaks only when the
+    display has printed nothing since the last line, and the display's
+    dots are suppressed. At a live display the apply is not narrated,
+    since a line written beside it is erased by the redraw. The log
+    reaches nothing the driver acts on, a passed-through command gets
     neither the flag nor the variable, and the apply's narration is a
     layer of its own that goes once a pinned release reprints a running
-    step's elapsed time (`operator_stack.progress`).
+    step's elapsed time (`operator_stack.progress`). The second preview
+    is announced before it starts and not narrated: its event log is the
+    reading's own, `--event-log` names one file, and a reading that
+    fails closed does not share it with a display that fails open.
 -   **A ^C is `pulumi`'s to answer.** The terminal sends it to `pulumi` as
     well as to the driver, and `pulumi` answers the first one by
     cancelling gracefully: it finishes the steps in flight and releases

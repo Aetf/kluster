@@ -1443,19 +1443,23 @@ before it ([pulumi.md](pulumi.md) §1.4), is not held: a release may
 change either without changing what a run rests on.
 
 `tests/test_stack_plan_engine.py` holds what `stack-plan` rests on, as
-the modules of `src/kluster/scripts/stack_plan/` state it: the JSON
-preview's states and the event log's outputs, as the pinned CLI writes
-them, carry each change an `up` writes on a `same` step -- a resource
-option, aliases among them, and an output of the stack or of a
-component -- so the command reads each as one an `up` would write, and as
-nothing once an `up` has written it. An unchanged program reads as
-nothing, and a plan that rewrites a secret prints no secret. It runs the
-command as the console script the package installs. It also holds the
-command's tripwire, a workaround's in the sense of the bullet above: the
-bare preview under `--expect-no-changes` still exits 0 on each of those
-changes. And it holds that a signal to the command, while its preview waits
-on a provider call that never returns, leaves no process of the run behind:
-not the CLI, its language host or its provider.
+`kluster.lib.state_only` and the modules of
+`src/kluster/scripts/stack_plan/` state it: the JSON preview's states
+and the event log's outputs, as the pinned CLI writes them, carry each
+change an `up` writes on a `same` step -- a resource option, aliases
+among them, and an output of the stack or of a component -- so the
+command reads each as one an `up` would write, and as nothing once an
+`up` has written it. An unchanged program reads as nothing, and a plan
+that rewrites a secret prints no secret. It runs the command as the
+console script the package installs. The operator driver reads the same
+reading, through its second preview, and its own real-engine cases in
+`tests/test_operator_stack.py` plan, show and apply each such change.
+The module also holds the layer's tripwire, a workaround's in the sense
+of the bullet above, for the command and the driver both: the bare
+preview under `--expect-no-changes` still exits 0 on each of those
+changes. And it holds that a signal to the command, while its preview
+waits on a provider call that never returns, leaves no process of the
+run behind: not the CLI, its language host or its provider.
 
 **A stand-in the engine imports is a provider plugin of the case's
 own**, served from the project's `plugins.providers` path, and it
