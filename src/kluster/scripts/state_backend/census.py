@@ -12,15 +12,29 @@ its writers compressed (physical/state-backend.md §2). It prints them and
 deletes nothing unless `--yes` is given too, and what it deletes is never a
 checkpoint, an update's `history/` record, nor a copy in a format its stack
 is stored in as of the delete's snapshot (`state.prune`).
+
+`--prune-expired` adds the rows the retention rule expires
+(`state.EXPIRED`, physical/state-backend.md §2): past
+`settings.EXPIRY_AGE`, every checkpoint copy under `history/` and
+`backups/`, every update record beyond the newest `settings.HISTORY_RECORDS`
+of its history directory, and every `.bak` whose stack has no checkpoint.
+Each is printed with the clause that expires it, and `--yes` deletes them;
+the delete applies the rule again as of its own snapshot
+(`state.prune_expired`), so it deletes no checkpoint, no lock and no row the
+rule has stopped expiring since the listing. One run takes one of the two
+modes.
 """
 
 from __future__ import annotations
 
+import datetime as dt
 import logging
 from collections.abc import Sequence
 from typing import TextIO
 
 from kluster.lib.state_backend import settings, state
+
+from . import probe
 
 log = logging.getLogger(__name__)
 
@@ -58,17 +72,32 @@ def summary(rows: Sequence[state.Row], database: str) -> list[str]:
     return lines
 
 
-def run(target: state.Connection, *, prune: bool, yes: bool, out: TextIO) -> int:
-    """The census over `target`, and the prune where `prune` asks for it; the exit status.
+def run(
+    target: state.Connection,
+    *,
+    prune: bool,
+    yes: bool,
+    out: TextIO,
+    expire: bool = False,
+    age: dt.timedelta = settings.EXPIRY_AGE,
+    records: int = settings.HISTORY_RECORDS,
+) -> int:
+    """The census over `target`, and the mode `prune` or `expire` asks for; the exit status.
 
-    `yes` is what turns the prune's listing into a delete. A delete that
+    `prune` lists the superseded copies, `expire` the rows the retention
+    rule expires under the lengths `age` and `records`; one run takes one
+    of them. `yes` is what turns the listing into a delete. A delete that
     passes over a key it was given -- a row a writer made current again
     between the read and the delete, or one already gone -- leaves the row,
     names it, and makes the status 1.
     """
+    if prune and expire:
+        raise ValueError('one census run takes one mode: --prune-superseded or --prune-expired')
     database = settings.DATABASE
     rows = state.census(target)
     print('\n'.join(summary(rows, database)), file=out)
+    if expire:
+        return _expire(target, yes=yes, out=out, age=age, records=records)
     if not prune:
         return 0
 
@@ -86,15 +115,44 @@ def run(target: state.Connection, *, prune: bool, yes: bool, out: TextIO) -> int
 
     asked = [row.key for row in stale]
     deleted = set(state.prune(target, asked))
+    return _settled(asked, deleted, out=out, total=total, what='superseded')
+
+
+def _expire(target: state.Connection, *, yes: bool, out: TextIO, age: dt.timedelta, records: int) -> int:
+    """`--prune-expired`: the listing of the rows the retention rule expires, and their delete under `yes`."""
+    stale = state.expired(target, age=age, records=records)
+    total = sum(row.size for row in stale)
+    print('', file=out)
+    print(
+        f'expired rows: {len(stale)}, {total:,} bytes stored '
+        f'(written over {probe.hours(age)} ago; update records beyond the newest {records} of their directory)',
+        file=out,
+    )
+    for row in stale:
+        print(f'  {row.key}  {row.size:,} bytes  {row.clause.value}', file=out)
+    if not stale:
+        return 0
+    if not yes:
+        log.info('nothing deleted: `--prune-expired --yes` deletes the %d row(s) listed', len(stale))
+        return 0
+
+    asked = [row.key for row in stale]
+    deleted = set(state.prune_expired(target, asked, age=age, records=records))
+    return _settled(asked, deleted, out=out, total=total, what='expired')
+
+
+def _settled(asked: Sequence[str], deleted: set[str], *, out: TextIO, total: int, what: str) -> int:
+    """Each key asked for, deleted or kept, and the status: 1 where the delete passed over any."""
     for key in asked:
         print(f'{"deleted" if key in deleted else "kept"}  {key}', file=out)
     kept = [key for key in asked if key not in deleted]
     if kept:
         log.error(
-            '%d row(s) were not deleted, because each is gone or was no longer superseded when the delete ran: %s',
+            '%d row(s) were not deleted, because each is gone or was no longer %s when the delete ran: %s',
             len(kept),
+            what,
             ', '.join(kept),
         )
         return 1
-    log.info('deleted %d superseded row(s), %s stored', len(deleted), _mib(total))
+    log.info('deleted %d %s row(s), %s stored', len(deleted), what, _mib(total))
     return 0

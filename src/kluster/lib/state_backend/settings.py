@@ -222,6 +222,18 @@ DUMP_PERIOD = dt.timedelta(days=1)
 #: every scheduled backup's threshold follows (state-backend.md §5).
 DUMP_MAX_AGE = backup.max_age(DUMP_PERIOD)
 
+#: The retention rule of the state table (state-backend.md §2), which
+#: `state-backend census --prune-expired` enforces (`state.expired`). No row
+#: younger than `EXPIRY_AGE` expires: two dump periods, so a row that old has
+#: stood through two scheduled dumps and one missed run leaves it in the
+#: other, and half a period past `DUMP_MAX_AGE`, so while the dump-age probe
+#: passes the newest dump holds every row a prune takes. Past that age a
+#: checkpoint copy expires, and so does an update record that is not among
+#: the newest `HISTORY_RECORDS` of its stack's history directory: the page
+#: the reading of every stack's history asks for (sources-of-truth.md §4).
+EXPIRY_AGE = 2 * DUMP_PERIOD
+HISTORY_RECORDS = 1000
+
 #: A scheduled reboot is never mistaken for an incident.
 REBOOT_DAY = 'Tue'
 REBOOT_TIME = '04:00'
