@@ -893,10 +893,23 @@ every recovery path on this table an assumed-broken one.
 | CNPG restore (immich pattern, ported from legacy) | Monthly | In-cluster workflow, alert on failure |
 | State-backend rebuild — scratch micro from Butane → restore latest dump (drill key) → verify → destroy (state-backend.md §7.3) | Quarterly | Ops-repo workflow, alert on failure |
 | etcd snapshot restore-verify — latest B2 snapshot into a scratch etcd, health + key sanity | Monthly | Ops-repo workflow, alert on failure |
-| VolSync spot-restore — rotating PVC into a scratch namespace, checksum, tear down | Monthly | In-cluster workflow, alert on failure |
+| VolSync spot-restore — rotating PVC into a scratch namespace, checksum, and for an embedded database the rule below, tear down | Monthly | In-cluster workflow, alert on failure |
 | Orphan-volume audit, target zero (storage.md §3.3) | Quarterly | In-cluster workflow, alert only on findings |
 | Credential expiry tripwires (credentials.md §4) | Continuous (scheduled probes) | Ops-repo probes; `actionable` alert when an expiry approaches |
 | **Offline day**: age key rotation (proves offline custody, state-backend.md §7.4) + full cold-standby reverse bootstrap on homelab libvirt (nodes.md §5) + offline-kit verification against the register (credentials.md §2.1) + a `pulumi preview` against the Vultr-fallback stack config (nodes.md §3.1 — proves the scripted fallback still computes, creating nothing) + anything the probes can't reach | Yearly | One `actionable` issue, human-run |
+
+**Rule: a checksum does not pass a claim that holds an embedded
+database.** The VolSync spot-restore of a claim whose application keeps
+an embedded database in it (storage.md §3.1 says which claims those are)
+passes only when that application starts on the restored copy, or when
+the engine's own check passes on it, such as SQLite's
+`PRAGMA integrity_check` returning `ok`. A checksum match proves only
+that the restore reproduced the copy, and a copy that `Direct` tore
+reproduces faithfully. A failure is answered by restoring the copy
+before it, which is what storage.md §5's RPO for such a claim assumes.
+Where the failed copy does not open while that one does, the failure
+is the evidence storage.md §3.4 names for adopting a snapshot-capable
+driver on that claim's node class.
 
 **Destroy dates are not on that clock, and only one of them is a date.**
 A retired **kit** owes nothing forward: `credentials kit rotate` re-wraps

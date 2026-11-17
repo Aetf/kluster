@@ -13,7 +13,9 @@ resort, object storage used directly where an app supports it.
 > §2.1). 2026-08-22: JuiceFS root causes documented (§1), VPS
 > syncthing/dav disposition decided (§6), and — economy pass —
 > **Longhorn deferred out of the initial build** in favor of local-path +
-> VolSync (§3), with adoption criteria on file. Companion to
+> VolSync (§3), with adoption criteria on file. 2026-11-17:
+> snapshot-capable local volumes deferred as well, with adoption
+> criteria and the shape adoption takes (§3.4). Companion to
 > [nodes.md](nodes.md); topology and pools per
 > [architecture.md](architecture.md). Declared in code: the backup
 > bucket and its keys (`BackupBucket`, §4) and the cloud block volumes
@@ -119,6 +121,43 @@ the controller idles at well under 100 Mi. This one mechanism serves as:
     (below), which works identically same-site and cross-site, with no
     claimRef surgery.
 -   **DR**: a restore from the repository, onto a rebuilt node.
+
+**A `Direct` copy of an embedded database can be torn.** The mover
+reads the claim file by file while the application keeps writing to
+it, which is what `Direct` means. So a claim whose application keeps an
+embedded database in it, an engine the application links and that
+writes files of its own on the claim rather than a server it connects
+to, can be copied in a state that no crash leaves behind. A SQLite file
+can be read beside a write-ahead log that a checkpoint has already
+folded into it. A `RocksDB` manifest can name table files that a
+compaction created after the copy listed the directory, or deleted
+before the copy read them. Such a copy restores faithfully and matches
+its checksums, yet the engine refuses to open it.
+
+The definition decides which claims these are. Among the applications
+rfc-008 §4.2 gives a backed claim, they are today:
+
+-   matrix, whose continuwuity keeps `RocksDB`;
+-   golinks, whose store is a `LevelDB` directory
+    (`docker/golinks.Containerfile`);
+-   syncthing's index, which is `LevelDB` before syncthing 2.0 and
+    SQLite from it;
+-   authelia, jellyfin's database and settings, and spoolman, each on
+    SQLite.
+
+The engines of shoko, qbittorrent's resume data and seedwatch's history
+are not read, and each of them that turns out to be embedded joins the
+list.
+
+What answers the case is a procedure, not a driver. The spot-restore of
+such a claim opens the database rather than comparing checksums
+(operations.md §4), and a copy that does not open is restored from the
+copy before it, which is the RPO §5 states for such a claim. A
+snapshot-capable driver, which would copy from the state a power cut
+leaves and which every engine above is built to recover from, is
+deferred with adoption criteria (§3.4). The metrics stores are not this
+case: `vmbackup` copies them from a snapshot of their own, and VolSync
+does not copy them at all (§5).
 
 **The snapshot definitions are served all the same.** VolSync's
 controller watches `VolumeSnapshot` objects whatever a source's
@@ -273,6 +312,126 @@ Three related lessons, folded into policy:
     one-time census during migration — each mapped to an app or
     deleted (migration.md).
 
+### 3.4 Snapshot-capable local volumes: deferred (2026-11-17), with adoption criteria
+
+A local driver with CSI snapshots buys two things. A claim under it is
+copied `copyMethod: Snapshot`: VolSync takes a `VolumeSnapshot` of the
+claim and gives the mover a volume made from it, so the copy is the
+state a power cut would leave, which an embedded database is built to
+recover from, rather than the torn copy `Direct` can make (§3.1). And
+a claim gets a size it cannot exceed, where a `local-path` claim shares
+EPHEMERAL with the node's images and logs and can grow until the
+kubelet evicts every pod on the node.
+
+**Why not now, on either node class.** The census that would use it is
+about a dozen working-state claims holding a few GiB, and the price on
+the cluster's Talos release is standing:
+
+-   a second provisioner, because `local-path` stays for the node
+    volumes, for the claims a chart makes and for `off` claims;
+-   a cluster-wide snapshot controller, where `k8s-base` serves only the
+    definitions today (§3.1);
+-   under a ZFS or an LVM driver, a storage pool that no
+    machine-configuration document declares, so a privileged Job builds
+    it;
+-   under a ZFS driver a guest ARC on a host whose RAM already binds, and
+    under an LVM one a pool that fails every volume on it at once when
+    it fills.
+
+What it changes is narrow. Barman and `vmbackup` stay whichever driver
+is chosen, and a lost node is restored the same way, from the restic
+repository into a claim on the rebuilt node, since a snapshot lives on
+its volume's disk and dies with it. So what the rent would insure is a
+rare event, a torn latest copy meeting a restore, and the canon buys a
+rare event as a procedure, by the rule of nodes.md §4.4: the copy
+before it restores instead, at the RPO §5 states, and the drill that
+opens the database finds the torn one (operations.md §4).
+
+**Adoption criteria.** The driver enters on a node class when any one
+of these holds there:
+
+-   **Evidence**: a restore, drill or real, of a working-state claim
+    yields an embedded database that its engine refuses while the copy
+    before it opens. One such reading is enough, since it is the failure
+    `Direct` allows, observed.
+-   **A ruling**: the operator rules that a claim's RPO must hold at
+    its class's period, ≤24 h for a daily class, through a torn copy.
+
+Two changes in cost reopen the decision without deciding it:
+
+-   the cluster's Talos release declares the pool in machine
+    configuration, which removes the Job;
+-   OpenEBS marks `rawfile-localpv` stable, which removes the disk, the
+    pool and the Job on both node classes.
+
+**The shape adoption takes**, so that adopting is a set of slices
+rather than a new design.
+
+-   **Where.** The worker first, since nearly all the census is there.
+    The cloud control planes only when a criterion holds for the cloud.
+-   **The worker's pool** is a second virtual disk, sparse and raw, on
+    the same nodatacow subvolume as the system disk
+    (physical/homelab-host.md §1), declared by `physical`. It keeps the
+    pool off the path by which the worker grows, and attaching it
+    redefines the domain, which is a drained window. It is replaced with
+    the node, so nothing on it outlives its node (§2).
+-   **The cloud's pool** is a partition of the boot volume, a
+    `RawVolumeConfig` with a `VolumeConfig` capping EPHEMERAL. The cap
+    applies only when EPHEMERAL is created, so each control plane takes
+    it in a rebuild. Its writes land on the volume that holds etcd,
+    inside nodes.md §1.2's rule 2, where every cloud claim's writes
+    already land. A block volume of its own buys isolation that the
+    cloud's claims do not need, and a second data disk on the node that
+    carries `hath-cache` would break the node-volume selector, which
+    matches one disk only.
+-   **The driver is `TopoLVM` on a thin pool.** LVM holds no cache and
+    needs no change to the node image, on a homelab host where RAM
+    binds (nodes.md §4.1); `overprovision-ratio` keeps provisioning
+    within the pool; and it is tested on the cluster's Kubernetes
+    release. The OpenEBS ZFS driver is the alternative for the day RAM
+    stops binding, and it is out on the cloud nodes, whose ARC would
+    come out of their memory floor.
+    `rawfile-localpv` becomes the first choice once OpenEBS marks it
+    stable, since it needs no disk, no pool and no extension on either
+    node class.
+
+The slices, each a pull request of its own, in this order:
+
+1.  The snapshot controller in `k8s-base`, from the pin that already
+    serves the definitions; a driver's chart that bundles a controller
+    has it turned off.
+2.  The worker's data disk in `physical`, applied in a drained window.
+3.  `TopoLVM` in `k8s-base`: the chart, the Job that builds the thin pool
+    and, stricter than Talos is with a node volume (§6), refuses a disk
+    carrying any signature it did not write, the `StorageClass` and the
+    `VolumeSnapshotClass`.
+4.  `claim` takes its copy method from its class, and a worker
+    application's claim defaults to the worker's snapshot class, so no
+    application chooses a copy method.
+5.  The rent line in nodes.md §4.4, from a scratch install's readings,
+    and the data disk's place in the rebuild runbooks (operations.md
+    §3.2, §3.5).
+
+A node class adopted before its first backed claim lands has nothing to
+carry over. On one adopted after, each backed claim crosses by §3.1's
+move, or by a restore from its repository into a claim of the new class.
+
+**Adoption-day facts**, as of 2026-11:
+
+-   `TopoLVM` v0.42.1 supports Kubernetes 1.34–1.36, restores a snapshot
+    only into a thin volume on the source's node, needs the thin pool to
+    exist beforehand, and takes its webhooks' certificates from
+    cert-manager.
+-   `TopoLVM` deletes the claims of a node that is deleted, and `apps`
+    would recreate them empty on its next `up`, so adoption puts the
+    restore ahead of that `up` in the rebuild runbooks.
+-   Whether `dm_thin_pool` loads on demand on Talos or needs
+    `machine.kernel.modules`, and what each driver's pods request, are
+    read on the scratch install; no chart states requests.
+-   Not Longhorn by another door: no replica, no live detach and no RWX,
+    so §3.2's criteria are untouched. Longhorn, adopted by them, brings
+    its own snapshots, which close this item.
+
 ## 4. Object storage provider
 
 Needs: S3-compatible API (restic/VolSync, CNPG barman, and Longhorn if
@@ -391,9 +550,15 @@ Per nodes.md §5, durability = declarative rebuild + backups + drills:
     cluster owns on this list is assumed broken today: no drill has run,
     and nothing schedules one (operations.md §4).
 
-RPO: ≤1 h for etcd, ≤24 h for volumes, ~0 for CNPG (WAL), ≤1 h for
-the metrics history. RTO: rebuild
-either site from Pulumi + backups in ~1–2 h hands-on.
+RPO: ≤1 h for etcd, ~0 for CNPG (WAL), ≤1 h for the metrics history,
+and for a volume the period of its retention class's schedule
+(`conventions.backup.RETENTION_CLASSES`): ≤24 h under the daily
+`STANDARD` and `PRECIOUS`, ≤7 days under the weekly `BULKY`. A volume
+whose application keeps an embedded database (§3.1) holds that period
+while its latest copy opens, and up to twice it when it does not, since
+its restore then takes the copy before it (operations.md §4): ≤24 h and
+up to 48 h under a daily class. RTO: rebuild either site from Pulumi +
+backups in ~1–2 h hands-on.
 
 ## 6. JuiceFS containment policy
 
@@ -536,7 +701,7 @@ reason to write the criterion, not a license to skip it.
 -   **Longhorn replica=2 across sites** ("free" DR): every write pays WAN
     RTT synchronously; measured legacy homelab↔VPS latency makes fsync-heavy
     workloads unusable. Rejected on principle 3; async backup/restore covers
-    the DR case at RPO ≤24 h.
+    the DR case at the RPO §5 states.
 -   **Rook/Ceph**: proper distributed storage, but wants ≥3 storage nodes
     per site and an operational budget this cluster doesn't have. Strictly
     overkill for 2–3 nodes.
