@@ -1009,11 +1009,11 @@ kubeconfig at `~/.kube/kluster`:
 ```sh
 P=$(mise x uv -- uv run python -c 'from kluster.components.talos import ETCD_METRICS_PORT; print(ETCD_METRICS_PORT)')
 E=$(mise x uv -- uv run python -c 'from kluster import conventions as c; print(len(c.CLOUD_NODES))')
-CPN=$(kubectl --kubeconfig ~/.kube/kluster get nodes -l node-role.kubernetes.io/control-plane -o jsonpath='{.items[*].metadata.name}')
+CPN=$(mise x -- kubectl --kubeconfig ~/.kube/kluster get nodes -l node-role.kubernetes.io/control-plane -o jsonpath='{.items[*].metadata.name}')
 N=$(echo "$CPN" | wc -w)
 [ "$N" -eq "$E" ] || echo "FAIL: $N control planes labelled, $E declared"
 for n in $(echo "$CPN"); do
-    kubectl --kubeconfig ~/.kube/kluster get --raw "/api/v1/nodes/http:$n:$P/proxy/metrics" | awk -v n="$n" '
+    mise x -- kubectl --kubeconfig ~/.kube/kluster get --raw "/api/v1/nodes/http:$n:$P/proxy/metrics" | awk -v n="$n" '
         $1 == "etcd_disk_wal_fsync_duration_seconds_bucket{le=\"0.008\"}" { within = $2 }
         $1 == "etcd_disk_wal_fsync_duration_seconds_count" { count = $2 }
         END { ok = count > 0 && 100 * within >= 99 * count
