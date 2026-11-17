@@ -26,6 +26,20 @@ the SHA-1 of the CA's public key (RFC 5280 §4.2.1.2, method 1) and the
 Authority Key Identifier carries nothing else, no issuer name or serial:
 the CA certificate is rendered afresh with a new serial each time, and a
 leaf has to keep chaining to every rendering of it.
+
+**Every certificate is valid from `NOT_BEFORE_MARGIN` before it is issued.**
+A verifier holds `notBefore` against its own clock, which can trail the
+issuer's. The box and a CI runner check what a workstation issued, with
+clocks off from it by whatever NTP leaves, more on a host whose clock has
+not converged. On the issuing host itself, OpenSSL reads `time()`, which on
+Linux is the coarse clock and still reads the previous second for a few
+milliseconds after each second begins, while `notBefore` is the issuance
+second rounded down, so a certificate issued then and verified at once is
+"not yet valid" there. The margin is cfssl's default backdate, five minutes
+(step-ca uses one): it absorbs both with room to spare, and costs nothing,
+because no leaf is revoked (physical/state-backend.md §3) and the expiry,
+which the renewal and alert margins are held against, is still counted from
+the issuance.
 """
 
 from __future__ import annotations
@@ -48,6 +62,10 @@ CURVE = ec.SECP256R1()
 #: real bound; the three leaves below rotate far more often.
 CA_VALIDITY = dt.timedelta(days=3653)
 LEAF_VALIDITY = dt.timedelta(days=1096)
+
+#: How long before its issuance a certificate is already valid: the room a
+#: verifier whose clock runs behind the issuer's is given (module docstring).
+NOT_BEFORE_MARGIN = dt.timedelta(minutes=5)
 
 #: The appliance's pooler maps a client certificate's Common Name to the
 #: Postgres role it connects as.
@@ -88,6 +106,25 @@ def _name(common_name: str) -> x509.Name:
     return x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, common_name)])
 
 
+def _builder(
+    common_name: str, public_key: ec.EllipticCurvePublicKey, now: dt.datetime, validity: dt.timedelta
+) -> x509.CertificateBuilder:
+    """What every certificate the CA signs starts from: the CA as its issuer, and the validity of one issued at `now`.
+
+    The builder takes `notBefore` once and refuses a second, so a
+    certificate started here keeps `NOT_BEFORE_MARGIN`.
+    """
+    return (
+        x509.CertificateBuilder()
+        .subject_name(_name(common_name))
+        .issuer_name(_name(CA_COMMON_NAME))
+        .public_key(public_key)
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - NOT_BEFORE_MARGIN)
+        .not_valid_after(now + validity)
+    )
+
+
 def generate_ca_key() -> str:
     """A fresh CA private key as PKCS8 PEM — what the CA row's `generate` escrows.
 
@@ -107,10 +144,10 @@ class Authority:
     """The CA, in hand: the recovered private key and what it will sign.
 
     Certificates are re-issued rather than reproduced byte for byte — serial
-    numbers are random and validity starts now — so two runs produce two
-    certificates that assert the same thing. What identifies the CA across
-    them is its public key, which is stable because the private half comes
-    from escrow.
+    numbers are random and validity is counted from the issuance — so two
+    runs produce two certificates that assert the same thing. What
+    identifies the CA across them is its public key, which is stable because
+    the private half comes from escrow.
 
     The key does not print. Today's type carries `object`'s repr and would
     disclose nothing, but that is a property of the library rather than of
@@ -133,16 +170,8 @@ class Authority:
 
     def certificate(self, *, now: dt.datetime | None = None) -> Credential:
         """The self-signed CA certificate, with the key that signed it."""
-        now = _at(now)
-        name = _name(CA_COMMON_NAME)
         cert = (
-            x509.CertificateBuilder()
-            .subject_name(name)
-            .issuer_name(name)
-            .public_key(self.key.public_key())
-            .serial_number(x509.random_serial_number())
-            .not_valid_before(now)
-            .not_valid_after(now + CA_VALIDITY)
+            _builder(CA_COMMON_NAME, self.key.public_key(), _at(now), CA_VALIDITY)
             .add_extension(x509.BasicConstraints(ca=True, path_length=0), critical=True)
             .add_extension(
                 x509.KeyUsage(
@@ -173,13 +202,7 @@ class Authority:
     ) -> Credential:
         key = ec.generate_private_key(CURVE)
         builder = (
-            x509.CertificateBuilder()
-            .subject_name(_name(common_name))
-            .issuer_name(_name(CA_COMMON_NAME))
-            .public_key(key.public_key())
-            .serial_number(x509.random_serial_number())
-            .not_valid_before(now)
-            .not_valid_after(now + LEAF_VALIDITY)
+            _builder(common_name, key.public_key(), now, LEAF_VALIDITY)
             .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
             .add_extension(usage, critical=False)
             .add_extension(x509.AuthorityKeyIdentifier.from_issuer_public_key(self.key.public_key()), critical=False)

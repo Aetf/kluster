@@ -684,6 +684,13 @@ oraclecloud`, x86_64), the qcow2 imports as a custom image
     notice given to anything. Issuing twice yields two different keys,
     which is why a caller that needs a certificate and its key takes
     both halves from one issuance.
+-   **Every certificate is valid from `pki.NOT_BEFORE_MARGIN` before
+    its issuance.** The box and a CI runner verify what a workstation
+    issued, against clocks that may trail the workstation's. Even on the
+    workstation, the TLS library reads a coarser clock than the issuance
+    does. The expiry, and the renewal and alert margins measured against
+    it, still count from the issuance, and no leaf is revoked (below), so
+    the earlier start costs nothing.
 -   **No CRL/OCSP.** The box's configuration changes only by a
     replacement (§1), so a revocation list could reach it only the way
     a new CA does — and a new CA revokes every leaf under the old one
