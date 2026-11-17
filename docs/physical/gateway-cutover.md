@@ -2101,7 +2101,7 @@ WORKER=192.168.70.10
 ip_of() { physical stack output node_private_ips --json | jq -r --arg n "$1" '.[$n]'; }
 CP=($(physical stack output node_private_ips --json | jq -r '.[]'))
 CPS=$(physical stack output node_private_ips --json | jq -r '[.[]] | join(",")')
-tal() { talosctl --talosconfig "$TC" "$@"; }
+tal() { mise x -- talosctl --talosconfig "$TC" "$@"; }
 mkdir -p ~/.kube
 (umask 077; physical stack output kubeconfig --show-secrets > ~/.kube/kluster)
 ```

@@ -535,9 +535,9 @@ physical() { (cd ~/kluster && mise x -- env -u PULUMI_CONFIG_PASSPHRASE PULUMI_C
 h="$(sha256sum Pulumi.physical.yaml)"; ZT="$(physical config get zerotierApiToken)"; [ "$h" = "$(sha256sum Pulumi.physical.yaml)" ] && echo "stack file unchanged"
 N="$(mise x uv -- uv run python -c 'from kluster.conventions import overlay; print(overlay.NETWORK_ID)')"
 # Z2
-curl -sS -H "Authorization: bearer $ZT" "https://my.zerotier.com/api/network/$N" | jq '{name, rulesSource, routes: .config.routes, dns: .config.dns, pools: .config.ipAssignmentPools, v6: .config.v6AssignMode}'
+printf 'Authorization: bearer %s\n' "$ZT" | curl -sS -H @- "https://my.zerotier.com/api/network/$N" | jq '{name, rulesSource, routes: .config.routes, dns: .config.dns, pools: .config.ipAssignmentPools, v6: .config.v6AssignMode}'
 # Z3
-curl -sS -H "Authorization: bearer $ZT" "https://my.zerotier.com/api/network/$N/member" | jq -r '.[] | [.name, .nodeId, .config.authorized, (.config.ipAssignments // [] | join(","))] | @tsv' | sort
+printf 'Authorization: bearer %s\n' "$ZT" | curl -sS -H @- "https://my.zerotier.com/api/network/$N/member" | jq -r '.[] | [.name, .nodeId, .config.authorized, (.config.ipAssignments // [] | join(","))] | @tsv' | sort
 # Z4
 mise x uv -- uv run python -c 'from kluster.conventions import overlay; [print(m.name, getattr(m, "node_id", None) or "-", m.address, sep="\t") for m in overlay.ROSTER]' | sort
 ```
