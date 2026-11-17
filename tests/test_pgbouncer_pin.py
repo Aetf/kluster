@@ -2,14 +2,16 @@
 
 The pin -- the repository, the release's tag and the digest the box runs --
 is read by one renovate manager as the settings hold it, a move of its digest
-replaces the box and is taken in the image bases' monthly window, in the
-appliance's group, and `state-backend pins` asks the registry the image lives
-in, GitHub's, whether it serves the pinned digest.
+replaces the box, so the rule for those moves gives them a window of one day
+a month, in the appliance's group, and `state-backend pins` asks the registry
+the image lives in, GitHub's, whether it serves the pinned digest.
 """
 
 from __future__ import annotations
 
+import fnmatch
 import json
+import re
 from pathlib import Path
 from typing import cast
 from urllib import request as urllib_request
@@ -49,26 +51,111 @@ def test_renovate_reads_the_image_the_box_runs() -> None:
     assert f'{found["depName"]}:{found["currentValue"]}@{found["currentDigest"]}' == settings.PGBOUNCER_IMAGE
 
 
+def _matches(pattern: str, value: str) -> bool:
+    """Whether one renovate match pattern -- a `/regex/` or `/regex/i`, a glob or a literal -- matches `value`.
+
+    Read as renovate reads it: the regex is the JSON5 string's value, and a
+    glob ignores case. What this reading cannot settle is taken as matching: a
+    negated pattern (`!…`), whose effect depends on the rest of its list; a
+    regex Python cannot compile; and glob syntax `fnmatch` does not share with
+    minimatch, braces and extglobs.
+    """
+    if pattern.startswith('!'):
+        return True
+    regex = re.fullmatch(r'/(.+)/(i?)', pattern)
+    if regex:
+        try:
+            # The file's text doubles each backslash of the pattern renovate compiles.
+            return re.search(regex[1].replace('\\\\', '\\'), value, re.IGNORECASE if regex[2] else 0) is not None
+        except re.error:
+            return True
+    # Brace and extglob syntax is minimatch's alone.
+    if any(char in pattern for char in '{('):
+        return True
+    return fnmatch.fnmatchcase(value.lower(), pattern.lower())
+
+
+def _reaches(rule: str, presents: dict[str, tuple[str, ...]]) -> bool:
+    """Whether a rule can match an update presenting these values to its matchers.
+
+    A matcher the update presents no value for, and a key whose list this scan
+    cannot read, are taken as matching, so a rule is only cleared by a matcher
+    that provably misses.
+    """
+    for key in re.findall(r'^\s*((?:match|exclude)\w+):', rule, re.MULTILINE):
+        values = presents.get(key)
+        patterns = listed(rule, key)
+        if values is None or not patterns:
+            continue
+        if not any(_matches(pattern, value) for pattern in patterns for value in values):
+            return False
+    return True
+
+
+def _effective(config: str, presents: dict[str, tuple[str, ...]], key: str) -> str | None:
+    """The rule renovate takes `key` from for an update: the last one that sets it and can match.
+
+    Every matching rule is merged in order, so a later one overrides an
+    earlier one on any key both set. `None` when no rule sets the key.
+    """
+    setting = [
+        rule
+        for rule in package_rules(config)
+        if re.search(rf'^\s*{key}:', rule, re.MULTILINE) and _reaches(rule, presents)
+    ]
+    return setting[-1] if setting else None
+
+
 def test_the_images_digest_moves_monthly_in_the_appliances_group() -> None:
-    """A digest move replaces the box, so it is taken in the image bases' monthly window, with the appliance's pins."""
+    """A digest move replaces the box, so renovate offers one on one day of every month, in the appliance's group.
+
+    The release's tag is rebuilt on each new base, and each move of the pin
+    is a dump, a new box and a restore, as a move of the Postgres image's is
+    (`tests/test_postgres_pin.py`). A window on more days than one a month
+    puts that replacement up for merging after each rebuild; one that skips a
+    month leaves a base's security fix off the box for longer than a month.
+    Grouped elsewhere, the replacement travels in a pull request not read as
+    one.
+
+    What renovate gives the update is the last matching rule that sets each
+    key, so a later, broader rule setting `schedule` or a group overrides the
+    narrow one; the update is resolved against every rule, the way renovate
+    merges them. The window held is the update's own: renovate opens a
+    group's branch on the schedule of the update it sorts first, so beside
+    another of the appliance's updates a digest move can travel on that one's
+    schedule. Held as text, because there is no JSON5 parser here
+    (`renovate_text`).
+    """
     config = (ROOT / 'renovate.json5').read_text()
     (found,) = as_python_spells_it(IMAGE_MATCH_STRING).finditer((ROOT / APPLIANCE).read_text())
-    (rule,) = [
-        rule
-        for rule in package_rules(config)
-        if listed(rule, 'matchDepNames') == [found['depName']] and listed(rule, 'matchUpdateTypes') == ['digest']
-    ]
-    (bases,) = [
-        rule
-        for rule in package_rules(config)
-        if listed(rule, 'matchFileNames') == ['docker/**'] and listed(rule, 'matchUpdateTypes') == ['digest']
-    ]
+    # The custom manager reads the image from the appliance's settings, off Docker's data source.
+    digest = {
+        'matchDepNames': (found['depName'],),
+        'matchPackageNames': (found['depName'],),
+        'matchManagers': ('custom.regex', 'regex'),
+        'matchFileNames': (APPLIANCE,),
+        'matchDatasources': ('docker',),
+        'matchUpdateTypes': ('digest',),
+    }
 
-    assert listed(rule, 'schedule') == listed(bases, 'schedule') != []
-    # Grouped by the rule for the file the manager reads it from, which the
-    # narrower rule leaves alone.
-    assert group(rule) == []
-    assert group(_appliance_rule(config)) != []
+    scheduling = _effective(config, digest, 'schedule')
+    assert scheduling is not None, 'no rule gives the digest a window, so each rebuild opens a pull request'
+    windows = [entry.split() for entry in listed(scheduling, 'schedule')]
+    assert windows, f'the window renovate takes is not a list of cron entries:\n{scheduling}'
+    for window in windows:
+        # Minute, hour, day of the month, month, day of the week: any hours of
+        # one day that every month has, in every month, whatever its weekday.
+        assert len(window) == 5, f'not a cron entry: {window}'
+        minute, _hours, day, month, weekday = window
+        assert (minute, month, weekday) == ('*', '*', '*'), f'not every month, or not every weekday: {window}'
+        assert day.isdigit(), f'more than one day a month: {window}'
+        assert 1 <= int(day) <= 28, f'a day some month does not have: {window}'
+    assert len({day for _minute, _hours, day, _month, _weekday in windows}) == 1, (
+        f'more than one day a month: {windows}'
+    )
+
+    assert _effective(config, digest, 'groupName') == _appliance_rule(config)
+    assert _effective(config, digest, 'groupSlug') == _appliance_rule(config)
 
 
 class _Answer:
