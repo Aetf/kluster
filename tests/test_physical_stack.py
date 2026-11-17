@@ -1531,11 +1531,12 @@ async def test_the_bucket_holds_a_writer_key_per_family_of_each_backed_namespace
     Run under a census of the case's own, so a roll written into the program
     in place of the census -- today's namespaces, or any other -- declares the
     wrong keys here. Each key is exported under the scope `credentials` reads
-    it by when it seals the key into `apps`.
+    it by when it seals the key for the stack that declares what reads it.
     """
     census = {
         'alpha': frozenset({BackupFamily.VOLSYNC, BackupFamily.BARMAN}),
         'beta': frozenset({BackupFamily.BARMAN}),
+        'gamma': frozenset({BackupFamily.VM}),
     }
     monkeypatch.setattr(backup_conventions, 'BACKED_NAMESPACES', census)
     exported: dict[str, object] = {}
@@ -1556,6 +1557,7 @@ async def test_the_bucket_holds_a_writer_key_per_family_of_each_backed_namespace
         conventions.volsync_repo_path('alpha', ''),
         conventions.barman_repo_path('alpha', ''),
         conventions.barman_repo_path('beta', ''),
+        backup_conventions.metrics_repo_path('gamma', ''),
     }
     keys = cast('dict[str, object]', exported[conventions.PHYSICAL_OUTPUTS.backup_keys])
     assert set(keys) == {
@@ -1563,6 +1565,7 @@ async def test_the_bucket_holds_a_writer_key_per_family_of_each_backed_namespace
         writer_scope('alpha', BackupFamily.VOLSYNC),
         writer_scope('alpha', BackupFamily.BARMAN),
         writer_scope('beta', BackupFamily.BARMAN),
+        writer_scope('gamma', BackupFamily.VM),
     }
 
 

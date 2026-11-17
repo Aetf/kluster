@@ -186,10 +186,16 @@ per-app number:
     exempted (and why)" is derivable from the stacks, no external
     registry to drift.
 -   **The other backup families plug into the same frame**: CNPG barman
-    retention expressed from the same class constants; etcd snapshots
+    retention expressed from the same class constants; the monitoring
+    stack's `vmbackup` copies of its VictoriaMetrics stores, at
+    `conventions.backup.metrics_repo_path`, under a writer key of their
+    own that `k8s-base`, which declares the monitoring stack, carries
+    sealed rather than `apps`; etcd snapshots
     (hourly, ~14d) and the state-backend pg_dump (ci.md §1) are
     physical/CI-side but follow the same bucket-layout and retention
-    vocabulary (storage.md §5 stays the authority on targets/RPO).
+    vocabulary (storage.md §5 stays the authority on targets/RPO). Each
+    family of a namespace is one row of the census
+    `conventions.backup.BACKED_NAMESPACES` and one writer key.
 -   **Freshness is monitored centrally, not per-app**: one vmalert rule
     family — *any* backup whose last success is older than its class
     threshold alerts. A volume's last success is its source's

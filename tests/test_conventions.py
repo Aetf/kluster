@@ -3171,10 +3171,27 @@ def test_every_backed_namespace_has_a_writer_key_row_for_each_family() -> None:
             row = conventions.sealed.writer_key(namespace, family)
             assert conventions.sealed.VALUES.get(row.name) == row, (namespace, family)
             assert row.namespace == namespace
-            assert row.stack == conventions.STACK_NAMES.apps
             assert frozenset(row.keys) == conventions.WRITER_KEY_FIELDS
     assert len(conventions.sealed.WRITER_KEYS) == sum(len(families) for families in census.values())
     assert len({row.name for row in conventions.sealed.WRITER_KEYS}) == len(conventions.sealed.WRITER_KEYS)
+    # A stack named for a namespace nothing backs up seals nothing.
+    assert set(conventions.sealed.WRITER_KEY_STACKS) <= set(census)
+
+
+def test_every_sealed_value_of_a_namespace_is_declared_by_one_stack() -> None:
+    """A namespace's Secrets are declared by one stack, so a writer key is sealed where the rest of its namespace is.
+
+    The stack that declares a namespace's consumers is the one whose
+    configuration they read their ciphertexts from. A writer key sealed for
+    another stack -- `apps`, for a namespace `k8s-base` declares -- is
+    ciphertext in a configuration nothing in that namespace reads, and the
+    backup that needs it never gets a key.
+    """
+    stacks: dict[str, set[str]] = {}
+    for value in conventions.sealed.VALUES.values():
+        stacks.setdefault(value.namespace, set()).add(value.stack)
+
+    assert {namespace: held for namespace, held in stacks.items() if len(held) > 1} == {}
 
 
 def test_no_two_sealed_values_share_a_path() -> None:

@@ -331,13 +331,17 @@ be able to destroy the safety net it lives inside.
 -   Keys are **prefix-scoped per consumer**, capabilities
     `listFiles + readFiles + writeFiles` and **never `deleteFiles`**:
     an app's restic key reaches only `volsync/<its-namespace>/…`;
-    barman and `etcd/` prefixes likewise. (restic/barman need
-    list+read even to *back up* — a literally write-only key cannot
-    work — and their prunes still run in-cluster per the retention
-    classes: without `deleteFiles`, a B2 deletion degrades to a
-    **hide**, which the ≥30-day lifecycle rule purges. Retention
-    semantics are preserved while nothing in automation can destroy
-    a version before it ages out.) **No delete-capable key exists in
+    barman's (`cnpg/<namespace>/…`), the monitoring stack's `vmbackup`
+    key (`vm/<namespace>/…`) and the `etcd/` prefix likewise. One key
+    per family of each backed namespace, from the census
+    `conventions.backup.BACKED_NAMESPACES`, minted by `physical`.
+    (restic/barman need list+read even to *back up*, and `vmbackup`
+    lists the destination to upload only what it lacks — a literally
+    write-only key cannot work — and their prunes still run in-cluster
+    per the retention classes: without `deleteFiles`, a B2 deletion
+    degrades to a **hide**, which the ≥30-day lifecycle rule purges.
+    Retention semantics are preserved while nothing in automation can
+    destroy a version before it ages out.) **No delete-capable key exists in
     any automation**; the B2 account's master key is an account root in
     the operator's personal estate — deliberately not in the seed kit
     (credentials.md §2) — and is borrowed only to re-seed, account 2FA
@@ -365,16 +369,30 @@ Per nodes.md §5, durability = declarative rebuild + backups + drills:
 3.  **CNPG**: barman object-store backups + WAL archiving per database
     cluster (port the legacy barman-plugin setup), monthly automated
     restore drill (port the legacy drill; nothing runs it here yet).
-4.  **NAS data**: stays under the NAS's own backup regime — out of
+4.  **Metrics history**: the monitoring stack's VictoriaMetrics stores,
+    each copied hourly and incrementally by `vmbackup` to
+    `b2://…/vm/monitoring/<store>/` (`conventions.backup.metrics_repo_path`)
+    under the `vm` family's writer key, which `credentials` seals into
+    `k8s-base`, the stack that declares the monitoring stack. The key is
+    declared, and the backup jobs and the restore are not
+    (Aetf/kluster-ops#790), so none runs. `vmbackup` copies from an
+    instant snapshot of hard links to immutable parts, because a
+    file-by-file copy such as VolSync's is not consistent for a store
+    that merges and deletes its parts while the copy runs. The restore
+    path is `vmrestore` into an empty data directory before the store
+    starts, and a backup that cannot be read keeps the store down rather
+    than letting it start empty over a history that exists.
+5.  **NAS data**: stays under the NAS's own backup regime — out of
     cluster scope, but media moving onto NAS PVs must not silently drop
     out of that regime. (hath's cache is deliberately outside *every*
     backup regime — §3.3.)
-5.  **Drills are part of the design**: a restore that hasn't run this
+6.  **Drills are part of the design**: a restore that hasn't run this
     quarter is assumed broken. By that rule every restore path the
     cluster owns on this list is assumed broken today: no drill has run,
     and nothing schedules one (operations.md §4).
 
-RPO: ≤1 h for etcd, ≤24 h for volumes, ~0 for CNPG (WAL). RTO: rebuild
+RPO: ≤1 h for etcd, ≤24 h for volumes, ~0 for CNPG (WAL), ≤1 h for
+the metrics history. RTO: rebuild
 either site from Pulumi + backups in ~1–2 h hands-on.
 
 ## 6. JuiceFS containment policy

@@ -31,7 +31,8 @@ cluster consumes is sealed to the cluster instead and its ciphertext written
 in the clear into the configuration of the stack that declares it
 (`sealing.py`): the DNS-01 token cert-manager answers challenges with, and
 the backup bucket's writer keys, which `physical` mints and this side seals
-out of that stack's state into `apps` (`b2_writer_seal`); and Authelia's
+out of that stack's state into `apps`, or into `k8s-base` for a namespace
+the platform holds (`b2_writer_seal`); and Authelia's
 storage encryption key, which is escrowed and sealed from the escrow
 (`authelia_storage_key_seal`).
 
@@ -546,7 +547,7 @@ def _writer_key(keys: object, scope: str, *, physical: str) -> dict[str, str]:
 
 
 def b2_writer_seal(*, sealer: sealing.Sealer) -> list[str]:
-    """Seal every backed namespace's writer keys out of `physical`'s state into the `apps` stack's configuration.
+    """Seal every backed namespace's writer keys out of `physical`'s state, each into its consumers' stack.
 
     Returns the names of the sealed values written, one per namespace and
     family of `conventions.backup.BACKED_NAMESPACES`.
@@ -554,11 +555,14 @@ def b2_writer_seal(*, sealer: sealing.Sealer) -> list[str]:
     `physical` mints each key from the B2 management key, one per scope on the
     backup bucket, and exports them under `backup_keys` in its state, which
     opens under its own passphrase (credentials.md §1). A StackReference
-    cannot carry them across, and a copy as a configuration secret of `apps`
-    would reach every pull request's preview; so each is sealed, the shape
-    `derived sync` has for the kubeconfig with a seal in place of the copy.
-    Each key is sealed **namespace-wide** (`conventions.sealed.writer_key`):
-    one ciphertext, which every repository Secret of its namespace carries
+    cannot carry them across, and a copy as a configuration secret of the
+    stack that reads it would reach every pull request's preview; so each is
+    sealed, the shape `derived sync` has for the kubeconfig with a seal in
+    place of the copy. Each key is written into the stack its row names,
+    which declares what reads it: `apps` for an application's namespace,
+    `k8s-base` for the platform's (`conventions.sealed.WRITER_KEY_STACKS`).
+    Each is sealed **namespace-wide** (`conventions.sealed.writer_key`): one
+    ciphertext, which every Secret of its namespace that carries it carries
     under its own name.
 
     `physical` is opened through `sealer`, by its name, so it is read under
@@ -567,8 +571,8 @@ def b2_writer_seal(*, sealer: sealing.Sealer) -> list[str]:
     with none (`sealing.cluster_kubeconfig`).
 
     Every refusal comes before anything is written: a cluster whose
-    certificate could not be fetched, which building `sealer` does; an `apps`
-    stack that does not exist; and a namespace whose key `physical` does not
+    certificate could not be fetched, which building `sealer` does; a
+    declaring stack that does not exist; and a namespace whose key `physical` does not
     export yet, which a census row added since `physical`'s last apply is,
     or exports with a half missing or empty.
     Every run seals afresh, so it rewrites every value whatever the file
@@ -589,12 +593,13 @@ def b2_writer_seal(*, sealer: sealing.Sealer) -> list[str]:
     sealed = [(value, sealer.seal(value, fields)) for value, fields in held]
     for value, ciphertext in sealed:
         sealer.write(value, ciphertext)
-    log.info(
-        'sealed %d writer keys into the %s stack; commit its file, and each repository Secret of a namespace '
-        'carries its key from the next apply',
-        len(sealed),
-        conventions.STACK_NAMES.apps,
-    )
+    for stack in sorted({value.stack for value, _ in sealed}):
+        log.info(
+            'sealed %d writer keys into the %s stack; commit its file, and the Secrets of each namespace it '
+            'declares carry their key from its next apply',
+            sum(1 for value, _ in sealed if value.stack == stack),
+            stack,
+        )
     return [value.name for value, _ in sealed]
 
 
