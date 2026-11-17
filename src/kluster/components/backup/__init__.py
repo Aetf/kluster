@@ -27,6 +27,15 @@ only work together (storage.md §4, backup-integrity rules):
     are hides, and the hides age out. Retention semantics survive; nothing in
     automation can destroy a version before its time.
 
+**A consumer whose objects are each a whole backup leaves its retention to the
+bucket.** The etcd snapshots are that consumer: a second rule on their prefix
+hides a snapshot a fixed number of days after its upload, and the whole-bucket
+rule purges it after that like any hidden version, so nothing prunes them. A
+restic repository, a barman archive and a `vmbackup` copy are not such
+consumers: each is a store a newer backup builds on, so an old file in it can
+be part of the newest backup, its prefix carries no hiding rule, and its prune
+stays its own (storage.md §4).
+
 **Each key reaches one prefix.** An app's restic key sees
 `volsync/<its-namespace>/` and nothing else; barman's `cnpg/<namespace>/`,
 `vmbackup`'s `vm/<namespace>/` and the etcd snapshots likewise. The prefixes are not restated here — they come from the one bucket
@@ -51,7 +60,7 @@ import pulumi
 import pulumi_b2 as b2
 
 from kluster import conventions
-from kluster.conventions.backup import BackupFamily, metrics_repo_path, writer_scope
+from kluster.conventions.backup import ETCD_SNAPSHOT_RETENTION_DAYS, BackupFamily, metrics_repo_path, writer_scope
 from putils import Component, own_provider_opts, with_provider
 
 #: What a backup mover needs, and nothing beyond it. `readFiles` and
@@ -87,6 +96,34 @@ class UnseparatedPrefix(ValueError):
         self.prefix: str = prefix
 
 
+class NonPositiveHideAge(ValueError):
+    """A hide age under a day, which would give the scope no hiding rule.
+
+    B2 takes a hide age of a day or more, and the provider sends a zero as
+    unset, so a scope asking to be hidden at once would be kept forever
+    instead; a negative age means nothing.
+    """
+
+    def __init__(self, message: str, *, scope: str, days: int) -> None:
+        super().__init__(message)
+        self.scope: str = scope
+        self.days: int = days
+
+
+class OverlappingHide(ValueError):
+    """A hiding scope whose prefix also covers another scope's files.
+
+    B2 applies a rule to every file whose name starts with its prefix, so a
+    hide on a prefix that encloses or repeats another consumer's would retire
+    that consumer's files on the same timer, current backups included.
+    """
+
+    def __init__(self, message: str, *, scope: str, other: str) -> None:
+        super().__init__(message)
+        self.scope: str = scope
+        self.other: str = other
+
+
 class DuplicateScope(ValueError):
     """Two scopes under one name, which is the key's name too."""
 
@@ -97,7 +134,7 @@ class DuplicateScope(ValueError):
 
 @dataclass(frozen=True)
 class Scope:
-    """One consumer's reach into the bucket: a key name, and a prefix.
+    """One consumer of the bucket: the key and prefix it reaches, and whether the bucket retires its files.
 
     The prefix ends in a separator, and that is load-bearing rather than
     cosmetic — B2 matches a name prefix as plain text, so `volsync/app` also
@@ -107,6 +144,15 @@ class Scope:
 
     name: str
     prefix: str
+    hide_after_days: int | None = None
+    """How many days after its upload the bucket hides a file under the prefix.
+
+    Set for a consumer that leaves its retention to the bucket, which is safe
+    only where every object is a whole backup on its own, so that age alone
+    says an object is no longer needed. `None` for a consumer that prunes its
+    own store, where an old file can still be part of the newest backup and a
+    hide on a timer would delete a live one.
+    """
 
 
 def etcd_scope() -> Scope:
@@ -114,9 +160,13 @@ def etcd_scope() -> Scope:
 
     That workflow is unwritten, so none is taken (nodes.md §5 Tier 0); the
     scope is declared with the bucket so that the writer key is there when one
-    is.
+    is. Its retention is the bucket's: a snapshot is hidden
+    `ETCD_SNAPSHOT_RETENTION_DAYS` after its upload, since every snapshot is a
+    whole backup on its own.
     """
-    return Scope(name='etcd', prefix=f'{conventions.ETCD_SNAPSHOT_PREFIX}/')
+    return Scope(
+        name='etcd', prefix=f'{conventions.ETCD_SNAPSHOT_PREFIX}/', hide_after_days=ETCD_SNAPSHOT_RETENTION_DAYS
+    )
 
 
 def volsync_scope(namespace: str) -> Scope:
@@ -141,7 +191,7 @@ def metrics_scope(namespace: str) -> Scope:
 
 
 class BackupBucket(Component, pulumi_type='kluster:backup:BackupBucket'):
-    """The backup bucket, its version-retention rule, and one key per consumer.
+    """The backup bucket, its lifecycle rules, and one key per consumer.
 
     `scopes` is the roll of consumers, and it arrives from the caller: which
     namespaces exist is not this module's to know, and the consumers that exist
@@ -184,12 +234,28 @@ class BackupBucket(Component, pulumi_type='kluster:backup:BackupBucket'):
                     # the same floor, because the floor is a property of the
                     # bucket rather than a favor each consumer does itself.
                     file_name_prefix='',
-                    # Deliberately no `days_from_uploading_to_hiding`: that
-                    # one hides *current* files on a timer, which for a backup
-                    # bucket means deleting live backups on a schedule.
+                    # Deliberately no `days_from_uploading_to_hiding` here:
+                    # that one hides *current* files on a timer, which on a
+                    # prefix whose consumer prunes for itself means deleting
+                    # live backups on a schedule.
                     days_from_hiding_to_deleting=retention_days,
                     days_from_starting_to_canceling_unfinished_large_files=unfinished_upload_days,
-                )
+                ),
+                # One hiding rule per consumer that leaves its retention to
+                # the bucket. Its prefix overlaps the rule above, and B2
+                # applies to a file the smallest value each property takes
+                # among the rules whose prefix its name starts with, so the
+                # file is hidden on this rule's timer and purged on the floor
+                # above. That is why this rule states the hide alone: the
+                # floor stays the whole-bucket rule's to set.
+                *(
+                    b2.BucketLifecycleRuleArgs(
+                        file_name_prefix=scope.prefix,
+                        days_from_uploading_to_hiding=scope.hide_after_days,
+                    )
+                    for scope in scopes
+                    if scope.hide_after_days is not None
+                ),
             ],
             opts=self.child_opts(
                 # The safety net every other resource's destroy path assumes.
@@ -251,7 +317,11 @@ def s3_endpoint(region: str) -> str:
 
 
 def _check(scopes: Sequence[Scope]) -> None:
-    """Refuse a scope set that would hand a key more than its own prefix."""
+    """Refuse a scope set that would hand a key more than its own prefix, or a hide more than its own files.
+
+    A hide age under a day is refused too: B2 takes one of a day or more, and
+    the provider sends a zero as unset, so the scope would get no hiding rule.
+    """
     seen: set[str] = set()
     for scope in scopes:
         if not scope.prefix.endswith('/'):
@@ -261,6 +331,28 @@ def _check(scopes: Sequence[Scope]) -> None:
                 scope=scope.name,
                 prefix=scope.prefix,
             )
+        if scope.hide_after_days is not None and scope.hide_after_days <= 0:
+            raise NonPositiveHideAge(
+                f'scope {scope.name!r} asks to be hidden {scope.hide_after_days} days after upload: '
+                'B2 takes a day or more, and the provider sends a zero as unset, so the scope would get '
+                'no hiding rule',
+                scope=scope.name,
+                days=scope.hide_after_days,
+            )
         if scope.name in seen:
             raise DuplicateScope(f'scope {scope.name!r} is declared twice', scope=scope.name)
         seen.add(scope.name)
+    # A hide stays on its own consumer's prefix: a hiding scope inside another
+    # scope's prefix is fine, one enclosing or repeating another's is not.
+    for scope in scopes:
+        if scope.hide_after_days is None:
+            continue
+        for other in scopes:
+            if other is not scope and other.prefix.startswith(scope.prefix):
+                raise OverlappingHide(
+                    f'scope {scope.name!r} hides files under {scope.prefix!r} {scope.hide_after_days} days after '
+                    f'upload, and scope {other.name!r} writes under {other.prefix!r}: B2 would hide that '
+                    "consumer's files on the same timer, current backups included",
+                    scope=scope.name,
+                    other=other.name,
+                )

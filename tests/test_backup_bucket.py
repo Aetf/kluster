@@ -2,24 +2,29 @@
 
 Every assertion here is about a rule that is invisible in a later diff because
 it is a rule about *absence*: that no key can delete a file, that no key can
-read a prefix that is not its own, and that the lifecycle rule removes old
-versions without ever hiding current ones. A backup regime fails silently when
-any of those three slips, and it fails at exactly the moment it is needed.
+read a prefix that is not its own, and that the lifecycle rules remove old
+versions without hiding a current one anywhere but where its consumer leaves
+retention to the bucket. A backup regime fails silently when any of those
+slips, and it fails at exactly the moment it is needed.
 """
 
 import inspect
 from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import Any
 
 import pulumi
 import pytest
 import pytest_asyncio
 from mock_monitor import Recorder, declaring, run_with
+from pulumi_b2.outputs import BucketLifecycleRule
 
 from kluster import conventions
 from kluster.components.backup import (
     BackupBucket,
     DuplicateScope,
+    NonPositiveHideAge,
+    OverlappingHide,
     Scope,
     UnseparatedPrefix,
     barman_scope,
@@ -27,7 +32,7 @@ from kluster.components.backup import (
     s3_endpoint,
     volsync_scope,
 )
-from kluster.conventions.backup import BackupFamily, metrics_repo_path
+from kluster.conventions.backup import BACKED_NAMESPACES, ETCD_SNAPSHOT_RETENTION_DAYS, BackupFamily, metrics_repo_path
 from kluster.stacks import physical
 
 BUCKET_ID = 'b2-bucket-id'
@@ -37,7 +42,7 @@ REGION = 'us-west-004'
 #: state. Neither is the fleet's own, so a component that read either off
 #: `conventions` instead of its parameter would fail the cases that look.
 BUCKET_NAME = 'a-backup-bucket'
-RETENTION_DAYS = 7
+VERSION_RETENTION_DAYS = 7
 
 
 #: The key pair the component builds its provider from. Both are invented:
@@ -74,7 +79,9 @@ SCOPES: tuple[Scope, ...] = (etcd_scope(),)
 
 
 def build(scopes: Sequence[Scope] = SCOPES) -> BackupBucket:
-    return BackupBucket('kluster', region=REGION, bucket_name=BUCKET_NAME, retention_days=RETENTION_DAYS, scopes=scopes)
+    return BackupBucket(
+        'kluster', region=REGION, bucket_name=BUCKET_NAME, retention_days=VERSION_RETENTION_DAYS, scopes=scopes
+    )
 
 
 @pytest.mark.asyncio
@@ -127,39 +134,175 @@ async def test_each_key_reaches_one_prefix_and_one_bucket() -> None:
         assert await key.bucket_ids.future() == [BUCKET_ID]
 
 
-@pytest.mark.asyncio
-async def test_old_versions_age_out_and_current_ones_never_do() -> None:
-    assert RETENTION_DAYS != conventions.BACKUP_VERSION_RETENTION_DAYS
-    bucket = build()
+@dataclass(frozen=True)
+class Applied:
+    """What the bucket does to one file: the three timers, each `None` where no rule sets it."""
+
+    hide: float | None
+    purge: float | None
+    cancel: float | None
+
+
+def applied(rules: Sequence[BucketLifecycleRule], name: str) -> Applied:
+    """The lifecycle B2 applies to the file `name`, by Backblaze's own statement of overlapping rules.
+
+    Every rule whose `fileNamePrefix` the name starts with governs the file,
+    and for each property "the system evaluates all matching rules and
+    applies the smallest non-null value"
+    (https://www.backblaze.com/docs/cloud-storage-lifecycle-rules, "Overlapping
+    Prefixes"). That is the account's reading of the rules rather than the
+    component's, so the cases below hold the component to what B2 will do
+    with what it declares.
+    """
+    matching = [rule for rule in rules if name.startswith(rule.file_name_prefix)]
+
+    def smallest(values: Sequence[float | None]) -> float | None:
+        present = [value for value in values if value is not None]
+        return min(present) if present else None
+
+    return Applied(
+        hide=smallest([rule.days_from_uploading_to_hiding for rule in matching]),
+        purge=smallest([rule.days_from_hiding_to_deleting for rule in matching]),
+        cancel=smallest([rule.days_from_starting_to_canceling_unfinished_large_files for rule in matching]),
+    )
+
+
+def written(namespace: str) -> dict[BackupFamily, str]:
+    """A file each family writes for `namespace`, at the path its own consumer writes it."""
+    return {
+        BackupFamily.VOLSYNC: conventions.volsync_repo_path(namespace, 'a-claim') + '/data/00/a-pack',
+        BackupFamily.BARMAN: conventions.barman_repo_path(namespace, 'a-database') + '/base/a-backup/data.tar',
+        BackupFamily.VM: metrics_repo_path(namespace, 'a-store') + '/data/small/a-part/values.bin',
+    }
+
+
+#: A file under the etcd snapshots' prefix.
+ETCD_SNAPSHOT = f'{conventions.ETCD_SNAPSHOT_PREFIX}/a-snapshot'
+
+
+async def fleet_rules() -> Sequence[BucketLifecycleRule]:
+    """The lifecycle rules of a bucket carrying the `physical` stack's own roll of consumers."""
+    bucket = build(physical.backup_scopes(BACKED_NAMESPACES))
     rules = await bucket.bucket.lifecycle_rules.future()
     assert rules is not None
-    assert len(rules) == 1
-    rule = rules[0]
+    return rules
 
-    assert rule.days_from_hiding_to_deleting == RETENTION_DAYS
-    # The dangerous knob: `daysFromUploadingToHiding` hides *current* files on
-    # a timer, which in a backup bucket is a scheduled deletion of live
-    # backups. It must stay unset.
-    assert rule.days_from_uploading_to_hiding is None
+
+@pytest.mark.asyncio
+async def test_a_pruning_consumers_files_are_never_hidden_on_a_timer_and_age_out_once_hidden() -> None:
+    """Every store a newer backup builds on keeps its current files, and its hides age out on the floor.
+
+    `days_from_uploading_to_hiding` hides *current* files on a timer, which
+    on a restic repository, a barman archive or a `vmbackup` copy is a
+    scheduled deletion of live backups: an old pack or base backup is still
+    part of the newest one. So no file any family writes is hidden on a timer,
+    for every namespace the census backs up, while each is purged once its
+    own prune or an overwrite hides it.
+    """
+    assert VERSION_RETENTION_DAYS != conventions.BACKUP_VERSION_RETENTION_DAYS
+    rules = await fleet_rules()
+    files = [written(namespace)[family] for namespace, families in BACKED_NAMESPACES.items() for family in families]
+    assert files
+
+    for name in files:
+        kept = applied(rules, name)
+        assert (kept.hide, kept.purge) == (None, VERSION_RETENTION_DAYS), name
+
+
+@pytest.mark.asyncio
+async def test_the_floor_covers_a_file_no_consumer_claims() -> None:
     # The floor is a property of the bucket, so it covers a consumer nobody
     # remembered to add a rule for.
-    assert rule.file_name_prefix == ''
+    rules = await fleet_rules()
+    stray = applied(rules, 'a-prefix-nobody-declared/a-file')
+    assert (stray.hide, stray.purge) == (None, VERSION_RETENTION_DAYS)
+
+
+@pytest.mark.asyncio
+async def test_an_etcd_snapshot_is_hidden_at_its_retention_and_then_purged_on_the_floor() -> None:
+    """The snapshots' retention is the bucket's: listed for their retention, kept for the floor after it.
+
+    Nothing prunes a snapshot -- the writer key deletes nothing, and no code
+    hides one -- so the bucket's hide is the only thing that retires it, and
+    the whole-bucket floor still reaches it once hidden, which is what keeps a
+    hidden snapshot recoverable for as long as any other version.
+    """
+    rules = await fleet_rules()
+    snapshot = applied(rules, ETCD_SNAPSHOT)
+    assert snapshot.hide == ETCD_SNAPSHOT_RETENTION_DAYS
+    assert snapshot.purge == VERSION_RETENTION_DAYS
+
+
+@pytest.mark.asyncio
+async def test_a_scope_that_leaves_retention_to_the_bucket_is_hidden_on_its_own_timer() -> None:
+    whole = Scope(name='whole', prefix='whole/', hide_after_days=3)
+    bucket = build([whole, volsync_scope('immich')])
+    rules = await bucket.bucket.lifecycle_rules.future()
+    assert rules is not None
+
+    retired = applied(rules, 'whole/a-file')
+    assert (retired.hide, retired.purge) == (3, VERSION_RETENTION_DAYS)
+    assert applied(rules, written('immich')[BackupFamily.VOLSYNC]).hide is None
+
+
+@pytest.mark.parametrize('days', [0, -1])
+def test_a_hide_age_of_no_days_is_refused(days: int) -> None:
+    # The provider sends a zero as an unset value, so a scope asking to be
+    # hidden at once would be kept forever without a word.
+    with pytest.raises(NonPositiveHideAge) as refused:
+        build([Scope(name='eager', prefix='eager/', hide_after_days=days)])
+    assert (refused.value.scope, refused.value.days) == ('eager', days)
+
+
+#: A scope whose files the bucket retires, and a pruning one whose prefix lies
+#: inside it: a hide on the outer prefix reaches the inner consumer's files.
+OUTER_HIDING = Scope(name='outer', prefix='volsync/', hide_after_days=3)
+INNER_PRUNING = volsync_scope('immich')
+
+
+@pytest.mark.parametrize(
+    'scopes',
+    [[OUTER_HIDING, INNER_PRUNING], [INNER_PRUNING, OUTER_HIDING]],
+    ids=['hiding-first', 'hiding-last'],
+)
+def test_a_hide_enclosing_another_scope_is_refused(scopes: list[Scope]) -> None:
+    with pytest.raises(OverlappingHide) as refused:
+        build(scopes)
+    assert (refused.value.scope, refused.value.other) == (OUTER_HIDING.name, INNER_PRUNING.name)
+
+
+def test_a_hide_repeating_another_scopes_prefix_is_refused() -> None:
+    hiding = Scope(name='hiding', prefix='shared/', hide_after_days=3)
+    pruning = Scope(name='pruning', prefix='shared/')
+    with pytest.raises(OverlappingHide) as refused:
+        build([pruning, hiding])
+    assert (refused.value.scope, refused.value.other) == ('hiding', 'pruning')
+
+
+@pytest.mark.asyncio
+async def test_a_hide_inside_another_scopes_prefix_stays_on_its_own_files() -> None:
+    inner = Scope(name='inner', prefix='volsync/immich/snapshots/', hide_after_days=3)
+    bucket = build([INNER_PRUNING, inner])
+    rules = await bucket.bucket.lifecycle_rules.future()
+    assert rules is not None
+
+    assert applied(rules, 'volsync/immich/snapshots/a-file').hide == 3
+    assert applied(rules, 'volsync/immich/a-claim/data/00/a-pack').hide is None
 
 
 @pytest.mark.asyncio
 async def test_abandoned_multipart_uploads_are_canceled() -> None:
-    bucket = build()
-    rules = await bucket.bucket.lifecycle_rules.future()
-    assert rules is not None
+    rules = await fleet_rules()
     # Parts of a killed upload bill forever and show up in no listing. How
     # soon is the component's to choose; the rule is that a cancellation is
-    # scheduled at all, a positive number of days after the upload started.
-    # Whole days, compared by value: the mock monitor hands numbers back as
-    # floats.
-    days = rules[0].days_from_starting_to_canceling_unfinished_large_files
-    assert days is not None
-    assert days > 0
-    assert days == int(days)
+    # scheduled at all, for every file, a positive number of days after the
+    # upload started. Whole days, compared by value: the mock monitor hands
+    # numbers back as floats.
+    for name in (ETCD_SNAPSHOT, written('immich')[BackupFamily.BARMAN], 'a-prefix-nobody-declared/a-file'):
+        days = applied(rules, name).cancel
+        assert days is not None
+        assert days > 0
+        assert days == int(days)
 
 
 @pytest.mark.asyncio
@@ -256,13 +399,6 @@ def test_a_familys_scope_reaches_where_that_family_writes_and_nothing_beside_it(
     """
     namespace = 'a-namespace'
     scope = physical.FAMILY_SCOPES[family](namespace)
-
-    def written(within: str) -> dict[BackupFamily, str]:
-        return {
-            BackupFamily.VOLSYNC: conventions.volsync_repo_path(within, 'a-claim'),
-            BackupFamily.BARMAN: conventions.barman_repo_path(within, 'a-database'),
-            BackupFamily.VM: metrics_repo_path(within, 'a-store'),
-        }
 
     assert written(namespace)[family].startswith(scope.prefix)
     # Neither the other family's prefix nor a namespace whose name extends

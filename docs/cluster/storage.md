@@ -507,6 +507,24 @@ be able to destroy the safety net it lives inside.
     on. The one genuine write-only key is the micro's
     pg_dump uploader (`writeFiles` alone — it keeps no index,
     state-backend.md §5).
+-   **The etcd snapshots' retention is the bucket's.** A second
+    lifecycle rule, on `etcd/`, hides a snapshot 14 days after its
+    upload (`conventions.backup.ETCD_SNAPSHOT_RETENTION_DAYS`), and
+    nothing prunes the prefix: its writer key deletes nothing, and no
+    code hides a snapshot. That rule's prefix overlaps the whole-bucket
+    rule's, and B2 evaluates every rule whose prefix a file's name
+    starts with and applies, for each property, the smallest value any
+    of them sets
+    ([lifecycle rules](https://www.backblaze.com/docs/cloud-storage-lifecycle-rules),
+    "Overlapping Prefixes"). The `etcd/` rule sets only the hide and
+    the whole-bucket rule only the purge and the cancellation of
+    unfinished uploads, so a snapshot takes each from the one rule that
+    sets it: listed for 14 days, then kept hidden for the 30-day floor
+    above. A hide on a timer is safe on this prefix because every
+    snapshot is a whole backup on its own. In a restic repository, a
+    barman archive or a `vmbackup` copy an old file can be part of the
+    newest backup, so their prefixes carry no hiding rule, and a timed
+    hide there would delete live backups on a schedule.
 -   Verification item (physical.md §6): a scoped key must fail to
     list/delete a foreign prefix.
 
