@@ -30,14 +30,15 @@ The rule, in full:
     listing.
 
 **What belongs in this table** is what the rest of the register grows out of:
-a credential that mints successors, or the recovery key that opens what §2.2
-escrows. A credential something *authenticates with* is a §3 row even when a
-console is the only thing that can make one -- it is created there and
-delivered by `credentials derived <row> record`, into the stack config that
-reads it (`devices.py`) or into the escrow where nothing reads it yet
-(`escrow.py`). Putting such a row here as well would give one credential two
-homes and hand the kit a rotation it cannot perform: the kit's own rotation
-would then owe every consumer a redelivery.
+a credential that mints others narrower than itself, or the recovery key that
+opens what §2.2 escrows. A ZeroTier Central token mints only tokens as
+broad as itself, so it is no seed (credentials.md §2). A credential something
+*authenticates with* is a §3 row even when a console is the only thing that
+can make one -- it is created there and delivered by
+`credentials derived <row> record`, into the stack config that reads it
+(`devices.py`) or into the escrow where nothing reads it yet (`escrow.py`).
+Putting such a row here as well would give one credential two homes and hand
+the kit a rotation it cannot perform: the kit's own rotation would then owe every consumer a redelivery.
 
 **Each row is declared as one of three kinds**, and the kind carries the
 membership rule, so a new member says which part of it the member answers to

@@ -146,10 +146,9 @@ every workstation's clone; the slot is its one copy per workstation
 **Stack configuration is where a provider credential lives**, and it is
 the store the paragraph above licenses a component to read for itself.
 Every one of them is there, however the value was obtained: minted from
-a seed, or made by hand in a console because the platform publishes no
-API that makes one — the `github` stack's admin token
-([framework/github.md](../framework/github.md) §1) is that second case,
-and it is a config secret like the rest. How a credential is *obtained*
+a seed, or made by hand in a console, as the `github` stack's admin token
+is ([framework/github.md](../framework/github.md) §1), and that token is a
+config secret like the rest. How a credential is *obtained*
 is the credential's own design and belongs in
 [credentials.md](../credentials.md) §3; where it is *read* is the rule
 above, and neither moves with the other.

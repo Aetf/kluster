@@ -441,9 +441,9 @@ Two channels, chosen by who consumes the secret:
     provider token, B2 management keys, the UDM SSH key, and the
     ZeroTier Central token — which `credentials derived zerotier record`
     delivers here from Central's own web console, as broad as the account
-    it belongs to because Central publishes no token API and offers no
-    narrower scope (credentials.md §3). CI's own ZeroTier *member
-    identities* are not in this channel: `physical` generates them into
+    it belongs to, which every Central token is, the token API's included
+    (credentials.md §3). CI's own ZeroTier *member identities* are not in
+    this channel: `physical` generates them into
     state, and they reach a job as an Environment secret.
 -   Where one external service serves several consumers (Cloudflare),
     issue **separately-scoped tokens per consumer**: one per channel
