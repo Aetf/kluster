@@ -18,23 +18,23 @@ disagree on a pin's shape.
 from __future__ import annotations
 
 import enum
-import hashlib
 import logging
 import os
 import re
+import shutil
 import subprocess as sp
-import tarfile
-from collections.abc import Generator, Iterable
-from contextlib import contextmanager
+import tomllib
+from collections.abc import Iterable
 from dataclasses import dataclass
-from io import BytesIO, StringIO
+from io import StringIO
 from pathlib import Path
-from typing import IO, Any, cast
+from typing import Any, cast
 
 import requests
 from ruamel.yaml import YAML
 from tqdm import tqdm
 
+from kluster.lib import stack_environment, workstation
 from kluster.lib.versions import ChartPin, ProjectFile
 from kluster.scripts.update_crds import pins
 from kluster.scripts.update_crds.pins import SourceTree
@@ -55,8 +55,6 @@ _GITHUB_API = 'https://api.github.com'
 class Malformed(enum.Enum):
     """What a fetched document lacks, or holds in the wrong shape."""
 
-    #: An unpacked release with no executable of the name looked for.
-    NO_EXECUTABLE = enum.auto()
     #: A project or stack file with no `config:` block.
     NO_CONFIG = enum.auto()
     #: A project file with no `packages:` entry carrying `extensions:`.
@@ -77,6 +75,10 @@ class Malformed(enum.Enum):
     NO_NAME = enum.auto()
     #: A CRD document with no `spec.group`.
     NO_GROUP = enum.auto()
+    #: A `mise.toml` whose `helm` entry is neither a version nor a table carrying one.
+    NO_HELM_VERSION = enum.auto()
+    #: A `talosctl images default` listing that names no `kube-apiserver` image.
+    NO_KUBE_APISERVER = enum.auto()
 
 
 class SourceError(RuntimeError):
@@ -109,15 +111,6 @@ class Definition:
     name: str
     group: str
     document: dict[str, Any]
-
-
-@contextmanager
-def _progress_read(fileobj: IO[bytes], /, *, desc: str, total: int) -> Generator[Any, None, None]:
-    """`fileobj` with a byte-counting progress bar wrapped around its reads."""
-    with tqdm.wrapattr(
-        fileobj, 'read', unit='B', unit_scale=True, unit_divisor=1024, miniters=1, desc=desc, total=total
-    ) as wrapped:
-        yield wrapped
 
 
 #: Wider than any line a definition holds, so the dumper never folds one, and
@@ -154,51 +147,128 @@ def _yaml() -> YAML:
 
 # --- Tools ----------------------------------------------------------------
 
+#: The `[tools]` key `mise.toml` pins Helm under, which is also the binary's name.
+HELM = 'helm'
 
-def _fetch_tool(workdir: Path, *, binary: str, version: str, url: str, sha256: str) -> Path:
-    """A pinned tool archive, unpacked under `workdir` once its digest matches.
 
-    The archive is held whole rather than unpacked straight out of the
-    response: a digest only checks anything if nothing is extracted before it
-    matches. A mismatch names both digests, because the one thing the caller
-    has to decide is whether the pin is stale or the download is not the
-    artifact it claims to be.
+class NotThePinnedHelm(RuntimeError):
+    """The `helm` on `PATH` is not the release `mise.toml` pins, or there is none.
+
+    `found` is the version the binary on `PATH` reports, and `None` when
+    `PATH` holds no `helm` at all.
     """
-    log.info(f'Downloading {binary} {version} from {url}')
-    with requests.get(url, stream=True, timeout=60) as response:
-        _ = response.raise_for_status()
-        total = int(response.headers.get('content-length', 0))
-        with _progress_read(response.raw, desc=f'Downloading {binary} {version}', total=total) as stream:
-            archive = stream.read()
 
-    digest = hashlib.sha256(archive).hexdigest()
-    if digest != sha256:
-        raise ValueError(f'{binary} {version} digest is {digest}, expected {sha256}')
-
-    with tarfile.open(fileobj=BytesIO(archive), mode='r:gz') as tarobj:
-        tarobj.extractall(workdir, filter='data')
-
-    found = _extracted_binary(workdir, binary, source=url)
-    log.info(f'{binary} binary: {found}')
-    return found
+    def __init__(self, message: str, *, found: str | None) -> None:
+        super().__init__(message)
+        self.found: str | None = found
 
 
-def fetch_helm(workdir: Path) -> Path:
-    """The pinned Helm 3 binary, verified against its published digest."""
-    return _fetch_tool(workdir, binary='helm', version=pins.HELM_VERSION, url=pins.HELM_URL, sha256=pins.HELM_SHA256)
+def pinned_helm_version() -> str:
+    """The Helm release `mise.toml` pins, as `helm version` spells it: with its leading `v`.
 
-
-def _extracted_binary(workdir: Path, name: str, *, source: str) -> Path:
-    """The one executable called `name` an unpacked archive left under `workdir`.
-
-    An upstream that changes an archive's layout is refused by name here: the
-    bare search would otherwise end in a `StopIteration` raised inside a
-    generator, which says neither what was looked for nor where it came from.
+    The entry is a version, or a table carrying one under `version`, the two
+    forms `mise.toml` writes a pin in; any other shape is refused by name.
     """
-    found = next((path for path in workdir.rglob(name) if path.is_file() and os.access(path, os.X_OK)), None)
-    if found is None:
-        raise SourceError(f'{source} unpacked no executable called {name}', reason=Malformed.NO_EXECUTABLE)
-    return found.resolve()
+    path = workstation.repo_root() / stack_environment.MISE_TOML
+    pinned: object = tomllib.loads(path.read_text())['tools'].get(HELM)
+    version = cast('dict[str, object]', pinned).get('version') if isinstance(pinned, dict) else pinned
+    if not isinstance(version, str) or not version:
+        raise SourceError(
+            f'the `{HELM}` entry of {path} is {pinned!r}, neither a version nor a table carrying one',
+            reason=Malformed.NO_HELM_VERSION,
+        )
+    return f'v{version}'
+
+
+def find_helm() -> Path:
+    """The Helm `mise.toml` pins, from `PATH`, refused by name when it is missing or is another release.
+
+    `mise x` puts the pinned release on `PATH`, installed from `mise.lock`,
+    which holds the archive to its sha256. A run outside `mise x` finds
+    whichever `helm` the host has, if any, so the binary is asked its version
+    and held to the pin's: the pin is the Helm release the kubernetes
+    provider renders charts with (`mise.toml`, the pin's comment), and any
+    other release renders as no cluster here does. Asked before anything is
+    fetched, so a wrong binary costs no download.
+    """
+    pinned = pinned_helm_version()
+    located = shutil.which(HELM)
+    if located is None:
+        raise NotThePinnedHelm(
+            f'no `{HELM}` on PATH; run under `mise x --`, which puts the {pinned} mise.toml pins there', found=None
+        )
+    found = sp.check_output([located, 'version', '--template', '{{.Version}}'], text=True).strip()
+    if found != pinned:
+        raise NotThePinnedHelm(
+            f'the `{HELM}` on PATH, {located}, is {found}, not the {pinned} mise.toml pins; run under `mise x --`',
+            found=found,
+        )
+    log.info(f'{HELM} {found}: {located}')
+    return Path(located)
+
+
+#: The binary the Kubernetes release is read from, by the name `mise.toml` pins it under.
+TALOSCTL = 'talosctl'
+
+#: The line of `talosctl version --client --short` naming the client's release.
+_TALOS_CLIENT = re.compile(r'^Talos (v\S+)$', re.MULTILINE)
+
+#: The image line of `talosctl images default` whose tag is the Kubernetes release.
+_KUBE_APISERVER = re.compile(r'/kube-apiserver:(v\d+\.\d+\.\d+)$', re.MULTILINE)
+
+
+class NotTheFleetsTalosctl(RuntimeError):
+    """The `talosctl` on `PATH` is not the fleet's Talos release, or there is none.
+
+    `found` is the release the binary on `PATH` reports, and `None` when
+    `PATH` holds no `talosctl` or the binary names no release.
+    """
+
+    def __init__(self, message: str, *, found: str | None) -> None:
+        super().__init__(message)
+        self.found: str | None = found
+
+
+def kube_version(*, talos: str) -> str:
+    """The Kubernetes release the cluster runs, which every chart is rendered for.
+
+    The release the fleet's Talos, `talos` (`versions:talos`), defaults to,
+    which is the one the cluster runs (operations.md §1, the Kubernetes
+    version row): the tag of the `kube-apiserver` image `talosctl images
+    default` names, read off the release itself with no network. `mise x`
+    puts the `talosctl` `mise.toml` pins on `PATH`, which a test holds to
+    `versions:talos`; a run outside it finds whichever `talosctl` the host
+    has, so the binary is asked its own release and held to `talos` first,
+    as `find_helm` holds Helm to its pin. Without the release, `helm template`
+    renders for the one its own build names, which is no cluster's, and a
+    chart that branches on `.Capabilities.KubeVersion` or gates on
+    `kubeVersion` renders as the cluster would not. Asked before anything is
+    fetched.
+    """
+    located = shutil.which(TALOSCTL)
+    if located is None:
+        raise NotTheFleetsTalosctl(
+            f'no `{TALOSCTL}` on PATH to read the Kubernetes release from; run under `mise x --`, '
+            f'which puts the {talos} mise.toml pins there',
+            found=None,
+        )
+    client = sp.check_output([located, 'version', '--client', '--short'], text=True)
+    reported = _TALOS_CLIENT.search(client)
+    found = None if reported is None else reported[1]
+    if found != talos:
+        raise NotTheFleetsTalosctl(
+            f"the `{TALOSCTL}` on PATH, {located}, is {found or 'no Talos release'}, not the fleet's {talos} "
+            f'(versions:talos); run under `mise x --`',
+            found=found,
+        )
+    images = sp.check_output([located, 'images', 'default'], text=True)
+    default = _KUBE_APISERVER.search(images)
+    if default is None:
+        raise SourceError(
+            f'`{located} images default` names no kube-apiserver image:\n{images}', reason=Malformed.NO_KUBE_APISERVER
+        )
+    log.info(f'Rendering for Kubernetes {default[1]}, the release Talos {talos} defaults to')
+    return default[1]
 
 
 # --- The project file -------------------------------------------------------
@@ -299,8 +369,8 @@ def _helm(helm: Path, arguments: list[str], *, workdir: Path) -> str:
     return sp.check_output([str(helm), *arguments], env=environment, text=True)
 
 
-def render_chart(helm: Path, pin: ChartPin, *, workdir: Path) -> str:
-    """A chart's manifests, rendered offline.
+def render_chart(helm: Path, pin: ChartPin, *, workdir: Path, kube_version: str) -> str:
+    """A chart's manifests, rendered offline, for the Kubernetes release `kube_version` names.
 
     `--include-crds` is what reaches the chart's `crds/` directory, which Helm
     otherwise never templates; CRDs a chart ships as ordinary templates
@@ -310,8 +380,13 @@ def render_chart(helm: Path, pin: ChartPin, *, workdir: Path) -> str:
 
     The render is values-aware, so a subchart the values disable contributes
     nothing — which is the reason to prefer it over `helm show crds`.
+
+    `--kube-version` is what the chart sees as `.Capabilities.KubeVersion` and
+    checks its `Chart.yaml` `kubeVersion` against; left out, it is the release
+    the Helm binary was built with (`kube_version`).
     """
     command = ['template', pin.name, *_chart_location(pin), '--namespace', 'render', '--include-crds']
+    command += ['--kube-version', kube_version]
     for key, value in pin.render_values.items():
         command += ['--set', f'{key}={value}']
 

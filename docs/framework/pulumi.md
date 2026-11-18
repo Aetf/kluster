@@ -472,10 +472,9 @@ branch.
 A pin no stack program reads lives with the tool that reads it: Python
 dependencies in `pyproject.toml` and `uv.lock`, the command-line tools
 in `mise.toml`, the generated SDKs' recipes in `Pulumi.yaml`'s own
-`packages:` block, a script's pins in that script's modules
-(`update_crds/pins.py`), the container builds' pins beside their build
-files under `docker/`, and the actions and mise's own release in the
-workflows that call them (`.github/workflows/`).
+`packages:` block, the container builds' pins beside their build files
+under `docker/`, and the actions and mise's own release in the workflows
+that call them (`.github/workflows/`).
 
 **A program a provider runs on the machine running the stack is pinned
 in `mise.toml` like every command-line tool**, and the stack runs under
@@ -856,13 +855,30 @@ a cluster, selects the definitions, writes them as one bundle to
 `packages/crds/crds.yaml` — the path the entry names — and ends by
 running `pulumi install`, which regenerates every `sdks/<name>` from the
 block. It is run as `mise x -- uv run update_crds`, which puts the
-pinned `pulumi` CLI on `PATH`, and running it is the only supported way
-to change the bundle or the SDK. Around `pulumi install` it puts back
+pinned `pulumi`, `helm` and `talosctl` on `PATH`, and running it is the
+only supported way to change the bundle or the SDK. Around
+`pulumi install` it puts back
 the `pyproject.toml` the command rewrites and re-locks `uv.lock` with
 the pinned `uv`, and it hands the command an empty `file://` backend of
 its own, because the CLI with no backend logged in signs up a Pulumi
 Cloud account to answer a package lookup when it takes its environment
-for a coding agent's. Two tests hold the bundle and the SDK to each
+for a coding agent's.
+
+**The charts render as the cluster renders them.** The cluster's charts
+are rendered inside the Kubernetes provider, by the Helm SDK its plugin
+embeds, against the cluster's own Kubernetes release. The script renders
+with the Helm CLI, so it is pinned to that SDK: `mise.toml`'s `helm` is
+the release the plugin embeds, at the `pulumi-kubernetes` release
+`uv.lock` pins, and a test reads the release out of the plugin's Go
+build information and holds the pin equal to it. Renovate offers the pin
+nothing; it moves by hand in the provider's pull request (operations.md
+§1). Each render is for the Kubernetes release the fleet's Talos
+defaults to, which `helm template` takes as `--kube-version`: the tag of
+the `kube-apiserver` image the pinned `talosctl`'s `images default`
+names. The script refuses a `helm` that is not the pinned release and a
+`talosctl` that is not `versions:talos`, before it fetches anything.
+
+Two tests hold the bundle and the SDK to each
 other. The bundle is a fixed point of the script's own selection, so a
 hand edit the script would not have written fails — definitions
 reordered, a `status` left in, a dropped group restored, text laid out
