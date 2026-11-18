@@ -1,9 +1,8 @@
 """A chart of a case's own, installed through `helm_chart` by the pinned `pulumi`, with no cluster.
 
 What the engine makes of a chart -- the transforms it applies to what the
-chart renders, the dependencies it registers the rendered objects with -- shows
-only in a run against the engine, never under the mock monitor
-(framework/testing.md §8). `installed` is that run: the CLI `mise.toml` pins,
+chart renders -- shows only in a run against the engine, never under the mock
+monitor (framework/testing.md §8). `installed` is that run: the CLI `mise.toml` pins,
 over a `file://` backend and a `PULUMI_HOME` of the case's own, runs `up` on a
 fresh stack of a program that installs the case's chart through `helm_chart`,
 served from a Helm repository the case runs on `127.0.0.1`, and reads the
@@ -49,10 +48,9 @@ pulumi_and_uv_on_path = pytest.mark.skipif(
 #: How long a case of this harness may take: its project's set-up, the
 #: plugin's download and every command it runs. On four cores, idle and then
 #: with four times as many busy processes as cores, the case of
-#: `tests/test_admission_wait_engine.py` took 3 s and 6 s, and the case of
-#: `tests/test_install_order_engine.py`, whose chart renders a few more
-#: objects, 3 s and 5 s. Twice `COMMAND_TIMEOUT`, so a stalled command fails
-#: naming itself before this fires; a stop-loss, which nothing asserts on.
+#: `tests/test_admission_wait_engine.py` took 3 s and 6 s. Twice
+#: `COMMAND_TIMEOUT`, so a stalled command fails naming itself before this
+#: fires; a stop-loss, which nothing asserts on.
 CASE_TIMEOUT = 240
 
 #: How long one `pulumi` command may take before the case fails naming it: a

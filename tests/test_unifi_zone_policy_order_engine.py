@@ -37,13 +37,16 @@ from unifi_controller import ControllerSession, ZonePolicies
 import kluster
 from kluster.providers.unifi_zone_policy_order import API_KEY_CONFIG
 
-#: How long one case may take: its project's set-up and every command it runs
-#: against the engine, at the bounds of `tests/test_device_directory_engine.py`,
-#: whose handful of commands these are. A stop-loss, which nothing asserts on.
+#: How long one case may take: its project's set-up and the handful of
+#: commands it runs against the engine. Run alone (`-n 0`) on 24 cores at a
+#: load average of about 3.5, the slowest case took 2.1 s of set-up and 5.1 s
+#: of call. Twice `COMMAND_TIMEOUT`, so a stalled command fails naming itself
+#: first; a stop-loss, which nothing asserts on.
 CASE_TIMEOUT = 240
 
 #: How long one `pulumi` command may take before the case fails naming it: a
-#: stop-loss, below the case bound.
+#: stop-loss, many times the slowest whole case measured, and below the case
+#: bound.
 COMMAND_TIMEOUT = 120
 
 pytestmark = [

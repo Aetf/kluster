@@ -1,6 +1,7 @@
-"""The engine semantics the bring-up's targeted applies rest on, held by the pinned `pulumi` itself.
+"""The bring-up's targeted applies, with their targets read from the runbook, run by the pinned `pulumi`.
 
-Two targeted runs, and each is a claim about the engine that no mock can show.
+Two targeted runs, each made with the targets its runbook writes, and what
+each leaves behind is something no mock can show.
 
 Step 3 of the cutover window (docs/physical/gateway-cutover.md §4) is the
 `physical` stack's first apply, restricted by `--target`. The overlay network

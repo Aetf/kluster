@@ -36,6 +36,18 @@
     hand; §3.6's list of what a lost state imports drops `Image`. The
     drill disables the deploy workflow from before the dump until the
     restore, so no run writes to the old box after its dump.
+*   **Updated:** 2026-11-18. §4.3's engine test, and its new rule in
+    framework/testing.md, are withdrawn (Aetf/kluster-ops#854): a test of
+    what the engine does with an option turns red only at a release that
+    moves it, or on the option's own line in the diff under review. What
+    the pinned engine does with the hooks, `ignore_changes`,
+    `replace_on_changes` and `delete_before_replace` is held by no test of
+    its own: each option carries its reason at its declaration, and a
+    `pulumi` bump's review reads the changelog for each of them
+    (operations.md §1). The hooks' own decisions are held as functions in
+    `tests/test_state_backend_stack.py`. Every later mention of the engine
+    test in the body, in §13 and §14 among them, names that withdrawn
+    test.
 *   **Authority:** AGENTS.md,
     [framework/dispatch.md](../framework/dispatch.md),
     [framework/rfc.md](../framework/rfc.md) and the style rules

@@ -844,8 +844,8 @@ release and the manifest's path — and generated into `sdks/crds` by
 ([ci.md](ci.md) §3). Its classes carry the extension's package in their
 type token, `crds:<group>/<version>:<Kind>`, and are served by the
 `kubernetes` provider a program hands them, explicit providers included
-(`tests/test_extension_provider.py` holds that against the engine). The
-generated SDK is excluded from the type-annotation standard the
+(pulumi/pulumi#24702, from 3.266.0, the `pulumi` floor in
+`pyproject.toml`). The generated SDK is excluded from the type-annotation standard the
 handwritten code holds to — it is not ours to annotate.
 
 **The manifest is authored here; the SDK is generated from it.** The

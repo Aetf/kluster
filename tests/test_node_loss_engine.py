@@ -1,12 +1,11 @@
-"""The engine semantics a lost cloud node's recovery and the instances' protection rest on, held by the pinned `pulumi`.
+"""A lost cloud node's recovery, operations.md §3.1's commands as written, run by the pinned `pulumi`.
 
 Each node's instance is protected (`components/cloud/nodes.py`,
 declarative/physical.md §1): the program neither replaces nor deletes it, and
-an instance leaves the state only through a refresh that reads it gone. What
-that rests on is three things the engine does, and no mock shows:
+an instance leaves the state only through a refresh that reads it gone. The
+runbook's commands are read out of the document and run as written, so a
+target set or an order in it that misses something fails a case:
 
--   a replacement of a protected instance is refused before anything is
-    created, whether the provider plans it or `--target-replace` asks for it;
 -   the lost node's targeted `refresh --run-program`, at the count
     operations.md §3.1 gates it on, drops the instance that reads back
     without an ID, protected as it is, and on the dedicated VIP's node the
@@ -177,8 +176,8 @@ VOLUMES = {'hath-cache': 'cp1'}
 #: Two of the ports the balancer forwards, each on both families, as
 #: `components/cloud/nodes.py` names a backend set: the field alone for IPv4.
 FORWARDS = ('kubernetes', 'talos', 'kubernetes-ipv6', 'talos-ipv6')
-#: Where each node is placed: one AD apiece, unless the case moves one.
-PLACEMENTS = {'cp1': 'AD-1', 'cp2': 'AD-2', 'cp3': 'AD-3'} | json.loads(os.environ.get('PROBE_PLACEMENTS', '{}'))
+#: Where each node is placed: one AD apiece.
+PLACEMENTS = {'cp1': 'AD-1', 'cp2': 'AD-2', 'cp3': 'AD-3'}
 
 
 def declared(cls, typ, name, props, parent):
@@ -499,13 +498,9 @@ class Engine:
     env: dict[str, str]
     log_file: Path
 
-    def pulumi(self, *args: str, **env: str) -> sp.CompletedProcess[str]:
+    def pulumi(self, *args: str) -> sp.CompletedProcess[str]:
         return process_sessions.run(
-            ['pulumi', '--non-interactive', *args],
-            cwd=self.project,
-            env=self.env | env,
-            text=True,
-            timeout=COMMAND_TIMEOUT,
+            ['pulumi', '--non-interactive', *args], cwd=self.project, env=self.env, text=True, timeout=COMMAND_TIMEOUT
         )
 
     def shell(self, script: str, **env: str) -> sp.CompletedProcess[str]:
@@ -553,28 +548,6 @@ def launched(tmp_path: Path, options: str) -> Engine:
     applied = engine.pulumi('up', '--yes', '--skip-preview')
     assert applied.returncode == 0, _ran(applied)
     return engine
-
-
-def test_a_targeted_replacement_of_an_instance_is_refused_with_nothing_created(launched: Engine) -> None:
-    before = len(launched.log())
-    original = launched.of(INSTANCE, 'kluster-cp2')
-
-    replaced = launched.pulumi('up', '--yes', '--skip-preview', '--target-replace', original['urn'])
-
-    assert replaced.returncode != 0, _ran(replaced)
-    assert launched.written(before) == []
-    assert launched.of(INSTANCE, 'kluster-cp2')['id'] == original['id']
-
-
-def test_a_replacement_the_provider_plans_is_refused_with_nothing_created(launched: Engine) -> None:
-    before = len(launched.log())
-    original = launched.of(INSTANCE, 'kluster-cp2')
-
-    moved = launched.pulumi('up', '--yes', '--skip-preview', PROBE_PLACEMENTS=json.dumps({'cp2': 'AD-9'}))
-
-    assert moved.returncode != 0, _ran(moved)
-    assert launched.written(before) == []
-    assert launched.of(INSTANCE, 'kluster-cp2')['id'] == original['id']
 
 
 def lost(engine: Engine, node: str) -> list[str]:

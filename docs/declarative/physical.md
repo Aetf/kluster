@@ -209,8 +209,8 @@ credential (`ci_zerotier_identity_physical`,
     `protect`. A deliberate replacement terminates the instance
     outside the program, and the refresh after it drops the instance
     from the state (operations.md §3.1, physical/gateway-cutover.md §5).
-    `tests/test_node_loss_engine.py`
-    holds the refusal and the refresh against the pinned CLI.
+    `tests/test_node_loss_engine.py` runs that refresh, and the `up`
+    after it, as operations.md §3.1 writes them, against the pinned CLI.
 -   **Guardrails**: compartment quotas pinning creatable shapes to the
     envelope the design is budgeted against, plus a budget with alert
     rules (nodes.md §3.2).

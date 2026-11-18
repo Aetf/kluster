@@ -5,12 +5,10 @@ resources hold of each other: the subnet and its one list and table, where
 the box launches, what is secret, where the dump key may write and where the
 hooks are bound. The security list's openings, the instance's options, the
 secret outputs and the dump key's grant are not restated here: each carries
-its reason at its declaration, and what each option does is
-`tests/test_state_backend_engine.py`'s. The hooks are then exercised as functions, over
+its reason at its declaration. The hooks are then exercised as functions, over
 `kluster.lib.state_backend.state` with its tools replaced, and the two dynamic
 resources' refusals over a fake stream and a local TLS server, and the
-artifact object's deletes over a fake bucket. What the engine
-does with the options and hooks is `tests/test_state_backend_engine.py`.
+artifact object's deletes over a fake bucket.
 
 The files committed beside the Butane template are written into a directory
 of the run's own and pointed at, since the checkout's may not hold them yet.

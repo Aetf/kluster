@@ -1,17 +1,19 @@
-"""What the PD lease read rests on in the engine, held by the pinned `pulumi` itself.
+"""The model of the engine the PD lease read is written against, checked against the pinned `pulumi` itself.
 
-`DelegatedPrefixLease` observes in `check` and writes nothing, so a prefix the
-ISP moved has to be a diff a plain preview plans, with no refresh, and a
-resource built from the read prefix has to move with it in the same plan. No
-mock plans a step, so each case runs the CLI `mise.toml` pins over a `file://`
-backend and a `PULUMI_HOME` of the case's own, against a program holding the
-real resource and one stand-in that consumes its `prefix` and logs what its
-`check` was handed. The resource dials a device stand-in: an SSH server on
-`127.0.0.1` presenting a key of the case's own and admitting the case's client
-key, which runs each command it is sent under `/bin/sh` with the lease's path
-pointed at a file the case writes, and records every command. The project
-around the program is `scratch_projects`', and every command leads a POSIX
-session of its own that ends with it (`process_sessions`).
+`DelegatedPrefixLease` observes in `check` and writes nothing, rather than
+through a refresh, and the provider-level cases (`test_pd_lease.py`) are
+written against a model of what the engine does with what `check` returns: a
+prefix the ISP moved is a diff a plain preview plans, with no refresh, and a
+resource built from the read prefix moves with it in the same plan, its
+value known. These cases check that model. Each runs the CLI `mise.toml` pins
+over a `file://` backend and a `PULUMI_HOME` of the case's own, against a
+program holding the real resource and one stand-in that consumes its `prefix`
+and logs what its `check` was handed. The resource dials a device stand-in:
+an SSH server on `127.0.0.1` presenting a key of the case's own and admitting
+the case's client key, which runs each command it is sent under `/bin/sh`
+with the lease's path pointed at a file the case writes. The project around
+the program is `scratch_projects`', and every command leads a POSIX session
+of its own that ends with it (`process_sessions`).
 """
 
 from __future__ import annotations
@@ -22,7 +24,7 @@ import shutil
 import subprocess as sp
 import threading
 from collections.abc import Iterator
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast, final
 
@@ -117,13 +119,12 @@ def _ed25519() -> asyncssh.SSHKey:
 @final
 @dataclass
 class Device:
-    """The device stand-in: where it answers, the keys of its session, its lease, and every command it was sent."""
+    """The device stand-in: where it answers, the keys of its session, and its lease."""
 
     port: int
     host_key: str
     client_key: str
     lease: Path
-    commands: list[str] = field(default_factory=list[str])
 
 
 @pytest.fixture
@@ -133,11 +134,9 @@ def device(tmp_path: Path) -> Iterator[Device]:
     client = _ed25519()
     lease = tmp_path / 'pd.leases'
     _ = lease.write_text(RECORDED)
-    commands: list[str] = []
 
     async def answer(process: asyncssh.SSHServerProcess[bytes]) -> None:
         command = process.command or ''
-        commands.append(command)
         # outside process_sessions -- the device stand-in answers on its own
         # event loop, and the helper blocks; the command is the transport's
         # one-line read, which ends with its output, and the case bound stops
@@ -176,7 +175,6 @@ def device(tmp_path: Path) -> Iterator[Device]:
             host_key=host.export_public_key().decode().strip(),
             client_key=client.export_private_key().decode(),
             lease=lease,
-            commands=commands,
         )
     finally:
         server.close()
@@ -287,35 +285,3 @@ def test_a_moved_prefix_is_planned_by_a_plain_preview_and_moves_what_is_built_fr
     assert (ops['lease'], ops['consumer']) == ('update', 'update'), ops
     assert launched.checked() == ['check 2001:db8:84:20::/60']
     assert rpc.UNKNOWN not in json.dumps(preview)
-
-
-def test_a_renewal_that_keeps_the_prefix_plans_nothing(launched: Engine) -> None:
-    _ = launched.device.lease.write_text(RECORDED.replace('1794796588156', '1794796590000'))
-
-    previewed = launched.pulumi('preview', '--expect-no-changes', '--diff')
-
-    assert previewed.returncode == 0, _ran(previewed)
-
-
-def test_the_moved_prefix_lands_in_state_with_an_up(launched: Engine) -> None:
-    _ = launched.device.lease.write_text(MOVED)
-
-    applied = launched.pulumi('up', '--yes', '--skip-preview')
-    assert applied.returncode == 0, _ran(applied)
-    exported = launched.pulumi('stack', 'export')
-    assert exported.returncode == 0, exported.stderr
-
-    resources = cast('list[dict[str, Any]]', json.loads(exported.stdout)['deployment']['resources'])
-    (consumer,) = (it for it in resources if str(it['urn']).endswith('::consumer'))
-    assert consumer['outputs']['prefix'] == '2001:db8:84:20::/60'
-    assert launched.pulumi('preview', '--expect-no-changes').returncode == 0
-
-
-def test_the_device_is_only_ever_asked_to_read_the_lease(launched: Engine) -> None:
-    """Every command the device was sent, across an `up` and a preview, is the transport's read of the lease."""
-    _ = launched.device.lease.write_text(MOVED)
-    _ = launched.plain_preview()
-
-    read = f'if [ ! -f {pd_lease.LEASES} ]; then exit'
-    assert launched.device.commands
-    assert all(command.startswith(read) for command in launched.device.commands), launched.device.commands
