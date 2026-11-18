@@ -9,11 +9,12 @@ the session's password sealed in and as the stack stands until it is
 (physical/bring-up.md §1).
 
 Literals written here are the upstream projects' contracts: the values both
-guides for Cilium on Talos prescribe, KubePrism's port, the addresses Talos
-and the cloud fix, the label Talos puts on a control plane node, and the
-families and the password's key as Cilium spells them. What the program
-derives from a convention is held to that convention, and where the session
-has a second end, to what the gateway's stack declares of it.
+guides for Cilium on Talos prescribe and the Gateway API switches Talos' guide
+adds to them, KubePrism's port, the addresses Talos and the cloud fix, the
+label Talos puts on a control plane node, and the families and the password's
+key as Cilium spells them. What the program derives from a convention is held
+to that convention, and where the session has a second end, to what the
+gateway's stack declares of it.
 
 Every run is under the parent backstop `kluster.main` installs, so a resource
 the component leaves unparented fails it here as it would in `pulumi
@@ -91,6 +92,13 @@ GUIDE_AGENT_CAPABILITIES = [
 ]
 GUIDE_CLEAN_STATE_CAPABILITIES = ['NET_ADMIN', 'SYS_ADMIN', 'SYS_RESOURCE']
 
+#: The Gateway API switches Talos' guide for Cilium sets, as it writes them, in
+#: each variant that enables the Gateway API ("Deploying Cilium",
+#: https://docs.siderolabs.com/kubernetes-guides/cni/deploying-cilium, read
+#: 2026-11-18). Cilium's guide for Talos names neither `enableAlpn` nor
+#: `enableAppProtocol`.
+TALOS_GUIDE_GATEWAY_API = {'enabled': True, 'enableAlpn': True, 'enableAppProtocol': True}
+
 #: KubePrism, the node-local API server front Talos runs on every node.
 KUBEPRISM = ('localhost', 7445)
 
@@ -140,6 +148,19 @@ def test_the_values_both_guides_prescribe_are_set_as_written(applied: Run) -> No
     assert 'SYS_MODULE' not in capabilities['ciliumAgent']
     assert capabilities['cleanCiliumState'] == GUIDE_CLEAN_STATE_CAPABILITIES
     assert values['cgroup'] == {'autoMount': {'enabled': False}, 'hostRoot': '/sys/fs/cgroup'}
+
+
+def test_the_gateway_api_switches_talos_guide_sets_are_set_as_written(applied: Run) -> None:
+    """ALPN on the listeners and a backend's protocol chosen by its Service port's `appProtocol`, each stated.
+
+    The chart renders `appProtocol` support on whenever ALPN is on
+    (`cilium-configmap.yaml` at 1.20.4), so `enableAppProtocol` changes
+    nothing that runs while ALPN is on; it is held all the same, because the
+    installation is the guide's as written (rfc-007 §4.1).
+    """
+    gateway_api = applied.values('cilium')['gatewayAPI']
+
+    assert {key: gateway_api.get(key) for key in TALOS_GUIDE_GATEWAY_API} == TALOS_GUIDE_GATEWAY_API
 
 
 def test_the_proxy_replacement_is_on_and_reaches_the_api_server_through_kubeprism(applied: Run) -> None:

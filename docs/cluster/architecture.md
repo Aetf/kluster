@@ -129,11 +129,16 @@ The cluster will operate in Dual-Stack mode, prioritizing IPv4.
 
 -   **The installation both upstreams document for Talos**: Cilium's
     guide for Talos and Talos' guide for Cilium prescribe the same
-    values, and each answers a property of Talos — Kubernetes IPAM,
-    because Talos assigns every node its pod ranges; the agent's
-    capabilities without `SYS_MODULE`, because Talos lets no workload
-    load a kernel module; Talos' own control-group mount, reused rather
-    than mounted again (rfc-007 §4.1). What the design adds to it is
+    values but for two Gateway API switches that Talos' guide alone
+    sets, and each value they share answers a property of Talos —
+    Kubernetes IPAM, because Talos assigns every node its pod ranges;
+    the agent's capabilities without `SYS_MODULE`, because Talos lets no
+    workload load a kernel module; Talos' own control-group mount,
+    reused rather than mounted again (rfc-007 §4.1). The installation
+    takes Talos' two switches as well, `gatewayAPI.enableAlpn` and
+    `gatewayAPI.enableAppProtocol`: an HTTPS listener offers HTTP/2, and
+    a backend's Service port names in `appProtocol` what Envoy speaks to
+    it (cluster-infra.md §2). What the design adds to it is
     cluster-infra.md §2's.
 -   **Kube-Proxy Replacement**: kube-proxy is disabled in Talos. Cilium
     handles all L3/L4 service routing directly in the kernel using eBPF.
