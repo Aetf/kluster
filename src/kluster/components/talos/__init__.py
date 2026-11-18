@@ -163,16 +163,6 @@ KUBESPAN_PORT = 51820
 #: The kubelet's API, which the apiserver and metrics-server call.
 KUBELET_PORT = 10250
 
-#: etcd's metrics listener on a control plane: plain HTTP serving `/metrics`
-#: and etcd's health endpoints (`/health`, `/livez`, `/readyz`), never a key
-#: or a value. Talos starts etcd with none, so
-#: `control_plane_patch` declares one. 2381 is none of Talos' fixed ports and
-#: none in Cilium's port table (rfc-007 §4.3). It takes no opening
-#: (`HOST_OPENINGS`). Its readers are the operator, through the API server's
-#: node proxy (declarative/physical.md §6), and vmagent, from the worker over
-#: KubeSpan (`components.monitoring`).
-ETCD_METRICS_PORT = 2381
-
 #: The DHCPv6 client's port (RFC 8415 §7.2). A cloud node's IPv6 address is
 #: leased over DHCPv6, and the server's Reply comes from its own address rather
 #: than the multicast the Solicit went to, so it matches no connection-tracking
@@ -280,7 +270,7 @@ POD_REACHED_PORTS: tuple[int, ...] = (9962, 9963, 9964, 9965, 9100)
 #: another node is masqueraded to a node address and enters on `kubespan`.
 #: The DHCPv6 client is open to the link alone. etcd and trustd have no opening: their
 #: peers reach them over KubeSpan, which enters on `kubespan`. Nor has etcd's
-#: metrics listener (`ETCD_METRICS_PORT`). Its readers arrive over KubeSpan or
+#: metrics listener (`conventions.ETCD_METRICS_PORT`). Its readers arrive over KubeSpan or
 #: on `lo`, both accepted ahead of every rule: the API server's node proxy
 #: calls another control plane over KubeSpan and its own node on `lo`, and
 #: vmagent, which runs on the worker alone (`components.monitoring`, its
@@ -321,13 +311,13 @@ def etcd_metrics_url() -> str:
     host is one dual-stack socket, so `0.0.0.0` answers on every IPv4 and
     IPv6 address alike. The host is unspecified rather than a node address
     because the patch is shared by every control plane, and each of its
-    readers (`ETCD_METRICS_PORT`) — the API server's node proxy, and
+    readers (`conventions.ETCD_METRICS_PORT`) — the API server's node proxy, and
     vmagent's node scrape from the worker over KubeSpan — dials the node's
     internal address, where a loopback listener would not answer. The
     firewall admits nothing to the port, so nothing outside the cluster
     reaches it.
     """
-    return f'http://{IPv4Address(0)}:{ETCD_METRICS_PORT}'
+    return f'http://{IPv4Address(0)}:{conventions.ETCD_METRICS_PORT}'
 
 
 def node_patch() -> dict[str, Any]:

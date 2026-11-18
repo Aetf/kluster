@@ -55,7 +55,6 @@ from kluster.components.monitoring import (
     RECEIVER,
     dashboard,
     memory,
-    readings,
     rules,
     scrape_jobs,
     stack_values,
@@ -75,7 +74,6 @@ from kluster.components.monitoring.rules import (
     selectors,
     target_down,
 )
-from kluster.components.talos import ETCD_METRICS_PORT
 from kluster.conventions import backup, schedule
 from kluster.conventions.alert import Tier
 from kluster.conventions.backup import BackupFamily
@@ -83,6 +81,7 @@ from kluster.conventions.cluster import KUBECONFIG_ALERT_MARGIN, KUBECONFIG_RENE
 from kluster.conventions.outputs import BOOT_VOLUME
 from kluster.conventions.providers import OCI_BLOCKSTORE_METRICS
 from kluster.lib.k8s import KUBECONFIG_KEY
+from kluster.lib.monitoring import readings
 from kluster.lib.versions import ChartPin, versions
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -607,7 +606,7 @@ def test_etcd_is_scraped_on_every_control_plane_and_nowhere_else(absent: tuple[R
     assert set(targets) == set(conventions.CLOUD_NODES)
     jobs: set[str] = set()
     for node, (target, series) in targets.items():
-        assert target['__address__'].rsplit(':', 1)[1] == str(ETCD_METRICS_PORT), node
+        assert target['__address__'].rsplit(':', 1)[1] == str(conventions.ETCD_METRICS_PORT), node
         assert (target['__scheme__'], target['__metrics_path__']) == ('http', '/metrics'), node
         assert series is not None, node
         assert series['node'] == node
@@ -2822,7 +2821,14 @@ def test_the_metrics_readers_key_adds_its_sealed_secret_the_pulls_config_map_and
         (CRONJOB, schedule.OCI_METRICS_PULL.cronjob),
     }
     assert _monitoring_objects(without_oci_key) <= _monitoring_objects(sealed)
-    assert _declared_rules(sealed) == _declared_rules(without_oci_key)
+    # The rule objects register concurrently, so the order their rules come
+    # back in is not the program's: the two sets are compared as sets.
+    assert _rule_set(sealed) == _rule_set(without_oci_key)
+
+
+def _rule_set(run: Run) -> list[str]:
+    """Every alerting rule the program declares, each as canonical JSON, in sorted order."""
+    return sorted(json.dumps(rule, sort_keys=True) for rule in _declared_rules(run))
 
 
 def test_without_the_metrics_readers_key_the_pull_is_not_declared_and_the_key_is_named(

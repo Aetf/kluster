@@ -1,4 +1,4 @@
-"""Inside the cluster: its address ranges, its ports, its mesh's MTU, its routing session, its pools, its namespaces, its storage classes, the renewal of its admin credential."""
+"""Inside the cluster: its address ranges, its ports, its mesh's MTU, its routing session, its pools, its namespaces, its metrics history, its storage classes, the renewal of its admin credential."""
 
 from __future__ import annotations
 
@@ -55,6 +55,16 @@ MANAGEMENT_PORTS = ManagementPorts(kubernetes=6443, talos=50000)
 #: (there is no kube-proxy to fall back on). Node-local, so it is neither a
 #: management port above nor a Gateway port below.
 KUBEPRISM_PORT = 7445
+
+#: etcd's metrics listener on a control plane: plain HTTP serving `/metrics`
+#: and etcd's health endpoints (`/health`, `/livez`, `/readyz`), never a key
+#: or a value. Talos starts etcd with none, so
+#: `components.talos.control_plane_patch` declares one. 2381 is none of
+#: Talos' fixed ports and none in Cilium's port table (rfc-007 §4.3). It takes
+#: no opening (`components.talos.HOST_OPENINGS`). Its readers are the
+#: operator, through the API server's node proxy (declarative/physical.md
+#: §6), and vmagent, from the worker over KubeSpan (`components.monitoring`).
+ETCD_METRICS_PORT = 2381
 
 #: BGP (cluster-infra.md §2). The UDM's FRR is AS 65000; the cluster peers
 #: from a distinct private ASN so the session is eBGP.
@@ -131,6 +141,39 @@ MONITORING_NAMESPACE = 'monitoring'
 #: holds the etcd backup's own workloads and nothing else, and the grant
 #: reaches no other workload (credentials.md §1, rule 3).
 ETCD_BACKUP_NAMESPACE = 'etcd-backup'
+
+#: The namespaces the platform's other components run in: each component
+#: installs into its own, and the readings tell the platform's pods from a
+#: workload's by these (`kluster.lib.monitoring.readings.PLATFORM_NAMESPACES`).
+#:
+#: Where Cilium's chart installs, which is where both guides install it: under
+#: Talos' Pod Security exemption, which the agent's host access needs
+#: (cluster-infra.md §0).
+CILIUM_NAMESPACE = 'kube-system'
+#: The namespace NFD runs in, its upstream's default.
+NFD_NAMESPACE = 'node-feature-discovery'
+#: The namespace the Intel device-plugin operator runs in, and so the one the
+#: GPU plugin's DaemonSet runs in: the operator's upstream default.
+INTEL_DEVICE_PLUGINS_NAMESPACE = 'inteldeviceplugins-system'
+#: The namespace the local-path provisioner and its helper pods run in.
+LOCAL_PATH_NAMESPACE = 'local-path-storage'
+#: The namespace the CloudNativePG operator and its backup plugin run in: the
+#: operator's upstream default, which the plugin's documentation installs into
+#: too.
+CNPG_NAMESPACE = 'cnpg-system'
+#: The namespace Reloader's controller runs in. It watches every namespace, so
+#: no other object names this one.
+RELOADER_NAMESPACE = 'reloader'
+#: The namespace the VolSync operator runs in, its upstream's default. It
+#: watches every namespace, so no other object names this one.
+VOLSYNC_NAMESPACE = 'volsync-system'
+
+#: The metrics history store, by the name of its vmsingle object
+#: (`components.monitoring.stores`), which the monitoring component declares
+#: it under and anything reading the store from outside the program addresses
+#: it by, through the Service the operator names after it
+#: (`kluster.lib.monitoring.vmsingle`).
+HISTORY_STORE = 'history'
 
 
 class TalosGrant(NamedTuple):

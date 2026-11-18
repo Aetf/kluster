@@ -73,14 +73,14 @@ from types import MappingProxyType
 
 import promql_parser
 
-from kluster.components.monitoring import readings
-from kluster.components.monitoring.jobs import ETCD_JOB
-from kluster.components.monitoring.readings import Reading, Resource
 from kluster.conventions import backup, schedule
 from kluster.conventions.alert import Playbook, Tier
 from kluster.conventions.cluster import KUBECONFIG_ALERT_MARGIN
 from kluster.conventions.providers import OCI_BLOCKSTORE_METRICS
 from kluster.conventions.schedule import ScheduledJob
+from kluster.lib.monitoring import readings
+from kluster.lib.monitoring.jobs import ETCD_JOB
+from kluster.lib.monitoring.readings import Reading, Resource
 
 __all__ = (
     'ALERT_GROUPS',

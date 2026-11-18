@@ -228,7 +228,7 @@ classes its objects fall into (§1.2):
     the key is sealed in, neither the key's SealedSecret nor the pull
     is declared, and `volume_ids` is not read.
     **The control planes are read by readings defined once**
-    (`components/monitoring/readings.py`): each a name, a window, a
+    (`lib/monitoring/readings.py`): each a name, a window, a
     PromQL expression over the history's series, a unit, and the budget
     nodes.md §1.1–1.2 and migration.md §0 rule 6 give it, with the
     canon's phrase and the section it stands in, which a test reads

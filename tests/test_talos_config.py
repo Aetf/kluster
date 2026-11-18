@@ -472,7 +472,7 @@ def test_a_control_plane_serves_etcds_metrics_where_the_node_proxy_reaches_them(
     host = ip_address(listener.hostname or '')
 
     assert listener.scheme == 'http'
-    assert listener.port == talos.ETCD_METRICS_PORT
+    assert listener.port == conventions.ETCD_METRICS_PORT
     assert host.is_unspecified, host
 
 

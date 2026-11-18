@@ -23,15 +23,12 @@ from collections.abc import Sequence
 
 import pulumi
 
+from kluster import conventions
 from kluster.lib.k8s import helm_chart, namespace
 from kluster.lib.versions import ChartPin
 from putils import Component
 
-__all__ = ('NAMESPACE', 'PostgresOperator')
-
-#: The namespace the operator and its backup plugin run in: the operator's
-#: upstream default, which the plugin's documentation installs into too.
-NAMESPACE = 'cnpg-system'
+__all__ = ('PostgresOperator',)
 
 
 class PostgresOperator(Component, pulumi_type='kluster:postgres:PostgresOperator'):
@@ -54,7 +51,7 @@ class PostgresOperator(Component, pulumi_type='kluster:postgres:PostgresOperator
         super().__init__(name, opts=opts)
         behind = self.child_opts(depends_on=list(after))
 
-        self.namespace = namespace(f'{name}-namespace', name=NAMESPACE, opts=behind)
+        self.namespace = namespace(f'{name}-namespace', name=conventions.CNPG_NAMESPACE, opts=behind)
         self.operator = helm_chart(name, pin=operator_chart, namespace=self.namespace.metadata.name, opts=behind)
         self.barman_cloud = helm_chart(
             f'{name}-barman-cloud',

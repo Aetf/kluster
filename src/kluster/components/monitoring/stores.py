@@ -54,13 +54,13 @@ from kluster.conventions.backup import metrics_repo_path
 from kluster.conventions.providers import OCI_BLOCKSTORE_METRICS
 from kluster.conventions.schedule import METRICS_BACKUPS, ScheduledJob
 from kluster.lib import templates
+from kluster.lib.monitoring.vmsingle import VMSINGLE_PORT, vmsingle_workload
 
 __all__ = (
     'DATA_DIR',
     'DATA_VOLUME',
     'HISTORY_CLASS',
     'HISTORY_RETENTION',
-    'HISTORY_STORE',
     'RECENT_RETENTION',
     'SHELL',
     'SHELL_CONFIGMAP',
@@ -96,9 +96,6 @@ RECENT_RETENTION = dt.timedelta(days=31)
 #: How long the history store keeps a sample, in VictoriaMetrics' own syntax:
 #: for good, so that every period compares with every other.
 HISTORY_RETENTION = '100y'
-
-#: The name of the history store's vmsingle object.
-HISTORY_STORE = 'history'
 
 #: Where the operator mounts a vmsingle's data volume, and that volume's name
 #: in its pod (`internal/controller/operator/factory/vmsingle/vmsingle.go` L37-38
@@ -181,12 +178,12 @@ class Store:
     @property
     def workload(self) -> str:
         """The name of the store's Deployment, Service and claim: the operator's `PrefixedName`."""
-        return f'vmsingle-{self.vmsingle}'
+        return vmsingle_workload(self.vmsingle)
 
     @property
     def url(self) -> str:
         """The store's address in the cluster, on the port the operator serves it at."""
-        return f'http://{self.workload}.{conventions.MONITORING_NAMESPACE}.svc:8428'
+        return f'http://{self.workload}.{conventions.MONITORING_NAMESPACE}.svc:{VMSINGLE_PORT}'
 
     @property
     def repository(self) -> str:
@@ -217,7 +214,7 @@ def stores(release: str, chart: str) -> tuple[Store, Store]:
     """The recent store, the chart's vmsingle at this release, and the history store, backed up half an hour apart."""
     return (
         Store('recent', stack_fullname(release, chart), minute=15, keeps_every_row=False),
-        Store('history', HISTORY_STORE, minute=45, keeps_every_row=True),
+        Store('history', conventions.HISTORY_STORE, minute=45, keeps_every_row=True),
     )
 
 

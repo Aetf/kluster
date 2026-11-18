@@ -33,27 +33,19 @@ from collections.abc import Sequence
 
 import pulumi
 
+from kluster import conventions
 from kluster.lib.k8s import LooserLevel, PodSecurity, helm_chart, namespace
 from kluster.lib.versions import ChartPin
 from putils import Component
 
 __all__ = (
     'GPU_NODE_LABEL',
-    'INTEL_NAMESPACE',
-    'NFD_NAMESPACE',
     'IntelGpuPlugin',
     'NodeFeatureDiscovery',
     'gpu_values',
     'nfd_values',
     'operator_values',
 )
-
-#: The namespace NFD runs in, its upstream's default.
-NFD_NAMESPACE = 'node-feature-discovery'
-
-#: The namespace the Intel device-plugin operator runs in, and so the one the
-#: GPU plugin's DaemonSet runs in: the operator's upstream default.
-INTEL_NAMESPACE = 'inteldeviceplugins-system'
 
 #: The label the plugin chart's `NodeFeatureRule` sets on a node with an Intel
 #: GPU, and that the plugin selects its nodes by.
@@ -107,7 +99,7 @@ class NodeFeatureDiscovery(Component, pulumi_type='kluster:gpu:NodeFeatureDiscov
 
         self.namespace = namespace(
             f'{name}-namespace',
-            name=NFD_NAMESPACE,
+            name=conventions.NFD_NAMESPACE,
             looser=LooserLevel(
                 level=PodSecurity.PRIVILEGED,
                 reason="the worker reads the host's `/boot`, `/sys`, `/proc/swaps`, libraries, OS release and "
@@ -153,7 +145,7 @@ class IntelGpuPlugin(Component, pulumi_type='kluster:gpu:IntelGpuPlugin'):
 
         self.namespace = namespace(
             f'{name}-namespace',
-            name=INTEL_NAMESPACE,
+            name=conventions.INTEL_DEVICE_PLUGINS_NAMESPACE,
             looser=LooserLevel(
                 level=PodSecurity.PRIVILEGED,
                 reason="the plugin's DaemonSet, which the operator creates in this namespace, mounts the GPU's "

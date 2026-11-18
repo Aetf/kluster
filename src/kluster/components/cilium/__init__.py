@@ -49,7 +49,6 @@ __all__ = (
     'GATEWAY_CLASS',
     'HOST_DNS_ADDRESS',
     'METADATA_RANGE',
-    'NAMESPACE',
     'BgpSession',
     'Cilium',
     'Gateways',
@@ -57,11 +56,6 @@ __all__ = (
     'chart_values',
     'internet_pool_members',
 )
-
-#: Where the chart installs, which is where both guides install it: under
-#: Talos' Pod Security exemption, which the agent's host access needs
-#: (cluster-infra.md §0).
-NAMESPACE = 'kube-system'
 
 #: The one `GatewayClass` every Gateway names (rfc-007 §5.1), declared here
 #: rather than by the chart so that it can carry its configuration: the chart's
@@ -279,7 +273,7 @@ class Cilium(Component, pulumi_type='kluster:cilium:Cilium'):
         self.chart = helm_chart(
             name,
             pin=chart,
-            namespace=NAMESPACE,
+            namespace=conventions.CILIUM_NAMESPACE,
             values=chart_values(),
             opts=self.child_opts(depends_on=[self.gateway_api]),
         )
@@ -297,7 +291,7 @@ class Cilium(Component, pulumi_type='kluster:cilium:Cilium'):
 
         self.class_config = crds.cilium.v2alpha1.CiliumGatewayClassConfig(
             f'{name}-gateway-class',
-            metadata=k8s.meta.v1.ObjectMetaArgs(name=GATEWAY_CLASS, namespace=NAMESPACE),
+            metadata=k8s.meta.v1.ObjectMetaArgs(name=GATEWAY_CLASS, namespace=conventions.CILIUM_NAMESPACE),
             spec=crds.cilium.v2alpha1.CiliumGatewayClassConfigSpecArgs(
                 service=crds.cilium.v2alpha1.CiliumGatewayClassConfigSpecServiceArgs(
                     # Stated, though the configuration's own default is the
@@ -321,7 +315,7 @@ class Cilium(Component, pulumi_type='kluster:cilium:Cilium'):
                     group='cilium.io',
                     kind='CiliumGatewayClassConfig',
                     name=GATEWAY_CLASS,
-                    namespace=NAMESPACE,
+                    namespace=conventions.CILIUM_NAMESPACE,
                 ),
             ),
             opts=self.child_opts(depends_on=[self.gateway_api, self.class_config]),

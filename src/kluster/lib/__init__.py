@@ -8,11 +8,12 @@ the `pulumi` CLI runner and the backend and passphrase a run against each stack
 is given (`stack_environment`), what code outside the `credentials` package
 needs of the `age` tool and of a state-backend client bundle's layout, and the
 marker a field carrying credential material is declared with (`secret`). And, in
-`kluster.lib.<area>`, the code an area's component and a script both run:
-`state_backend`, which the `state-backend` script and the appliance's
-component both run. `putils` is the other home for
-shared code — the Pulumi framework, which knows nothing about this
-installation.
+`kluster.lib.<area>`, the code an area's component and a script both run, with
+the files it reads beside it: today `state_backend`, which the `state-backend`
+script and the appliance's component both run, and `monitoring`, the readings
+and the scrape jobs, which the monitoring component runs and which are kept out
+of it so that a script can read them. `putils` is the other home for shared
+code — the Pulumi framework, which knows nothing about this installation.
 
 Nothing here is a component, and nothing here imports a component, a provider,
 a stack program or a script. Two of the Kubernetes helpers do declare a resource —
