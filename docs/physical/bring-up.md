@@ -177,7 +177,7 @@ that follow the ceremony, holds for stages 2 to 4.
 
 ## 6. What moved out of the gate
 
-Three items of the verification lists cannot run on an empty cluster,
+Two items of the verification lists cannot run on an empty cluster,
 and migration.md §1 and physical.md §6 say so: each moves to the first
 wave, which is where what it tests arrives.
 
@@ -185,8 +185,6 @@ wave, which is where what it tests arrives.
     physical.md §6, needs the authentication gate.
 *   **The authentication canary**, physical.md §6, needs the
     authentication service.
-*   **The backup bucket's prefix isolation**, physical.md §6, needs a
-    writer key with a consumer.
 
 Everything else on those lists runs at stage 8. The check that a raw
 LoadBalancer port is answered ahead of the node firewall runs on a
