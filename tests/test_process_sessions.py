@@ -39,7 +39,8 @@ import subprocess as sp
 import sys
 import time
 import tokenize
-from collections.abc import Iterator
+import uuid
+from collections.abc import Iterator, Sequence
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
@@ -863,3 +864,122 @@ def test_every_test_module_starts_its_processes_through_the_helper_or_says_why()
     assert unspent == [], (
         f"each explains no start the census recognizes: put the reason with the call it explains, or add that call's way to STARTS: {unspent}"
     )
+
+
+#: How long each `podman` command a container case starts may take: a
+#: stop-loss, which nothing asserts on. Every one is local.
+PODMAN_TIMEOUT = 60
+
+#: An image the store does not hold. A `podman create` of it with
+#: `--pull=never` fails before it creates a container.
+ABSENT_IMAGE = 'localhost/kluster-test-absent:none'
+
+#: The label every container a case here would start carries, and so the
+#: census of what a run has left (framework/testing.md §1.2).
+LABEL = f'kluster-test={Path(__file__).stem}'
+
+#: A `podman create` of `ABSENT_IMAGE` with no name, which creates nothing
+#: wherever it reaches podman.
+CREATE = ['podman', 'create', '--pull=never', '--rm', '--label', LABEL, ABSENT_IMAGE]
+
+#: The words a podman can come behind in a command a case starts: none, and
+#: the wrappers that run it, as a log follower runs behind `timeout`.
+WRAPPERS = {'bare': [], 'timeout': ['timeout', str(PODMAN_TIMEOUT)], 'env': ['env', 'KLUSTER_TEST=1']}
+
+
+def _named(argv: list[str], name: str) -> list[str]:
+    """`CREATE`, behind whatever `argv` puts ahead of it, given `name`."""
+    at = argv.index('create') + 1
+    return [*argv[:at], '--name', name, *argv[at:]]
+
+
+def _issue(entry: str, argv: list[str]) -> int:
+    """Run `argv` through the helper's entry point `entry`, and return its status."""
+    if entry == 'run':
+        return process_sessions.run(argv, timeout=PODMAN_TIMEOUT).returncode
+    with process_sessions.started(argv) as command:
+        return command.wait(timeout=PODMAN_TIMEOUT)
+
+
+@pytest.fixture
+def podman() -> None:
+    """Skip a case that reaches podman where podman is not on `PATH`."""
+    if shutil.which('podman') is None:
+        pytest.skip('podman is not on PATH')
+
+
+@pytest.mark.parametrize('entry', ['run', 'started'])
+@pytest.mark.parametrize('wrapper', WRAPPERS.values(), ids=WRAPPERS)
+@pytest.mark.parametrize(
+    ('named', 'refusal'),
+    [(False, 'names no container'), (True, 'before the teardown that removes it is armed')],
+    ids=['no-name', 'unarmed'],
+)
+def test_a_container_no_armed_teardown_removes_by_name_is_refused_before_podman_runs(
+    entry: str, wrapper: list[str], named: bool, refusal: str
+) -> None:
+    """A `podman create` with no name, or with one no `removing` block is armed to remove, fails before podman runs.
+
+    Through either entry point, and with a podman behind a wrapper as with a
+    bare one. A create that reached podman would fail on the absent image,
+    naming no refusal, and create nothing.
+    """
+    argv = [*wrapper, *CREATE]
+    with pytest.raises(AssertionError, match=refusal):
+        _ = _issue(entry, _named(argv, f'kluster-test-unarmed-{uuid.uuid4().hex[:12]}') if named else argv)
+
+
+@pytest.mark.usefixtures('podman')
+@pytest.mark.parametrize('entry', ['run', 'started'])
+@pytest.mark.parametrize('wrapper', WRAPPERS.values(), ids=WRAPPERS)
+def test_a_container_named_for_an_armed_teardown_reaches_podman(entry: str, wrapper: list[str]) -> None:
+    """A `podman create` of a name a `removing` block is armed to remove runs; podman fails it on the absent image."""
+    name = f'kluster-test-armed-{uuid.uuid4().hex[:12]}'
+    with process_sessions.removing(name, timeout=PODMAN_TIMEOUT):
+        status = _issue(entry, _named([*wrapper, *CREATE], name))
+
+    assert status != 0
+
+
+@pytest.mark.usefixtures('podman')
+@pytest.mark.parametrize('entry', ['run', 'started'])
+def test_a_podman_option_ahead_of_the_verb_is_refused_before_podman_runs(entry: str) -> None:
+    """A global option between `podman` and its verb is refused, the name it creates armed or not, since it is not read."""
+    name = f'kluster-test-option-{uuid.uuid4().hex[:12]}'
+    argv = ['podman', '--log-level=error', *_named(CREATE, name)[1:]]
+    with (
+        process_sessions.removing(name, timeout=PODMAN_TIMEOUT),
+        pytest.raises(AssertionError, match='ahead of the verb'),
+    ):
+        _ = _issue(entry, argv)
+
+
+@pytest.mark.parametrize('failure', ['timeout', 'refusal'])
+def test_a_removal_that_fails_leaves_the_rest_of_its_block_to_run(
+    monkeypatch: pytest.MonkeyPatch, failure: str
+) -> None:
+    """Every name a `removing` block arms is removed, whatever the removal of an earlier one raised.
+
+    `run` is stood in for, so no podman is reached: the second of three
+    removals times out at its bound or is refused, and the third is still
+    attempted, the failure comes out of the block, and nothing stays armed.
+    """
+    attempted: list[str] = []
+
+    def removal(argv: Sequence[str], *, timeout: float) -> sp.CompletedProcess[bytes]:
+        name = argv[-1]
+        attempted.append(name)
+        if name == 'second' and failure == 'timeout':
+            raise sp.TimeoutExpired(list(argv), timeout)
+        status = 125 if name == 'second' else 0
+        return sp.CompletedProcess(list(argv), status, b'', b'refused' if status else b'')
+
+    monkeypatch.setattr(process_sessions, 'run', removal)
+    raised = sp.TimeoutExpired if failure == 'timeout' else AssertionError
+    with pytest.raises(raised), process_sessions.removing('first', 'second', 'third', timeout=PODMAN_TIMEOUT):
+        pass
+
+    assert attempted == ['first', 'second', 'third']
+    monkeypatch.undo()
+    with pytest.raises(AssertionError, match='before the teardown that removes it is armed'):
+        _ = _issue('run', _named(CREATE, 'third'))

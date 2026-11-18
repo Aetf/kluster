@@ -26,6 +26,17 @@ What this does not reach is a process outside the session of a command
 started here -- a descendant that called `setsid()`, a command code under
 test starts through a runner of its own -- and anything at all once the test
 process can no longer run a `finally`: framework/testing.md §1.2.
+
+**A container is created here only under a teardown armed to remove it by
+name.** A container left `Created` -- by a `podman run` killed between its
+create and its start, at the bound on the command, say -- ends by nothing
+but a removal by name, since a container's `--timeout` and `--rm` both count
+from its start. So `started`, which every command a case starts goes through,
+refuses before it starts anything a `podman run` or `podman create` that
+names no container, or names one no `removing` block is armed to remove.
+Being here rather than in a module's fixture, the refusal holds every
+module that starts a container, a command a fixture of any scope starts
+included.
 """
 
 from __future__ import annotations
@@ -33,10 +44,11 @@ from __future__ import annotations
 import os
 import signal
 import subprocess
+from collections import Counter
 from collections.abc import Generator, Mapping, Sequence
-from contextlib import contextmanager, suppress
+from contextlib import ExitStack, contextmanager, suppress
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import IO, Any
 
 import psutil
@@ -218,7 +230,11 @@ def started(
     The end runs twice, the second time in a `finally` of its own: the case
     bound fires once per case, so if it lands inside the first the second
     runs to the end, and after an uninterrupted first it does nothing at all.
+
+    A container `argv` would create that no armed teardown removes by name
+    is refused before anything starts (`_refuse_unarmed`).
     """
+    _refuse_unarmed(argv)
     popen = subprocess.Popen(
         argv,
         cwd=cwd,
@@ -308,3 +324,86 @@ def run(
             failed.add_note(said if isinstance(said, str) else said.decode(errors='replace'))
         raise failed
     return subprocess.CompletedProcess(command.args, status, output, errors)
+
+
+#: The names of the containers a teardown is armed to remove, counted once for
+#: each `removing` block that will: armed as the block is entered, before the
+#: command that creates the container, and disarmed once its teardown has run.
+_ARMED: Counter[str] = Counter()
+
+
+def remove(*names: str, timeout: float) -> None:
+    """Remove each container `names` lists, whatever state it is in, attempting every one whatever an earlier one raised.
+
+    A container that `podman rm` removes keeps its anonymous volumes without
+    `--volumes`, `--rm` notwithstanding, so the flag goes with every removal.
+    A refusal fails the caller: a container still there stays until its
+    `--timeout`, and one that publishes a port keeps it until then. A
+    container already gone is no refusal, since `--force` passes over a name
+    podman does not know -- one that `--rm` removed when it ended, or one
+    whose `create` never ran.
+
+    Each removal is a callback of its own on an `ExitStack`, so a refusal, a
+    `TimeoutExpired` at `timeout`, or the case bound landing in one removal
+    leaves the rest to run, and what each raised comes out chained once all
+    of them have.
+    """
+    with ExitStack() as removals:
+        for name in reversed(names):
+            _ = removals.callback(_remove_one, name, timeout)
+
+
+def _remove_one(name: str, timeout: float) -> None:
+    done = run(['podman', 'rm', '--force', '--volumes', '--time', '0', name], timeout=timeout)
+    assert done.returncode == 0, f'podman rm refused {name}: {done.stderr.decode().strip()}'
+
+
+@contextmanager
+def removing(*names: str, timeout: float) -> Generator[None]:
+    """Arm the removal of the containers `names` for a block that creates them, and remove each on every way out.
+
+    Arming is what lets a command that creates one of `names` through here
+    start at all (`_refuse_unarmed`). `timeout` bounds each removal.
+    """
+    _ARMED.update(names)
+    try:
+        yield
+    finally:
+        try:
+            remove(*names, timeout=timeout)
+        finally:
+            _ARMED.subtract(names)
+
+
+def _refuse_unarmed(argv: Sequence[str]) -> None:
+    """Refuse a `podman run` or `podman create` whose container no armed teardown removes by name.
+
+    The command names its container, and the `removing` block that removes
+    that name is entered before the command runs. A refusal is an
+    `AssertionError` raised before anything starts, so the refused command
+    creates nothing.
+
+    A command is read from its first word named `podman`, wherever it sits,
+    so a podman behind a wrapper such as `timeout` or `env` is read too. The
+    verb is the next word, or the one after `container`. An option ahead of
+    the verb is refused, whatever the verb, because it is not read: a global
+    option can take a value, so the verb's place is not known past it.
+    """
+    at = next((at for at, word in enumerate(argv) if PurePosixPath(word).name == 'podman'), None)
+    if at is None:
+        return
+    words = list(argv[at + 1 :])
+    if words[:1] == ['container']:
+        words = words[1:]
+    if words[:1] and words[0].startswith('-'):
+        raise AssertionError(f'podman {words[0]} comes ahead of the verb, and options there are not read: {list(argv)}')
+    if words[:1] not in (['run'], ['create']):
+        return
+    names = [
+        *(words[at + 1] for at, word in enumerate(words[:-1]) if word == '--name'),
+        *(word.removeprefix('--name=') for word in words if word.startswith('--name=')),
+    ]
+    if not names:
+        raise AssertionError(f'podman {words[0]} names no container, so no teardown can remove it: {list(argv)}')
+    if not all(_ARMED[name] > 0 for name in names):
+        raise AssertionError(f'podman {words[0]} of {names} runs before the teardown that removes it is armed')

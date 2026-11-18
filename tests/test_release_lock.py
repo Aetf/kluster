@@ -119,7 +119,8 @@ def box() -> Iterator[Box]:
     Once started, `--timeout` has conmon end the container at
     `CONTAINER_TIMEOUT` and `--rm` removes it then, however this process
     ended. One a `podman run` killed before the start leaves `Created` is
-    removed by name in the teardown, which a test process killed outright
+    removed by name in the teardown, armed before the `podman run`
+    (`process_sessions.removing`), which a test process killed outright
     never runs. The data directory, the
     image's one `VOLUME`, is a tmpfs, so the container has no anonymous
     volume to leave. `podman run` creates and starts it in one command, so
@@ -132,7 +133,7 @@ def box() -> Iterator[Box]:
     if process_sessions.run(['podman', 'image', 'exists', IMAGE], timeout=COMMAND_TIMEOUT).returncode != 0:
         pytest.skip(f'there is no local copy of {IMAGE}')
     name = f'kluster-test-release-lock-{uuid.uuid4().hex[:12]}'
-    try:
+    with process_sessions.removing(name, timeout=COMMAND_TIMEOUT):
         with host_ports.reserved(ADDRESS) as port:
             _ = _podman(
                 'run',
@@ -164,8 +165,6 @@ def box() -> Iterator[Box]:
             time.sleep(POLL_INTERVAL)
         _ = found.sql(f'CREATE ROLE {WRITER} LOGIN; GRANT CREATE ON SCHEMA public TO {WRITER}')
         yield found
-    finally:
-        _ = _podman('rm', '--force', '--volumes', '--time', '0', name)
 
 
 @dataclass(frozen=True)
@@ -258,6 +257,29 @@ def _start_file(path: Path, pid: int, started: int) -> Path:
 
 def _run(bundle_dir: Path, stack: str, start_file: Path) -> int:
     return cli.main(['release-lock', '--stack', stack, '--start-file', str(start_file), '--bundle', str(bundle_dir)])
+
+
+#: An image the store does not hold. A `podman create` of it with
+#: `--pull=never` fails before it creates a container.
+ABSENT_IMAGE = 'localhost/kluster-test-absent:none'
+
+
+@pytest.mark.parametrize(
+    ('named', 'refusal'),
+    [(False, 'names no container'), (True, 'before the teardown that removes it is armed')],
+    ids=['no-name', 'unarmed'],
+)
+def test_a_container_no_armed_teardown_removes_by_name_is_refused_before_podman_runs(named: bool, refusal: str) -> None:
+    """A `podman create` this module issues with no name, or with one no `removing` block is armed to remove, fails before podman runs.
+
+    The module's containers are started through `_podman`, so this is the
+    path the box's own create takes. The image is one the store does not
+    hold, so a create that reached podman fails there, naming podman rather
+    than the refusal, and leaves no container behind.
+    """
+    name = ['--name', f'kluster-test-unarmed-{uuid.uuid4().hex[:12]}'] if named else []
+    with pytest.raises(AssertionError, match=refusal):
+        _ = _podman('create', '--pull=never', '--label', LABEL, *name, ABSENT_IMAGE)
 
 
 def test_the_lock_the_runs_own_pulumi_left_is_deleted_and_nothing_else(box: Box, release: Path, tmp_path: Path) -> None:
