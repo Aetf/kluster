@@ -1837,8 +1837,6 @@ SECRET_COMPONENT_OUTPUT = 'a-component-output-nobody-may-read'
 #: depends on several `part`s, some through `depends_on` and some through its
 #: input, whose state therefore lists several members in each of its
 #: dependency fields. The change a case makes is `settings.json`'s `change`.
-#: `first`'s secret input is the one `additional_secret_outputs` names, so
-#: the checkpoint the driver checks holds it as ciphertext either way.
 UNSTEPPED = f"""\
 import json
 import pathlib
@@ -1874,28 +1872,9 @@ class Holder(pulumi.ComponentResource):
 
 holder = Holder('holder')
 
-first_options = {{
-    'protect': pulumi.ResourceOptions(protect=True),
-    'retain on delete': pulumi.ResourceOptions(retain_on_delete=True),
-    'renamed by an alias': pulumi.ResourceOptions(aliases=[pulumi.Alias(name='first')]),
-    'moved under a parent by an alias': pulumi.ResourceOptions(
-        parent=holder, aliases=[pulumi.Alias(parent=pulumi.ROOT_STACK_RESOURCE)]
-    ),
-    'ignore changes': pulumi.ResourceOptions(ignore_changes=['value']),
-    'replace on changes': pulumi.ResourceOptions(replace_on_changes=['value']),
-    'additional secret outputs': pulumi.ResourceOptions(additional_secret_outputs=['token']),
-    'custom timeouts': pulumi.ResourceOptions(custom_timeouts=pulumi.CustomTimeouts(create='5m')),
-}}.get(CHANGE)
-first = Stand(
-    'renamed' if CHANGE == 'renamed by an alias' else 'first',
-    {{'value': 'as it was', 'token': pulumi.Output.secret({SECRET_INPUT!r})}},
-    first_options,
-)
+first = Stand('first', {{'value': 'as it was', 'token': pulumi.Output.secret({SECRET_INPUT!r})}})
 
-second_options = {{
-    'depends on': pulumi.ResourceOptions(depends_on=[first]),
-    'deleted with': pulumi.ResourceOptions(deleted_with=first),
-}}.get(CHANGE)
+second_options = pulumi.ResourceOptions(depends_on=[first]) if CHANGE == 'depends on' else None
 Stand('second', {{'value': 'as it was'}}, second_options)
 
 parts = [Stand(f'part-{{number}}', {{'value': str(number)}}) for number in range(8)]
@@ -1905,7 +1884,6 @@ Stand(
     pulumi.ResourceOptions(depends_on=parts[:4]),
 )
 
-pulumi.export('exported', 'changed' if CHANGE == 'stack output' else 'as it was')
 pulumi.export('token', pulumi.Output.secret({SECRET_OUTPUT!r}))
 """
 
@@ -1923,24 +1901,19 @@ def unstepped(repository: Repository, committed: str, tmp_path: Path) -> Scratch
     return made
 
 
-#: Each change of `UNSTEPPED` that an `up` writes and the refreshed preview
-#: plans no step for, as the resource it moves and the state field that
-#: moves. The first eight are outside both the four options a step event
-#: carries before and after and the stack's own outputs; the last four are
-#: inside them.
+#: A change of `UNSTEPPED` that an `up` writes and the refreshed preview
+#: plans no step for, from each surface of the preview without a refresh, as
+#: the resource it moves and the field that moves: a state field, which the
+#: JSON document carries, and a component's output, which only the event log
+#: does. A change to `protect` alone and to a stack output, the fields a step
+#: event and the stack's outputs carry, are cases of their own above. Every
+#: kind of such change is `tests/test_stack_plan_engine.py`'s, through
+#: the reading the driver shares (`kluster.lib.state_only`); what each case
+#: here holds is the driver's own: its plan, its listing, and the `up` that
+#: settles it.
 STATE_ONLY = {
     'depends on': ('second', 'dependencies'),
-    'deleted with': ('second', 'deletedWith'),
-    'renamed by an alias': ('renamed', 'aliases'),
-    'ignore changes': ('first', 'ignoreChanges'),
-    'replace on changes': ('first', 'replaceOnChanges'),
-    'additional secret outputs': ('first', 'additionalSecretOutputs'),
-    'custom timeouts': ('first', 'customTimeouts'),
     'component output': ('holder', 'outputs.held'),
-    'protect': ('first', 'protect'),
-    'retain on delete': ('first', 'retainOnDelete'),
-    'moved under a parent by an alias': ('first', 'parent'),
-    'stack output': (f'{PROBE}-{PROBE}', 'outputs.exported'),
 }
 
 

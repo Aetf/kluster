@@ -17,8 +17,7 @@ Every command leads a POSIX session of its own that ends with it
 with it.
 
 This suite fetches, an exception to the engine suites' fetching nothing
-that it shares with `tests/test_admission_wait_engine.py` (testing.md §8):
-`pulumi package gen-sdk` needs the kubernetes plugin, at the version the
+(testing.md §8): `pulumi package gen-sdk` needs the kubernetes plugin, at the version the
 locked `pulumi-kubernetes` registers. It is downloaded once per worker that
 runs one of the module's cases, because each worker process builds the
 module's fixture, and the home it downloads into, for itself. Each download is

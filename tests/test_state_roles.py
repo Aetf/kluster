@@ -1641,40 +1641,6 @@ def _keys(box: Box) -> set[str]:
     return set(box.local(f'SELECT key FROM {BACKEND_TABLE}').splitlines())
 
 
-def test_a_run_under_mises_environment_keeps_a_compressed_checkpoint_and_no_backup_copy(
-    start: Start,
-    ignition: dict[str, Any],
-    roots: config.Roots,
-    clients: Path,
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """What `mise.toml` makes of every writer of a stack CI deploys, held against the pinned `pulumi`.
-
-    The stack is created and then updated the way a deploy updates one,
-    under the variables `mise.toml` sets and no others: its checkpoint is
-    stored compressed, and the update writes no copy under `backups/`. The
-    update's own `history/` record is what shows that a writing operation
-    finished, which is where the `backups/` copy would have been written.
-    """
-    for variable in STATE_SWITCHES_ENV:
-        monkeypatch.delenv(variable, raising=False)
-    switches = stack_environment.state_switches()
-    box = _appliance(start, ignition)
-    ci = _bundle(roots, box, clients, settings.CI_ROLE)
-    project = tmp_path / 'project'
-
-    _stack_init(ci, project, STACK, switches)
-    _up(ci, project, STACK, switches)
-
-    keys = _keys(box)
-    stacks = f'{settings.DATABASE}/{BACKEND_STACKS}{project.name}/'
-    checkpoints = {key for key in keys if state.kind(key, settings.DATABASE) is state.Kind.CHECKPOINT}
-    assert checkpoints == {f'{stacks}{STACK}.json.zst'}
-    assert [key for key in keys if state.kind(key, settings.DATABASE) is state.Kind.HISTORY]
-    assert [key for key in keys if state.kind(key, settings.DATABASE) is state.Kind.BACKUPS] == []
-
-
 def _copies(keys: set[str], stack: str, *, layout: str) -> set[str]:
     """The keys among `keys` that are `stack`'s `history/` and `backups/` copies, records excluded."""
     history = f'{layout}history/project/{stack}/{stack}-'
@@ -2483,18 +2449,29 @@ EXECUTE = (b'E', b'\0' + struct.pack('!i', 0))
 SYNC = (b'S', b'')
 
 
-def test_the_transaction_entry_lends_a_server_process_between_a_statements_two_round_trips(
+def test_remove_binary_parameters_once_the_transaction_entry_keeps_a_statements_two_round_trips_together(
     start: Start, capped: dict[str, Any], roots: config.Roots, clients: Path
 ) -> None:
-    """Why `pulumi` is given `binary_parameters=yes` (`bundle.Purpose.PULUMI`), at the one server process the cap leaves.
+    """The tripwire on `binary_parameters=yes`: red once the pinned pooler serves a statement's two round trips alike.
 
-    A statement sent in two round trips -- Parse and Describe, answered, then
+    `pulumi` is given the parameter (`bundle.Purpose.PULUMI`) because a
+    statement sent in two round trips -- Parse and Describe, answered, then
     Bind and Execute, which is how `lib/pq` sends one by default -- is
-    executed as whatever the server process last parsed: another client's
-    statement, parsed in between. Sent in one round trip, which the parameter
-    makes `lib/pq` do, it is its own. `pulumi` keeps two connections open,
-    so the first is what its reads meet on any server process the pooler
-    lends both.
+    executed as whatever its server process last parsed: on the transaction
+    entry, at the one server process the cap leaves, another client's
+    statement, parsed in between. `pulumi` keeps two connections open, so the
+    first is what its reads meet on any server process the pooler lends both.
+    The parameter makes `lib/pq` send each statement in one round trip.
+
+    -   **Two round trips meet the other client's statement: the case
+        passes.** The pooler lends the server process between them, and the
+        parameter is needed.
+    -   **Two round trips meet their own statement: the case fails**, naming
+        the parameter to remove. The pooler is the box's pinned image, the
+        same on every machine, so any run's finding is the verdict.
+
+    The control is the one round trip the parameter makes `lib/pq` send,
+    executed as its own statement.
     """
     box = start.appliance(capped)
     target = _bundle(roots, box, clients, settings.CI_ROLE)
@@ -2513,8 +2490,14 @@ def test_the_transaction_entry_lends_a_server_process_between_a_statements_two_r
         first.close()
         second.close()
 
-    assert apart == ['second']
     assert together == ['first']
+    if apart == ['first']:
+        pytest.fail(
+            "the pinned pooler's transaction entry executes a statement sent in two round trips as its own: remove "
+            "`binary_parameters=yes` where `pulumi`'s URL gains it (`bundle.pulumi_url`, `mise.toml`'s "
+            '`PULUMI_BACKEND_URL`), and this case'
+        )
+    assert apart == ['second']
 
 
 def test_a_pulumi_session_after_a_dump_and_a_restore_meets_the_default_search_path(

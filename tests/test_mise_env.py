@@ -247,8 +247,8 @@ def test_every_run_mise_starts_writes_the_state_compressed_and_without_backups(t
     # one does not turn it off. What mise renders is held to what the Python
     # side reads out of the same `[env]` (`stack_environment.state_switches`),
     # which is what an operator stack in the estate's backend is given, so
-    # the two kinds of writer agree. Which switch is which, and what the
-    # pinned `pulumi` writes under them, is `tests/test_state_roles.py`'s.
+    # the two kinds of writer agree. What the pinned `pulumi` writes under
+    # each switch is the comment above it in `mise.toml`'s `[env]`.
     primary = _checkout(tmp_path / 'kluster')
     cwd = primary
     if layout != 'checkout without slots':

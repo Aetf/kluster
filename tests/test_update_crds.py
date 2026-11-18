@@ -31,7 +31,7 @@ from importlib import resources
 from pathlib import Path
 from typing import TextIO, cast
 
-import chart_engine
+import helm_repository
 import pinned_tools
 import process_sessions
 import pytest
@@ -1393,7 +1393,7 @@ def probe(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Generator[ChartPin
     # A proxy the test run's environment names would be asked for the loopback.
     monkeypatch.setenv('no_proxy', '127.0.0.1')
     monkeypatch.setenv('NO_PROXY', '127.0.0.1')
-    with chart_engine.served(tmp_path / 'repository', PROBE_CHART) as repository:
+    with helm_repository.served(tmp_path / 'repository', PROBE_CHART) as repository:
         yield ChartPin(name='probe', repository=repository, version='0.1.0', digest=None, definitions=True)
 
 
