@@ -298,6 +298,17 @@ classes its objects fall into (§1.2):
     the evaluation interval below), so a run that succeeds is never
     reported stale. A test holds every CronJob `k8s-base` and `apps`
     declare to a row, and every row to a CronJob one of them declares.
+    **Every scrape job a rule reads is watched by the scrape-target
+    family** (operations.md §6.4): a job that reports nothing leaves
+    each rule that reads it evaluating over no series, silent rather
+    than firing. `ScrapeTargetDown` fires for the job when a target of
+    it fails its scrape or no target of it is listed, and `ScraperDown`
+    when no target of any job reports, which holds the per-job alerts
+    back. The set of jobs is derived from the rules: the metric names
+    each expression selects, each read from the job its selector names
+    or from every scrape job that exports it, and a name no scrape job
+    exports is refused. A test holds every job a declared rule reads to
+    one alert, and every alert to a job some rule reads.
     Alertmanager's one receiver
     is a Home Assistant webhook of its own, an automation apart from
     the one the operations repository posts to, because alertmanager's

@@ -48,9 +48,20 @@ from renovate_text import listed, package_rules, scalar
 from section_numbers import sections
 
 from kluster import conventions
-from kluster.components.monitoring import DATASOURCES_DIGEST_ENV, RECEIVER, memory, stack_values
+from kluster.components.monitoring import DATASOURCES_DIGEST_ENV, RECEIVER, memory, scrape_jobs, stack_values
 from kluster.components.monitoring.operator_objects import type_token
-from kluster.components.monitoring.rules import HEARTBEAT, HEARTBEAT_TIMER, TIER_LABEL
+from kluster.components.monitoring.rules import (
+    HEARTBEAT,
+    HEARTBEAT_TIMER,
+    JOB_LABEL,
+    SCRAPER_DOWN,
+    TIER_LABEL,
+    ScrapeJob,
+    Selector,
+    inputs,
+    selectors,
+    target_down,
+)
 from kluster.components.talos import ETCD_METRICS_PORT
 from kluster.conventions import backup, schedule
 from kluster.conventions.alert import Tier
@@ -918,6 +929,170 @@ def test_the_rules_are_declared_behind_the_chart_that_defines_them(absent: tuple
     assert objects
     for typ, name in objects:
         assert chart in run.dependencies(typ, name), name
+
+
+# -- The scrape-target family -------------------------------------------------------
+
+#: The scrape-target family's two alerts, by name.
+TARGET_DOWN = target_down('a-job').alert
+
+#: The stack chart's name.
+STACK_CHART = 'victoria-metrics-k8s-stack'
+
+
+def _scrape_jobs() -> tuple[ScrapeJob, ...]:
+    return scrape_jobs(STACK, STACK_CHART)
+
+
+def _family(declared: Sequence[Mapping[str, Any]]) -> tuple[list[Mapping[str, Any]], list[Mapping[str, Any]]]:
+    """The declared rules split in two: the scrape-target family's, and every other."""
+    family = {SCRAPER_DOWN.alert, TARGET_DOWN}
+    return [rule for rule in declared if rule['alert'] in family], [
+        rule for rule in declared if rule['alert'] not in family
+    ]
+
+
+@pytest.mark.parametrize(
+    ('expr', 'expected'),
+    [
+        ('increase(a_total[15m]) > 0', (Selector('a_total', None),)),
+        ('vector(1)', ()),
+        (
+            'time() - max by (namespace, name) (a_seconds{class="daily"}) > 36h',
+            (Selector('a_seconds', None),),
+        ),
+        (
+            'sum(rate(a_total{job="x"}[5m])) by (instance) / on(instance) group_left(node) b_info',
+            (Selector('a_total', frozenset({'x'})), Selector('b_info', None)),
+        ),
+        (
+            'a offset 1h30m or b{namespace="n", job=~"x|y-z"} unless absent(c) > bool 0',
+            (Selector('a', None), Selector('b', frozenset({'x', 'y-z'})), Selector('c', None)),
+        ),
+        ('max without (cpu) (a) > 0', (Selector('a', None),)),
+        ('max_over_time((a > 0)[1h:5m])', (Selector('a', None),)),
+        ('a * on() group_left b', (Selector('a', None), Selector('b', None))),
+    ],
+)
+def test_the_reader_finds_each_selector_and_nothing_else(expr: str, expected: tuple[Selector, ...]) -> None:
+    """Functions, aggregations, keywords, grouping labels, durations and label values select nothing."""
+    assert selectors(expr) == expected
+
+
+@pytest.mark.parametrize(
+    'expr',
+    [
+        '{job="x"} == 0',
+        '{__name__="a"}',
+        'a{__name__=~"b"}',
+        'a{__name__="a"}',
+        'a{job!="x"}',
+        'a{job=~"x.*"}',
+        'a{job="x", job="y"}',
+        'a $ b',
+        'a{job="x" or job="y"}',
+        'a{job=~"a.b"}',
+        'a{job=""}',
+        'a{job=~"x|"}',
+        'a{job="x|y"}',
+        'a default 0',
+    ],
+)
+def test_the_reader_refuses_an_expression_it_cannot_follow(expr: str) -> None:
+    """A selector it could only read short is refused rather than skipped, and so is what the parser refuses.
+
+    That is no metric, alternatives of matchers, no definite set of jobs, and
+    MetricsQL's own syntax.
+    """
+    with pytest.raises(ValueError, match=re.escape(repr(expr))):
+        _ = selectors(expr)
+
+
+def test_a_metric_read_by_name_alone_is_read_from_each_job_that_exports_it() -> None:
+    """A selector naming its job reads that job; one naming none reads every job whose `exports` claims the name."""
+    jobs = (ScrapeJob('one', 'shared_.+|one_.+'), ScrapeJob('two', 'shared_.+'))
+
+    assert inputs('one_a + two_b{job="two"}', jobs) == {'one', 'two'}
+    assert inputs('shared_a > 0', jobs) == {'one', 'two'}
+    assert inputs('one_a{job="elsewhere"}', jobs) == {'elsewhere'}
+
+
+@pytest.mark.parametrize('metric', ['cilium_drop_count_total', 'kube_apiserver_pod_logs_backend_tls_failure_total'])
+def test_a_metric_no_job_exports_is_refused_naming_it(metric: str) -> None:
+    """A rule cannot read a series whose job would go unwatched: the name must be a job's, or the selector name one.
+
+    The API server's `kube_apiserver_` families share kube-state-metrics'
+    prefix and are not its.
+    """
+    with pytest.raises(ValueError, match=re.escape(repr(metric))):
+        _ = inputs(f'{metric} > 0', _scrape_jobs())
+
+
+def test_every_job_an_alerting_rule_reads_has_a_target_alert_and_no_other_job_has_one(
+    absent: tuple[Run, list[str]],
+) -> None:
+    """The family is a definition: the jobs whose series the declared rules read, each watched once.
+
+    Read off the declaration, every rule outside the family through the
+    reader and the scrape jobs' exports, against the job each target alert
+    is labeled with and reads.
+    """
+    run, _ = absent
+    watching, reading = _family(_declared_rules(run))
+    jobs = _scrape_jobs()
+    read = {job for rule in reading for job in inputs(rule['expr'], jobs)}
+    watched = [rule['labels'][JOB_LABEL] for rule in watching if rule['alert'] == TARGET_DOWN]
+
+    assert read, 'no rule reads a scrape job'
+    assert sorted(watched) == sorted(read)
+    for rule in watching:
+        if rule['alert'] == TARGET_DOWN:
+            named = {selector.jobs for selector in selectors(rule['expr']) if selector.jobs is not None}
+            assert named == {frozenset({rule['labels'][JOB_LABEL]})}, rule['expr']
+
+
+def test_the_family_waits_out_two_scrapes_and_an_evaluation_and_is_actionable(absent: tuple[Run, list[str]]) -> None:
+    """A single failed scrape, a restart, or the stagger of jobs going stale as vmagent stops, reports nothing.
+
+    Both intervals are read off what the program declares, as the
+    scheduled-job family's lag is.
+    """
+    run, _ = absent
+    values = _values(run)
+    scrape = _duration(values['vmagent']['spec']['scrapeInterval'])
+    evaluation = _duration(values['vmalert']['spec']['evaluationInterval'])
+    watching, _ = _family(_declared_rules(run))
+
+    assert watching
+    for rule in watching:
+        assert _duration(rule['for']) > 2 * scrape + evaluation, rule['alert']
+        assert rule['labels'][TIER_LABEL] == Tier.ACTIONABLE.value, rule['alert']
+
+
+def test_the_scrapes_the_job_names_follow_keep_the_job_they_are_derived_from(absent: tuple[Run, list[str]]) -> None:
+    """`scrape_jobs` derives each job from a default the declared objects leave in place.
+
+    The operator's scrape of its own objects takes the job from the Service's
+    name (`servicescrape.go` L209-220 at operator v0.74.0) unless the object's
+    `serviceScrapeSpec` says otherwise, and the stack chart's scrape of
+    kube-state-metrics takes it from its `jobLabel`, which the component's
+    values leave to the chart, as no endpoint they state relabels `job`. That the live series carry the names is the recent
+    store's to show (operations.md §6.4).
+    """
+    run, _ = absent
+    values = _values(run)
+    history = _history(run)
+    specs = {name: values[name]['spec'] for name in ('vmsingle', 'vmagent', 'alertmanager')} | {
+        'history': history['spec']
+    }
+
+    for name, spec in specs.items():
+        assert 'serviceScrapeSpec' not in spec, name
+    ksm = values['kube-state-metrics'].get('vmScrape', {}).get('spec', {})
+    assert 'jobLabel' not in ksm
+    for endpoint in ksm.get('endpoints', []):
+        relabeled = [it.get('targetLabel') for it in endpoint.get('relabelConfigs', [])]
+        assert 'job' not in relabeled, endpoint
 
 
 # -- alertmanager's receiver ----------------------------------------------------------

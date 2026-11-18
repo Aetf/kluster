@@ -121,8 +121,10 @@ configuration. While the id is absent from the stack's configuration, no
 SealedSecret is declared for it; the operator then skips the receiver's
 configuration, and every alert ends at the chart's `blackhole` receiver until
 the value is sealed in (`kluster.lib.k8s.sealed_value`,
-physical/bring-up.md §1). The rules are `rules.RULE_GROUPS`, among them the
-cluster's check-in, which the receiver repeats on a short interval.
+physical/bring-up.md §1). The rules are `rules.rule_groups`, among them the
+cluster's check-in, which the receiver repeats on a short interval, and the
+scrape-target family over every job the other rules read, which reads each
+job by the `job` label `scrape_jobs` gives it.
 
 **Scrape objects for Cilium** are declared here rather than in Cilium's
 component: they are instances of definitions this chart installs, and Cilium
@@ -182,6 +184,7 @@ __all__ = (
     'HISTORY_SIZE',
     'KUBELET_RELABELING',
     'KUBE_STATE_METRICS_ENDPOINT',
+    'KUBE_STATE_METRICS_JOB',
     'RECEIVER',
     'SCRAPE_INTERVAL',
     'SNAPSHOTS_MAX_AGE',
@@ -195,6 +198,7 @@ __all__ = (
     'history_store_spec',
     'metrics_server_values',
     'receiver_spec',
+    'scrape_jobs',
     'stack_fullname',
     'stack_values',
     'webhook_url',
@@ -321,6 +325,52 @@ ETCD_JOB = 'etcd'
 #: and etcd's debugging series, which etcd itself names unstable. Together
 #: they are most of a member's series.
 ETCD_DROPPED: tuple[str, ...] = ('grpc_server_.*', 'etcd_debugging_.*')
+
+#: The `job` kube-state-metrics' series carry: the chart's scrape of it takes
+#: the job from its Service's `app.kubernetes.io/name` (`jobLabel`,
+#: `values.yaml` L2228 at stack chart 0.91.2), which the kube-state-metrics
+#: chart sets to its own name (`kube-state-metrics.selectorLabels` at 7.5.3).
+#: `KUBE_STATE_METRICS_ENDPOINT` replaces the scrape's endpoints, relabels no
+#: `job`, and leaves the `jobLabel` in place. Its `honorLabels` bears on the
+#: series kube-state-metrics publishes, not on `up`, which vmagent writes with
+#: the target's own labels (`docs/victoriametrics/vmagent.md`, "Automatically
+#: generated metrics", at VictoriaMetrics v1.150.0).
+KUBE_STATE_METRICS_JOB = 'kube-state-metrics'
+
+
+def scrape_jobs(release: str, chart: str) -> tuple[rules.ScrapeJob, ...]:
+    """The scrape jobs whose series the rules read by name alone, each by the `job` label vmagent gives it.
+
+    The operator's scrape of one of its own objects -- a vmsingle, vmagent or
+    alertmanager -- takes the job from the name of the object's Service
+    (`servicescrape.go` L209-220 at operator v0.74.0), which is the object's
+    `PrefixedName`; the stack names its objects `stack_fullname`, and the
+    history store is the component's. kube-state-metrics' is
+    `KUBE_STATE_METRICS_JOB`.
+
+    What each exports is the namespace its exporter names its families in:
+    `kube_` for kube-state-metrics, the API server's own `kube_apiserver_`
+    families apart, and `alertmanager_` and `vmagent_` for those two.
+    VictoriaMetrics names every one of its components' series `vm_`, so a
+    `vm_` name is claimed by the components whose source registers it: the
+    count of rows a limit ignored by the stores' ingestion and by vmagent
+    (`lib/timeserieslimits`, which `app/vmagent` and `app/vminsert` import
+    and `app/vmalert` does not, at VictoriaMetrics v1.150.0).
+
+    Nothing the program declares holds these claims, since no scrape here
+    keeps only what it names: the recent store holds them, and operations.md
+    §6.4 gives the queries that read them, which are run again when an
+    exporter changes.
+    """
+    fullname = stack_fullname(release, chart)
+    ignored_rows = 'vm_rows_ignored_total'
+    return (
+        rules.ScrapeJob(KUBE_STATE_METRICS_JOB, 'kube_(?!apiserver_).+'),
+        rules.ScrapeJob(f'vmalertmanager-{fullname}', 'alertmanager_.+'),
+        rules.ScrapeJob(stores.vmagent_service(release, chart), f'vmagent_.+|{ignored_rows}'),
+        *(rules.ScrapeJob(store.workload, ignored_rows) for store in stores.stores(release, chart)),
+    )
+
 
 #: The keys vmsingle's mutating endpoints take, by the flag that sets each:
 #: deleting series, taking snapshots, and forcing a merge. A flag left unset
@@ -745,7 +795,7 @@ class Monitoring(Component, pulumi_type='kluster:monitoring:Monitoring'):
             f'{name}-rules',
             kind='VMRule',
             metadata=k8s.meta.v1.ObjectMetaArgs(namespace=self.namespace.metadata.name),
-            spec={'groups': [_rule_group(group) for group in rules.RULE_GROUPS]},
+            spec={'groups': [_rule_group(group) for group in rules.rule_groups(scrape_jobs(name, stack_chart.name))]},
             opts=after_the_chart,
         )
         self.cilium_scrapes = [

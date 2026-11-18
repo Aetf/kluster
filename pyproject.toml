@@ -67,6 +67,9 @@ dependencies = [
     # `YAML()` imports only the extension this one installs, and without it runs
     # in pure Python.
     "ruamel-yaml[oldlibyaml]>=0.19.1,<0.20",
+    # The monitoring component's reading of which series an alert rule selects
+    # (`components.monitoring.rules.selectors`): GreptimeDB's PromQL parser.
+    "promql-parser>=0.12.0,<0.13",
 ]
 
 [project.scripts]
