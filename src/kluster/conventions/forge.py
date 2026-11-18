@@ -319,8 +319,8 @@ TRIGGER_APP_CLIENT_ID = Variable('TRIGGER_APP_CLIENT_ID', TRIGGER_APP.client_id)
 #: same name collides with the declared one rather than being adopted by it.
 ALERT = Label('alert', 'An alert issue: the dispatch handler applies it and lists open alerts by it (operations.md §4)')
 
-#: The ops repository's only Environment, which carries the unattended drills'
-#: credentials. Ungated because its scope is the gate (credentials.md §4).
+#: The ops repository's only Environment, which carries the state-backend
+#: rebuild drill's credentials. Ungated because its scope is the gate (credentials.md §4).
 #: Any branch, for want of an alternative: a private repository has no
 #: protected branches to name on this plan (framework/github.md §2). Named
 #: after the consumer whose credentials it holds (`identity.DRILL`): the
@@ -354,9 +354,9 @@ DEPLOYMENT = Repository(
 )
 
 #: The notification and drill repository. Private on purpose — it holds the
-#: alert issues and every scheduled workflow in the system but for the
-#: in-cluster drills the cluster runs itself (operations.md §4) — which is what
-#: puts branch protection and secret scanning out of its reach.
+#: alert issues and the scheduled jobs whose credentials the cluster may not
+#: hold (ci.md §3; operations.md §4 lists them) — which is what puts branch
+#: protection and secret scanning out of its reach.
 OPS = Repository(
     name='kluster-ops',
     public=False,

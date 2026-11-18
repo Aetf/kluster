@@ -42,11 +42,8 @@ shape nor the domain, which reads like a permissions problem.
 > committed public half is among the recipients the box encrypts to
 > (`committed.age_recipients`). The two scheduled probes of §6 — the server certificate's
 > expiry, and the age of the newest dump — are `state-backend probe`,
-> built to be run from the ops repository on a schedule; whether that
-> schedule is in place is the ops repository's own record (its README's
-> census of workflows), and until that schedule starts a job, the probe
-> runs when an operator runs it. Every key rotation this document
-> describes is carried out with commands that exist and, for the age
+> which the ops repository's `probes.yml` runs today (§6). Every key
+> rotation this document describes is carried out with commands that exist and, for the age
 > identity, a pin edit (§7.4): a reissue into the stack's configuration
 > and the replacement that carries it for the server and host keys, a
 > generation bump in configuration for the dump key (§1), and the
@@ -709,8 +706,8 @@ oraclecloud`, x86_64), the qcow2 imports as a custom image
     when an operator says so and not before. The backstop is the expiry probe of §6:
     `state-backend probe` reads the server certificate off an `openssl
     s_client` handshake (no credentials needed) and fails once less
-    than `config.EXPIRY_ALERT_MARGIN` remains, and the ops repo's
-    scheduled workflow (ci.md §3) is what runs it, failing into the
+    than `config.EXPIRY_ALERT_MARGIN` remains, and the ops
+    repository's `probes.yml` runs it today (§6), failing into the
     unified alert channel (architecture.md §4.3). The renewal margin
     opens earlier than the alert margin, so the probe fires only for an
     appliance whose stack nobody has run — or whose reports nobody acted
@@ -881,8 +878,8 @@ step 8).
     a timer that stopped firing, a box that is down — has no failure
     to report.
     Freshness is therefore asserted **from outside**, by the dump-age
-    probe of §6 (object-age on the prefix, run on the ops repo's
-    schedule, ci.md §3), and the box's design is what makes that
+    probe of §6 (object-age on the prefix, which the ops
+    repository's `probes.yml` runs today), and the box's design is what makes that
     probe load-bearing: a nightly that stopped in August looks exactly
     like one that ran, until a restore reaches for it. Reading the
     newest object's stamp is the assertion, and the probe is what
@@ -989,11 +986,20 @@ shell on it:
 -   Every CI job and local `pulumi` operation is an implicit
     5432 + TLS + auth probe — backend-down is discovered by the first
     thing that needs it, which is the only thing that cares.
--   **`state-backend probe`** is the two scheduled checks, and the ops
-    repo's scheduled workflow (ci.md §3) is what runs it, from a
+-   **`state-backend probe`** is the two scheduled checks as they run
+    today: the ops repository's `probes.yml` runs it daily, from a
     checkout of this repository at a pinned commit, alerting into the
-    unified alert channel (architecture.md §4.3). One command runs
-    both probes (`--only certificate|dumps` runs one), prints each
+    unified alert channel (architecture.md §4.3). Both checks are the
+    cluster's under ci.md §3's rule, since neither gives an unmerged
+    ref's runs anything they do not already hold: the certificate is
+    to be read by `blackbox_exporter` probing the box's Postgres
+    STARTTLS, with vmalert rules over its metrics, and the dump age by
+    an hourly CronJob in `monitoring` that lists the prefix with the
+    same list-only key, sealed. Each keeps the verdicts and playbooks
+    below. Neither is built, and `probes.yml` and this command retire
+    together once both have reported a pass (operations.md §4).
+    One command runs both probes (`--only certificate|dumps` runs one),
+    prints each
     verdict with what it measured as its probe answers, and exits with
     one bit per failed probe — 4 for the certificate, 8 for the dumps,
     their sum when both failed — so the workflow's log names which. 1

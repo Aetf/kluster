@@ -1077,9 +1077,10 @@ private half into that Environment and writes the public half to
 `src/kluster/lib/state_backend/machine/drill-recipient.txt`; the
 appliance encrypts to it from the converge that adopts the committed
 file (state-backend.md §5), and a dump written before that converge
-carries the escrowed generations alone. As of 2026-09-25 nothing reads the key: of the ops
+carries the escrowed generations alone. As of 2026-11-17 nothing reads the key: of the ops
 repository's workflows, `lint.yml` checks the workflow files
-themselves and `probes.yml` runs `state-backend probe`, and neither
+themselves, `probes.yml` runs `state-backend probe` and
+`drift-trigger.yml` dispatches the drift check, and none of them
 opens a dump, while the rebuild drill's workflow is not written
 (`kluster-ops#57`). A rebuild is an operator opening the object with
 the kit. The rest of this paragraph is the argument for holding it
@@ -1109,35 +1110,38 @@ exposed key reads in the clear is the resource graph and the
 non-secret configuration. With the key held there, the state-backend
 rebuild drill can run unattended end to end once its workflow exists.
 
-**As of 2026-11-12, one row runs, and only in part.** Of the
+**As of 2026-11-17, one row runs, and only in part.** Of the
 credential expiry tripwires, the state-backend server certificate's
 runs daily in the ops repository's `probes.yml`, beside the age of the
-appliance's newest dump (state-backend.md §6). Its alert job
+appliance's newest dump (state-backend.md §6). Both checks are the
+cluster's under the rule below, and `probes.yml` runs them until the
+cluster's own have reported. Its alert job
 dispatches into the intake, whose handler is not built
 (`kluster-ops#715`), so a failing probe is a red run there and nothing
-more (the alert contract, below). The other ops-repo rows have no
-workflow written (`kluster-ops#57`): not the state-backend rebuild,
-and not the etcd restore-verify, nor the scheduled snapshot it would
-restore. No in-cluster row has its drill written. `k8s-base` declares
+more (the alert contract, below). The ops-repository row, the
+state-backend rebuild, has no workflow written (`kluster-ops#57`). No
+in-cluster row has its job written: not the etcd restore-verify, nor
+the hourly snapshot it would restore (storage.md §5), and not the two
+restores or the orphan-volume audit, whose recipe (storage.md §3.3) is
+not written either. `k8s-base` declares
 what they would stand on, the operators the two restores drive and
 the alerting every in-cluster row reports into, and none of it runs
-until the cluster's bring-up applies it (physical/bring-up.md). The
-orphan-volume audit's recipe (storage.md §3.3) is not written either.
-The last column is the designed form
-rather than a census of schedulers: every row is an operator act, and
+until the cluster's bring-up applies it (physical/bring-up.md).
+The last column is the designed form, and where each scheduled job
+runs is the census below. Every row is an operator act today, and
 the only one written out as a procedure is the state-backend restore
 (state-backend.md §7.3.1). By the standing principle above, that makes
 every recovery path on this table an assumed-broken one.
 
 | Drill | Cadence | Form (designed) |
 | --- | --- | --- |
-| CNPG restore (immich pattern, ported from legacy) | Monthly | In-cluster workflow, alert on failure |
+| CNPG restore (immich pattern, ported from legacy) | Monthly | In-cluster CronJob, alert on failure |
 | State-backend rebuild — scratch micro from Butane → restore latest dump (drill key) → verify → destroy (state-backend.md §7.3) | Quarterly | Ops-repo workflow, alert on failure |
-| etcd snapshot restore-verify — latest B2 snapshot into a scratch etcd, health + key sanity | Monthly | Ops-repo workflow, alert on failure |
-| VolSync spot-restore — rotating PVC into a scratch namespace, checksum, and for an embedded database the rule below, tear down | Monthly | In-cluster workflow, alert on failure |
+| etcd snapshot restore-verify — latest B2 snapshot into a scratch etcd, health + key sanity | Monthly | In-cluster CronJob in `etcd-backup`, alert on failure |
+| VolSync spot-restore — rotating PVC into a scratch namespace, checksum, and for an embedded database the rule below, tear down | Monthly | In-cluster CronJob, alert on failure |
 | Metrics-history restore — both stores restore themselves on the rebuilt cluster, and the history's earliest sample and rows match the baseline (§3.5, pass condition 5) | Each whole-cluster rebuild (§3.5) | The rebuild drill's readings |
-| Orphan-volume audit, target zero (storage.md §3.3) | Quarterly | In-cluster workflow, alert only on findings |
-| Credential expiry tripwires (credentials.md §4) | Continuous (scheduled probes) | Ops-repo probes; `actionable` alert when an expiry approaches |
+| Orphan-volume audit, target zero (storage.md §3.3) | Quarterly | In-cluster CronJob, alert only on findings |
+| Credential expiry tripwires (credentials.md §4) | Continuous (scheduled checks) | Each placed by the rule below like any scheduled job (the census); `actionable` alert when an expiry approaches |
 | **Offline day**: age key rotation (proves offline custody, state-backend.md §7.4) + full cold-standby reverse bootstrap on homelab libvirt (nodes.md §5) + offline-kit verification against the register (credentials.md §2.1) + a `pulumi preview` against the Vultr-fallback stack config (nodes.md §3.1 — proves the scripted fallback still computes, creating nothing) + anything the probes can't reach | Yearly | One `actionable` issue, human-run |
 
 **Rule: a checksum does not pass a claim that holds an embedded
@@ -1167,22 +1171,98 @@ byte-for-byte as it was and a generation's ciphertext carries no expiry,
 so a probe has no field to read. Honoring it is part of the yearly
 offline day until the register carries it.
 
-Every scheduled drill above belongs in the **ops repo** (ci.md §3 —
-the deployment repo carries no scheduled workflows; the in-cluster
-drills are the exceptions: VolSync spot-restore and the CNPG restore,
-kube-native scratch-namespace operations driven by the cluster itself,
-so the ops repo never needs a kubeconfig; and the orphan-volume audit,
-which compares each node's on-disk volume directories against the live
-volumes and so needs what only a node can read). Each automated drill
-is to be covered against stopping silently — an ops-repo drill by the
-dead-man below, an in-cluster one by a **freshness alert** (the
-backup-freshness family, cluster-infra.md §3) — because a drill that
-silently stops running is indistinguishable from a failing one. The
-family is declared and evaluates over no series until a backup source
-reports its last sync; until the workflows, the dead-man and those
-series exist, a drill that never started is indistinguishable from
-both. The only calendar ritual
-left is the yearly offline-day issue.
+**Where a scheduled job runs is ci.md §3's rule.** A job runs in the
+cluster unless its credential would give an unmerged ref's runs
+something they do not already hold. Work that keeps the state of one
+device outside the cluster, a dump of its database or a copy of its
+backups, runs with that device instead: on the device, or, for a
+device that runs no timer of its own, on the homelab host that reads
+it. A check that watches a device never runs on it: the cluster test
+places it, and where that test keeps it out of the cluster and the
+homelab host already reads the device, it runs there. The ops
+repository is the last resort, with the reason beside each job there.
+Of the drills above, the state-backend rebuild alone runs in the ops
+repository, because its OCI user administers the `drill` compartment.
+The two restores are kube-native operations on scratch namespaces, the
+restore-verify starts a scratch etcd inside its own pod, and the
+orphan-volume audit compares each node's on-disk volume directories
+against the live volumes, which needs what only a node can read; all
+four are the cluster's. Each automated job in the cluster or the ops
+repository is covered against stopping silently, because a job that
+silently stops running is indistinguishable from a failing one: an
+ops-repository workflow by its dead-man timer, and an in-cluster
+CronJob by the scheduled-job rule family (the rule below) and, behind
+the family, the cluster's check-in (the alert contract). Neither the
+family nor the timers exist yet; until they and the jobs do, a job that
+never started is indistinguishable from both. A device's own jobs are
+watched as the census below says, and the gateway's daily check by
+nothing but its own findings. Two calendar acts are left to the
+operator. The yearly offline day is one, because its steps need the
+offline kit and physical custody, which no job holds (the table
+above). The other is `credentials derived sync --only kubeconfig`, at
+least monthly: the Talos provider issues the kubeconfig's client
+certificate again by itself in whichever `physical` apply falls within
+720 hours of its expiry, and the copies in `k8s-base`'s and `apps`'s
+configuration go stale with it unless the sync carries the new one
+over (credentials.md §3).
+
+**What runs on a clock, and where.** Every job the installation
+schedules, in the cluster, on a device or on GitHub, with the reason
+for its place. The last column says which run, as of 2026-11-17:
+
+| Job | Runs in, and why | Credentials there | Liveness to Home Assistant | Built |
+| --- | --- | --- | --- | --- |
+| etcd snapshot, hourly | The cluster: `siderolabs/talos-backup` as a CronJob in `etcd-backup`, on the control planes (storage.md §5) | A certificate Talos issues for `os:etcd:backup` and renews itself; the `etcd` writer key, sealed | The family's rules, then the cluster's check-in | No (`kluster-ops#792`) |
+| Age of the newest object under `etcd/` | No job of its own: the snapshot job's stale rule stands in for it, since a run that succeeded is an object uploaded, and the monthly restore-verify reads the newest object's age as a second, independent reading | None | The snapshot job's rules | No, with the snapshot job |
+| VolSync backups, one `ReplicationSource` per backed claim | The cluster: VolSync's own schedule, the claim's retention class (`conventions.backup.RETENTION_CLASSES`, storage.md §5) | The namespace's writer key and each repository's password, sealed | The backup-freshness family (declarative/workloads.md §3), then the cluster's check-in | No: none is declared until the first claim under a class lands |
+| CNPG barman backups, per database cluster | The cluster: the operator's own schedule, beside continuous WAL archiving (storage.md §5) | The namespace's writer key, sealed | The backup-freshness family, then the cluster's check-in | No: no database cluster is declared yet |
+| The metrics stores' backups, hourly | The cluster: a CronJob per store, in `monitoring` (storage.md §5) | The `vm` writer key, sealed | `MetricsBackupStale` (§6.2), which folds into the family, then the cluster's check-in | No: declared once bring-up stage 9 seals the `vm` key (storage.md §5) |
+| The block volumes' metrics, pulled hourly into the history store | The cluster: a CronJob in `monitoring` | The OCI metrics reader's key, sealed (credentials.md §3) | The family's rules, then the cluster's check-in | No (`kluster-ops#790`) |
+| The authentication canary, every few minutes | The cluster: a CronJob in Authelia's namespace that requests a protected path with no credential (declarative/cluster-infra.md §2) | None: it presents none | Its own rule, which fires on anything but a refusal; the family's rules for the job; then the cluster's check-in | No: it ships with Authelia (rfc-008 §5.2) |
+| State-backend dump age | The cluster: a CronJob in `monitoring`, hourly, listing `pulumi-state/` (state-backend.md §6) | The list-only `B2 freshness key (state dumps)`, sealed | The family's rules, then the cluster's check-in | No; `probes.yml` reads it today |
+| State-backend server certificate's expiry | The cluster: `blackbox_exporter` probing the appliance's Postgres STARTTLS, with vmalert rules over its metrics (state-backend.md §6) | None: the CA's certificate, which is public | Its rules, then the cluster's check-in | No; `probes.yml` reads it today |
+| The other credential expiry tripwires | Each placed by the same rule. The certificate above is the only one with a probe: the client bundles report their expiry at their first `pulumi` command (state-backend.md §6), and the destroy dates stay with the offline day | — | — | — |
+| etcd restore-verify, monthly | The cluster: a CronJob in `etcd-backup` | The `etcd` writer key, which lists and reads, and an age identity of its own, sealed | The family's rules, then the cluster's check-in | No (`kluster-ops#57`) |
+| CNPG restore, VolSync spot-restore, orphan-volume audit | The cluster (the drills above) | The writer keys of the backups they read, sealed; the audit needs none | The family's rules, then the cluster's check-in | No |
+| The state-backend appliance's dump, nightly (`state-dump.timer`) | The appliance itself: the job dumps the box's own database (state-backend.md §5) | The dump key, `writeFiles` alone, in the box's Ignition | The dump-age check above; the box's own failed-run notice reaches only a shell on it (state-backend.md §6) | Yes |
+| The state-backend appliance's OS updates, a weekly window (Zincati) | The appliance itself: they update the box's own OS (state-backend.md §1) | None beyond the box's own | None, deliberately (state-backend.md §6) | Yes |
+| The gateway controller's autobackup, monthly | The gateway itself: the controller's own schedule, a console setting | None | The gateway's daily check, which holds the newest autobackup to 32 days (physical/gateway.md §1.6) | Yes |
+| The gateway's weekly backup pull (`gateway-backup.timer`) | The homelab host: it keeps copies of the gateway's backups, and the gateway runs no timer of its own (physical/gateway.md §1.6) | The host's SSH access to the gateway | The daily check, which reads how fresh the copies are | Yes |
+| The gateway's daily check (`check-gateway.timer`) | The homelab host: the check reads the gateway as `root` over SSH, which the cluster may not hold, and the host already reads the gateway (physical/gateway.md §1.6) | The host's SSH access to the gateway | Its findings, mailed with their playbooks. A healthy run writes a journal line and nothing else, so nothing reports the timer stopping | Yes |
+| Slot-drift probe | The ops repository: it lists every repository's and Environment's secrets, which takes a GitHub credential (credentials.md §4) | A token that lists secrets | Its alert job, then its own timer | No (`kluster-ops#1`) |
+| Issue-sync poller, hourly | The ops repository: it writes that repository's issues, which acts on GitHub (architecture.md §4.3) | The `alertmanager/read` token, and the workflow's own token | Its alert job, then its own timer. Its "monitoring unreachable" issue is the GitHub leg of a cluster that cannot be reached | No (`kluster-ops#57`) |
+| Weekly drift trigger, `drift-trigger.yml` | The ops repository: the trigger App starts runs on this repository's `main`, which acts on GitHub (framework/ci.md §3) | The trigger App's key and client id | Its alert job, then its own timer | Yes |
+| The drift check, `drift.yml` | This repository's CI, dispatched by the trigger: it needs `physical`'s passphrase, which threat-model.md §3.1 keeps from every unmerged ref | The CI Environments | Its own alert job | Yes |
+| State-backend rebuild drill, quarterly | The ops repository, in the `drill` Environment: its OCI user administers the `drill` compartment, and nothing an unmerged ref holds can create an instance (state-backend.md §7.3) | The `drill` Environment | Its alert job, then its own timer | No (`kluster-ops#57`) |
+| The ops repository's `probes.yml`, daily | The ops repository, until the two in-cluster checks of the state backend above have reported a pass; it then retires, and its two secrets with it | The `B2 freshness key (state dumps)` | Its alert job, then its own timer | Yes |
+
+Outside the rule are the jobs that do not run on a clock: the ops
+repository's `lint.yml`, which runs on push and pull request and gates
+that repository's own workflow files, and its dispatch handler
+(`kluster-ops#715`), which runs on each dispatch and writes that
+repository's issues.
+
+**Rule: every CronJob that does the installation's own scheduled
+work — a backup, a check or a drill — is watched by the scheduled-job
+rule family**: *stale* at `conventions.backup.max_age` of its period,
+and *last run failed* within its run deadline. Both rules are
+`actionable`, and each names the job's playbook. The facts the
+declaring component and the rules share — namespace, CronJob name,
+period and run deadline — are one row in `conventions`, from which
+`components.monitoring.rules` derives both rules, and a test holds
+every CronJob the `k8s-base` program declares to a row. Both read the
+CronJob series of kube-state-metrics. Stale is the time since the last
+success, or since the CronJob's creation where there is none, past the
+job's `max_age`, which also catches a job suspended or no longer
+scheduled at all. Last-run-failed is a last schedule later than that
+same mark, held for the run deadline: a failed run is reported within
+its deadline rather than after one and a half periods, which matters
+once a job is monthly, and it resolves when a later run succeeds. A job
+is watched by the family rather than by a timer of its own, because a
+timer per job would need every job to post to Home Assistant itself,
+which duplicates alertmanager. What notices a cluster that can no
+longer report a stopped job is the cluster's check-in, a timer outside
+it (the alert contract below).
 
 **The alert contract.** Every ops-repo drill and probe above, and
 every workflow here that fails on `main` (framework/ci.md §3 names
@@ -1197,7 +1277,7 @@ contract the Home Assistant side is built against:
     `kluster.conventions.alert`, which says what each field holds.
     A source is `<repo>/<workflow>`, the workflow named by its file
     name without the suffix. CI sends the event through its producer,
-    `alert.yml` (ci.md §3); the ops repo's own workflows are to send
+    `alert.yml` (ci.md §3); the ops repo's own workflows send
     the same event with their own token, so there is one intake and
     one payload.
 -   **The handler's post to Home Assistant.** The ops repo's dispatch
@@ -1249,7 +1329,9 @@ contract the Home Assistant side is built against:
     (`gh workflow enable`), a run that never started (fire it by
     hand), or a green run whose post landed on a webhook id nothing
     is registered under (`credentials derived sync --only
-    haos-webhook`).
+    haos-webhook`). An in-cluster job has no timer of its own: the
+    scheduled-job rule family watches it (the rule above), and the
+    cluster's check-in below is the timer behind the family.
 -   **The cluster's check-in.** A rule that always fires, in the
     `heartbeat` tier, reaches alertmanager's intake once per repeat
     interval, ten minutes, and at most one group interval, a minute,
@@ -1269,13 +1351,14 @@ contract the Home Assistant side is built against:
     with all of that in order, alertmanager's own playbook for failing
     notifications (architecture.md §4.3).
 
-What is built of it is the census, CI's producer, and the cluster's
-side: alertmanager's receiver, the rules and the check-in, declared in
+What is built of it is the census, CI's producer, the alert job every
+ops-repository workflow on a clock ends in, and the cluster's side:
+alertmanager's receiver, the rules and the check-in, declared in
 `k8s-base` and running once the bring-up applies it and seals the
-webhook in. The handler, the ops repo's own intake, and the Home
+webhook in. The handler, the scheduled-job rule family, and the Home
 Assistant automations and timers are not: until the handler exists, a
-dispatch is accepted and starts nothing, and a CI alert is a red run
-and nothing more.
+dispatch is accepted and starts nothing, and an alert from CI or from
+the ops repository is a red run and nothing more.
 
 ## 5. Playbook index
 

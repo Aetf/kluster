@@ -707,12 +707,11 @@ column to the map lists it as one the map does not carry.
 | Cloudflare token (gateway ACME) | CF seed token | DNS edit on the zones the gateway's own vhosts are served under | Pulumi config secret (`physical`) · device secret (caddy's token file) | the gateway's caddy, written onto the device by `physical` |
 | B2 management key | B2 seed key | Bucket/key/lifecycle admin, **no file capabilities** | Pulumi config secret | `physical` |
 | B2 management key (state backend) | B2 seed key (`credentials derived b2-state-backend-management mint`) | The same capabilities as the one above, under a key name of its own, so that neither row's mint retires the other's key | Pulumi config secret (`state-backend`) | the `state-backend` stack, which declares the appliance's dump bucket and dump key with it (rfc-006 §4) |
-| B2 writer keys | B2 seed key (via `physical`) | Prefix-scoped, `list+read+write`, **no `deleteFiles`** — deletes degrade to lifecycle-purged hides (audit H4): VolSync, CNPG barman, the VictoriaMetrics stores' `vmbackup`, etcd snapshots | Pulumi state (`physical`, `backup_keys`, by scope) · SealedSecret (`sealedSecrets.writer-<scope>` in the stack that declares its consumers — `apps`, or `k8s-base` for `monitoring` — one per family of each namespace `conventions.backup.BACKED_NAMESPACES` names, sealed namespace-wide, by `credentials derived b2-writer seal`) · ops-repo secret (pending) | restic/barman, `vmbackup` and `vmrestore`, ops-repo workflow |
+| B2 writer keys | B2 seed key (via `physical`) | Prefix-scoped, `list+read+write`, **no `deleteFiles`** — deletes degrade to lifecycle-purged hides (audit H4): VolSync, CNPG barman, the VictoriaMetrics stores' `vmbackup`, etcd snapshots | Pulumi state (`physical`, `backup_keys`, by scope) · SealedSecret (`sealedSecrets.writer-<scope>` in the stack that declares its consumers — `apps`, or `k8s-base` for `monitoring` — one per family of each namespace `conventions.backup.BACKED_NAMESPACES` names, sealed namespace-wide, by `credentials derived b2-writer seal`) | restic/barman, `vmbackup` and `vmrestore`, and the etcd snapshot job, which is not declared yet (storage.md §5) |
 | B2 dump key (micro) | minted through the `state-backend` stack, with its own B2 management key; rotated by a generation bump in its configuration | `writeFiles` alone, dump prefix | Pulumi state (`state-backend`, its committed checkpoint) · on-box (Ignition) | state-backend pg_dump timer |
 | B2 freshness key (state dumps) | B2 seed key (`credentials derived b2-freshness-dumps mint`) | `listFiles` alone, confined to the dump prefix of the appliance's bucket: names, never a byte | ops-repo secret (`B2_FRESHNESS_DUMPS_KEY_ID`, `B2_FRESHNESS_DUMPS_KEY`) | `state-backend probe`, run daily by the ops repo's `probes.yml` (state-backend.md §6) |
-| B2 freshness key (etcd) | B2 seed key | The same shape over the etcd snapshots' prefix of the backup bucket, which a B2 key cannot share with the one above: a key confines to one bucket | ops-repo secret (pending) | the etcd snapshot age probe |
 | GitHub App key (dispatch) | Made on the App's own page (no key API) | Signs a JWT for that App alone, which mints a per-run installation token carrying contents:write on `kluster` and `kluster-ops` — the App is installed on both, and each mint is scoped to the one repository its run pushes to. The residual: the key is a repository secret any same-repository job can read, and its token pushes non-workflow files to `kluster`'s unprotected branches and merges any `kluster` pull request whose required checks are green and that changes no workflow file — `main`'s protection requires checks and restricts nobody (threat-model.md §3.2) — and pushes to any branch of `kluster-ops`, a private repository with no branch protection on this plan; it writes no workflow file in either (no `workflows` permission), and nothing in `kluster-ops` that writes one takes instructions from a file it can write (architecture.md §4.3). What it reaches counts as reachable by whatever can start a run that reads the key (threat-model.md §2.8) | escrow as `github/dispatch-key` · `kluster` repository secret (`DISPATCH_APP_PRIVATE_KEY`) | `sdk-regenerate.yml`, whose push onto a renovate branch is the App's act so that the pushed head's runs start on their own (ci.md §3); the alert producer (`alert.yml`), to which the `alert` job every workflow on `main` but `deploy.yml` ends in (ci.md §3) hands the key, and which posts the alert to `kluster-ops` |
-| GitHub App key (trigger) | Made on the App's own page (no key API) | The same, for a per-run installation token carrying actions:write on `kluster` | escrow as `github/trigger-key` · ops-repo secret (`TRIGGER_APP_PRIVATE_KEY`) | Weekly drift trigger, the ops repo's `drift-trigger.yml`, which is not built (`kluster-ops#57`) |
+| GitHub App key (trigger) | Made on the App's own page (no key API) | The same, for a per-run installation token carrying actions:write on `kluster` | escrow as `github/trigger-key` · ops-repo secret (`TRIGGER_APP_PRIVATE_KEY`) | Weekly drift trigger, the ops repo's `drift-trigger.yml` |
 | overlay CI member identities (`ci-physical`, `ci-dns`) | generated in-state (`zerotier_identity`) | One per joining stack, `ci`-tagged and flow-rule-confined (gateway.md §2.3) | CI env | CI per-run join |
 | Pulumi stack passphrase | generated, escrowed as `pulumi/passphrase` | Decrypts the config secrets and the state secrets of every stack but `physical` and the operator stacks | escrow · CI env (every Environment but `physical-plan` and `physical`) · workstation slot | every `pulumi` run but those of `physical` and the operator stacks |
 | `physical` passphrase | generated, escrowed as `physical/passphrase` | Decrypts the configuration and the state secrets of `physical`, whose provider credentials can root the gateway, and nothing else | escrow · CI env (`physical-plan` and `physical` alone, the Environments that take protected branches only, as their `PULUMI_CONFIG_PASSPHRASE`) · workstation slot | every run of `physical`: its CI jobs, the `credentials` commands that reach its configuration or its state, and a run by hand (§4.4) |
@@ -724,7 +723,7 @@ column to the map lists it as one the map does not carry.
 | age backup identity | generated, escrowed as `backup/age/<generation>` | Decrypts state-backend pg_dumps | escrow · on-box (public half, a Butane recipient) | micro cron, a restore run from the kit |
 | Drill age identity | generated by `credentials derived drill-age-identity generate` and escrowed nowhere: the same generator as the backup identities (`age-keygen`), outside the generations | Its contract is the newest dump alone, with retention coverage left to the escrowed generations; what it *opens* is every dump written since it became a recipient and still in retention, whose payload secrets stay under the stack passphrase | ops-repo Environment (`drill`, the private half, as `DRILL_AGE_IDENTITY`) · on-box (the public half, the Butane recipient after the backup generations, read from `src/kluster/lib/state_backend/machine/drill-recipient.txt`) | Quarterly rebuild drill (state-backend.md §7.3) |
 | restic repo passwords | generated in-state (`claim`) | Per-claim repos | Pulumi state (pending) · SealedSecret (via `claim`; pending) | VolSync |
-| Talos machine secrets + talosconfig | generated by `physical` | Cluster PKI roots | Pulumi state · ops-repo secret (pending) | Talos ops, etcd snapshot workflow |
+| Talos machine secrets + talosconfig | generated by `physical` | Cluster PKI roots | Pulumi state | Talos ops |
 | kubeconfig | `physical` output | cluster-admin | Pulumi state · Pulumi config secret (`k8s-base`, `apps`, copied in by `credentials derived sync --only kubeconfig`) | `k8s-base` and `apps`, each opening its Kubernetes provider with the copy in its own configuration |
 | UDM SSH key, libvirt SSH identity | installed by automation on each side: the gateway's `AuthorizedKeys` keeps the UDM key on the device (physical/gateway.md §1.4), aconfmgr provisions the homelab host's dedicated service user together with its key (physical/homelab-host.md §4) | device-file push (host key pinned) / `virsh` as a `libvirt`-group user | Pulumi config secret; the UDM key's public half is a constant | `physical` |
 | UniFi API key | Dedicated local admin | Network API | Pulumi config secret | `physical` |
@@ -812,13 +811,14 @@ passphrase, writing it under theirs, and leaving a stack that already
 holds the value untouched, so a stack file changes only when the
 kubeconfig did. The copy is as reachable from a pull request as the rest
 of those two stacks' configuration, which their previews open the cluster
-with — the reach rfc-005 §5.1 accepts for them. The talosconfig has one — the hourly
-etcd snapshot in the ops repository (ci.md §3) — and that reader is the
-whole of its ops-repo secret. The ZeroTier CI identities are the third
+with — the reach rfc-005 §5.1 accepts for them. The talosconfig has
+none: its readers are workstations, and the hourly etcd snapshot is to
+speak Talos with a certificate Talos issues it inside the cluster
+(storage.md §5). The ZeroTier CI identities are the second
 shape: a job joins the overlay before it can reach anything the LAN
 holds, and that join is a workflow step rather than something a program
 does, which is why theirs is a CI Environment secret. The backup
-bucket's writer keys are the fourth: their readers are in the cluster,
+bucket's writer keys are the third: their readers are in the cluster,
 VolSync's movers, CNPG's barman and the monitoring stack's `vmbackup`
 and `vmrestore`, so each leaves `physical`'s state sealed.
 `credentials derived b2-writer seal` reads every key under
@@ -1272,8 +1272,7 @@ configuration, which its program reads: the slot exists, so nothing is
 parked. The DNS-01 token is delivered too, sealed to the cluster into
 `k8s-base`'s configuration (below), and so are the backup bucket's
 writer keys, which `physical` mints and `credentials derived b2-writer
-seal` seals into `apps`'s, and `monitoring`'s into `k8s-base`'s; the etcd freshness key joins them with the
-workflow that fills its prefix. The
+seal` seals into `apps`'s, and `monitoring`'s into `k8s-base`'s. The
 GitHub-secret half of a row is
 delivered separately, by `credentials derived sync` rather than by the
 row's own command, for the rows whose value can be obtained without
@@ -1691,15 +1690,16 @@ writes its own Pulumi state and, for `physical`, the device secrets.
     both in the `drill` Environment; and, as repository secrets, the
     state dumps' freshness key, which its mint pushes as two carriers,
     the trigger App's key, which stage 10 pushes, and the Home Assistant
-    webhook, which stage 10 asks for and pushes. As of 2026-09-25 every
-    other row above naming an ops-repo secret lands nowhere, because the
-    workflow that
+    webhook, which stage 10 asks for and pushes. Every other row above
+    naming an ops-repo secret lands nowhere, because the workflow that
     would read it is not built (`kluster-ops#57`) — nothing there names
-    a secret for it. Of the workflows reading the secrets that do land,
-    `probes.yml` alone exists, and as of 2026-11-12 it runs daily
-    (state-backend.md §6); the drift trigger and the dispatch handler
-    (`kluster-ops#715`) are not built, and nothing there reads the
-    drill Environment either (state-backend.md §7.3).
+    a secret for it; today that is the alertmanager read token (below).
+    Of the workflows reading the secrets that do land, two exist as of
+    2026-11-17: `probes.yml`, which runs daily until the cluster's
+    checks replace it (state-backend.md §6), and the weekly drift
+    trigger. The dispatch handler (`kluster-ops#715`) is not built,
+    and nothing there reads the drill Environment either
+    (state-backend.md §7.3).
 -   **`alertmanager/read`** is generated and escrowed, and what it lacks
     is a consumer: neither the issue-sync poller nor the HTTPRoute that
     matches its header exists, so the ops-repo secret and the config

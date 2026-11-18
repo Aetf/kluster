@@ -969,14 +969,6 @@ def _sealed_record(member: str) -> Row:
 #: stand.
 _OPS_UNBUILT = 'the ops-repository workflow that would read it is not built, so no secret there names it'
 
-#: Why the etcd snapshots' freshness key has no address: the bucket it would
-#: be confined to is a `physical` resource the stack has not created, and the
-#: scheduled snapshot that fills its prefix is unbuilt with it (ci.md §3).
-_ETCD_PREFIX_UNBUILT = (
-    'the backup bucket is a `physical` resource the stack has not created, and the etcd snapshot workflow '
-    'that would fill its prefix is not built, so no secret there names it'
-)
-
 #: Why the restic passwords have no address: `claim` generates each one, and
 #: no application that calls it is wired into the `apps` program yet
 #: (declarative/workloads.md §3).
@@ -1089,13 +1081,13 @@ ROWS: dict[str, Row] = {
         # dumps with is `writeFiles` alone, which is the dump-key row below and
         # not a writer key. The sealed copies are VolSync's, CNPG barman's and
         # `vmbackup`'s, one per family of each backed namespace, each in the
-        # stack its row names; the etcd snapshots' key waits on the
-        # ops-repository workflow that would take it.
+        # stack its row names; the etcd snapshots' key is the in-cluster
+        # snapshot job's, and is sealed once that job is declared
+        # (storage.md §5).
         targets=(
             PulumiState(PHYSICAL_STACK, 'one key per scope of the backup bucket, exported as `backup_keys`'),
             *(SealedSecret(value) for value in conventions.sealed.WRITER_KEYS),
         ),
-        pending={'ops-repo secret': _OPS_UNBUILT},
     ),
     'b2-dump': Row(
         register='B2 dump key (micro)',
@@ -1113,15 +1105,6 @@ ROWS: dict[str, Row] = {
         # Environment's, because the probe's job belongs to no Environment.
         source=Minted(f'credentials derived {derived.B2_FRESHNESS_DUMPS_ROW} mint'),
         targets=derived.B2_FRESHNESS_DUMPS_SLOTS,
-    ),
-    'b2-freshness-etcd': Row(
-        register='B2 freshness key (etcd)',
-        # The same shape over the etcd snapshots' prefix of the backup
-        # bucket. A B2 key confines to one bucket, so the two probes' keys
-        # are two rows; this one waits on its bucket and on the workflow
-        # that fills the prefix, and lands with them.
-        source=Minted('credentials derived b2-freshness-etcd mint', unbuilt=_ETCD_PREFIX_UNBUILT),
-        pending={'ops-repo secret': _ETCD_PREFIX_UNBUILT},
     ),
     'github-dispatch-key': Row(
         register='GitHub App key (dispatch)',
@@ -1291,8 +1274,11 @@ ROWS: dict[str, Row] = {
     'talos': Row(
         register='Talos machine secrets + talosconfig',
         source=StateRead(PHYSICAL_STACK, conventions.PHYSICAL_OUTPUTS.talosconfig),
+        # State alone: its readers are workstations, which read it there under
+        # `physical`'s passphrase. The etcd snapshot job is no reader of it:
+        # it speaks Talos with a certificate Talos issues it inside the
+        # cluster (storage.md §5).
         targets=(PulumiState(PHYSICAL_STACK, 'the cluster PKI roots'),),
-        pending={'ops-repo secret': _OPS_UNBUILT},
     ),
     'kubeconfig': Row(
         register='kubeconfig',

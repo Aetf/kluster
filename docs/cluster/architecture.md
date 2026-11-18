@@ -705,11 +705,12 @@ producer paths exist by necessity, not preference:
     to Home Assistant's own address, which only the homelab worker
     reaches, so monitoring runs there
     ([rfc-008](../rfc/rfc-008-workload-migration.md) §4.1).
--   **Out-of-cluster**: CI alerts (deploy failures, the ci.md §3
-    scheduled checks) must not route through the cluster — they
-    exist precisely to fire when it can't. They deliver via the
-    ops repo (below): CI already runs on GitHub, so the detour
-    adds no failure domain.
+-   **Out-of-cluster**: CI alerts (deploy failures, the drift check)
+    and the ops repo's own workflows must not route through the
+    cluster — they report on what deploys the cluster and on the jobs
+    ci.md §3's rule keeps out of it, so they may not depend on it.
+    They deliver via the ops repo (below): CI already runs on GitHub,
+    so the detour adds no failure domain.
 
 The shared convention is what makes the paths one channel: a push
 reads identically regardless of origin, and always names its
@@ -746,11 +747,11 @@ HA so that the source's timer restarts — how a scheduled ops-repo
 workflow that stops running is noticed (operations.md §4). Every event
 from a watched source is a check-in whatever its tier.
 
-**All delivery logic lives in the ops repo (2026-08-24; renamed
-`kluster-alerts` → `kluster-ops` when it absorbed the system's
-scheduled automation — ci.md §3).** `kluster-ops` is the notification
-hub: tier semantics, HA payload formatting, dedup, and issue creation
-exist only in its workflows.
+**All delivery logic lives in the ops repo (2026-08-24).**
+`kluster-ops` is the notification hub, and it also runs the scheduled
+jobs that ci.md §3's rule keeps out of the cluster. As the hub, it
+holds tier semantics, HA payload formatting, dedup, and issue creation,
+which exist only in its workflows.
 What remains outside it is producer plumbing, not logic — one
 dispatch call in CI, one receiver line in alertmanager. Two intake
 paths, matched to the producers' shapes:
@@ -899,36 +900,35 @@ Costs and facts on record:
     repositories to an App without adding permissions.
     Register row in credentials.md.
 -   **The ops repo burns private-repo Actions minutes** (billed
-    per-minute, min 1/run): hourly poller ≈ 720 min/mo, the hourly
-    etcd snapshot roughly as much again, plus freshness probes and
-    the monthly/quarterly drills — together at or somewhat above
-    the account-wide 2000-min free pool. Accepted as a few dollars
-    a month at worst ("billed, not killed"); the recorded knobs are
-    folding poller + snapshot into one hourly workflow, and cadence
-    — except etcd's, whose RPO ≤ 1 h is a target, not a knob. The
-    push leg is instant regardless; the issue leg tolerates the
-    poll interval. If minutes or latency ever truly bite, the
-    recorded alternative for the issue leg is an in-cluster adapter
-    (m-lab's alertmanager-github-receiver) with a PAT as a
-    SealedSecret.
+    per-minute, min 1/run): the hourly poller ≈ 720 min/mo, plus the
+    weekly drift trigger, the slot-drift probe, the quarterly
+    rebuild drill, and the daily `probes.yml` until the cluster's
+    checks replace it (operations.md §4) — the poller being most of
+    it, against the account-wide 2000-min free pool.
+    Nothing the cluster runs on a clock spends a minute. Accepted
+    as a few dollars a month at worst ("billed, not killed"); the
+    recorded knob is the poller's cadence. The push leg is instant
+    regardless; the issue leg tolerates the poll interval. An
+    in-cluster adapter for the issue leg (m-lab's
+    alertmanager-github-receiver) is ruled out by ci.md §3's rule:
+    the GitHub token it holds would be within reach of every
+    unmerged ref's runs.
 -   **Verification item**: the alertmanager read route is a new
     public read-only surface (the header-match token route,
     cluster-infra.md §1; its own register row). (The scheduled-workflow inactivity auto-disable
     concern is resolved structurally: the 60-day rule applies to
-    public repos, every scheduled workflow lives in the private ops
-    repo but for the in-cluster drills the cluster runs itself
-    (operations.md §4), and the public kluster repo keeps none — ci.md
-    §3.)
+    public repos, scheduled work runs in the cluster or, where ci.md
+    §3's rule places it, in the private ops repo, and the public
+    kluster repo keeps no `schedule:` trigger — ci.md §3.)
 
 **Issues live in the dedicated private ops repo (2026-08-24).**
 This repo is public (2026-08-25), so alert issues must never live
 here — hosting them in-repo would have made a certain migration look
 like a conditional. The always-private `kluster-ops`
-holds the dispatch-receiving workflow, the issues — and, by the same
-decision's amendment, **every scheduled workflow in the system but
-for the in-cluster drills the cluster runs itself** (operations.md
-§4; ci.md §3: the deployment repo stays event-driven, and the ops
-repo owns the rest of what runs on a clock). It also keeps alert
+holds the dispatch-receiving workflow, the issues — and **the
+scheduled jobs the cluster cannot hold the credentials of** (ci.md
+§3's rule; operations.md §4 lists each job and where it runs, and the
+deployment repo stays event-driven). It also keeps alert
 noise out of this repo's
 issue tracker, which the public repo needs for real issues. Consequences on record:
 

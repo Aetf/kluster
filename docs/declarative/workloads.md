@@ -191,10 +191,11 @@ per-app number:
     `conventions.backup.metrics_repo_path`, under a writer key of their
     own that `k8s-base`, which declares the monitoring stack, carries
     sealed rather than `apps`; etcd snapshots
-    (hourly, ~14d) and the state-backend pg_dump (ci.md §1) are
-    physical/CI-side but follow the same bucket-layout and retention
-    vocabulary (storage.md §5 stays the authority on targets/RPO). Each
-    family of a namespace is one row of the census
+    (hourly, ~14d), a platform job of `k8s-base` (storage.md §5), and
+    the state-backend pg_dump, a timer on the appliance (ci.md §1), sit
+    outside the namespaces' census but follow the same bucket-layout
+    and retention vocabulary (storage.md §5 stays the authority on
+    targets/RPO). Each family of a namespace is one row of the census
     `conventions.backup.BACKED_NAMESPACES` and one writer key.
 -   **Freshness is monitored centrally, not per-app**: one vmalert rule
     family — *any* backup whose last success is older than its class

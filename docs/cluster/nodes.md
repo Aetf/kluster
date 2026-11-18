@@ -819,8 +819,9 @@ by construction; Tier 0 remains the foundation everything else sits on:
     (declarative/physical.md §5, storage.md §4) and exists once that
     stack is first applied (migration.md §1 step 2); nothing writes to
     it. The legs: hourly etcd snapshots shipped to B2 (off-provider by
-    the storage.md §4 placement rule) — an ops-repo workflow, and that
-    workflow is unwritten, so none is taken; VolSync volume
+    the storage.md §4 placement rule) — a CronJob in the cluster, on
+    the control planes (storage.md §5), which is not declared yet, so
+    none is taken; VolSync volume
     backups and CNPG barman to the same bucket (storage.md §5) —
     whose operators the `k8s-base` stack declares, with no backup
     declared against either until the first database and the first
