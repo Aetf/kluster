@@ -343,7 +343,10 @@ the `finally` that removes the container in `tests/image_busybox.py` and in
 container that no teardown names -- one run without a name, or one created
 ahead of the block whose teardown removes it -- nor any `Created` container
 once the test process can no longer run a `finally`. The label census lists
-each of them, in the `Created` state.
+each of them, in the `Created` state. `tests/test_state_roles.py` names
+every container it creates for a teardown armed before the create, and
+refuses, before podman runs, a `podman run` or `podman create` that names
+none, or names one no armed teardown removes (`_refuse_unarmed`).
 
 **A container a case starts mounts no named volume.** A named volume outlives every container
 that mounts it and holds one of the host's podman locks until something

@@ -22,7 +22,10 @@ in another mount namespace than this process -- sees none of this process's
 temporary files, and `podman cp` is the channel that reaches it either way.
 
 Every container here ends by itself once it has started (`_bounded`); one
-left `Created` goes only when something removes it. Every command a case
+left `Created` goes only when something removes it, so each is named for a
+teardown armed before the command that creates it, and a `podman run` or
+`podman create` that names none, or names one no armed teardown removes, is
+refused before podman runs (`_refuse_unarmed`). Every command a case
 starts -- `podman`, the client tools, the log follower -- runs through
 `process_sessions` under a bound below the case's. Both are
 framework/testing.md §1.2.
@@ -68,8 +71,9 @@ import sys
 import tarfile
 import time
 import uuid
-from collections.abc import Callable, Generator, Iterator, Mapping
-from contextlib import ExitStack, contextmanager, suppress
+from collections import Counter
+from collections.abc import Callable, Generator, Iterator, Mapping, Sequence
+from contextlib import AbstractContextManager, ExitStack, contextmanager, suppress
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any, NoReturn, cast
@@ -215,6 +219,25 @@ def image_is_local() -> None:
         found = process_sessions.run(['podman', 'image', 'exists', image], timeout=COMMAND_TIMEOUT)
         if found.returncode != 0:
             pytest.skip(f'there is no local copy of {image}')
+
+
+@pytest.fixture(scope='module', autouse=True)
+def created_only_under_an_armed_teardown() -> Iterator[None]:
+    """Put `_refuse_unarmed` in front of every command the module's cases start, for as long as they run.
+
+    `process_sessions` is where every command a case starts goes through
+    (framework/testing.md §1.2), and its `run` starts its command through
+    its `started`, so rebinding `started` checks both.
+    """
+    started = process_sessions.started
+
+    def guarded_started(argv: Sequence[str], **given: Any) -> AbstractContextManager[process_sessions.Command]:
+        _refuse_unarmed(argv)
+        return started(argv, **given)
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(process_sessions, 'started', guarded_started)
+        yield
 
 
 def _podman(*args: str, stdin: bytes | None = None) -> bytes:
@@ -554,6 +577,83 @@ def _remove(name: str) -> None:
     _ = _podman('rm', '--force', '--volumes', '--time', '0', name)
 
 
+def _remove_each(names: Sequence[str]) -> None:
+    """Remove every container `names` lists, and fail naming each removal podman refused."""
+    refused: list[str] = []
+    for name in names:
+        try:
+            _remove(name)
+        except AssertionError as refusal:
+            refused.append(f'{name}: {refusal}')
+    assert not refused, refused
+
+
+#: The names of the containers a teardown here is armed to remove, counted
+#: once for each teardown that will: armed before the command that creates
+#: the container, by `_removing` or `Launcher.arm`, and disarmed by that
+#: teardown once it has removed it. `_refuse_unarmed` reads it.
+ARMED: Counter[str] = Counter()
+
+
+@contextmanager
+def _removing(*names: str) -> Generator[None]:
+    """Arm the removal of the containers `names` for a block that creates them, and remove each on every way out."""
+    ARMED.update(names)
+    try:
+        yield
+    finally:
+        try:
+            _remove_each(names)
+        finally:
+            ARMED.subtract(names)
+
+
+def _refuse_unarmed(argv: Sequence[str]) -> None:
+    """Refuse a `podman run` or `podman create` whose container no armed teardown removes by name.
+
+    A `podman run` killed between creating its container and starting it --
+    at the bound on the command, say -- leaves the container `Created`,
+    which neither its `--timeout` nor its `--rm` reaches, since both count
+    from the start (`_bounded`). Only a removal by name reaches it. So the
+    command names its container, and the teardown that removes that name
+    is armed before the command runs, which is what `ARMED` records: the
+    `finally` of a `_removing` block the command runs inside, or the
+    launcher's (`Launcher.arm`). A refusal is an `AssertionError` raised
+    before `podman` runs, so the refused command creates nothing.
+
+    A command is read from its first word named `podman`, wherever it
+    sits, so a podman behind a wrapper such as `timeout` or `env` is read
+    too. The verb is the next word, or the one after `container`. An option
+    ahead of the verb is refused, whatever the verb, because it is not
+    read: a global option can take a value, so the verb's place is not
+    known past it.
+
+    Every container's name reaches its command through a helper's
+    parameters (`_fill`, `_network`, `Launcher.pooler`), so the relation is
+    checked here, on each command as it is issued, rather than read from
+    the code: `created_only_under_an_armed_teardown` puts this in front of
+    every command the module starts through `process_sessions`.
+    """
+    at = next((at for at, word in enumerate(argv) if PurePosixPath(word).name == 'podman'), None)
+    if at is None:
+        return
+    words = list(argv[at + 1 :])
+    if words[:1] == ['container']:
+        words = words[1:]
+    if words[:1] and words[0].startswith('-'):
+        raise AssertionError(f'podman {words[0]} comes ahead of the verb, and options there are not read: {list(argv)}')
+    if words[:1] not in (['run'], ['create']):
+        return
+    names = [
+        *(words[at + 1] for at, word in enumerate(words[:-1]) if word == '--name'),
+        *(word.removeprefix('--name=') for word in words if word.startswith('--name=')),
+    ]
+    if not names:
+        raise AssertionError(f'podman {words[0]} names no container, so no teardown can remove it: {list(argv)}')
+    if not all(ARMED[name] > 0 for name in names):
+        raise AssertionError(f'podman {words[0]} of {names} runs before the teardown that removes it is armed')
+
+
 def _named(created: list[str], name: str) -> list[str]:
     """A `podman create` built without a name, given `name`."""
     return [*created[:1], '--name', name, *created[1:]]
@@ -669,20 +769,22 @@ def _own(ignition: dict[str, Any], box: str) -> None:
     the server, which is not root, could not write its socket into it.
     """
     owned = {host: inside for host, inside, _ in _volumes(ignition, UNIT)}
-    for host in _shared(ignition):
+    for index, host in enumerate(_shared(ignition)):
         mode, user, group = _directory(ignition, host)
         inside = owned[host]
-        _ = _podman(
-            *_bounded('run', '--volumes-from', box, '--entrypoint', 'sh', IMAGE),
-            '-c',
-            'install -d -o "$1" -g "$2" -m "$3" "$4" && touch "$4/$5"',
-            'sh',
-            str(user),
-            str(group),
-            f'{mode:o}',
-            inside,
-            OWNED,
-        )
+        name = f'{box}-own-{index}'
+        with _removing(name):
+            _ = _podman(
+                *_named(_bounded('run', '--volumes-from', box, '--entrypoint', 'sh', IMAGE), name),
+                '-c',
+                'install -d -o "$1" -g "$2" -m "$3" "$4" && touch "$4/$5"',
+                'sh',
+                str(user),
+                str(group),
+                f'{mode:o}',
+                inside,
+                OWNED,
+            )
 
 
 class Launcher:
@@ -700,10 +802,15 @@ class Launcher:
     def __init__(self) -> None:
         self.containers: list[str] = []
 
+    def arm(self, *names: str) -> None:
+        """Arm the removal of the containers `names` at `close`, before anything creates them (`_refuse_unarmed`)."""
+        self.containers.extend(names)
+        ARMED.update(names)
+
     def __call__(self, created: list[str], copies: list[File], superuser: str) -> Box:
         name = f'kluster-test-pgstate-{uuid.uuid4().hex[:12]}'
         network = _network_name(name)
-        self.containers.extend((network, name))
+        self.arm(network, name)
         netns, port = _network(network)
         _fill(name, _joined(created, netns), copies)
         _ = _podman('start', name)
@@ -721,7 +828,7 @@ class Launcher:
         """
         name = f'kluster-test-pgstate-{uuid.uuid4().hex[:12]}'
         network, pooler = _network_name(name), f'{name}-pooler'
-        self.containers.extend((network, name, pooler))
+        self.arm(network, name, pooler)
         netns, port = _network(network)
         created, copies = _unit_container(ignition, UNIT)
         _fill(name, created, [*copies, *([held] if held else [])])
@@ -744,13 +851,10 @@ class Launcher:
         _await_log(box.pooler, (POOLER_UP,))
 
     def close(self) -> None:
-        refused: list[str] = []
-        for name in self.containers:
-            try:
-                _remove(name)
-            except AssertionError as refusal:
-                refused.append(f'{name}: {refusal}')
-        assert not refused, refused
+        try:
+            _remove_each(self.containers)
+        finally:
+            ARMED.subtract(self.containers)
 
 
 Start = Launcher
@@ -815,8 +919,8 @@ def tools(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Path]:
     """
     directory = tmp_path_factory.mktemp('clients')
     name = f'kluster-test-pgclient-{uuid.uuid4().hex[:12]}'
-    _ = _podman(*_client(name))
-    try:
+    with _removing(name):
+        _ = _podman(*_client(name))
         _ = _podman('exec', name, 'mkdir', '-p', str(directory))
         for tool in (state.PSQL, state.PG_RESTORE, state.PG_DUMP):
             script = directory / tool
@@ -836,8 +940,6 @@ def tools(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Path]:
             )
             script.chmod(0o755)
         yield directory
-    finally:
-        _remove(name)
 
 
 @pytest.fixture
@@ -924,9 +1026,7 @@ def _exists(kind: str, name: str) -> bool:
 
 
 @pytest.mark.parametrize('container', ['appliance', 'pooler', 'superusers', 'network', 'client'])
-def test_every_container_ends_by_itself_and_mounts_no_named_volume(
-    start: Start, ignition: dict[str, Any], container: str
-) -> None:
+def test_every_container_ends_by_itself_and_mounts_no_named_volume(ignition: dict[str, Any], container: str) -> None:
     """Each container these cases start is bounded, removed when it ends, labelled, and mounts no named volume.
 
     Read from the container podman made of the arguments rather than from
@@ -938,7 +1038,6 @@ def test_every_container_ends_by_itself_and_mounts_no_named_volume(
     """
     name = f'kluster-test-volumes-{uuid.uuid4().hex[:12]}'
     source = f'{name}-source'
-    start.containers.extend((name, source))
     run: Callable[[], object] = {
         'appliance': lambda: _podman(*_named(_unit_container(ignition, UNIT)[0], name)),
         'pooler': lambda: _podman(*_named(_unit_container(ignition, POOLER_UNIT, source)[0], name)),
@@ -947,7 +1046,7 @@ def test_every_container_ends_by_itself_and_mounts_no_named_volume(
         'client': lambda: _podman(*_client(name)),
     }[container]
     image = {'pooler': POOLER_IMAGE}.get(container, IMAGE)
-    try:
+    with _removing(name, source):
         if container == 'pooler':
             _ = _podman(*_named(_unit_container(ignition, UNIT)[0], source))
         _ = run()
@@ -957,9 +1056,6 @@ def test_every_container_ends_by_itself_and_mounts_no_named_volume(
         anonymous = {
             volume: json.loads(_podman('volume', 'inspect', volume))[0].get('Anonymous', False) for volume in mounted
         }
-    finally:
-        _remove(name)
-        _remove(source)
     declared: dict[str, Any] = json.loads(_podman('image', 'inspect', image))[0]['Config'].get('Volumes') or {}
     shares = sorted(inside for host, inside, _ in _volumes(ignition, UNIT) if host in _shared(ignition))
 
@@ -1039,12 +1135,10 @@ def test_the_port_a_box_is_reached_on_is_bound_before_the_box_is_created() -> No
     use`.
     """
     name = f'kluster-test-pgnetwork-{uuid.uuid4().hex[:12]}'
-    try:
+    with _removing(name):
         _, port = _network(name)
         with socket.socket() as taker, pytest.raises(OSError) as refused:
             taker.bind((ADDRESS, port))
-    finally:
-        _remove(name)
     assert refused.value.errno == errno.EADDRINUSE
 
 
@@ -1055,10 +1149,8 @@ def test_the_port_a_box_is_reached_on_lies_outside_the_ephemeral_range() -> None
     dials `ADDRESS`. A port podman picks lies inside it.
     """
     name = f'kluster-test-pgnetwork-{uuid.uuid4().hex[:12]}'
-    try:
+    with _removing(name):
         _, port = _network(name)
-    finally:
-        _remove(name)
     low, high = (int(field) for field in Path('/proc/sys/net/ipv4/ip_local_port_range').read_text().split())
 
     assert not low <= port <= high, (port, low, high)
@@ -1083,7 +1175,7 @@ def test_remove_the_reserved_ports_once_podman_holds_the_port_it_picks() -> None
         message names too.
     """
     name = f'kluster-test-pickedport-{uuid.uuid4().hex[:12]}'
-    try:
+    with _removing(name):
         _ = _podman(
             *_bounded('create', '--network', 'pasta', '--publish', f'{ADDRESS}::{settings.PORT}', '--name', name),
             '--entrypoint',
@@ -1108,8 +1200,6 @@ def test_remove_the_reserved_ports_once_podman_holds_the_port_it_picks() -> None
                         raise
                 else:
                     return
-    finally:
-        _remove(name)
 
     if picked is None:
         found = f'a container only created records no host port for {settings.PORT}/tcp: {bindings!r}'
@@ -1130,13 +1220,86 @@ def test_a_network_is_removed_while_a_box_joined_to_it_exists() -> None:
     """
     network = f'kluster-test-pgnetwork-{uuid.uuid4().hex[:12]}'
     box = f'{network}-box'
-    try:
+    with _removing(box, network):
         netns, _ = _network(network)
         _ = _podman(*_named(_joined(_superusers(), netns), box))
         _remove(network)
-    finally:
-        _remove(box)
-        _remove(network)
+
+
+#: An image the store does not hold. A `podman create` of it with
+#: `--pull=never` fails before it creates a container.
+ABSENT_IMAGE = 'localhost/kluster-test-absent:none'
+
+
+def _issue(entry: str, argv: list[str]) -> int:
+    """Run `argv` through `process_sessions`' entry point `entry`, and return its status."""
+    if entry == 'run':
+        return process_sessions.run(argv, timeout=COMMAND_TIMEOUT).returncode
+    with process_sessions.started(argv) as command:
+        return command.wait(timeout=COMMAND_TIMEOUT)
+
+
+#: The words a podman can come behind in a command a case starts: none, and
+#: the wrappers that run it, as `_await_log`'s follower runs behind `timeout`.
+WRAPPERS = {'bare': [], 'timeout': ['timeout', str(COMMAND_TIMEOUT)], 'env': ['env', 'KLUSTER_TEST=1']}
+
+
+@pytest.mark.parametrize('entry', ['run', 'started'])
+@pytest.mark.parametrize('wrapper', WRAPPERS.values(), ids=WRAPPERS)
+@pytest.mark.parametrize('named', [False, True], ids=['no-name', 'unarmed'])
+def test_a_container_no_armed_teardown_removes_by_name_is_refused_before_podman_runs(
+    entry: str, wrapper: list[str], named: bool
+) -> None:
+    """A `podman create` with no name, or with one no teardown is armed to remove, fails before `podman` runs.
+
+    The refusal comes from `process_sessions` itself, so a command a case
+    starts there directly is held to it as one through `_podman` is, and a
+    podman behind a wrapper as a bare one is.
+    """
+    name = f'kluster-test-unarmed-{uuid.uuid4().hex[:12]}'
+    created = _bounded('create', '--pull=never', ABSENT_IMAGE)
+
+    with pytest.raises(AssertionError):
+        _ = _issue(entry, [*wrapper, 'podman', *(_named(created, name) if named else created)])
+
+
+@pytest.mark.parametrize('entry', ['run', 'started'])
+@pytest.mark.parametrize('wrapper', WRAPPERS.values(), ids=WRAPPERS)
+def test_a_container_named_for_an_armed_teardown_reaches_podman(entry: str, wrapper: list[str]) -> None:
+    """A `podman create` of a name a `_removing` block is armed to remove runs; podman fails it on the absent image."""
+    name = f'kluster-test-armed-{uuid.uuid4().hex[:12]}'
+    with _removing(name):
+        status = _issue(entry, [*wrapper, 'podman', *_named(_bounded('create', '--pull=never', ABSENT_IMAGE), name)])
+
+    assert status != 0
+
+
+@pytest.mark.parametrize('entry', ['run', 'started'])
+def test_a_podman_option_ahead_of_the_verb_is_refused_before_podman_runs(entry: str) -> None:
+    """A global option between `podman` and its verb is refused, the name it creates armed or not, since it is not read."""
+    name = f'kluster-test-option-{uuid.uuid4().hex[:12]}'
+    with _removing(name), pytest.raises(AssertionError):
+        _ = _issue(
+            entry, ['podman', '--log-level=error', *_named(_bounded('create', '--pull=never', ABSENT_IMAGE), name)]
+        )
+
+
+def test_a_container_whose_start_never_comes_goes_with_its_teardown() -> None:
+    """A container left `Created`, as a `podman run` killed between its create and its start leaves it, goes with the teardown armed for its name.
+
+    The kill is stood in for by what it leaves: the container is created and
+    not started, and the block is left with the `TimeoutExpired` that the
+    bound on a command raises.
+    """
+    name = f'kluster-test-created-{uuid.uuid4().hex[:12]}'
+    status: list[str] = []
+    with pytest.raises(sp.TimeoutExpired), _removing(name):
+        _ = _podman(*_named(_superusers(), name))
+        status.append(_podman('container', 'inspect', '--format', '{{.State.Status}}', name).decode().strip())
+        raise sp.TimeoutExpired(['podman', 'run', '--name', name], COMMAND_TIMEOUT)
+
+    assert status == ['created']
+    assert not _exists('container', name)
 
 
 def test_an_archive_ends_at_its_end_of_archive_blocks() -> None:
@@ -1197,14 +1360,12 @@ def test_remove_the_archive_workaround_once_the_runners_copier_drains_its_stream
     name = f'kluster-test-drain-{uuid.uuid4().hex[:12]}'
     path, content = PurePosixPath('/kluster-drain-probe'), b'probe\n'
     probe = _archive([File(path, content)]) + bytes(PAST_THE_END)
-    try:
+    with _removing(name):
         _ = _podman(*_named(_superusers(), name))
         copied = process_sessions.run(
             ['podman', 'cp', '--archive=false', '-', f'{name}:/'], input=probe, timeout=COMMAND_TIMEOUT
         )
         read = process_sessions.run(['podman', 'cp', f'{name}:{path}', '-'], timeout=COMMAND_TIMEOUT)
-    finally:
-        _remove(name)
 
     # Whichever way the copy ended, the archive before the blocks went in
     # whole; a copy that failed short of it failed on something else.
@@ -1246,12 +1407,10 @@ def test_a_box_silent_before_it_serves_fails_the_wait_naming_the_follower() -> N
     log. The bound is the event here, since nothing else ends the follow.
     """
     name = f'kluster-test-silent-{uuid.uuid4().hex[:12]}'
-    try:
+    with _removing(name):
         _ = _podman(*_client(name))
         with pytest.raises(sp.TimeoutExpired) as stalled:
             _await_ready(name, timeout=1)
-    finally:
-        _remove(name)
 
     assert stalled.value.cmd == ['timeout', '1', 'podman', 'logs', '--follow', name]
 
@@ -2244,13 +2403,11 @@ def test_a_handshake_with_no_credential_completes_against_the_pooler(box: Box, r
 
 def test_the_pooler_runs_as_the_user_the_box_gives_its_files() -> None:
     """The server key and the shared directory are given to `PGBOUNCER_UID` and `PGBOUNCER_GID`; the image runs as them."""
-    ran = process_sessions.run(
-        ['podman', *_bounded('run', '--entrypoint', 'id', POOLER_IMAGE, image=POOLER_IMAGE)],
-        text=True,
-        timeout=COMMAND_TIMEOUT,
-    )
-    found = re.match(r'uid=(\d+)\S* gid=(\d+)', ran.stdout)
-    assert found is not None, ran.stdout + ran.stderr
+    name = f'kluster-test-pooleruser-{uuid.uuid4().hex[:12]}'
+    with _removing(name):
+        ran = _podman(*_named(_bounded('run', '--entrypoint', 'id', POOLER_IMAGE, image=POOLER_IMAGE), name)).decode()
+    found = re.match(r'uid=(\d+)\S* gid=(\d+)', ran)
+    assert found is not None, ran
 
     assert (int(found.group(1)), int(found.group(2))) == (settings.PGBOUNCER_UID, settings.PGBOUNCER_GID)
 
