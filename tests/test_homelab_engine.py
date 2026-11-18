@@ -382,6 +382,8 @@ def test_a_disk_whose_state_records_no_guard_is_guarded_once_a_plain_up_records_
     disk = _unprotected(engine)
     refused = engine.up('--replace', disk)
     assert refused.returncode != 0
+    assert "--replace '<image URN>'" in _ran(refused)
+    assert f"--replace '{disk}'" in _ran(refused)
     assert 'delete disk' not in engine.log()
 
 

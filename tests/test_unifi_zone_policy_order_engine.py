@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import http.server as http_server
 import json
+import re
 import shutil
 import subprocess as sp
 import threading
@@ -35,6 +36,7 @@ from scratch_projects import scratch_project
 from unifi_controller import ControllerSession, ZonePolicies
 
 import kluster
+from kluster.lib import state_only
 from kluster.providers.unifi_zone_policy_order import API_KEY_CONFIG
 
 #: How long one case may take: its project's set-up and the handful of
@@ -260,11 +262,12 @@ def test_a_foreign_policy_shows_in_a_refreshed_preview_and_refuses_the_update_it
 
     previewed = launched.refreshed_preview()
 
-    assert previewed.returncode != 0, _ran(previewed)
+    assert previewed.returncode == state_only.REFUSED, _ran(previewed)
+    assert re.search(r'^\s+~ \S+:ZonePolicyOrder: \(update\)$', previewed.stdout, re.M), _ran(previewed)
     assert 'Hand rule' in _ran(previewed)
     result = launched.up('--refresh')
     assert result.returncode != 0, _ran(result)
-    assert 'Hand rule' in _ran(result)
+    assert "ForeignPolicy: 'Hand rule'" in _ran(result)
     assert len(launched.controller.batches) == written
     assert launched.controller.ranked(SOURCE, DESTINATION) == ['first', 'second', 'Hand rule']
 
