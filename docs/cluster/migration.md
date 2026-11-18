@@ -239,8 +239,8 @@ runbook, from the gateway window to a verified, empty cluster.
     verifications (pod→IMDS denied, bogus-BGP rejected) — alongside the Talos-level checks item 3 names, etcd
     fsync among them. **No app migrates until this gate passes** —
     every item is cheaper to fix on an empty cluster. ExternalAuth
-    failing closed, the auth canary and a B2 key's prefix scope need
-    what the first wave brings, and move to it
+    failing closed and the auth canary need what the first wave
+    brings, and move to it
     ([physical/bring-up.md](../physical/bring-up.md) §6).
 5.  **Handing over to the first wave** (bring-up.md's last stage), after
     `physical` has applied `conventions.backup.BACKED_NAMESPACES`, which

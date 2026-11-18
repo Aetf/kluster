@@ -84,6 +84,12 @@
     deletion of the tolerance at stage 8 stops a run that finds it
     absent
     ([Aetf/kluster-ops#855](https://github.com/Aetf/kluster-ops/issues/855)).
+*   **Updated:** 2026-11-18. §5.2's third item, a writer key's prefix
+    isolation, is read in the bring-up's gate (physical/bring-up.md
+    stage 8) rather than at Wave A1's head. It needs a writer key and a
+    file under another key's prefix, and the etcd snapshots upload one
+    from stage 6 (declarative/physical.md §6,
+    [Aetf/kluster-ops#857](https://github.com/Aetf/kluster-ops/issues/857)).
 *   **Authority:** AGENTS.md,
     [framework/dispatch.md](../framework/dispatch.md),
     [framework/rfc.md](../framework/rfc.md) and the style rules

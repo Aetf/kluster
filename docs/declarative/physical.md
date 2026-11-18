@@ -1387,11 +1387,12 @@ Security verifications (from the 2026-08-23 audit,
 cluster/security-audit.md): a pod's request to `169.254.169.254` is
 denied by the baseline policy; the UDM rejects an out-of-policy BGP
 advertisement from the worker (bogus-prefix test, cluster-infra.md
-§2); and, in the first wave rather than the gate, since an empty
-cluster has neither ([physical/bring-up.md](../physical/bring-up.md)
-§6), a prefix-scoped B2 key cannot list/delete a foreign prefix
-(storage.md §4) and the ExternalAuth filter fails closed with Authelia
-down *and* the standing auth canary alerts (cluster-infra.md §2);
+§2); a prefix-scoped B2 key cannot list/delete a foreign prefix
+(storage.md §4), by the prefix-isolation item below; in the first
+wave rather than the gate, since an empty cluster runs no
+authentication service ([physical/bring-up.md](../physical/bring-up.md)
+§6), the ExternalAuth filter fails closed with Authelia down *and* the
+standing auth canary alerts (cluster-infra.md §2);
 the Talos ingress firewall drops an undeclared port on a node
 primary IP, **and** a declared raw TCP/UDP LoadBalancer service port
 serves with no firewall entry (the BPF-precedence check — failure
@@ -1401,3 +1402,67 @@ answers the cluster and nothing else — once `k8s-base` is up,
 address gets no answer from outside the VCN; and no `NodePort` is allocated — once `k8s-base` is up,
 `mise x -- kubectl get svc -A -o jsonpath='{..nodePort}'` prints nothing
 (cluster-infra.md §2).
+
+**The prefix-isolation item** reads what B2 does with a writer key's
+prefix. What the program declares for each key, one prefix of its
+own, this bucket alone and no `deleteFiles`, is held by the suite
+(`tests/test_backup_bucket.py`). Whether B2 then refuses the key
+beyond that prefix is read here. The item reads the monitoring
+namespace's key, `vm-monitoring`. Every writer key is minted by the
+one construction in `components.backup`, so one key's reading stands
+for the rest. A writer key holds no `deleteFiles`, so the deletion it
+can make is a hide (storage.md §4). B2 answers `404 not_found` to a
+hide of a name it does not hold, and does not document whether it
+reads the name or the key's prefix first. So the hide is aimed at a
+file that exists: the oldest etcd snapshot, which the `etcd` scope's
+own key lists. Name order is time order, and a listing leaves out
+hidden files, so that snapshot is the next the bucket hides. The item
+therefore runs once a snapshot has been uploaded, which is from
+bring-up stage 6 on. From the root of the checkout that holds
+`.credentials/`, with `physical` the function above:
+
+```sh
+auth() {   # one scope's writer key, out of this stack's state, authorized with B2
+    physical stack output backup_keys --show-secrets --json \
+        | mise x -- jq -r --arg s "$1" '.[$s] | "user = \"\(.id):\(.secret)\""' \
+        | curl --noproxy '*' --connect-timeout 10 --max-time 30 -sS --config - \
+            https://api.backblazeb2.com/b2api/v3/b2_authorize_account
+}
+call() {   # a call under an authorization: B2's answer, then the HTTP status on a line of its own
+    mise x -- jq -r '"header = \"Authorization: \(.authorizationToken)\""' <<<"$1" \
+        | curl --noproxy '*' --connect-timeout 10 --max-time 30 -sS --config - -w '\n%{http_code}' \
+            -d "$3" "$(mise x -- jq -r .apiInfo.storageApi.apiUrl <<<"$1")/b2api/v3/$2"
+}
+as_vm() {   # a call as the monitoring namespace's key: the call, the HTTP status and B2's code
+    local out
+    out=$(call "$VM" "$1" "$2")
+    echo "$1 ${out##*$'\n'} $(mise x -- jq -r '.code // "ok"' <<<"${out%$'\n'*}")"
+}
+ETCD=$(auth etcd) VM=$(auth vm-monitoring)
+B=$(mise x -- jq -r .apiInfo.storageApi.bucketId <<<"$VM")
+out=$(call "$ETCD" b2_list_file_names "{\"bucketId\":\"$B\",\"prefix\":\"etcd/\",\"maxFileCount\":1}")
+OBJ=$(mise x -- jq -r '.files[0].fileName // empty' <<<"${out%$'\n'*}")
+echo "object ${OBJ:-none}"
+as_vm b2_list_file_names "{\"bucketId\":\"$B\",\"prefix\":\"vm/monitoring/\",\"maxFileCount\":1}"
+as_vm b2_list_file_names "{\"bucketId\":\"$B\",\"prefix\":\"vm/\",\"maxFileCount\":1}"
+as_vm b2_list_file_names "{\"bucketId\":\"$B\",\"prefix\":\"etcd/\",\"maxFileCount\":1}"
+[ -n "$OBJ" ] && as_vm b2_hide_file "{\"bucketId\":\"$B\",\"fileName\":\"$OBJ\"}"
+unset ETCD VM
+```
+
+It passes when it prints `object etcd/kluster-<stamp>.snap.age`, then
+`b2_list_file_names 200 ok`, then
+`b2_list_file_names 401 unauthorized` twice, then
+`b2_hide_file 401 unauthorized`. The
+monitoring key lists its own prefix, and is refused three things: its
+family's parent `vm/`, which a key minted one level too short would
+list, the snapshots' prefix, and the hide of a snapshot. The first two
+lines are the controls. `object none` means the `etcd` key listed no
+snapshot, and the hide is then not tried. A failed authorization or a
+wrong bucket prints `000`, or a code other than `ok`, on the second
+line. B2 answers a token it does not accept with `bad_auth_token`, so
+a probe that failed cannot read as `unauthorized`. A hide that goes
+through fails the item, and the snapshot it hid ages out on the
+bucket's floor like any hidden version. Each key reaches curl through
+its standard input, and each token stays in the shell, so the
+transcript holds neither.
