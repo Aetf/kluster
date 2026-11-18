@@ -209,8 +209,7 @@ STATE_BACKEND_MANAGEMENT = Role(
 DRILL_READ_NAME = f'{conventions.CLUSTER_NAME}-{conventions.DRILL}-read'
 
 #: What the freshness probe's key is called, on the same terms: the state
-#: dumps are what it lists, and the etcd snapshots' key of the same shape --
-#: over another bucket, once that bucket exists -- will carry the other suffix.
+#: dumps are what it lists.
 FRESHNESS_DUMPS_NAME = f'{conventions.CLUSTER_NAME}-freshness-dumps'
 
 #: The prefix every dump-prefix role is confined to: the one `conventions`

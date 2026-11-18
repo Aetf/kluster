@@ -534,8 +534,9 @@ rather than pull. *Lives in* ci.md §4.
     carried consciously, with the mitigations designed for them (etcd
     encryption at rest, hourly snapshots off-provider, the cold-standby
     drill). Of those, the encryption is in the control plane's machine
-    configuration; the snapshots are an ops-repo workflow, and that
-    workflow is unwritten, so none is taken; and the drill is
+    configuration; the snapshots are an in-cluster CronJob
+    (storage.md §5), which is not declared yet, so none is taken; and
+    the drill is
     unwritten (nodes.md §5 Tier 0). H1/H4 harden the *mechanism*, not
     the placement decision.
 -   **Combined CP+ingress+worker nodes** — the cost basis of the

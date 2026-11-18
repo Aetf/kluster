@@ -792,7 +792,7 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     schedule is in the ops repo**, because this repo carries no
     `schedule:` trigger: GitHub disables a public repository's
     scheduled workflow after 60 days without activity (the
-    scheduled-census bullet below). There `drift-trigger.yml`, Mondays
+    scheduled-work bullet below). There `drift-trigger.yml`, Mondays
     at 06:17 UTC and by hand, mints an installation token of the
     **trigger App**, `kluster-trigger` — a second single-purpose GitHub
     App, installed on this repo alone and carrying **Actions: write
@@ -1104,7 +1104,7 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     one that a change to that job removes without anybody deciding to.
     Repo secret scanning and push protection are on.
     A dedicated **`drill` Environment — in the ops repo, where the
-    drill workflows are to run** — is where the unattended drills'
+    state-backend rebuild drill is to run** — is where that drill's
     credentials (drill-compartment OCI user, dump-read B2 key, drill
     age key) are to live, with **no reviewer gate — the scope is the
     gate** (credentials.md §4). The Environment exists; its three
@@ -1206,48 +1206,62 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     credential nobody has typed in — is reported by name and the walk
     continues, so the exit status of a full `sync` is the answer to
     "is the map filled".
--   **Every scheduled workflow lives in the ops repo, but for the
-    in-cluster drills the cluster runs itself (operations.md §4); this
-    repo is event-driven only** (2026-08-24, amending the 2026-08-23 "one
-    scheduled workflow here" decision): once public, this repo's
-    scheduled workflows would sit under GitHub's 60-day inactivity
-    auto-disable — and the freshness checks silently dying with the
-    thing they watch is exactly what the dead-man design exists to
-    prevent. So the private **`kluster-ops`** repo (the notification
-    hub, architecture.md §4.3) owns the rest of the scheduled census:
-    the hourly **etcd snapshot** (designed as `talosctl etcd
-    snapshot` against the NLB endpoint → upload to B2 — no in-cluster
-    CronJob, no talosconfig copied into the cluster; as of 2026-09-25
-    that workflow is unwritten, so none is taken — nodes.md §5 Tier 0),
-    the
-    **freshness checks
-    for backups vmalert can't see** (object-age assertions on the
-    B2 `etcd/` and state-backend `pg_dump` prefixes, the
-    server-cert expiry probe ≥30 days —
-    physical/state-backend.md §6), the issue-sync poller, the
-    **slot-drift probe** (credentials.md §4), the **weekly drift
-    trigger** (`drift-trigger.yml`, which fires this repo's
-    `drift.yml` — the drift bullet above), and the unattended
-    **drill workflows** (state-backend rebuild, etcd restore-verify
-    — operations.md §4) in the ops repo's `drill` Environment.
-    Every run of them is to post to the same intake as CI's — the
-    same event to the same dispatch handler, with that repository's
-    own token since no repository boundary is crossed, an alert when
-    it failed and a `heartbeat` when it passed — and each is to be
-    watched by a dead-man timer on the Home Assistant side, because a
-    scheduled workflow that stops running cannot report its own
-    absence (operations.md §4, which says what of it is built).
-    Consequences carried consciously: the ops
-    repo is to hold real credentials (talosconfig, the B2 etcd
-    write key, the drill set — register rows in credentials.md,
-    pending but for the drill set, whose generator and mint fill
-    the `drill` Environment; as of 2026-09-25 nothing there reads any
-    of them),
-    which is what forced the dispatch App's fencing
-    (architecture.md §4.3), and its Actions-minutes bill is
-    accounted there too. This repo keeps only the event-driven
-    set: previews, the merge chain, noop-automerge, images.yml —
-    **zero `schedule:` triggers, by rule**.
+-   **Scheduled work runs in the cluster; a job runs in the ops
+    repository only where the cluster cannot hold what it needs**
+    (kluster-ops#832). Scheduled work that keeps the state of one
+    device outside the cluster — a dump of its database, a copy of its
+    backups — runs with that device instead: on the device itself, as
+    the state-backend appliance's nightly dump does, or, for a device
+    that runs no timer of its own, on the homelab host that reads it,
+    as the gateway's weekly backup pull does. A check that watches a
+    device never runs on it, because a device that has stopped cannot
+    report itself (physical/state-backend.md §6): the check is placed by
+    the test below like any job, and where that test keeps it out of
+    the cluster and the homelab host already reads the device, it runs
+    there, as the gateway's daily check does (physical/gateway.md
+    §1.6). The ops repository is the last resort, after the cluster and
+    the device. Whatever the cluster
+    holds, an unmerged ref's runs hold too: the previews of `k8s-base`
+    and `apps` open it with its kubeconfig (threat-model.md §3.1). So
+    the cluster holds a credential only where the credential gives such
+    a run nothing it does not already hold (threat-model.md §4, the
+    second clause), and a job whose credential fails that, and that has
+    no device to run with, runs in the private **`kluster-ops`**
+    repository, the reason stated beside it in that
+    repository's README. Today's instances are a credential that acts
+    on GitHub, of which the cluster holds none (architecture.md §4.3) —
+    the weekly drift trigger, the issue-sync poller and the slot-drift
+    probe (credentials.md §4) — and the state-backend rebuild drill's
+    OCI user, administrator of the `drill` compartment, in which
+    nothing an unmerged ref holds can create an instance
+    (operations.md §4). What the cluster runs on a clock is a CronJob,
+    a backup operator's own schedule, or a rule vmalert evaluates over
+    what it scrapes; operations.md §4 says where each scheduled job
+    runs.
+    **A cluster that is down is not such a reason**: an in-cluster job
+    that stops succeeding raises its own rules through alertmanager,
+    and a cluster that stops evaluating or delivering rules stops
+    restarting Home Assistant's timer for the cluster, whose expiry is
+    the push (operations.md §4).
+
+    **This repository keeps zero `schedule:` triggers, by rule**:
+    GitHub disables a public repository's scheduled workflow after 60
+    days without activity, and a check that dies quietly with the
+    thing it watches is the failure the dead-man exists to prevent. A
+    workflow here that runs on a clock is dispatched from the ops
+    repository, as `drift.yml` is (the drift bullet above).
+
+    Every ops-repository workflow posts to the same intake as CI's —
+    the same event to the same dispatch handler, with that
+    repository's own token, an alert when it failed and a `heartbeat`
+    when it passed — and each scheduled one is watched by a Home
+    Assistant timer of its own, because a workflow that stops running
+    cannot report its own absence (operations.md §4, which says what
+    of it is built). The ops repository holds real credentials for
+    those jobs — each a register row whose slot names it
+    (credentials.md §3) — which is what forced the dispatch App's
+    fencing (architecture.md §4.3), and its Actions-minutes bill is
+    accounted there.
 
 ## 4. Self-built images (decided 2026-08-22: they live in this repo)
 

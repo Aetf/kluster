@@ -156,11 +156,11 @@ class Scope:
 
 
 def etcd_scope() -> Scope:
-    """The control plane's hourly snapshots: an ops-repo workflow's to ship.
+    """The control plane's hourly snapshots, which a CronJob in the cluster ships.
 
-    That workflow is unwritten, so none is taken (nodes.md §5 Tier 0); the
-    scope is declared with the bucket so that the writer key is there when one
-    is. Its retention is the bucket's: a snapshot is hidden
+    That job is not declared yet, so none is taken (storage.md §5 item 1); the
+    scope is declared with the bucket so that the writer key is there when the
+    job is. Its retention is the bucket's: a snapshot is hidden
     `ETCD_SNAPSHOT_RETENTION_DAYS` after its upload, since every snapshot is a
     whole backup on its own.
     """

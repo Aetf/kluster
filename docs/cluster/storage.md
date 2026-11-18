@@ -533,8 +533,14 @@ be able to destroy the safety net it lives inside.
 Per nodes.md §5, durability = declarative rebuild + backups + drills:
 
 1.  **etcd**: hourly snapshots from the Talos control plane, shipped to
-    `b2://…/etcd/`, retained ~14 days — an ops-repo workflow, and that
-    workflow is unwritten, so none is taken (nodes.md §5 Tier 0).
+    `b2://…/etcd/`, retained ~14 days — taken in the cluster by
+    `siderolabs/talos-backup`, a CronJob in a namespace of its own,
+    `etcd-backup`, on the control planes. It speaks Talos with a
+    certificate Talos issues it for the `os:etcd:backup` role alone and
+    renews by itself, and writes with the `etcd` scope's writer key,
+    sealed into `k8s-base`; the scheduled-job rule family watches it
+    (operations.md §4). That job is not declared yet, nor its key
+    sealed, so none is taken (nodes.md §5 Tier 0).
     Restore path is documented Talos `--recover-from-snapshot` bootstrap, to be drilled both in-place and
     onto a substitute node (the CP cold-standby path, nodes.md §5 Tier 0);
     neither form has run.
