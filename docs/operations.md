@@ -781,9 +781,9 @@ preview with `denydefaultprovider not registered`.
     gateway to withdraw. A rebuild after stage 6 also takes stage 6's
     sealing sitting again, with `bgp seal` and never `bgp record`, which
     would draw a new password and rewrite the gateway's BGP
-    configuration. A rebuild after stage 9 also seals the writer keys
-    again, with `credentials derived b2-writer seal`, in the same
-    sitting. Until that sitting, both metrics stores wait in `Init` for
+    configuration; after stage 9 that sitting seals every writer key
+    with the bare `credentials derived b2-writer seal`, the
+    applications' keys with the rest. Until that sitting, both metrics stores wait in `Init` for
     the monitoring namespace's writer key. Once it has run, each store
     restores itself from the backup bucket before it starts
     (storage.md §5), and the readings below hold the history to its
@@ -885,7 +885,7 @@ preview with `denydefaultprovider not registered`.
         for o in cluster_endpoint cluster_endpoint_v6 vip1 worker_gua; do echo "$o $(physical stack output "$o")"; done > "$D/outputs"
         wc -l < "$D/protected"; cat "$D/outside" "$D/anchors" "$D/ids" "$D/metrics" "$D/outputs"; grep -c 'BEGIN CERTIFICATE' "$D/sealing.pem"
 
-    After bring-up stage 9, the history is backed up once more after its
+    After bring-up stage 6, the history is backed up once more after its
     baseline is read, so the backup a rebuild restores holds at least the
     baseline's rows. Both backup schedules are suspended first, and the
     drill's own job is created only once no backup job is running: a
@@ -898,7 +898,7 @@ preview with `denydefaultprovider not registered`.
     success. Both schedules go with etcd at step 3, and the rebuilt
     cluster declares them anew, running; a run that does not go resumes
     them, beside enabling `deploy.yml` again, with the same `patch`
-    and `"suspend":false`. Before stage 9 there is no backup job, and the
+    and `"suspend":false`. Before stage 6 there is no backup job, and the
     `kubectl` lines are left out.
 
     **The last line shows every baseline, and the go needs each one
@@ -908,7 +908,7 @@ preview with `denydefaultprovider not registered`.
     reading`. `ids` prints `1 found` and the partition's line, whose
     `uuid` may print `null` on the boot that provisioned the volume
     (physical/gateway-cutover.md §8.1). After
-    stage 9, `metrics` prints a `rows` line and an `earliest` line. Each
+    stage 6, `metrics` prints a `rows` line and an `earliest` line. Each
     of the four outputs has a value, and the certificate count is `1`.
     A baseline that is not whole is taken again before the go, because
     every later comparison against it reads as a pass where the reading
@@ -1081,9 +1081,10 @@ preview with `denydefaultprovider not registered`.
 
     **Step 9:** bring-up stage 5's gate on the rebuilt cluster, the
     sealing certificate differing from `$D/sealing.pem`. Where the run
-    is after bring-up stage 9, the sealing sitting of the paragraph on
+    is after bring-up stage 6, the sealing sitting of the paragraph on
     stage 6 above follows, and its pull request commits
-    `Pulumi.k8s-base.yaml` and `Pulumi.apps.yaml`. Once its merge has
+    `Pulumi.k8s-base.yaml`, and after stage 9 `Pulumi.apps.yaml` with
+    it. Once its merge has
     applied `k8s-base`, both stores leave `Init`, and `metrics` prints
     the baseline's earliest sample and at least the baseline's rows.
     Then the pass readings.
@@ -1109,12 +1110,12 @@ preview with `denydefaultprovider not registered`.
             and `anchors` prints what `$D/anchors` holds;
         -   every plan read during the run passed the scope check.
     5.  **The metrics history came back**, where the run is after bring-up
-        stage 9: `metrics` prints the earliest sample `$D/metrics` holds,
+        stage 6: `metrics` prints the earliest sample `$D/metrics` holds,
         and no fewer rows, and the history's backup job succeeds on its
         next run (§6.2). `metrics` counts the rows only over a read that
         succeeded, so a failed read prints no `rows` line rather than
         `rows 0`, and a `metrics`, at step 0 or here, that prints none
-        is no reading. Before stage 9, no key backs the stores up, and
+        is no reading. Before stage 6, no key backs the stores up, and
         both start empty.
     6.  `deploy.yml` is enabled again, and `.claude/drill/` is deleted.
 
@@ -1287,11 +1288,13 @@ CronJob by the scheduled-job rule family (the rule below) and, behind
 the family, the cluster's check-in (the alert contract). The family is
 declared with the rest of the cluster's rules in `k8s-base`, and it reads
 a CronJob only once the CronJob is declared: a job that waits for its
-sealed value, as the metrics stores' backups and the etcd snapshot do,
-reports nothing until the value is sealed in. For the etcd snapshot,
-whose key bring-up stage 6 seals, what bounds that is the pull request
-of stage 8 that deletes the sealed tolerance, from which an absent
-value stops the run by name (physical/bring-up.md). The timers
+sealed value, as the metrics stores' backups, the pull of OCI's
+block-volume series and the etcd snapshot do, reports nothing until the
+value is sealed in. Bring-up stage 6 seals every value `k8s-base`
+reads, each of those keys among them, and reads each job's first run;
+what bounds a value it missed is the pull request of stage 8 that
+deletes the sealed tolerance, from which an absent value stops the run
+by name (physical/bring-up.md §1). The timers
 do not exist yet, and until they do, an ops-repository workflow that
 stops running reports nothing. A device's own jobs are
 watched as the census below says, and the gateway's daily check by
@@ -1313,7 +1316,7 @@ for its place. The last column says which run, as of 2026-11-17:
 | Age of the newest object under `etcd/` | No job of its own: the snapshot job's stale rule stands in for it, since a run that succeeded is an object uploaded, and the monthly restore-verify reads the newest object's age as a second, independent reading | None | The snapshot job's rules | No, with the snapshot job |
 | VolSync backups, one `ReplicationSource` per backed claim | The cluster: VolSync's own schedule, the claim's retention class (`conventions.backup.RETENTION_CLASSES`, storage.md §5) | The namespace's writer key and each repository's password, sealed | The backup-freshness family (declarative/workloads.md §3), then the cluster's check-in | No: none is declared until the first claim under a class lands |
 | CNPG barman backups, per database cluster | The cluster: the operator's own schedule, beside continuous WAL archiving (storage.md §5) | The namespace's writer key, sealed | The backup-freshness family, then the cluster's check-in | No: no database cluster is declared yet |
-| The metrics stores' backups, hourly | The cluster: a CronJob per store, in `monitoring` (storage.md §5) | The `vm` writer key, sealed | The family's rules (§6.2), then the cluster's check-in | No: declared once bring-up stage 9 seals the `vm` key (storage.md §5) |
+| The metrics stores' backups, hourly | The cluster: a CronJob per store, in `monitoring` (storage.md §5) | The `vm` writer key, sealed | The family's rules (§6.2), then the cluster's check-in | No: declared once bring-up stage 6 seals the `vm` key (storage.md §5) |
 | The block volumes' metrics, pulled hourly into the history store | The cluster: a CronJob in `monitoring` | The OCI metrics reader's key, sealed (credentials.md §3) | The family's rules (§6.3), then the cluster's check-in | No (`kluster-ops#790`) |
 | The authentication canary, every few minutes | The cluster: a CronJob in Authelia's namespace that requests a protected path with no credential (declarative/cluster-infra.md §2) | None: it presents none | Its own rule, which fires on anything but a refusal; the family's rules for the job; then the cluster's check-in | No: it ships with Authelia (rfc-008 §5.2) |
 | State-backend dump age | The cluster: a CronJob in `monitoring`, hourly, listing `pulumi-state/` (state-backend.md §6) | The list-only `B2 freshness key (state dumps)`, sealed | The family's rules, then the cluster's check-in | No; `probes.yml` reads it today |
@@ -1588,7 +1591,7 @@ behind, and a rebuild would restore it only as far as its last success
 4. **A pod that never started.** It waits on what it mounts or reads:
    the writer key's Secret, `writer-vm-monitoring`, which a SealedSecret
    the controller cannot open never creates, and which the sealing
-   sitting of bring-up stage 9 (physical/bring-up.md §2) seals again
+   sitting of bring-up stage 6 (physical/bring-up.md §2) seals again
    after a rebuild (§3.5); or the scripts' `ConfigMap`, `metrics-backup-shell`. `mise x -- kubectl -n
    monitoring describe pod` names which.
 5. **The store did not answer.** The snapshot is taken through the

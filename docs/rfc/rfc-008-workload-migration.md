@@ -76,6 +76,14 @@
     OCI preserves the source on the IPv6 sets, so the fallback rfc-007
     §5.1 recorded for that front is gone, and the one that remains is
     architecture.md §3.2's reserved address per node, on IPv4.
+*   **Updated:** 2026-11-18. §4.6's seal of every namespace's writer
+    key at the bring-up's last stage stands, and the monitoring
+    namespace's key is sealed before it as well, at the sitting that
+    seals the cluster's own values (physical/bring-up.md stage 6):
+    `k8s-base` declares what reads it from its first `up`, and the
+    deletion of the tolerance at stage 8 stops a run that finds it
+    absent
+    ([Aetf/kluster-ops#855](https://github.com/Aetf/kluster-ops/issues/855)).
 *   **Authority:** AGENTS.md,
     [framework/dispatch.md](../framework/dispatch.md),
     [framework/rfc.md](../framework/rfc.md) and the style rules
