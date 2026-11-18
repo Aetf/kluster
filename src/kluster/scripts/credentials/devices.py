@@ -2,17 +2,16 @@
 
 Some of §3's rows are neither minted from a seed nor generated and escrowed.
 The credential is made by a person — in the console that checks it, the
-appliance's own or the provider's where the provider publishes no API for
-making one, or by drawing it where no console does — and this side of the
-system only delivers it:
+appliance's own or the provider's, or by drawing it where no console does —
+and this side of the system only delivers it:
 
 -   the **UniFi API key**, which the controller mints for a dedicated local
     admin and shows once;
 -   the **AdGuard admin login**, which *is* the API credential — AdGuard Home
     has no scoped API at all (the security audit's M6), so the account both
     instances carry is what a rewrite call authenticates as;
--   the **ZeroTier Central API token**, which Central mints only in its own
-    web console and scopes to the whole account;
+-   the **ZeroTier Central API token**, made in Central's web console and
+    scoped to the whole account, as every Central token is;
 -   the **GitHub admin token**, a personal access token created in the GitHub
     UI, which is what the `github` stack declares the forge with and what
     every `credentials` command that pushes a GitHub secret authenticates as;
@@ -24,10 +23,11 @@ system only delivers it:
     same value sealed to the cluster (`sealing.py`), which `k8s-base`
     declares (declarative/cluster-infra.md §2).
 
-None of them is a seed: a seed is a credential that mints successors
-(`entries.py`), and each of these mints nothing. Losing one costs a console
-visit — or, for the session password, a fresh draw — and a re-run of its
-`record` command, which is also the whole of its rotation.
+None of them is a seed: a seed is a credential that mints narrower ones
+(`entries.py`), and each of these mints nothing, or, for the Central token,
+only tokens as broad as itself, which it can mint as well. Losing one costs a
+console visit — or, for the session password, a fresh draw — and a re-run of
+its `record` command, which is also the whole of its rotation.
 
 **A row here is a provider credential like any other**, and lives where every
 other provider credential of this installation lives: the committed
@@ -407,15 +407,13 @@ DEVICES: dict[str, Device] = {
             holds='the Central API token',
             console=(
                 'my.zerotier.com → Account → API Access Tokens → New Token, named\n'
-                '  for this overlay. Central publishes no token API, so its web\n'
-                '  console is the only thing that can make one and nothing here can\n'
-                '  mint a successor: re-running this command with a token created\n'
-                '  there is the whole of a rotation, and the superseded token is\n'
-                '  deleted on the same page.\n'
-                '  The token carries the whole Central account — the network, its\n'
-                '  members and its flow rules — because Central offers no narrower\n'
-                '  scope. That excess is why it is delivered straight into the one\n'
-                '  stack that uses it rather than kept anywhere else.\n'
+                '  for this overlay. To rotate, re-run this command with a new token\n'
+                '  made there, then delete on the same page the superseded token and\n'
+                '  every other token there that nothing is meant to hold.\n'
+                "  Every Central token, made in that console or through Central's\n"
+                '  token API, carries the whole account — the network, its members,\n'
+                '  its flow rules, and the minting of more tokens — so it is\n'
+                '  delivered straight into the one stack that uses it.\n'
                 "  Which of the account's networks is this site's overlay is not\n"
                 '  asked for: the id is an identity rather than a setting, so it is\n'
                 '  a constant in `conventions.overlay` (rfc-002 §11).'

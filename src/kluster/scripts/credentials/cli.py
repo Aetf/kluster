@@ -578,9 +578,10 @@ def build_parser() -> argparse.ArgumentParser:
         help='the long-lived credentials the offline kit holds, one member per row',
         description=(
             'A seed is a credential kept in the offline kit so that everything a stack runs on can be '
-            'minted from it without reaching for an account root: one per provider, plus the recovery key '
-            'the escrowed secrets are encrypted to. Each member below is one entry of the kit. `create` '
-            'writes it, whether or not the kit already holds one -- minting it where the platform has an '
+            'minted from it without reaching for an account root: one for each provider whose credentials '
+            'are minted rather than made by hand, plus the recovery key the escrowed secrets are encrypted '
+            'to. Each member below is one entry of the kit. `create` writes it, whether or not the kit '
+            'already holds one -- minting it where the platform has an '
             'API for that, printing the console steps where it has none -- except the recovery key, '
             'which refuses a present row because every escrowed secret opens with that one key; and a '
             'seed that can mint its own successor also has `rotate`. A member listed here whose mint is '
@@ -1378,11 +1379,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     # The rows whose credential a person makes rather than a seed minting it:
     # in the console that checks it -- an appliance of the installation, or
-    # the platform itself where that platform publishes no API for making one
-    # -- or, where no console makes one, by drawing it. `record` prints the
-    # steps that create it, takes the value without echoing it and pushes it
-    # into the stack that reads it (`devices.py`); nothing here mints
-    # anything, so the delivery is the whole of the act.
+    # the platform itself -- or, where no console makes one, by drawing it.
+    # `record` prints the steps that create it, takes the value without
+    # echoing it and pushes it into the stack that reads it (`devices.py`);
+    # nothing here mints anything, so the delivery is the whole of the act.
     for device in devices.DEVICES.values():
         device_row = rows.add_parser(
             device.member,
