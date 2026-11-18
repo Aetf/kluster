@@ -33,8 +33,17 @@ import pytest
 import pytest_asyncio
 import yaml
 from fences import prose
-from k8s_base_installation import PUBLISHED, SEALED, VERSIONS_CONFIG, Autonaming, Run, applied, release_assets
-from mock_monitor import declaring, run_under_backstop
+from k8s_base_installation import (
+    PUBLISHED,
+    SEALED,
+    VERSIONS_CONFIG,
+    Autonaming,
+    Physical,
+    Run,
+    applied,
+    release_assets,
+)
+from mock_monitor import Recorder, declaring, run_under_backstop
 from renovate_text import listed, package_rules, scalar
 from section_numbers import sections
 
@@ -43,7 +52,7 @@ from kluster.components.monitoring import DATASOURCES_DIGEST_ENV, RECEIVER, memo
 from kluster.components.monitoring.operator_objects import type_token
 from kluster.components.monitoring.rules import HEARTBEAT, HEARTBEAT_TIMER, TIER_LABEL
 from kluster.components.talos import ETCD_METRICS_PORT
-from kluster.conventions import backup
+from kluster.conventions import backup, schedule
 from kluster.conventions.alert import Tier
 from kluster.conventions.backup import BackupFamily
 from kluster.conventions.outputs import BOOT_VOLUME
@@ -1353,11 +1362,10 @@ def test_without_the_writer_key_nothing_backs_up_or_restores_and_the_key_is_name
 
 def _backup_jobs(run: Run) -> dict[str, dict[str, Any]]:
     """Each backup CronJob's spec, by the claim its pod mounts."""
-    from kluster.components.monitoring import stores
-
+    names = {job.cronjob for job in schedule.METRICS_BACKUPS.values()}
     jobs: dict[str, dict[str, Any]] = {}
     for job in run.monitor.of_type(CRONJOB):
-        if not job.inputs['metadata']['name'].startswith(stores.BACKUP_JOB_PREFIX):
+        if job.inputs['metadata']['name'] not in names:
             continue
         pod = job.inputs['spec']['jobTemplate']['spec']['template']['spec']
         (claim,) = [it['persistentVolumeClaim'] for it in pod['volumes'] if 'persistentVolumeClaim' in it]
@@ -1393,22 +1401,12 @@ def _pod_containers(job: Mapping[str, Any]) -> list[dict[str, Any]]:
     return [*pod.get('initContainers', []), *pod['containers']]
 
 
-def test_a_backup_run_is_cut_off_before_the_next_is_due(sealed: Run) -> None:
-    """`Forbid` keeps a later run from starting while one runs, so a hung run is bounded inside the period."""
-    from kluster.components.monitoring import stores
-
-    for claim, job in _backup_jobs(sealed).items():
-        deadline = job['spec']['jobTemplate']['spec'].get('activeDeadlineSeconds')
-        assert deadline is not None, claim
-        assert dt.timedelta(seconds=deadline) < stores.BACKUP_PERIOD, claim
-
-
 def test_a_snapshot_a_cut_off_backup_leaves_is_deleted_well_after_any_run_ends(sealed: Run) -> None:
     """Its hard links would keep every part merged away since on disk; no run loses the snapshot it copies."""
-    from kluster.components.monitoring import BACKUP_DEADLINE
+    longest = max(job.deadline for job in schedule.METRICS_BACKUPS.values())
 
     for spec in (_values(sealed)['vmsingle']['spec'], _history(sealed)['spec']):
-        assert _duration(spec['extraArgs']['snapshotsMaxAge']) > BACKUP_DEADLINE
+        assert _duration(spec['extraArgs']['snapshotsMaxAge']) > longest
 
 
 def _env(container: Mapping[str, Any]) -> dict[str, Any]:
@@ -1725,12 +1723,10 @@ def _restore_pod(run: Run, store: str, tmp_path: Path, shells: Mapping[str, Path
 
 
 def _backup_pod(run: Run, store: str, tmp_path: Path, shells: Mapping[str, Path]) -> Pod:
-    from kluster.components.monitoring import stores
-
     (job,) = [
         it.inputs
         for it in run.monitor.of_type(CRONJOB)
-        if it.inputs['metadata']['name'] == f'{stores.BACKUP_JOB_PREFIX}{store}'
+        if it.inputs['metadata']['name'] == schedule.METRICS_BACKUPS[store].cronjob
     ]
     pod = job['spec']['jobTemplate']['spec']['template']['spec']
     return Pod(tmp_path, shells, pod.get('initContainers', []), pod['containers'])
@@ -1975,25 +1971,168 @@ def test_no_container_is_handed_a_secret_in_its_command(sealed: Run) -> None:
         assert not [arg for arg in container['command'] if 'generated-in-state' in arg or 'AgB-sealed' in arg]
 
 
-# -- The backups' freshness --------------------------------------------------------------
+# -- The scheduled-job family ------------------------------------------------------
 
 
-def test_a_backup_job_that_stopped_succeeding_or_never_did_raises_an_alert(absent: tuple[Run, list[str]]) -> None:
-    """Some rule reads each backup CronJob's last success, and its creation where it has none, against `max_age`."""
-    from kluster.components.monitoring import stores
+@pytest_asyncio.fixture(scope='module', loop_scope='module')
+async def apps() -> Recorder:
+    """The `apps` program, with every sealed value its stack declares sealed in, against a `physical` that has published."""
+    from kluster.stacks import apps as program
 
+    secrets = {
+        f'kluster:{KUBECONFIG_KEY}': 'a-fake-kubeconfig-that-reaches-no-cluster',
+        f'kluster:{program.CLOUDFLARE_API_TOKEN}': 'a-zones-token-that-reaches-no-account',
+    }
+    sealed = {
+        value.name: {key: f'AgB-sealed-{value.name}-{key}' for key in value.keys}
+        for value in conventions.sealed.VALUES.values()
+        if value.stack == conventions.STACK_NAMES.apps
+    }
+    config = secrets | {f'kluster:{conventions.sealed.CONFIG_KEY}': json.dumps(sealed)}
+    pulumi.runtime.set_all_config(config | VERSIONS_CONFIG, secret_keys=list(secrets))
+    monitor = await run_under_backstop(Physical(), stack=conventions.STACK_NAMES.apps)
+    async with declaring():
+        await program.main()
+    return monitor
+
+
+#: The type the provider registers a Kubernetes provider under, which every
+#: program that declares a CronJob opens.
+KUBERNETES_PROVIDER = 'pulumi:providers:kubernetes'
+
+
+def _cronjobs(*monitors: Recorder) -> dict[tuple[str, str], dict[str, Any]]:
+    """Every CronJob the runs declare, by its namespace and its name: its spec."""
+    declared: dict[tuple[str, str], dict[str, Any]] = {}
+    for monitor in monitors:
+        for job in monitor.of_type(CRONJOB):
+            metadata = job.inputs['metadata']
+            key = (metadata['namespace'], metadata['name'])
+            assert key not in declared, f'two CronJobs declared as {key}'
+            declared[key] = job.inputs['spec']
+    return declared
+
+
+#: A cron line's period, by which of its fields hold a value rather than `*`:
+#: the minute alone is hourly, the minute and the hour daily, and those and a
+#: day of the week weekly (crontab(5)).
+CRON_PERIODS: dict[tuple[bool, ...], dt.timedelta] = {
+    (True, False, False, False, False): dt.timedelta(hours=1),
+    (True, True, False, False, False): dt.timedelta(days=1),
+    (True, True, False, False, True): dt.timedelta(weeks=1),
+}
+
+
+def _period(schedule: str) -> dt.timedelta:
+    """How often a cron line of one of `CRON_PERIODS`' shapes fires, each field it sets one number."""
+    fields = schedule.split()
+    assert all(field == '*' or field.isdigit() for field in fields), schedule
+    shape = tuple(field != '*' for field in fields)
+    assert shape in CRON_PERIODS, f'{schedule!r} is no cron line of a single period'
+    return CRON_PERIODS[shape]
+
+
+def test_every_cronjob_a_program_declares_is_a_rows_and_every_row_a_declared_cronjob(
+    sealed: Run, apps: Recorder
+) -> None:
+    """The family watches a CronJob through its row, so a CronJob without one is a job nothing reports stopping.
+
+    Read off the two programs that open the cluster, `k8s-base` and `apps`,
+    each with every sealed value in, which is when each declares its every
+    CronJob. A row no program declares a CronJob for is two alerts over no
+    series, and two rows of one CronJob are its alerts twice.
+    """
+    for monitor in (sealed.monitor, apps):
+        assert monitor.of_type(KUBERNETES_PROVIDER), 'a run that opened no cluster'
+    rows = [(job.namespace, job.cronjob) for job in schedule.SCHEDULED_JOBS]
+
+    assert len(set(rows)) == len(rows)
+    assert set(_cronjobs(sealed.monitor, apps)) == set(rows)
+
+
+def test_each_cronjob_runs_at_its_rows_period_and_is_cut_off_at_its_rows_deadline(sealed: Run, apps: Recorder) -> None:
+    """The period is what the stale alert is held to and the deadline what the failed one waits for.
+
+    A run is cut off at the deadline, which `Forbid` would otherwise let hold
+    every later run back, so the failed alert finds the run either succeeded
+    or failed by then.
+    """
+    rows = {(job.namespace, job.cronjob): job for job in schedule.SCHEDULED_JOBS}
+
+    for key, spec in _cronjobs(sealed.monitor, apps).items():
+        assert _period(spec['schedule']) == rows[key].period, key
+        assert spec['jobTemplate']['spec']['activeDeadlineSeconds'] == rows[key].deadline.total_seconds(), key
+        assert spec['concurrencyPolicy'] == 'Forbid', key
+
+
+def test_each_row_raises_a_stale_and_a_failed_alert_on_its_cronjob_naming_its_playbook(
+    absent: tuple[Run, list[str]],
+) -> None:
+    """Stale over `max_age` of the row's period, failed held for its deadline, both `actionable`, on its CronJob alone.
+
+    The expressions' behavior over kube-state-metrics' series is not read
+    here: what holds is each rule's relation to its row.
+    """
     run, _ = absent
-    threshold = backup.duration(backup.max_age(stores.BACKUP_PERIOD))
-    reading = [
-        rule['alert']
-        for rule in _declared_rules(run)
-        if 'kube_cronjob_status_last_successful_time' in rule['expr']
-        and 'kube_cronjob_created' in rule['expr']
-        and f'cronjob=~"{stores.BACKUP_JOB_PREFIX}.*"' in rule['expr']
-        and rule['expr'].endswith(f'> {threshold}')
-    ]
+    declared = _declared_rules(run)
 
-    assert reading
+    for job in schedule.SCHEDULED_JOBS:
+        selector = f'{{namespace="{job.namespace}", cronjob="{job.cronjob}"}}'
+        reading = {rule['alert']: rule for rule in declared if selector in rule['expr']}
+        assert set(reading) == {f'{job.alert}Stale', f'{job.alert}Failed'}, job.cronjob
+        stale, failed = reading[f'{job.alert}Stale'], reading[f'{job.alert}Failed']
+
+        assert stale['expr'].endswith(f'> {backup.duration(backup.max_age(job.period))}'), stale['expr']
+        assert 'for' not in stale
+        assert _duration(failed['for']) == job.deadline
+
+        for rule in (stale, failed):
+            assert rule['labels'][TIER_LABEL] == Tier.ACTIONABLE.value
+            assert rule['annotations']['playbook'] == str(job.playbook)
+            assert job.cronjob in rule['annotations']['summary']
+
+
+def test_a_status_reaches_the_rules_inside_the_lag_every_deadline_leaves(absent: tuple[Run, list[str]]) -> None:
+    """A CronJob's status is published at the next scrape and read at the next evaluation after it.
+
+    Both intervals are read off what the program declares: vmagent's one
+    scrape interval, which kube-state-metrics' scrape keeps (the case on
+    vmagent's one interval), and vmalert's evaluation interval.
+    """
+    run, _ = absent
+    values = _values(run)
+    scrape = _duration(values['vmagent']['spec']['scrapeInterval'])
+    evaluation = _duration(values['vmalert']['spec']['evaluationInterval'])
+
+    assert scrape + evaluation < schedule.REPORT_LAG
+
+
+def _row(*, period: dt.timedelta, deadline: dt.timedelta) -> schedule.ScheduledJob:
+    return schedule.ScheduledJob(
+        alert='Drill',
+        namespace='a-namespace',
+        cronjob='a-job',
+        period=period,
+        deadline=deadline,
+        playbook=conventions.alert.Playbook('docs/operations.md', '4'),
+    )
+
+
+@pytest.mark.parametrize('period', [dt.timedelta(hours=1), dt.timedelta(days=1), dt.timedelta(weeks=1)])
+def test_a_deadline_past_what_its_period_leaves_is_refused_naming_the_cronjob(period: dt.timedelta) -> None:
+    """A run that eventually succeeds is never reported stale, and the failed alert fires before the stale one.
+
+    The stale alert fires one and a half periods after the last success; the
+    next run starts at the latest one period after it, and its success takes
+    `REPORT_LAG` to reach the rules. So a deadline may be half a period less
+    the lag, and no more.
+    """
+    slack = period / 2 - schedule.REPORT_LAG
+
+    assert _row(period=period, deadline=slack).deadline == slack
+    for deadline in (slack + dt.timedelta(seconds=1), dt.timedelta(0)):
+        with pytest.raises(ValueError, match="'a-job'"):
+            _ = _row(period=period, deadline=deadline)
 
 
 # -- The pull of OCI's block-volume series ------------------------------------------
@@ -2030,7 +2169,7 @@ def test_the_metrics_readers_key_adds_its_sealed_secret_the_pulls_config_map_and
     assert added == {
         (SEALED_SECRET, OCI_KEY.name),
         (CONFIGMAP, oci_metrics.PULL_CONFIGMAP),
-        (CRONJOB, oci_metrics.PULL_JOB),
+        (CRONJOB, schedule.OCI_METRICS_PULL.cronjob),
     }
     assert _monitoring_objects(without_oci_key) <= _monitoring_objects(sealed)
     assert _declared_rules(sealed) == _declared_rules(without_oci_key)
@@ -2044,7 +2183,7 @@ def test_without_the_metrics_readers_key_the_pull_is_not_declared_and_the_key_is
 
     run, warned = absent
     for declared in (run, without_oci_key):
-        assert _named(declared, CRONJOB, oci_metrics.PULL_JOB) == []
+        assert _named(declared, CRONJOB, schedule.OCI_METRICS_PULL.cronjob) == []
         assert _named(declared, CONFIGMAP, oci_metrics.PULL_CONFIGMAP) == []
         assert _named(declared, SEALED_SECRET, OCI_KEY.name) == []
     assert [message for message in warned if repr(OCI_KEY.name) in message]
@@ -2054,7 +2193,7 @@ def _pull(run: Run) -> tuple[dict[str, Any], dict[str, Any]]:
     """The pull's CronJob spec and its ConfigMap's data."""
     from kluster.components.monitoring import oci_metrics
 
-    (job,) = _named(run, CRONJOB, oci_metrics.PULL_JOB)
+    (job,) = _named(run, CRONJOB, schedule.OCI_METRICS_PULL.cronjob)
     (program,) = _named(run, CONFIGMAP, oci_metrics.PULL_CONFIGMAP)
     return job['spec'], program['data']
 
@@ -2075,9 +2214,7 @@ def _settings(run: Run, tmp_path: Path) -> Any:
 
 
 def test_the_pull_runs_hourly_one_run_at_a_time_apart_from_the_backups(sealed: Run) -> None:
-    """A hung run is cut off before the next is due, and no run shares a minute with a store's backup."""
-    from kluster.components.monitoring import oci_metrics
-
+    """No run shares a minute with a store's backup; how long a run may take is its row's (the family's cases)."""
     job, _ = _pull(sealed)
     minute, *every = job['schedule'].split()
     backups = {it['spec']['schedule'].split()[0] for it in _backup_jobs(sealed).values()}
@@ -2085,7 +2222,6 @@ def test_the_pull_runs_hourly_one_run_at_a_time_apart_from_the_backups(sealed: R
     assert every == ['*'] * 4
     assert minute not in backups
     assert job['concurrencyPolicy'] == 'Forbid'
-    assert dt.timedelta(seconds=job['jobTemplate']['spec']['activeDeadlineSeconds']) < oci_metrics.PULL_PERIOD
 
 
 def test_the_pull_runs_its_pin_on_the_program_and_settings_its_config_map_carries(sealed: Run) -> None:
@@ -2224,24 +2360,3 @@ def test_a_volume_physical_published_that_the_census_does_not_declare_is_not_pul
     )
 
     assert {(it.node, it.volume) for it in targets.values()} == _census()
-
-
-def test_a_pull_that_stopped_succeeding_or_never_did_raises_an_alert(absent: tuple[Run, list[str]]) -> None:
-    """Read as the backups' freshness is, over its own CronJob and period, in the same tier and under the same labels."""
-    from kluster.components.monitoring import oci_metrics, stores
-
-    run, _ = absent
-    threshold = backup.duration(backup.max_age(oci_metrics.PULL_PERIOD))
-    declared = _declared_rules(run)
-    (backups,) = [rule for rule in declared if f'cronjob=~"{stores.BACKUP_JOB_PREFIX}.*"' in rule['expr']]
-    reading = [
-        rule
-        for rule in declared
-        if 'kube_cronjob_status_last_successful_time' in rule['expr']
-        and 'kube_cronjob_created' in rule['expr']
-        and f'cronjob="{oci_metrics.PULL_JOB}"' in rule['expr']
-        and rule['expr'].endswith(f'> {threshold}')
-    ]
-
-    assert [rule['labels'] for rule in reading] == [backups['labels']]
-    assert backups['labels'][TIER_LABEL] == Tier.ACTIONABLE.value

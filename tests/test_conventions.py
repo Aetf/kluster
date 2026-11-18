@@ -1761,13 +1761,15 @@ def test_no_workflow_points_a_command_at_an_operator_stack() -> None:
 # --------------------------------------------------------------------------
 # The alert payload and its producer.
 # --------------------------------------------------------------------------
-# `conventions.alert` is the payload every alert travels as, and nothing in
-# this tree reads it at run time: the writer is `alert.yml`, a workflow no
-# import reaches, and the reader is the ops repository's dispatch handler,
-# which nothing here can see. So what holds the convention on this side is the
-# cases below -- the producer's event type, inputs and payload keys against the
-# census, every workflow that runs on `main` against the rule for calling it,
-# and the credential it mints with against the register's map and the forge.
+# `conventions.alert` is the payload every alert travels as. The cluster's
+# rules read `Tier` and `Playbook` from it at run time
+# (`components.monitoring.rules`), and no import reaches the dispatch itself:
+# the writer is `alert.yml`, a workflow, and the reader is the ops
+# repository's dispatch handler, which nothing here can see. So what holds the
+# dispatch's convention on this side is the cases below -- the producer's
+# event type, inputs and payload keys against the census, every workflow that
+# runs on `main` against the rule for calling it, and the credential it mints
+# with against the register's map and the forge.
 
 #: The reusable workflow every alert in CI goes through, as a caller's
 #: `uses:` names it.

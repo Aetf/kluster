@@ -16,6 +16,12 @@ The expressions are MetricsQL, which vmalert evaluates: a duration such as
 `36h` stands for its number of seconds wherever a number does, which is how
 the freshness family compares an age with a retention class's threshold in the
 duration syntax `conventions.backup` writes it in.
+
+**Every CronJob a stack program declares is watched by the scheduled-job
+family**: each row of `conventions.schedule.SCHEDULED_JOBS` gives a *stale*
+alert (`stale`) and a *failed* one (`failed`), read off kube-state-metrics'
+series for that CronJob, both `actionable` and both naming the row's playbook
+(operations.md §4).
 """
 
 from __future__ import annotations
@@ -25,9 +31,9 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from types import MappingProxyType
 
-from kluster.components.monitoring import oci_metrics, stores
-from kluster.conventions import MONITORING_NAMESPACE, backup
-from kluster.conventions.alert import Tier
+from kluster.conventions import backup, schedule
+from kluster.conventions.alert import Playbook, Tier
+from kluster.conventions.schedule import ScheduledJob
 
 __all__ = (
     'BACKUP_SYNC_TIME',
@@ -35,13 +41,12 @@ __all__ = (
     'HEARTBEAT',
     'HEARTBEAT_REPEAT',
     'HEARTBEAT_TIMER',
-    'METRICS_BACKUP_STALE',
-    'OCI_METRICS_PULL_STALE',
     'RULE_GROUPS',
     'TIER_LABEL',
     'AlertRule',
-    'Playbook',
     'RuleGroup',
+    'failed',
+    'stale',
 )
 
 #: The label an alert's tier travels under, and the receiver's routing key.
@@ -72,18 +77,6 @@ BACKUP_SYNC_TIME = 'kube_customresource_volsync_last_sync_time_seconds'
 
 #: The label carrying a backup source's retention class on `BACKUP_SYNC_TIME`.
 CLASS_LABEL = 'class'
-
-
-@dataclass(frozen=True)
-class Playbook:
-    """Where an alert's response procedure is written: a document, from the repository's root, and a section."""
-
-    document: str
-    section: str
-
-    def __str__(self) -> str:
-        """The form the payload's `playbook` field takes (`conventions.alert.FIELDS`)."""
-        return f'{self.document} §{self.section}'
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -123,11 +116,6 @@ HEARTBEAT = AlertRule(
 )
 
 
-def _backup_jobs() -> str:
-    """The matchers selecting the metrics stores' backup CronJobs."""
-    return f'namespace="{MONITORING_NAMESPACE}", cronjob=~"{stores.BACKUP_JOB_PREFIX}.*"'
-
-
 def _freshness(retention: backup.RetentionClass) -> AlertRule:
     """The backup-freshness rule for one retention class: a source whose last sync is older than the class allows."""
     return AlertRule(
@@ -143,47 +131,60 @@ def _freshness(retention: backup.RetentionClass) -> AlertRule:
     )
 
 
-#: The metrics stores' backups going stale: a backup CronJob whose last
-#: success, or its creation where it has not succeeded yet, is older than the
-#: one rule for stale allows over its period. kube-state-metrics publishes both
-#: times per CronJob, under the same labels, so the creation stands in only
-#: for a job with no success on record, and a job that never succeeds is
-#: reported as one that stopped succeeding is.
-METRICS_BACKUP_STALE = AlertRule(
-    alert='MetricsBackupStale',
-    expr=(
-        f'time() - max by (cronjob) ('
-        f'kube_cronjob_status_last_successful_time{{{_backup_jobs()}}} or kube_cronjob_created{{{_backup_jobs()}}}'
-        f') > {backup.duration(backup.max_age(stores.BACKUP_PERIOD))}'
-    ),
-    tier=Tier.ACTIONABLE,
-    summary="A metrics store's backup is older than its period allows",
-    playbook=Playbook('docs/operations.md', '6.2'),
-)
+#: The labels kube-state-metrics publishes a CronJob's series under, which a
+#: job's alerts keep: they tell apart two jobs whose alerts share a name.
+_JOB_LABELS = 'namespace, cronjob'
 
 
-def _pull_job() -> str:
-    """The matchers selecting the pull of OCI's block-volume series."""
-    return f'namespace="{MONITORING_NAMESPACE}", cronjob="{oci_metrics.PULL_JOB}"'
+def _last_success(job: ScheduledJob) -> str:
+    """The time of the job's last success, or of its creation where it has none, one series per CronJob.
+
+    kube-state-metrics publishes both times per CronJob under the same labels,
+    so the creation stands in only for a job with no success on record, and a
+    job that never succeeds is reported as one that stopped succeeding is.
+    """
+    selector = f'namespace="{job.namespace}", cronjob="{job.cronjob}"'
+    return (
+        f'max by ({_JOB_LABELS}) ('
+        f'kube_cronjob_status_last_successful_time{{{selector}}} or kube_cronjob_created{{{selector}}})'
+    )
 
 
-#: The pull of OCI's block-volume series going stale, read as the metrics
-#: stores' backups are: its CronJob's last success, or its creation where it
-#: has not succeeded yet, older than the one rule for stale allows over its
-#: period. A run fails where OCI returned nothing of a volume the census
-#: declares, so that is reported here too. Silent until the CronJob is
-#: declared, which it is once the key is sealed in.
-OCI_METRICS_PULL_STALE = AlertRule(
-    alert='OciMetricsPullStale',
-    expr=(
-        f'time() - max by (cronjob) ('
-        f'kube_cronjob_status_last_successful_time{{{_pull_job()}}} or kube_cronjob_created{{{_pull_job()}}}'
-        f') > {backup.duration(backup.max_age(oci_metrics.PULL_PERIOD))}'
-    ),
-    tier=Tier.ACTIONABLE,
-    summary="OCI's block-volume series have not been pulled within their period",
-    playbook=Playbook('docs/operations.md', '6.3'),
-)
+def stale(job: ScheduledJob) -> AlertRule:
+    """The job's last success older than the one rule for stale allows over its period.
+
+    It also reports a job that is no longer scheduled at all, suspended or
+    with its controller stopped, since no success follows.
+    """
+    return AlertRule(
+        alert=f'{job.alert}Stale',
+        expr=f'time() - {_last_success(job)} > {backup.duration(backup.max_age(job.period))}',
+        tier=Tier.ACTIONABLE,
+        summary=f'{job.cronjob} has not succeeded for one and a half of its periods',
+        playbook=job.playbook,
+    )
+
+
+def failed(job: ScheduledJob) -> AlertRule:
+    """A run scheduled after the job's last success, held for the job's deadline.
+
+    A run that succeeds moves the last success past its schedule inside the
+    deadline, and one that does not has been cut off by then, so the alert
+    reports a failed run within its deadline rather than after one and a half
+    periods. It resolves when a later run succeeds.
+    """
+    return AlertRule(
+        alert=f'{job.alert}Failed',
+        expr=(
+            f'max by ({_JOB_LABELS}) (kube_cronjob_status_last_schedule_time'
+            f'{{namespace="{job.namespace}", cronjob="{job.cronjob}"}}) > {_last_success(job)}'
+        ),
+        tier=Tier.ACTIONABLE,
+        summary=f"{job.cronjob}'s last run failed",
+        playbook=job.playbook,
+        pending=job.deadline,
+    )
+
 
 #: Every rule the component declares, by group (rfc-007 §7.2).
 RULE_GROUPS: Sequence[RuleGroup] = (
@@ -234,8 +235,7 @@ RULE_GROUPS: Sequence[RuleGroup] = (
                 summary='The metrics store is ignoring rows it is sent',
                 playbook=Playbook('docs/operations.md', '6.1'),
             ),
-            METRICS_BACKUP_STALE,
-            OCI_METRICS_PULL_STALE,
         ),
     ),
+    RuleGroup('scheduled-jobs', tuple(rule for job in schedule.SCHEDULED_JOBS for rule in (stale(job), failed(job)))),
 )

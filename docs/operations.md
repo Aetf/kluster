@@ -1192,9 +1192,10 @@ repository is covered against stopping silently, because a job that
 silently stops running is indistinguishable from a failing one: an
 ops-repository workflow by its dead-man timer, and an in-cluster
 CronJob by the scheduled-job rule family (the rule below) and, behind
-the family, the cluster's check-in (the alert contract). Neither the
-family nor the timers exist yet; until they and the jobs do, a job that
-never started is indistinguishable from both. A device's own jobs are
+the family, the cluster's check-in (the alert contract). The family is
+declared with the rest of the cluster's rules in `k8s-base`. The timers
+do not exist yet, and until they do, an ops-repository workflow that
+stops running reports nothing. A device's own jobs are
 watched as the census below says, and the gateway's daily check by
 nothing but its own findings. Two calendar acts are left to the
 operator. The yearly offline day is one, because its steps need the
@@ -1216,8 +1217,8 @@ for its place. The last column says which run, as of 2026-11-17:
 | Age of the newest object under `etcd/` | No job of its own: the snapshot job's stale rule stands in for it, since a run that succeeded is an object uploaded, and the monthly restore-verify reads the newest object's age as a second, independent reading | None | The snapshot job's rules | No, with the snapshot job |
 | VolSync backups, one `ReplicationSource` per backed claim | The cluster: VolSync's own schedule, the claim's retention class (`conventions.backup.RETENTION_CLASSES`, storage.md §5) | The namespace's writer key and each repository's password, sealed | The backup-freshness family (declarative/workloads.md §3), then the cluster's check-in | No: none is declared until the first claim under a class lands |
 | CNPG barman backups, per database cluster | The cluster: the operator's own schedule, beside continuous WAL archiving (storage.md §5) | The namespace's writer key, sealed | The backup-freshness family, then the cluster's check-in | No: no database cluster is declared yet |
-| The metrics stores' backups, hourly | The cluster: a CronJob per store, in `monitoring` (storage.md §5) | The `vm` writer key, sealed | `MetricsBackupStale` (§6.2), which folds into the family, then the cluster's check-in | No: declared once bring-up stage 9 seals the `vm` key (storage.md §5) |
-| The block volumes' metrics, pulled hourly into the history store | The cluster: a CronJob in `monitoring` | The OCI metrics reader's key, sealed (credentials.md §3) | The family's rules, then the cluster's check-in | No (`kluster-ops#790`) |
+| The metrics stores' backups, hourly | The cluster: a CronJob per store, in `monitoring` (storage.md §5) | The `vm` writer key, sealed | The family's rules (§6.2), then the cluster's check-in | No: declared once bring-up stage 9 seals the `vm` key (storage.md §5) |
+| The block volumes' metrics, pulled hourly into the history store | The cluster: a CronJob in `monitoring` | The OCI metrics reader's key, sealed (credentials.md §3) | The family's rules (§6.3), then the cluster's check-in | No (`kluster-ops#790`) |
 | The authentication canary, every few minutes | The cluster: a CronJob in Authelia's namespace that requests a protected path with no credential (declarative/cluster-infra.md §2) | None: it presents none | Its own rule, which fires on anything but a refusal; the family's rules for the job; then the cluster's check-in | No: it ships with Authelia (rfc-008 §5.2) |
 | State-backend dump age | The cluster: a CronJob in `monitoring`, hourly, listing `pulumi-state/` (state-backend.md §6) | The list-only `B2 freshness key (state dumps)`, sealed | The family's rules, then the cluster's check-in | No; `probes.yml` reads it today |
 | State-backend server certificate's expiry | The cluster: `blackbox_exporter` probing the appliance's Postgres STARTTLS, with vmalert rules over its metrics (state-backend.md §6) | None: the CA's certificate, which is public | Its rules, then the cluster's check-in | No; `probes.yml` reads it today |
@@ -1248,9 +1249,10 @@ rule family**: *stale* at `conventions.backup.max_age` of its period,
 and *last run failed* within its run deadline. Both rules are
 `actionable`, and each names the job's playbook. The facts the
 declaring component and the rules share — namespace, CronJob name,
-period and run deadline — are one row in `conventions`, from which
+period and run deadline — are one row in `conventions.schedule`, from which
 `components.monitoring.rules` derives both rules, and a test holds
-every CronJob the `k8s-base` program declares to a row. Both read the
+every CronJob the `k8s-base` and `apps` programs declare to a row, and
+every row to a CronJob one of them declares. Both read the
 CronJob series of kube-state-metrics. Stale is the time since the last
 success, or since the CronJob's creation where there is none, past the
 job's `max_age`, which also catches a job suspended or no longer
@@ -1358,9 +1360,9 @@ contract the Home Assistant side is built against:
 
 What is built of it is the census, CI's producer, the alert job every
 ops-repository workflow on a clock ends in, and the cluster's side:
-alertmanager's receiver, the rules and the check-in, declared in
-`k8s-base` and running once the bring-up applies it and seals the
-webhook in. The handler, the scheduled-job rule family, and the Home
+alertmanager's receiver, the rules, the scheduled-job rule family among
+them, and the check-in, declared in `k8s-base` and running once the
+bring-up applies it and seals the webhook in. The handler and the Home
 Assistant automations and timers are not: until the handler exists, a
 dispatch is accepted and starts nothing, and an alert from CI or from
 the ops repository is a red run and nothing more.
@@ -1380,7 +1382,7 @@ Owning docs keep the content — the index only locates it.
 | Backup restores (CNPG, VolSync, etcd) | storage.md §5; the drills are §4 here |
 | Alert-channel failure (HA push down → meta-alert; GitHub leg down; a scheduled ops-repo workflow that stopped checking in) | architecture.md §4.3; the contract and the dead-man are §4 here |
 | CI alerts (a red `checks` or `images` run; a drift diff) | framework/ci.md §3.1 and §3.2 |
-| The metrics stores (rows a store ignores; a backup gone stale, refused, or a store that does not restore; the pull of OCI's block-volume series gone stale) | §6 here |
+| The metrics stores (rows a store ignores; a backup run that failed, a backup gone stale or refused, or a store that does not restore; a pull of OCI's block-volume series that failed or went stale) | §6 here |
 
 vmalert rule families adopt this index as they are ported: an alert
 that cannot point at a row (or at its owner doc's census) does not
@@ -1429,11 +1431,15 @@ than sparse, and every reading over it reads nothing.
    every reason, the series the log named is present, and the alert
    resolves 30 minutes after the last ignored row.
 
-### 6.2 A metrics store's backup is stale
+### 6.2 A metrics store's backup failed or is stale
 
-**Trigger**: `MetricsBackupStale`, `actionable`. The backup CronJob the
-alert names, `vmbackup-recent` or `vmbackup-history`, has not succeeded
-for an hour and a half, the one rule for stale over its hourly period
+**Trigger**: the scheduled-job family's two alerts on the backup
+CronJob the alert names, `vmbackup-recent` or `vmbackup-history`, both
+`actionable` (`conventions.schedule.METRICS_BACKUPS`, the rule in §4).
+`MetricsBackupFailed`: the job's last run, scheduled after its last
+success, has not succeeded within the 25 minutes a run is cut off at.
+`MetricsBackupStale`: the job has not succeeded for an hour and a half,
+the one rule for stale over its hourly period
 (`conventions.backup.max_age`), or has never succeeded since it was
 created that long ago. The bucket's copy of that store is falling
 behind, and a rebuild would restore it only as far as its last success
@@ -1441,23 +1447,52 @@ behind, and a rebuild would restore it only as far as its last success
 
 **Gist**:
 
-1. **Read the last run.**
+1. **Which alert.** `MetricsBackupFailed` is a run that failed, and the
+   steps from step 2 on find why. `MetricsBackupStale` firing without
+   it is a job no run of which was scheduled after its last success,
+   since a run that was is the failed alert's. The CronJob is suspended,
+   the controller that schedules it is not running, or the creation of
+   its Job was refused: the controller records a schedule only once it
+   has created the Job.
+   `mise x -- kubectl -n monitoring get cronjob <job>` reads its
+   `SUSPEND` and its `LAST SCHEDULE`. The program suspends no job, so a
+   suspension is a hand's, and
+   `mise x -- kubectl -n monitoring patch cronjob <job> -p '{"spec":{"suspend":false}}'`
+   lifts it. A refused creation is a `FailedCreate` event, which
+   `mise x -- kubectl -n monitoring describe cronjob <job>` lists with
+   what refused it: an admission webhook, a quota, or a namespace being
+   deleted. An unsuspended job with no such event whose last schedule
+   stopped moving is the controller manager's, which runs on each
+   control plane as `kube-controller-manager-<node>` in `kube-system`.
+2. **Read the last run.**
    `mise x -- kubectl -n monitoring get jobs --sort-by=.metadata.creationTimestamp`
    lists the namespace's runs from the oldest, each named `<job>-<n>`; the
    newest of the alert's job is the last of its name, and
    `mise x -- kubectl -n monitoring logs job/<run> --all-containers` says
    where it stopped. Each line before the failure names the step it
    starts.
-2. **A pod that never started.** It waits on what it mounts or reads:
+3. **A run cut off at its deadline.**
+   `mise x -- kubectl -n monitoring describe job <run>` reads
+   `DeadlineExceeded`, and the run's log ends partway through the
+   upload: it took longer than the 25 minutes a run is allowed, which a
+   store's first backup, a full upload from the worker, can. `vmbackup`
+   resumes from the parts a cut-off run already uploaded, so the runs
+   after it converge on a complete backup with nothing done here. Until
+   one of them completes, the store's copy in the bucket is a backup the
+   restore refuses (step 7), and a store whose node is lost meanwhile
+   does not start. Runs that are cut off hour after hour without
+   converging are a deadline too short for the store, which is its row's
+   in `conventions.schedule`.
+4. **A pod that never started.** It waits on what it mounts or reads:
    the writer key's Secret, `writer-vm-monitoring`, which a SealedSecret
    the controller cannot open never creates, and which the sealing
    sitting of bring-up stage 9 (physical/bring-up.md §2) seals again
    after a rebuild (§3.5); or the scripts' `ConfigMap`, `metrics-backup-shell`. `mise x -- kubectl -n
    monitoring describe pod` names which.
-3. **The store did not answer.** The snapshot is taken through the
+5. **The store did not answer.** The snapshot is taken through the
    store's Service, so a store that is down fails every backup. A store
-   whose pod sits in `Init` is its restore, step 5.
-4. **The history store's backup refused.** The log reads `holds <n>
+   whose pod sits in `Init` is its restore, step 7.
+6. **The history store's backup refused.** The log reads `holds <n>
    rows, fewer than the <m> the last backup recorded at
    vm/monitoring/history.rows`. Its retention keeps every row, so a
    store holding fewer started without its history, and its backup
@@ -1469,7 +1504,7 @@ behind, and a rebuild would restore it only as far as its last success
    in since it started empty. Where fewer rows are deliberate, series
    deleted through the store's keyed delete endpoint, the record is
    hidden instead, in the B2 console, and the next run records afresh.
-5. **A store that does not restore** sits in `Init`, one of its two
+7. **A store that does not restore** sits in `Init`, one of its two
    restore containers failing: `mise x -- kubectl -n monitoring logs <pod> -c
    restore-check`, then `-c restore`. The first fails where the bucket
    or the key does not answer; the second where `vmrestore` refuses the
@@ -1521,16 +1556,20 @@ behind, and a rebuild would restore it only as far as its last success
    vmsingle-monitoring-victoria-metrics-k8s-stack`, and its pod, since
    the claim holds the lock file, and the restore refuses a lock with
    no backup behind it.
-6. **Confirm**: the next run's log ends with the backup, and for the
-   history with `recorded <n> rows`; the alert resolves at the next
-   evaluation.
+8. **Confirm**: the next run's log ends with the backup, and for the
+   history with `recorded <n> rows`; both alerts resolve at the next
+   evaluation after it.
 
-### 6.3 The pull of OCI's block-volume series is stale
+### 6.3 The pull of OCI's block-volume series failed or is stale
 
-**Trigger**: `OciMetricsPullStale`, `actionable`. The CronJob
-`oci-metrics-pull` has not succeeded for an hour and a half, the one
-rule for stale over its hourly period (`conventions.backup.max_age`),
-or has never succeeded since it was created that long ago. The stores
+**Trigger**: the scheduled-job family's two alerts on the CronJob
+`oci-metrics-pull`, both `actionable` (`conventions.schedule.OCI_METRICS_PULL`,
+the rule in §4). `OciMetricsPullFailed`: its last run, scheduled after
+its last success, has not succeeded within the 25 minutes a run is cut
+off at. `OciMetricsPullStale`: it has not succeeded for an hour and a
+half, the one rule for stale over its hourly period
+(`conventions.backup.max_age`), or has never succeeded since it was
+created that long ago. The stores
 hold none of OCI's block-volume series since its last success, the
 throttled I/O among them. A run reads up to seven days back from the
 newest sample the history store holds of each volume, so a gap shorter
@@ -1539,7 +1578,13 @@ one is lost, since OCI keeps one-minute data for seven days.
 
 **Gist**:
 
-1. **Read the last run.**
+1. **Which alert.** `OciMetricsPullFailed` is a run that failed, and
+   the steps from step 2 on find why. `OciMetricsPullStale` firing
+   without it is a pull no run of which was scheduled after its last
+   success, since a run that was is the failed alert's: read the
+   CronJob as §6.2's first step does, with `oci-metrics-pull` for the
+   job.
+2. **Read the last run.**
    `mise x -- kubectl -n monitoring get jobs --sort-by=.metadata.creationTimestamp`
    lists the namespace's runs from the oldest, each named `<job>-<n>`; the
    newest `oci-metrics-pull-<n>` is the last of its name, and
@@ -1548,26 +1593,35 @@ one is lost, since OCI keeps one-minute data for seven days.
    metric that meets an error stops alone, logged as `<metric> stopped
    <step>`, and the run goes on to the next metric and exits 1 at the
    end; the steps below say what each error is.
-2. **A pod that never started.** It waits on what it mounts: the key's
+3. **A run cut off at its deadline.**
+   `mise x -- kubectl -n monitoring describe job <run>` reads
+   `DeadlineExceeded`, and the log ends in the step that was running
+   when the 25 minutes a run is allowed ran out. What the run wrote
+   stays: it writes each day of a metric as it reads it, and the next
+   run reads on from the newest sample the history store holds, so the
+   first run that completes fills the rest, up to seven days back. A
+   run cut off hour after hour is a step that hangs, and the step the
+   log ends in names which.
+4. **A pod that never started.** It waits on what it mounts: the key's
    Secret, `oci-metrics`, which a SealedSecret the controller cannot
    open never creates, and which the sealing sitting of bring-up stage 6
    (physical/bring-up.md §2) mints and seals again after a rebuild; or
    the `ConfigMap`, `oci-metrics-pull`.
    `mise x -- kubectl -n monitoring describe pod` names which.
-3. **OCI refused the key** (`NotAuthenticated`, a 401). The key the
+5. **OCI refused the key** (`NotAuthenticated`, a 401). The key the
    cluster holds is not one the reader's user carries: re-running
    `credentials derived oci-metrics mint` retires the old key once its
    ciphertext is committed, and every run fails until `k8s-base` is
    applied with the new one. Apply `k8s-base` through the merge chain;
    the next run fills the gap.
-4. **OCI refused the request** (`NotAuthorizedOrNotFound`). The
+6. **OCI refused the request** (`NotAuthorizedOrNotFound`). The
    reader's policy reads one metric namespace of `physical`'s
    compartment and nothing else (credentials.md §3). A request that does
    not name that namespace is refused by the policy's condition, as is
    one for another compartment: compare the namespace and the
    compartment in the run's settings, the `settings.json` of the
    `ConfigMap`, with `conventions`.
-5. **A volume with no sample.** The log ends with `no sample of <volume>
+7. **A volume with no sample.** The log ends with `no sample of <volume>
    on <node> in the window`, after every other volume was written: OCI
    returned no series under that volume's OCID. The OCID is the one
    `physical` published for it when `k8s-base` was last applied, so a
@@ -1576,7 +1630,7 @@ one is lost, since OCI keeps one-minute data for seven days.
    `skipping` is the replaced volume's old one, which needs nothing.
    Where the OCID is current, OCI has no series for the volume, and its
    console's Block Volume metrics page says whether it has any.
-6. **A series that names no volume.** The log reads `a series of
+8. **A series that names no volume.** The log reads `a series of
    <metric> carries no resourceId, only the dimensions <names>`: OCI
    answered with series of another shape than the query asks for,
    which groups each metric's series by the volume's OCID. No apply
@@ -1585,10 +1639,11 @@ one is lost, since OCI keeps one-minute data for seven days.
    dimensions the log names are what the new query reads. The runs
    between keep failing for that metric, and the first one after the
    fix merges fills the gap, up to seven days of it.
-7. **A plan of `k8s-base` refuses the volume map**: `physical`'s output
+9. **A plan of `k8s-base` refuses the volume map**: `physical`'s output
    holds no OCID for a volume the census declares, the state a
    targeted `physical` apply leaves a volume it did not create in.
    Apply `physical`, then `k8s-base`.
-8. **Confirm**: the next run logs every volume written and exits 0, and
-   the alert resolves at the next evaluation. The history store answers
-   `oci_blockstore_VolumeReadOps` for each volume up to the run.
+10. **Confirm**: the next run logs every volume written and exits 0,
+   and both alerts resolve at the next evaluation after it. The history
+   store answers `oci_blockstore_VolumeReadOps` for each volume up to
+   the run.

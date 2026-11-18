@@ -40,8 +40,9 @@ series that carries no `RESOURCE_ID` at all is an answer of another shape than
 the query asks for, and is an error of its own, logged with the dimensions it
 does carry. A run fails, after everything else is written, where a metric
 stopped, where a series carried no volume, or where a target got no new
-sample, so the CronJob's last success stops moving and `OciMetricsPullStale`
-reports it.
+sample, so the CronJob's last success stops moving: `OciMetricsPullFailed`
+reports the run once its deadline has passed, and `OciMetricsPullStale` the
+pull once its last success is older than its period allows.
 
 **Every request to OCI names the metric namespace**, which is what the
 reader's policy is conditioned on: a request that does not carry the
