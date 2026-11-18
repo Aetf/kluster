@@ -534,13 +534,36 @@ Per nodes.md §5, durability = declarative rebuild + backups + drills:
 
 1.  **etcd**: hourly snapshots from the Talos control plane, shipped to
     `b2://…/etcd/`, retained ~14 days — taken in the cluster by
-    `siderolabs/talos-backup`, a CronJob in a namespace of its own,
-    `etcd-backup`, on the control planes. It speaks Talos with a
-    certificate Talos issues it for the `os:etcd:backup` role alone and
-    renews by itself, and writes with the `etcd` scope's writer key,
-    sealed into `k8s-base`; the scheduled-job rule family watches it
-    (operations.md §4). That job is not declared yet, nor its key
-    sealed, so none is taken (nodes.md §5 Tier 0).
+    `siderolabs/talos-backup`, the CronJob `etcd-snapshot` in a
+    namespace of its own, `etcd-backup`, which `k8s-base` declares
+    (`components.backup.etcd`).
+    -   **Placement**: on the control planes, so the snapshots go on
+        through an outage of the home site, the upload leaves from the
+        cloud, and the stream stays off the mesh to the worker. The run
+        works in a memory-backed directory of its pod, since a control
+        plane's disk is etcd's own (nodes.md §1.2).
+    -   **Credentials**: it speaks Talos with a certificate Talos issues
+        it for the `os:etcd:backup` role alone and renews by itself, and
+        writes with the `etcd` scope's writer key, sealed strict into
+        `k8s-base` as `writer-etcd`; the key lists, reads and writes
+        `etcd/` and cannot delete.
+    -   **A run**: one snapshot, refused without etcd's hash trailer,
+        encrypted with age to every escrowed backup generation in
+        `src/kluster/lib/state_backend/machine/backup-recipients.txt`,
+        the recipients the state backend's dumps are encrypted to, and
+        uploaded. Every step's error ends the run non-zero, so a run that
+        succeeded is an object uploaded.
+    -   **The object**: `etcd/kluster-<RFC 3339 UTC>.snap.age`, such as
+        `etcd/kluster-2026-11-17T06:05:00Z.snap.age`. The stamp is
+        fixed-width, so name order is time order. The object carries
+        nothing beside the snapshot, no file info, so no revision is
+        recorded with it.
+    -   **Liveness**: the scheduled-job rule family watches it
+        (operations.md §4), and its playbook is operations.md §7.1.
+    -   **Status**: the job is declared, and takes no snapshot until
+        bring-up stage 6 seals `writer-etcd` (physical/bring-up.md);
+        until then `k8s-base` declares its namespace and its Talos
+        `ServiceAccount` alone (nodes.md §5 Tier 0).
     Restore path is documented Talos `--recover-from-snapshot` bootstrap, to be drilled both in-place and
     onto a substitute node (the CP cold-standby path, nodes.md §5 Tier 0);
     neither form has run.

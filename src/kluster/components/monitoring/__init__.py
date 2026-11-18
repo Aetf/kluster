@@ -181,6 +181,7 @@ __all__ = (
     'HISTORY_DATASOURCE',
     'HISTORY_SIZE',
     'KUBELET_RELABELING',
+    'KUBE_STATE_METRICS_ENDPOINT',
     'RECEIVER',
     'SCRAPE_INTERVAL',
     'SNAPSHOTS_MAX_AGE',
@@ -256,6 +257,23 @@ SCRAPE_INTERVAL = dt.timedelta(seconds=30)
 #: reach the scheduled-job family's rules, which `conventions.schedule.REPORT_LAG`
 #: leaves room for.
 EVALUATION_INTERVAL = dt.timedelta(seconds=20)
+
+#: kube-state-metrics' one scrape endpoint, which the scheduled-job family
+#: reads every CronJob's status from. Stated whole, since the chart's list of
+#: endpoints is replaced rather than merged: the chart's own endpoint at
+#: victoria-metrics-k8s-stack 0.91.2 (`values.yaml`, `kube-state-metrics.vmScrape`),
+#: with the two settings the family relies on written out rather than left to
+#: the chart's defaults. `honorLabels` keeps the labels kube-state-metrics
+#: publishes over the target's, so a CronJob's series carries the CronJob's
+#: own namespace rather than the namespace kube-state-metrics runs in, which
+#: is the namespace a row's rules select it by. The interval is vmagent's,
+#: `SCRAPE_INTERVAL`, which `conventions.schedule.REPORT_LAG` leaves room for.
+KUBE_STATE_METRICS_ENDPOINT: Mapping[str, Any] = {
+    'port': 'http',
+    'interval': backup.duration(SCRAPE_INTERVAL),
+    'honorLabels': True,
+    'metricRelabelConfigs': [{'action': 'labeldrop', 'regex': '(uid|container_id|image_id)'}],
+}
 
 #: The relabeling of the chart's kubelet scrapes, which the chart builds from
 #: one spec (`kubelet.vmScrape.spec`): the kubelet's own metrics, cAdvisor's,
@@ -508,7 +526,10 @@ def _stack_values(release: str, chart: ChartPin, restore: Sequence[Mapping[str, 
                 'GOGC': str(memory.GRAFANA_GOGC),
             },
         },
-        'kube-state-metrics': {'affinity': WORKER_AFFINITY},
+        'kube-state-metrics': {
+            'affinity': WORKER_AFFINITY,
+            'vmScrape': {'spec': {'endpoints': [dict(KUBE_STATE_METRICS_ENDPOINT)]}},
+        },
     }
 
 

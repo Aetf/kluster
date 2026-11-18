@@ -33,7 +33,7 @@ in the clear into the configuration of the stack that declares it
 OCI key the block-volume metrics pull reads with (`oci_metrics`), and
 the backup bucket's writer keys, which `physical` mints and this side seals
 out of that stack's state into `apps`, or into `k8s-base` for a namespace
-the platform holds (`b2_writer_seal`); and Authelia's
+the platform holds and for the etcd snapshots (`b2_writer_seal`); and Authelia's
 storage encryption key, which is escrowed and sealed from the escrow
 (`authelia_storage_key_seal`).
 
@@ -93,7 +93,6 @@ from kluster.lib.state_backend import committed
 from kluster.lib.state_backend import settings as appliance_settings
 
 from ... import conventions
-from ...conventions.backup import BACKED_NAMESPACES, writer_scope
 from ..state_backend import config as appliance
 from ..state_backend import probe
 from . import age, b2, cloudflare, entries, escrow, oci_iam, pki, pulumi_config, sealing
@@ -548,11 +547,23 @@ def _writer_key(keys: object, scope: str, *, physical: str) -> dict[str, str]:
     return fields
 
 
-def b2_writer_seal(*, sealer: sealing.Sealer) -> list[str]:
-    """Seal every backed namespace's writer keys out of `physical`'s state, each into its consumers' stack.
+class UnknownWriterKey(ValueError):
+    """A sealed value `b2-writer seal --only` was asked for, which is no writer key it seals."""
 
-    Returns the names of the sealed values written, one per namespace and
-    family of `conventions.backup.BACKED_NAMESPACES`.
+    def __init__(self, name: str) -> None:
+        super().__init__(
+            f'{name!r} is no writer key `{B2_WRITER_ROW} seal` seals; the writer keys are '
+            f'{", ".join(value.name for value in conventions.sealed.WRITER_KEYS_BY_SCOPE.values())}'
+        )
+        self.name: str = name
+
+
+def b2_writer_seal(*, sealer: sealing.Sealer, only: str | None = None) -> list[str]:
+    """Seal the backup bucket's writer keys out of `physical`'s state, each into its consumers' stack.
+
+    Returns the names of the sealed values written: every row of
+    `conventions.sealed.WRITER_KEYS_BY_SCOPE`, or the one named `only`, which a name of none of them
+    refuses (`UnknownWriterKey`) before anything is read.
 
     `physical` mints each key from the B2 management key, one per scope on the
     backup bucket, and exports them under `backup_keys` in its state, which
@@ -572,19 +583,28 @@ def b2_writer_seal(*, sealer: sealing.Sealer) -> list[str]:
     `sealer` read the cluster's kubeconfig out of it, and refuses a stack
     with none (`sealing.cluster_kubeconfig`).
 
+    The etcd snapshots' key is the exception to both: one Secret reads it,
+    so it is sealed **strict** to that Secret's name, and its consumer is the
+    platform's, so it goes into `k8s-base` (`conventions.sealed.ETCD_WRITER_KEY`).
+    `only` seals one key alone, which is how this one is sealed at the
+    sitting that seals the cluster's own values (credentials.md §4.1); a run
+    without it seals it again with the rest, which changes nothing it reads.
+
     Every refusal comes before anything is written: a cluster whose
     certificate could not be fetched, which building `sealer` does; a
-    declaring stack that does not exist; and a namespace whose key `physical` does not
+    declaring stack that does not exist; and a scope whose key `physical` does not
     export yet, which a census row added since `physical`'s last apply is,
     or exports with a half missing or empty.
     Every run seals afresh, so it rewrites every value whatever the file
     held (`sealing.py`).
     """
     rows = [
-        (writer_scope(namespace, family), conventions.sealed.writer_key(namespace, family))
-        for namespace, families in BACKED_NAMESPACES.items()
-        for family in sorted(families)
+        (scope, value)
+        for scope, value in conventions.sealed.WRITER_KEYS_BY_SCOPE.items()
+        if only is None or value.name == only
     ]
+    if only is not None and not rows:
+        raise UnknownWriterKey(only)
     # Each declaring stack once, before `physical` is read.
     for value in {value.stack: value for _, value in rows}.values():
         _ = sealer.stack(value)

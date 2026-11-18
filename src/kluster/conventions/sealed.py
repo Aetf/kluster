@@ -36,10 +36,11 @@ from dataclasses import dataclass
 from enum import StrEnum
 from types import MappingProxyType
 
-from kluster.conventions.backup import BACKED_NAMESPACES, BackupFamily, writer_scope
+from kluster.conventions.backup import BACKED_NAMESPACES, ETCD_SCOPE, BackupFamily, writer_scope
 from kluster.conventions.cluster import (
     BGP_SECRETS_NAMESPACE,
     CERT_MANAGER_NAMESPACE,
+    ETCD_BACKUP_NAMESPACE,
     MONITORING_NAMESPACE,
     WRITER_KEY_FIELDS,
 )
@@ -52,9 +53,11 @@ __all__ = (
     'CONFIG_KEY',
     'DKIM_EXIM',
     'DNS01_TOKEN',
+    'ETCD_WRITER_KEY',
+    'NAMESPACE_WRITER_KEYS',
     'OCI_METRICS',
     'VALUES',
-    'WRITER_KEYS',
+    'WRITER_KEYS_BY_SCOPE',
     'WRITER_KEY_STACKS',
     'SealedValue',
     'SealingScope',
@@ -173,6 +176,21 @@ OCI_METRICS = SealedValue(
     stack=STACK_NAMES.k8s_base,
 )
 
+#: The backup bucket's `etcd` writer key, which the hourly etcd snapshot
+#: uploads with (`components.backup.etcd`): `physical` mints it with the bucket,
+#: as the scope `ETCD_SCOPE` (`components.backup.etcd_scope`), and `credentials
+#: derived b2-writer seal` seals it out of that stack's state. Strict, unlike a
+#: backed namespace's writer keys: one Secret reads it, under one name, and the
+#: namespace-wide scope is for a key that every Secret of its namespace carries
+#: under its own. Its data keys are the fields the snapshot reads the key's two
+#: halves from, which are a mover's (`WRITER_KEY_FIELDS`).
+ETCD_WRITER_KEY = SealedValue(
+    name=f'writer-{ETCD_SCOPE}',
+    namespace=ETCD_BACKUP_NAMESPACE,
+    keys=tuple(sorted(WRITER_KEY_FIELDS)),
+    stack=STACK_NAMES.k8s_base,
+)
+
 #: The mail relay's DKIM private key, which exim signs every mail zone's `k8s`
 #: selector with and reads as `tls.key`, the key the legacy cluster's
 #: cert-manager Secret holds it under. It is carried from the legacy cluster
@@ -238,9 +256,25 @@ def writer_key(namespace: str, family: BackupFamily) -> SealedValue:
     )
 
 
-#: Every writer key the backed namespaces hold, one per namespace and family.
-WRITER_KEYS: tuple[SealedValue, ...] = tuple(
+#: Every writer key the backed namespaces hold, one per namespace and family,
+#: each sealed namespace-wide (`writer_key`).
+NAMESPACE_WRITER_KEYS: tuple[SealedValue, ...] = tuple(
     writer_key(namespace, family) for namespace, families in BACKED_NAMESPACES.items() for family in sorted(families)
+)
+
+#: Every writer key `credentials derived b2-writer seal` seals out of
+#: `physical`'s state, by the scope `physical` exports it under: the etcd
+#: snapshots' (`ETCD_WRITER_KEY`), sealed strict, then the backed namespaces'
+#: (`NAMESPACE_WRITER_KEYS`), in the census's order.
+WRITER_KEYS_BY_SCOPE: Mapping[str, SealedValue] = MappingProxyType(
+    {
+        ETCD_SCOPE: ETCD_WRITER_KEY,
+        **{
+            writer_scope(namespace, family): writer_key(namespace, family)
+            for namespace, families in BACKED_NAMESPACES.items()
+            for family in sorted(families)
+        },
+    }
 )
 
 #: Every sealed value, by name.
@@ -252,9 +286,10 @@ VALUES: Mapping[str, SealedValue] = MappingProxyType(
             BGP_PASSWORD,
             ALERT_WEBHOOK,
             OCI_METRICS,
+            ETCD_WRITER_KEY,
             DKIM_EXIM,
             AUTHELIA_STORAGE_KEY,
-            *WRITER_KEYS,
+            *NAMESPACE_WRITER_KEYS,
         )
     }
 )

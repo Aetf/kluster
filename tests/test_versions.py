@@ -547,6 +547,12 @@ SCHEMES = {
     'ghcr.io/aetf/homelab-containers/zerotier': Scheme(('15', '16')),
     'docker.io/rancher/local-path-provisioner': Scheme(('v0.0.36', 'v0.0.37'), ('v0.0.x-head-arm64',)),
     'docker.io/library/busybox': Scheme(('1.37.0', '1.38.0')),
+    # One release so far, `v0.1.0`, so the step's second tag is the next
+    # minor's. Every commit between releases is tagged too, after the release
+    # it follows, and so is each prerelease.
+    'ghcr.io/siderolabs/talos-backup': Scheme(
+        ('v0.1.0', 'v0.2.0'), ('v0.1.0-beta.3', 'v0.1.0-beta.3-14-gac4318d', 'e8e2910', 'latest')
+    ),
     'docker.io/victoriametrics/victoria-metrics': Scheme(
         ('v1.149.0', 'v1.150.0'), ('v1.150.0-scratch', 'v1.150.0-enterprise', 'v1.150.0-rc0')
     ),

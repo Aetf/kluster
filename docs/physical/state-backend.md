@@ -947,9 +947,15 @@ step 8).
         the recipients file names it. The path stays warm because the apply
         is the same replacement as everything else.
     -   **Old keys get a definite end of life**: generation N−1
-        becomes destroyable **30 days after the rotation to N+1** —
-        every object it can uniquely decrypt has aged out, and
-        everything newer also carries key N. Destroying a generation is
+        becomes destroyable once every object it can uniquely decrypt
+        has aged out — everything newer also carries key N. For the
+        dumps that is **30 days after the rotation to N+1**. The
+        generations also guard the cluster's etcd snapshots, which
+        `k8s-base` encrypts to every line of the same recipients file
+        ([cluster/storage.md](../cluster/storage.md) §5) and which stay
+        recoverable for 44 days, 14 current and 30 hidden; so N−1's
+        destroy date is the later one, **44 days after the `k8s-base`
+        apply that carries the recipients file of N+1**. Destroying a generation is
         deleting its ciphertext under `escrow/`, which is the only copy,
         and doing so is what actually ends that generation's exposure.
         **No field holds that date**: a ciphertext carries no expiry and
@@ -966,7 +972,9 @@ step 8).
         hidden versions persist ≤30 days by the anti-ransomware
         floor — accepted: the dump's payload is still
         passphrase-encrypted underneath, so a leaked age key alone
-        reads nothing).
+        reads nothing of a dump; of an etcd snapshot it reads every
+        object but the Secrets, which etcd holds as secretbox
+        ciphertext).
 -   **The age identity is deliberately independent of the CA.**
     Deriving one from the other was considered (age can encrypt to
     ssh-ed25519 recipients, so one shared ed25519 key was possible)
@@ -1210,18 +1218,22 @@ is the moment nobody can afford to find out later:
     (`settings.AGE_GENERATION`) to N+1, which brings the row
     `backup-age-<N+1>` into the register and swaps the Butane recipients
     `[N, N−1] → [N+1, N]` →
-    `credentials derived backup-age-<N+1> generate` → note the rotation
-    date and N−1's earliest-destroy date where the next offline day
-    will read them (nothing stores either — §5) → commit the recipients
-    file it wrote → `operator-stack state-backend up --force`, which
-    dumps the box, replaces it and restores into the new one → verify
-    both decrypt paths →
+    `credentials derived backup-age-<N+1> generate` → commit the
+    recipients file it wrote → `operator-stack state-backend up --force`,
+    which dumps the box, replaces it and restores into the new one, and
+    the `k8s-base` apply the merge carries, from which the etcd
+    snapshots are encrypted to the new pair → note the rotation date and
+    N−1's earliest-destroy date, whichever comes last of 30 days after
+    the rotation for the dumps and 44 days after that `k8s-base` apply
+    for the etcd snapshots (§5), where the next offline day will read them (nothing
+    stores either — §5) → verify both decrypt paths →
     destroy N−1 on its date by deleting its escrow ciphertext
     (compromise: the recipients are always the pin and the generation
     below it, so dropping N now is the pin at N+2 with
     `backup-age-<N+1>` and `backup-age-<N+2>` both generated, then a
-    fresh dump; the objects written under N are deleted from the bucket
-    by hand, which no command here does).
+    fresh dump; the objects written under N, the dumps and the etcd
+    snapshots, are deleted from their buckets by hand, which no command
+    here does).
 
 ### 7.3.1 Restore rehearsal
 

@@ -60,7 +60,13 @@ import pulumi
 import pulumi_b2 as b2
 
 from kluster import conventions
-from kluster.conventions.backup import ETCD_SNAPSHOT_RETENTION_DAYS, BackupFamily, metrics_repo_path, writer_scope
+from kluster.conventions.backup import (
+    ETCD_SCOPE,
+    ETCD_SNAPSHOT_RETENTION_DAYS,
+    BackupFamily,
+    metrics_repo_path,
+    writer_scope,
+)
 from putils import Component, own_provider_opts, with_provider
 
 #: What a backup mover needs, and nothing beyond it. `readFiles` and
@@ -156,16 +162,16 @@ class Scope:
 
 
 def etcd_scope() -> Scope:
-    """The control plane's hourly snapshots, which a CronJob in the cluster ships.
+    """The control plane's hourly snapshots, which a CronJob in the cluster ships (`components.backup.etcd`).
 
-    That job is not declared yet, so none is taken (storage.md §5 item 1); the
-    scope is declared with the bucket so that the writer key is there when the
-    job is. Its retention is the bucket's: a snapshot is hidden
-    `ETCD_SNAPSHOT_RETENTION_DAYS` after its upload, since every snapshot is a
-    whole backup on its own.
+    The scope is declared with the bucket, and its writer key with it, which
+    the snapshot uploads with once `credentials` has sealed it into `k8s-base`
+    (`conventions.sealed.ETCD_WRITER_KEY`). Its retention is the bucket's: a
+    snapshot is hidden `ETCD_SNAPSHOT_RETENTION_DAYS` after its upload, since
+    every snapshot is a whole backup on its own.
     """
     return Scope(
-        name='etcd', prefix=f'{conventions.ETCD_SNAPSHOT_PREFIX}/', hide_after_days=ETCD_SNAPSHOT_RETENTION_DAYS
+        name=ETCD_SCOPE, prefix=f'{conventions.ETCD_SNAPSHOT_PREFIX}/', hide_after_days=ETCD_SNAPSHOT_RETENTION_DAYS
     )
 
 

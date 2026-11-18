@@ -20,7 +20,7 @@ from types import MappingProxyType
 
 from kluster.conventions.alert import Playbook
 from kluster.conventions.backup import max_age
-from kluster.conventions.cluster import MONITORING_NAMESPACE
+from kluster.conventions.cluster import ETCD_BACKUP_NAMESPACE, MONITORING_NAMESPACE
 
 #: How long a change of a CronJob's status takes to reach the family's rules:
 #: kube-state-metrics publishes it at the next scrape, and vmalert reads it at
@@ -49,30 +49,44 @@ class ScheduledJob:
     writes the cron line, and a test holds the one to the other."""
     deadline: dt.timedelta
     """How long a run may take before it is cut off, which the component
-    sets as the Job's `activeDeadlineSeconds`; inside `slack`, and refused
-    otherwise."""
+    sets as the Job's `activeDeadlineSeconds`; with `starting_deadline`,
+    inside `slack`, and refused otherwise."""
     playbook: Playbook
     """Where the response to either alert is written."""
+    starting_deadline: dt.timedelta | None = None
+    """How late after its scheduled time a run may still start, which the
+    component sets as the CronJob's `startingDeadlineSeconds`; a run the
+    controller cannot start by then is skipped. `None` is a CronJob that sets
+    none. A run that starts this late succeeds this much later, so the
+    starting deadline and `deadline` together fit `slack`."""
 
     def __post_init__(self) -> None:
-        if not dt.timedelta(0) < self.deadline <= self.slack:
+        if self.starting_deadline is not None and self.starting_deadline <= dt.timedelta(0):
             raise ValueError(
-                f'the CronJob {self.cronjob!r} in {self.namespace!r} would cut a run off at {self.deadline}, '
-                f'outside the {self.slack} its period of {self.period} leaves: a run that succeeds that late '
-                'would already be reported stale'
+                f'the CronJob {self.cronjob!r} in {self.namespace!r} would skip every run, starting none '
+                f'within {self.starting_deadline} of its time'
+            )
+        late = self.starting_deadline or dt.timedelta(0)
+        if not dt.timedelta(0) < self.deadline <= self.slack - late:
+            raise ValueError(
+                f'the CronJob {self.cronjob!r} in {self.namespace!r} would cut a run off at {self.deadline} '
+                f'after starting up to {late} late, outside the {self.slack} its period of {self.period} leaves: '
+                'a run that succeeds that late would already be reported stale'
             )
 
     @property
     def slack(self) -> dt.timedelta:
-        """The longest deadline under which a run that succeeds is never reported stale.
+        """The longest a run may take, from its scheduled time, under which a run that succeeds is never reported stale.
 
         The stale alert fires once the last success is `max_age` old. The next
-        run starts one period after the one that succeeded started, so at the
-        latest one period after that success; it succeeds, if it does, by its
-        deadline after that, and its success reaches the rules `REPORT_LAG`
-        later. So the slack is `max_age` of the period, less the period and
-        the lag. A deadline inside it also has the failed alert, held for the
-        deadline, fire before the stale one.
+        run is scheduled one period after the one that succeeded was, so at
+        the latest one period after that success; it starts by its starting
+        deadline after that, succeeds, if it does, by its deadline after the
+        start, and its success reaches the rules `REPORT_LAG` later. So the
+        slack is `max_age` of the period, less the period and the lag, and the
+        starting deadline and the deadline share it. A deadline inside it also
+        has the failed alert, held for the deadline, fire before the stale
+        one.
         """
         return max_age(self.period) - self.period - REPORT_LAG
 
@@ -106,8 +120,22 @@ OCI_METRICS_PULL = ScheduledJob(
     playbook=Playbook('docs/operations.md', '6.3'),
 )
 
+#: The hourly etcd snapshot (`components.backup.etcd`), the period storage.md
+#: §5 gives its RPO. A run streams one snapshot and uploads it, so it is cut
+#: off well inside the hour, and a run the controller could not start within
+#: ten minutes is left to the next hour's.
+ETCD_SNAPSHOT = ScheduledJob(
+    alert='EtcdSnapshot',
+    namespace=ETCD_BACKUP_NAMESPACE,
+    cronjob='etcd-snapshot',
+    period=dt.timedelta(hours=1),
+    deadline=dt.timedelta(minutes=15),
+    starting_deadline=dt.timedelta(minutes=10),
+    playbook=Playbook('docs/operations.md', '7.1'),
+)
+
 #: Every CronJob a stack program declares, as a row of the family:
 #: `components.monitoring.rules` derives the family's alerts from each row,
 #: and `tests/test_monitoring.py` holds every CronJob the programs declare to
 #: a row of it, and every row to a CronJob some program declares.
-SCHEDULED_JOBS: Sequence[ScheduledJob] = (*METRICS_BACKUPS.values(), OCI_METRICS_PULL)
+SCHEDULED_JOBS: Sequence[ScheduledJob] = (*METRICS_BACKUPS.values(), OCI_METRICS_PULL, ETCD_SNAPSHOT)
