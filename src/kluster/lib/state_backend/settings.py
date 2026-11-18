@@ -59,8 +59,9 @@ IMAGE_BUCKET = f'{NAME}-images'
 #: The box's Postgres image: the major line's tag, and the digest it named
 #: when the pin last moved, which is what the box pulls and runs. The digest
 #: changes with every rebuild of the tag -- a minor release, or a new Debian
-#: base -- and renovate moves it by pull request, monthly, in the appliance's
-#: group; nothing on the box moves it. The tag is what the local client's
+#: base -- and renovate moves it by a pull request opened on the first of
+#: the month, in a group of the appliance's image refreshes apart from its
+#: releases; nothing on the box moves it. The tag is what the local client's
 #: major is held to (`tests/test_postgres_client.py`). The three lines are
 #: one pair for renovate's manager, which reads them in this order.
 POSTGRES_REPOSITORY = 'docker.io/library/postgres'
@@ -76,10 +77,11 @@ POSTGRES_UID = 999
 #: release's tag, and the digest it named when the pin last moved, which is
 #: what the box pulls and runs. The image is the CloudNativePG project's
 #: build, the project whose operator the cluster already runs. The tag is
-#: rebuilt for every new base, and renovate moves the digest by pull request,
-#: monthly, in the appliance's group, and the tag to a new release the same
-#: way. The three lines are one pair for renovate's manager, which reads them
-#: in this order.
+#: rebuilt for every new base, and renovate moves the digest by a pull
+#: request opened on the first of the month, as it moves the Postgres
+#: image's, and the tag to a new release, with its digest, by a pull request
+#: in the appliance's group on any day. The three lines are one pair for
+#: renovate's manager, which reads them in this order.
 PGBOUNCER_REPOSITORY = 'ghcr.io/cloudnative-pg/pgbouncer'
 PGBOUNCER_TAG = '1.26.1'
 PGBOUNCER_DIGEST = 'sha256:6c91fd7383b8b098bc0c3b71dba4e98bd568c0d301b9fc66027fbc23259c6a7d'

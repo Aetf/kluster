@@ -690,10 +690,13 @@
       dependencyDashboardApproval: true,
     },
     {
-      // The appliance's pins change the box rather than a library: the
-      // Postgres and PgBouncer images and the age release replace it, and the
+      // The appliance's pins change the box rather than a library: a release
+      // of the Postgres or PgBouncer image or of age replaces it, and a
       // Fedora CoreOS release imports a new image that the next launch boots
-      // from, so they travel alone and get read.
+      // from, so they travel apart from everything else and get read. No rule
+      // gives a release a window, so one is offered the day renovate finds
+      // it. The images' rebuilds under an unchanged tag are the next rule's,
+      // in a group of their own.
       matchFileNames: [
         'src/kluster/lib/state_backend/settings.py',
         'src/kluster/lib/state_backend/machine/**',
@@ -702,44 +705,64 @@
       groupSlug: 'state-backend',
     },
     {
-      // The appliance's Postgres image moving under its tag: Docker Hub
-      // rebuilds the major line's tag for every minor release and every new
-      // Debian base, and the pin names the digest (`settings.POSTGRES_IMAGE`).
-      // Each move is a replacement of the box -- a dump, a new box, a restore
-      // -- so the refreshes are taken monthly, on the first of the month as
-      // the self-built image bases are: a Postgres security release reaches
-      // the box within a month, at one replacement a month at most. They stay
-      // in the appliance's group, where the rule above puts every pin of its
-      // file. No release age: the image is one the cluster only pulls, which
-      // the first rule exempts, and CI runs it only in a check holding no
+      // The appliance's Postgres and PgBouncer images moving under their
+      // tags, which the pins name by digest (`settings.POSTGRES_IMAGE`,
+      // `settings.PGBOUNCER_IMAGE`). Docker Hub rebuilds the Postgres major
+      // line's tag for every minor release and every new Debian base, and
+      // the PgBouncer release's tag is rebuilt on every new base. Each move
+      // replaces the box -- a dump, a new box, a restore -- so the moves are
+      // offered on the first of the month, as the self-built image bases
+      // are: a security fix reaches the box within a month, at one
+      // replacement a month for the two images together.
+      //
+      // The rule sets the group as well as the window, after the rule above
+      // so that its group wins. Renovate opens a group's branch on the
+      // schedule of the update it sorts first in the group, and so the window
+      // holds only where every update that can reach the branch carries it:
+      // the digest moves here, and no release. A release of either image is
+      // the rule above's. A PgBouncer minor or patch goes in that group's
+      // pull request on any day; a major of either goes in a pull request of
+      // its own behind dashboard approval, and a major is the only release
+      // the Postgres tag, which names a major alone, has. So a month that
+      // brings a release and a rebuild opens two pull requests, each of them
+      // a replacement of the box. Once this group's pull request is open,
+      // renovate moves it on to a newer rebuild of the tag on any day, and a
+      // rebuild after it merges waits for the next first of the month. A
+      // test holds every update of the appliance's pins to one window per
+      // branch.
+      //
+      // No release age: the images are ones the cluster only pulls, which
+      // the first rule exempts, and CI runs them only in a check holding no
       // stack's secret (docs/threat-model.md §2.6). Matched by name alone:
-      // nothing else in the repository names this image.
+      // nothing else in the repository names these images.
       matchDepNames: [
         'docker.io/library/postgres',
-      ],
-      matchUpdateTypes: [
-        'digest',
-      ],
-      schedule: [
-        '* 0-3 1 * *',
-      ],
-    },
-    {
-      // The appliance's PgBouncer image moving under its tag, for the
-      // Postgres image's reasons above: each move replaces the box, so the
-      // rebuilds of the release's tag on a new base are taken monthly, in the
-      // same window, and stay in the appliance's group. A new release is not
-      // held to the window. Matched by name alone: nothing else in the
-      // repository names this image.
-      matchDepNames: [
         'ghcr.io/cloudnative-pg/pgbouncer',
       ],
       matchUpdateTypes: [
         'digest',
       ],
+      groupName: 'state-backend image refreshes',
+      groupSlug: 'state-backend-refreshes',
       schedule: [
         '* 0-3 1 * *',
       ],
+    },
+    {
+      // The pooler's patch releases, re-enabled. PgBouncer ships its
+      // security fixes in patch releases, and the global
+      // `patch: enabled: false` would drop every one, leaving the box's one
+      // listener on the network without them until the next minor. A patch
+      // travels as the image's minors do, in the appliance's group, with no
+      // window. The Postgres tag names a major alone, so it has no patch to
+      // re-enable. Matched by name alone, as the rule above is.
+      matchDepNames: [
+        'ghcr.io/cloudnative-pg/pgbouncer',
+      ],
+      matchUpdateTypes: [
+        'patch',
+      ],
+      enabled: true,
     },
     {
       // The local age, into the appliance's group. `mise.toml` pins the age
@@ -749,13 +772,14 @@
       // The mise manager reads the pin as the dependency `age` (its bundled
       // registry resolves the name to `FiloSottile/age` through the aqua
       // backend); the settings pin is a different dependency, named by the
-      // custom manager below, and the rule above already groups it.
+      // custom manager below, and the appliance's rule above already groups
+      // it.
       //
       // Position is load-bearing, as for the `jdx/mise-action` rule: this sits
       // *after* the rule grouping the whole mise manager as the toolchain, so
-      // its group wins. The group's name and slug are the rule above's, and a
-      // test holds them equal: the slug names the branch, so a different one
-      // would be a second pull request again.
+      // its group wins. The group's name and slug are the appliance's rule's,
+      // and a test holds them equal: the slug names the branch, so a
+      // different one would be a second pull request again.
       //
       // The dependency name is `mise.toml`'s key under `[tools]`, backend
       // prefix included, so respelling the pin there (`aqua:FiloSottile/age`)

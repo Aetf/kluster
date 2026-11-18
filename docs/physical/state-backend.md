@@ -307,9 +307,10 @@ oraclecloud`, x86_64), the qcow2 imports as a custom image
     nothing on it moves to another:
     the containers carry no auto-update label, and no auto-update timer
     runs. A new digest — a tag rebuilt for a new base, or Postgres's for a
-    minor release — reaches the box as a renovate pull request, taken
-    monthly, and the replacement that carries it (§7.2); a new pooler
-    release, as a pull request of its own.
+    minor release — reaches the box as a renovate pull request that opens
+    on the first of the month, the two images' in one, and the replacement
+    that carries it (§7.2); a new pooler release, as the appliance's
+    release pull request, on any day.
 -   **Major upgrades take the rebuild path** (§7.2): pin bump → a
     replacement, which dumps the old box, initdb's a fresh data
     directory under the new major and restores into it. At tens of MB of state, owning `pg_upgrade` machinery
@@ -758,8 +759,10 @@ connection without a certificate the CA signed for a client role;
 Postgres has no network at all (§2). Brute force buys nothing against
 cert auth, a certificate gets no further than the role it names (§2),
 and the pre-authentication surface is the pooler's, bounded by its
-pinned image's monthly moves to the tag's newest build (§2) plus the
-replace-not-mutate posture — the same appliance logic as everything
+pinned image, which moves to the tag's newest build by a pull request
+opened on the first of the month and to a new release by one on any day
+(§2), plus the replace-not-mutate posture — the same appliance logic as
+everything
 else on this box. What a client role reaches past it is Postgres, with
 that role's grants. (A scheduled workflow auto-editing
 security rules was already rejected on standing-rent grounds; now

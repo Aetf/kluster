@@ -301,8 +301,10 @@ workload holds, so a poisoned image or chart release reaches it the day
 it is published, held by its pin and by whatever reading its bump gets.
 The state backend's Postgres image is one of these, though it holds every
 stack's state: CI runs it only in `checks`, which holds no stack's secret,
-and every move of its digest is a pull request a person reads, taken at
-most monthly, and a replacement of the box the operator runs.
+and every move of its digest is a pull request a person reads and a
+replacement of the box the operator runs. A rebuild of its tag is offered
+by a pull request that opens on the first of the month, and a new major
+line waits on approval on the dependency dashboard.
 Which routes wait, and why a week, is the comment on `minimumReleaseAge`
 in `renovate.json5`.
 
