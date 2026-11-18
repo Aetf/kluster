@@ -476,6 +476,29 @@ def test_a_control_plane_serves_etcds_metrics_where_the_node_proxy_reaches_them(
     assert host.is_unspecified, host
 
 
+@pytest.mark.parametrize('shape', [shape for shape, arguments in SHAPES.items() if arguments.get('role') != 'worker'])
+def test_a_control_plane_lets_the_etcd_snapshots_namespace_ask_talos_for_the_backup_role_alone(shape: str) -> None:
+    """Talos issues a pod a certificate for one role, in one namespace (credentials.md §1, rule 3).
+
+    The grant is the field the whole node's configuration holds once every
+    patch is merged, so a second patch that widened it -- another role, or
+    another namespace -- would show here as well as one that dropped it. The
+    grant is the pair the snapshot's `ServiceAccount` is to ask with; that
+    Talos knows the role is `test_talos_validate.py`'s to hold, since
+    `talosctl validate` refuses a role it does not know.
+    """
+    assert merged('machine', **SHAPES[shape])['features']['kubernetesTalosAPIAccess'] == {
+        'enabled': True,
+        'allowedRoles': [conventions.ETCD_SNAPSHOT_GRANT.role],
+        'allowedKubernetesNamespaces': [conventions.ETCD_SNAPSHOT_GRANT.namespace],
+    }
+
+
+def test_a_worker_grants_no_talos_access_from_kubernetes() -> None:
+    """Talos refuses the feature on a worker's configuration, which therefore says nothing of it."""
+    assert 'kubernetesTalosAPIAccess' not in merged('machine', **SHAPES['homelab-worker'])['features']
+
+
 def test_a_worker_carries_no_control_plane_configuration() -> None:
     cluster = merged('cluster', role='worker')
     # A worker has no apiserver to harden and no etcd to encrypt; the CNI is

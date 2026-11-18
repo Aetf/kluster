@@ -124,6 +124,36 @@ CERT_MANAGER_NAMESPACE = 'cert-manager'
 BGP_SECRETS_NAMESPACE = 'kube-system'
 #: The monitoring stack's, alertmanager's among it (rfc-007 §7).
 MONITORING_NAMESPACE = 'monitoring'
+#: The etcd backup's (storage.md §5): the snapshot and the restore-verify
+#: (operations.md §4), and the one namespace Talos issues a certificate for its
+#: API to (`ETCD_SNAPSHOT_GRANT`). Talos grants by namespace, so the namespace
+#: holds the etcd backup's own workloads and nothing else, and the grant
+#: reaches no other workload (credentials.md §1, rule 3).
+ETCD_BACKUP_NAMESPACE = 'etcd-backup'
+
+
+class TalosGrant(NamedTuple):
+    """A Talos role a pod may ask a certificate for, and the namespace it may ask from.
+
+    The two are one grant: the control planes' machine configuration allows
+    the pair (`machine.features.kubernetesTalosAPIAccess`, in
+    `components.talos.control_plane_patch`), and a `talos.dev/v1alpha1`
+    `ServiceAccount` in that namespace asks for that role. Talos refuses
+    either half the configuration does not list, so the two sides have to
+    name the same pair.
+    """
+
+    role: str
+    """A Talos API role, by Talos' own name for it (`pkg/machinery/role`)."""
+    namespace: str
+    """The Kubernetes namespace a `ServiceAccount` asking for `role` is in."""
+
+
+#: The etcd snapshot's grant: `os:etcd:backup`, Talos' role for taking an etcd
+#: snapshot (`role.EtcdBackup`) and the narrowest the snapshot reads with, in
+#: the etcd backup's namespace. `physical` states it; it is for the
+#: `ServiceAccount` the snapshot's pod asks with.
+ETCD_SNAPSHOT_GRANT = TalosGrant(role='os:etcd:backup', namespace=ETCD_BACKUP_NAMESPACE)
 
 #: The MTU of KubeSpan's WireGuard link, which the machine configuration
 #: states; rfc-007 §4.1 has `k8s-base` size Cilium from it too. Cilium's own MTU setting
