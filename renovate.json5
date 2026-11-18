@@ -595,6 +595,16 @@
       versioning: 'regex:^(?<major>\\d+)\\.(?<minor>\\d+)\\.(?<patch>\\d+)-[0-9a-f]{12}$',
     },
     {
+      // The Postgres client runtime, tagged with the client's major, which is
+      // the state backend's server major. A new major is the server's, and
+      // the base's moves are rebuilds under the same major, which compare
+      // equal and are moved to by hand.
+      matchDepNames: [
+        'ghcr.io/aetf/postgres-client',
+      ],
+      versioning: 'regex:^(?<major>\\d+)-[0-9a-f]{12}$',
+    },
+    {
       // The patches of emailproxy, golinks and the OCI SDK runtime,
       // re-enabled: a release on emailproxy's calendar within a month, a
       // golinks commit within a month, an `oci` patch release. Each is a new
@@ -1050,15 +1060,16 @@
       // line `.python-version` names (ci.md §4). The `python` image's newest
       // tag is on a later line, so the line bounds what renovate may offer
       // the base, as gawk's rule above bounds gawk's, and a test holds the
-      // bound to the base's tag and the tag to `.python-version`. Within the
-      // bound the only tag of the base's form is its own, so what reaches it
-      // is the digest refreshes of the monthly group above. The pull request that
-      // moves `.python-version` to another line moves the base and this bound
-      // by hand, and that test holds it red until both have moved. Matched by
-      // file, since emailproxy builds from the same image on a line of its
-      // own.
+      // bound to the base's tag and the tag to `.python-version`, for every
+      // file the rule names. Within the bound the only tag of the base's form
+      // is its own, so what reaches it is the digest refreshes of the monthly
+      // group above. The pull request that moves `.python-version` to another
+      // line moves the bases and this bound by hand, and that test holds it
+      // red until all of them have moved. Matched by file, since emailproxy
+      // builds from the same image on a line of its own.
       matchFileNames: [
         'docker/oci-sdk.Containerfile',
+        'docker/postgres-client.Containerfile',
       ],
       matchDepNames: [
         'docker.io/library/python',

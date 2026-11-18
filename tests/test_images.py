@@ -15,7 +15,9 @@ and the cases below hold both (framework/ci.md §4):
 
 An image that runs this repository's Python is held besides to the
 interpreter line and the package ranges that code is checked against, and
-renovate to offering it nothing past them: the last section below.
+renovate to offering it nothing past them; and the image a cluster job reaches
+the state backend with, to a client of the server's major: the last sections
+below.
 
 The action's step is bash in YAML, and the cases run it as it is written, with
 the one command that reaches the network -- `skopeo` -- replaced by a fake that
@@ -40,6 +42,8 @@ import yaml
 from packaging.requirements import Requirement
 from packaging.utils import canonicalize_name
 from renovate_text import as_python_spells_it, as_renovate_spells_it, listed, package_rules, scalar
+
+from kluster.lib.state_backend import settings
 
 ROOT = Path(__file__).parent.parent
 DOCKER = ROOT / 'docker'
@@ -181,6 +185,11 @@ PINNED = re.compile(r'^[^\s@$]+:[\w][\w.-]*@sha256:[0-9a-f]{64}$')
 FROM_OPTION = re.compile(r'(?:--from=|--mount=\S*?\bfrom=)(?P<image>[^\s,]+)')
 
 
+def _substituted(text: str, args: dict[str, str]) -> str:
+    """`text` with the build args substituted, as the build substitutes them; an arg not given is left as written."""
+    return VARIABLE.sub(lambda m: args.get(m.group(1) or m.group(2), m.group(0)), text)
+
+
 def _bases(recipe: str, args: dict[str, str]) -> list[str]:
     """Every image the recipe pulls, with the build args substituted.
 
@@ -193,7 +202,7 @@ def _bases(recipe: str, args: dict[str, str]) -> list[str]:
     count = 0
 
     def resolve(image: str) -> str:
-        return VARIABLE.sub(lambda m: args.get(m.group(1) or m.group(2), m.group(0)), image)
+        return _substituted(image, args)
 
     for line in recipe.splitlines():
         found = FROM.match(line)
@@ -704,13 +713,15 @@ def test_a_reference_pin_names_a_versioning_its_tag_reads_under(image: str) -> N
 #
 # It carries the interpreter line `.python-version` names and, of each package
 # it installs for that code, a release inside the range `pyproject.toml`
-# declares (framework/ci.md §4). The census is every image whose conf pins,
-# under a `pypi` hint, a package `pyproject.toml` declares: a package of this
-# repository's is installed for this repository's code. Equality with
+# declares (framework/ci.md §4). The package census is every image whose conf
+# pins, under a `pypi` hint, a package `pyproject.toml` declares: a package of
+# this repository's is installed for this repository's code. Equality with
 # `uv.lock` is not the rule, because lock maintenance moves a package inside
 # its range and the image would have to be rebuilt after every move. An image
 # that runs this repository's code on the standard library alone installs none
-# of the declared packages, so it is outside the census and held by review.
+# of the declared packages, so it is outside that census; review puts it under
+# renovate's bound on the interpreter line, and the line census -- the package
+# census and every image the bound names -- holds its base to the line.
 
 #: The base an image takes its interpreter from, by the name the dockerfile
 #: manager reads it under, and so the name renovate's rules match.
@@ -748,6 +759,25 @@ def _python_images() -> list[str]:
     ]
 
 
+def _python_bounds() -> list[str]:
+    """The `allowedVersions` rules that bound a `python` base: each names its Containerfiles by file."""
+    return [
+        rule
+        for rule in package_rules((ROOT / 'renovate.json5').read_text())
+        if listed(rule, 'matchDepNames') == [PYTHON_IMAGE] and scalar(rule, 'allowedVersions') is not None
+    ]
+
+
+def _line_images() -> list[str]:
+    """The package census, and every image whose Containerfile a bound on the `python` base names."""
+    bounded = {
+        path.removeprefix('docker/').removesuffix('.Containerfile')
+        for rule in _python_bounds()
+        for path in listed(rule, 'matchFileNames')
+    }
+    return [image for image in _images() if image in bounded or image in _python_images()]
+
+
 def _python_line() -> str:
     """The `<major>.<minor>` of the interpreter `.python-version` pins."""
     major, minor = (ROOT / '.python-version').read_text().strip().split('.')[:2]
@@ -780,7 +810,12 @@ def test_the_census_finds_an_image_running_this_repositorys_python() -> None:
     assert _python_images()
 
 
-@pytest.mark.parametrize('image', _python_images())
+def test_the_line_census_holds_an_image_of_the_standard_library_alone() -> None:
+    """Not vacuous: the Postgres client runtime is one today, under the bound and outside the package census."""
+    assert set(_line_images()) - set(_python_images())
+
+
+@pytest.mark.parametrize('image', _line_images())
 def test_an_image_running_this_repositorys_python_is_on_its_line(image: str, tmp_path: Path) -> None:
     """The base carries the line the gate type-checks and tests at, on every architecture built."""
     recipe = (DOCKER / f'{image}.Containerfile').read_text()
@@ -855,10 +890,8 @@ def _bound(path: str) -> re.Pattern[str]:
     """The `allowedVersions` of the one rule naming the `python` base of `path`, as a regular expression."""
     named = [
         written
-        for rule in package_rules((ROOT / 'renovate.json5').read_text())
-        if listed(rule, 'matchFileNames') == [path]
-        and listed(rule, 'matchDepNames') == [PYTHON_IMAGE]
-        and (written := scalar(rule, 'allowedVersions')) is not None
+        for rule in _python_bounds()
+        if path in listed(rule, 'matchFileNames') and (written := scalar(rule, 'allowedVersions')) is not None
     ]
     assert len(named) == 1, f'{len(named)} rules bound the base of {path}; renovate needs one'
     unescaped = named[0].replace('\\\\', '\\')
@@ -866,7 +899,7 @@ def _bound(path: str) -> re.Pattern[str]:
     return re.compile(unescaped[1:-1])
 
 
-@pytest.mark.parametrize('image', _python_images())
+@pytest.mark.parametrize('image', _line_images())
 def test_renovate_bounds_the_base_to_its_line(image: str, tmp_path: Path) -> None:
     """The bound admits the base's tag and not the next line's, so renovate offers the base no move off its line.
 
@@ -879,3 +912,75 @@ def test_renovate_bounds_the_base_to_its_line(image: str, tmp_path: Path) -> Non
     line = _bound(f'docker/{image}.Containerfile')
     assert line.search(tag), f'{image}: the bound {line.pattern} refuses the base {tag}'
     assert not line.search(_next_line(tag)), f'{image}: the bound {line.pattern} admits {_next_line(tag)}'
+
+
+# --------------------------------------------------------------------------
+# The Postgres client of the state backend.
+#
+# A cluster job reaches the state backend with the client this image carries.
+# The image installs the client of the major its conf names, and the
+# appliance's server is whatever major `settings.POSTGRES_TAG` names. They
+# are held equal, as `tests/test_postgres_client.py` holds the workstation's
+# client, so that moving the server is red until the client has moved with it.
+# The package is held apart from the directory its binaries are reached in:
+# an unversioned package installs whatever major the base's Debian release
+# defaults to, which a directory of the right major on `PATH` would not reveal.
+
+#: The image a cluster job reaches the state backend with.
+STATE_CLIENT = 'postgres-client'
+
+#: The major of a versioned client package the recipe installs.
+CLIENT_PACKAGE = re.compile(r'\bpostgresql-client-(\d+)\b')
+
+#: The major of a directory under `/usr/lib/postgresql/` the recipe reaches binaries in.
+CLIENT_DIRECTORY = re.compile(r'/usr/lib/postgresql/(\d+)/')
+
+
+def _majors(recipe: str) -> tuple[set[str], set[str]]:
+    """The majors of the client packages `recipe` installs, and of the directories it reaches binaries in."""
+    return set(CLIENT_PACKAGE.findall(recipe)), set(CLIENT_DIRECTORY.findall(recipe))
+
+
+def _server_major() -> str:
+    found = re.match(r'\d+', settings.POSTGRES_TAG)
+    assert found is not None, f'{settings.POSTGRES_TAG!r} does not start with a major'
+    return found.group()
+
+
+#: Recipes, each with the majors of the packages it installs and of the directories it reaches.
+MAJOR_CASES: dict[str, tuple[str, tuple[set[str], set[str]]]] = {
+    'the package and its directory': (
+        'RUN apt-get install postgresql-client-17\nENV PATH=/usr/lib/postgresql/17/bin:$PATH\n',
+        ({'17'}, {'17'}),
+    ),
+    'a directory of another major': (
+        'RUN apt-get install postgresql-client-17\nENV PATH=/usr/lib/postgresql/16/bin:$PATH\n',
+        ({'17'}, {'16'}),
+    ),
+    'the unversioned package beside a directory': (
+        'RUN apt-get install postgresql-client\nENV PATH=/usr/lib/postgresql/17/bin:$PATH\n',
+        (set(), {'17'}),
+    ),
+}
+
+
+@pytest.mark.parametrize('case', MAJOR_CASES)
+def test_the_majors_a_recipe_names_are_read(case: str) -> None:
+    recipe, majors = MAJOR_CASES[case]
+    assert _majors(recipe) == majors
+
+
+def test_the_state_client_is_on_the_servers_major(tmp_path: Path) -> None:
+    """The package the recipe installs and the directory it reaches are each of the server's major, on every architecture.
+
+    Resolved the way the build resolves the recipe, with the build args the
+    conf step writes for each architecture.
+    """
+    recipe = (DOCKER / f'{STATE_CLIENT}.Containerfile').read_text()
+    instructions = '\n'.join(line for line in recipe.splitlines() if not line.lstrip().startswith('#'))
+    for arch in _architectures():
+        conf = _run_conf(ROOT, tmp_path / arch, STATE_CLIENT, arch=arch)
+        assert conf.returncode == 0, conf.stderr
+        packages, directories = _majors(_substituted(instructions, conf.args))
+        assert packages == {_server_major()}, f'{arch}: the client packages installed are of {packages}'
+        assert directories == {_server_major()}, f'{arch}: the client directories reached are of {directories}'
