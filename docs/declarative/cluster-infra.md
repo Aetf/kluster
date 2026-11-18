@@ -20,15 +20,22 @@ that speaks the k8s API, consumed by `apps`.
     `credentials derived sync --only kubeconfig` copies out of
     `physical`'s state, since a StackReference elides a secret across
     `physical`'s passphrase ([credentials.md](../credentials.md) §3); and,
-    by StackReference to `physical` under the names in
-    `conventions.PHYSICAL_OUTPUTS`, the addresses the `internet` pool is
-    made of — each cloud node's primary private IPv4
-    (`node_private_ips`), each node's GUA (`node_guas`), the dedicated
-    VIP's secondary private address (`vip1_private`) and the balancer's
-    public IPv4 and IPv6 (`cluster_endpoint`, `cluster_endpoint_v6`),
-    and the worker's GUA (`worker_gua`), which its own pool holds,
-    each read so that anything but an address of its family stops the
-    run naming the output (`kluster.lib.stack_addresses`). A stack holding no
+    by StackReference, the outputs of the stacks below it that its
+    components consume. Today every one is `physical`'s, asked for by its
+    name in `conventions.PHYSICAL_OUTPUTS`, and they are of two kinds.
+    The addresses the pools are made of: for the `internet` pool, each
+    cloud node's primary private IPv4 (`node_private_ips`), each node's
+    GUA (`node_guas`), the dedicated VIP's secondary private address
+    (`vip1_private`) and the balancer's public IPv4 and IPv6
+    (`cluster_endpoint`, `cluster_endpoint_v6`), and for the worker's
+    own pool, the worker's GUA (`worker_gua`), each read so that
+    anything but an address of its family stops the run naming the
+    output (`kluster.lib.stack_addresses`). And the OCID of each cloud
+    node's volume (`volume_ids`), which the pull of OCI's block-volume
+    series names its series by (§1 item 6), read only once that pull's
+    key is sealed in, and so that anything but a map from each node's
+    volumes to an OCID each stops the run (`kluster.lib.stack_volumes`).
+    A stack holding no
     copy of the kubeconfig, or a blank one, stops at the read and names
     that command (`kluster.lib.k8s.kubeconfig_from`). The program builds
     one Kubernetes provider from it and disables the package's default
