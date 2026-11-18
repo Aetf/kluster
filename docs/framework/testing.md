@@ -1516,6 +1516,18 @@ measurement in their comment:
     A bump that measures a case slower moves the constant and its
     comment together.
 
+**A case that starts another pinned tool for a run the suite's per-case
+bound is not an order of magnitude above, under load, is under the same
+rule**, and is named here, since the census above sees only `pulumi`.
+Today's is `tests/test_alert_evaluation.py`'s
+`test_the_groups_alerts_are_what_each_case_says_they_are`, each of whose
+cases runs `vmalert-tool unittest` over one rule group the program
+declares, hours to days of synthesized series, as a process of its own
+started through `tests/process_sessions.py`: the run at the module's
+`COMMAND_TIMEOUT`, and the case at its `CASE_TIMEOUT`, which also covers
+the program's run under mocks that the module's fixture makes, with the
+tool's storage in the case's own temporary directory.
+
 The load such a case meets is the machine's and the suite's own: three
 other workers (§1), any of which may be running a case of this kind at the
 same moment. That is the load the bounds above are measured under, and

@@ -186,17 +186,24 @@ helm = "3.20.2"
 # Prometheus's series into the history store at Wave C's head
 # (docs/cluster/migration.md §2.1). It reaches each store only through its
 # HTTP API -- Prometheus's remote read on one side, VictoriaMetrics' import on
-# the other -- and reads no store's files, so its release is not held to the
-# one the stores run (the stack chart's `appVersion`), and renovate moves it
-# in the toolchain group. VictoriaMetrics publishes it only inside the
+# the other -- and reads no store's files, so the release it runs at is
+# indifferent to the one the stores run. vmalert-tool evaluates the cluster's
+# alerting rules over synthesized series in the suite
+# (tests/test_alert_evaluation.py), and has to be the engine the cluster's
+# vmalert runs, so the pin is the stack chart's release, its `appVersion`,
+# which a test there holds it to, and renovate moves it beside the chart, in
+# the `victoriametrics` group. VictoriaMetrics publishes both only inside the
 # `vmutils` archive of each release, beside the other utilities, as
-# `vmctl-prod`: `matching_regex` narrows the assets to those archives and
-# leaves the platform to mise's selection, `rename_exe` names the binary
-# `vmctl`, and `filter_bins` puts it alone on `PATH`, so the archive's
-# `vmbackup-prod` and the rest stay off it. The key is the repository, which
-# is how mise's GitHub backend names a tool. Its releases are static
-# binaries.
-"github:VictoriaMetrics/VictoriaMetrics" = { version = "1.150.0", matching_regex = '^vmutils-[a-z0-9]+-[a-z0-9]+-v[0-9.]+\.(tar\.gz|zip)$', rename_exe = { "vmctl-prod" = "vmctl" }, filter_bins = "vmctl" }
+# `vmctl-prod` and `vmalert-tool-prod`: `matching_regex` narrows the assets to
+# those archives and leaves the platform to mise's selection, `rename_exe`
+# drops each binary's `-prod`, and `filter_bins` puts those two alone on
+# `PATH`, so the archive's `vmbackup-prod` and the rest stay off it. Both are
+# applied when mise installs a release, so a change to either reaches an
+# installed release only through
+# `mise install --force github:VictoriaMetrics/VictoriaMetrics`. The key is
+# the repository, which is how mise's GitHub backend names a tool. Its
+# releases are static binaries.
+"github:VictoriaMetrics/VictoriaMetrics" = { version = "1.150.0", matching_regex = '^vmutils-[a-z0-9]+-[a-z0-9]+-v[0-9.]+\.(tar\.gz|zip)$', rename_exe = { "vmctl-prod" = "vmctl", "vmalert-tool-prod" = "vmalert-tool" }, filter_bins = "vmctl,vmalert-tool" }
 # node runs ZeroTier's own rule compiler, which the suite asks whether Central
 # would accept the overlay's rendered flow rules. The compiler is JavaScript
 # with no dependencies, vendored at the release the CI member runs

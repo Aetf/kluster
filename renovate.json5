@@ -270,9 +270,10 @@
       // is skipped: the pull request arrives without the entry and without
       // that mark, and `checks` refuses it at the install. Either way a
       // person runs `mise lock <tool>` onto the branch. The same holds for
-      // every mise pin a rule
-      // below takes out of this group, today `kubeseal`, `talosctl`, `age`
-      // and a major release of `postgres`.
+      // every mise pin a rule below takes out of this group, today
+      // `kubeseal`, `talosctl`, `age`, the `vmutils` archive
+      // (`github:VictoriaMetrics/VictoriaMetrics`) and a major release of
+      // `postgres`.
       matchManagers: [
         'mise',
       ],
@@ -410,25 +411,34 @@
       groupSlug: 'cilium',
     },
     {
-      // The VictoriaMetrics stack chart and the three images the monitoring
-      // component runs at the chart's release, out of the in-cluster group
-      // and into one of their own. A test holds each image to the release the
-      // chart records, and VictoriaMetrics publishes its images before the
-      // chart takes the release, so this group's pull request is red until a
-      // chart release records it; apart from the in-cluster group, it holds
-      // back these four pins alone. The chart's dependency is its pin's key,
-      // as Cilium's is.
+      // The VictoriaMetrics stack chart and every pin held to its release,
+      // out of the groups that would otherwise take them and into one of
+      // their own: the three images the monitoring component runs at the
+      // chart's release, from `Pulumi.yaml`, and the `vmutils` archive that
+      // puts `vmalert-tool` on the suite's path, from `mise.toml`, whose key
+      // under `[tools]` is the mise manager's name for it. A test holds each
+      // to the release the chart records, so apart from the chart each would
+      // be red on its own, and the chart red without them. VictoriaMetrics
+      // publishes a release before the chart takes it, so this group's pull
+      // request is red until a chart release records it; apart from the
+      // in-cluster and toolchain groups, it holds back these pins alone. The
+      // chart's dependency is its pin's key, as Cilium's is. A dependency
+      // matches when its file and its name are both listed, and no name here
+      // is pinned in both files.
       //
       // Position is load-bearing, as for the Cilium rule: this sits *after*
-      // the in-cluster rule, so its group wins. A test holds the order.
+      // the in-cluster rule and the rule grouping the whole mise manager as
+      // the toolchain, so its group wins over both. A test holds it.
       matchFileNames: [
         'Pulumi.yaml',
+        'mise.toml',
       ],
       matchDepNames: [
         'victoria-metrics-k8s-stack',
         'docker.io/victoriametrics/victoria-metrics',
         'docker.io/victoriametrics/vmbackup',
         'docker.io/victoriametrics/vmrestore',
+        'github:VictoriaMetrics/VictoriaMetrics',
       ],
       groupName: 'victoriametrics',
       groupSlug: 'victoriametrics',
