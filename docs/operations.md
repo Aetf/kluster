@@ -94,6 +94,27 @@ bridge and the providers it fetches (`Pulumi.yaml` says why beside its
 from an HTTP repository, which offers nothing to check a download against
 (`Pulumi.yaml` says so beside them).
 
+**A chart bump's review reads the chart's changelog for every key the
+program sets on it, unless the chart's schema refuses a key it does not
+declare.** The values a component hands its chart, the `values` of its
+`helm_chart` call, are held to the chart a bump brings in one respect:
+`tests/test_chart_values.py` holds every path they set to the paths the
+chart has at its pinned version (`packages/crds/chart-values.json`,
+[framework/pulumi.md](framework/pulumi.md) §4), so a bump that renames
+or removes a key the program sets is red until the component follows
+it. A key the new version keeps and reads differently, or keeps and no
+longer reads, passes that test. Cilium's `rollOutCiliumPods` is one
+such key: it is what makes a change to the values replace the agent's
+pods (declarative/cluster-infra.md §2), and a release that kept it in
+`values.yaml` and dropped its templating would pass. A chart whose
+`values.schema.json` sets `additionalProperties: false` at every map the
+program sets keys in declares its interface in that schema, and refuses
+a key it does not declare; today that is the cert-manager chart alone.
+For every other chart, one that ships no schema or whose schema is open
+at those maps, the bump's review reads the chart's changelog between the
+two versions for each key the program sets, and says on the pull
+request what it found for each.
+
 | Surface | PR opened by | Applied by | Policy |
 | --- | --- | --- | --- |
 | Talos version (machine-config pin + Image Factory schematic + `mise.toml`'s `talosctl`) | renovate (GitHub-releases datasource) | `physical` stack for the pin and the schematic; `talosctl upgrade` by hand, one node at a time in §2.1's order (declarative/physical.md §2) | Reviewed; one pull request moves `versions:talos` and the `talosctl` pin together, because `tests/test_talos_validate.py` holds the two equal; §2.1 runbook |
