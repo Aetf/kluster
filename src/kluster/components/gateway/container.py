@@ -923,9 +923,11 @@ class Container(Component, pulumi_type='kluster:gateway:Container'):
     yet.
 
     `after` is what this machine must be actuated behind. It is a parameter
-    rather than a fact of this class because the only service that has such a
-    constraint has it for a reason that is invisible from inside: the machine
-    carrying the deployment's own session must move last (rfc-002 §4.4).
+    rather than a fact of this class because every such constraint has a reason
+    that is invisible from inside one machine: the machine carrying the
+    deployment's own session must move last (rfc-002 §4.4), and of the site's
+    resolvers no two may restart at once, which is a fact about the set of
+    them (`Gateway`).
     """
 
     def __init__(

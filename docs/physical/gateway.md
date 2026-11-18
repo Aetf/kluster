@@ -424,7 +424,8 @@ hold the boot chain there.
 
 The set is **unordered**: which machine is actuated when is a
 push-time constraint, expressed in the deployment graph where the
-session is (below), and at boot there is nothing to order. What is fixed
+session and the resolvers are (below), and at boot there is nothing to
+order. What is fixed
 is the order *inside* one machine's stamp — `40-machines.sh` runs under
 `LC_ALL=C`, because a checksum is over a byte sequence and a glob's
 order is the collation's, and a script run both from systemd at boot and
@@ -500,6 +501,20 @@ machine's stamp has not been written yet, so the retry finds the work
 already done. During a first bring-up there is no overlay to sever —
 the container that will carry it is the thing being delivered — and the
 session runs over the device's LAN address instead (§2.5).
+
+**The resolvers are actuated one at a time, in the order the
+declaration lists them.** One change moves every resolver's pin, and
+machines with no order between them restart together, leaving the site
+with no resolver for as long as the restarts overlap. So each resolver
+machine is ordered behind the one declared before it — bob behind
+alice, and a third behind bob — and every file of the later machine
+waits for every file of the earlier one, each of which runs the hook
+that restarts that machine where its definition moved and then holds
+it to having come up (above). What that buys is exactly what the hook reads: the next
+resolver starts moving once systemd reports the one before it active,
+not once that one answers on port 53. A strict guarantee would take a
+hook that waits for an answer there. The proxy is not in the chain: it
+fronts the resolvers' interfaces rather than answering for names.
 
 ### 1.2 The persistence mechanism: the boot chain and the custom root
 

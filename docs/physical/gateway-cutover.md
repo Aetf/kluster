@@ -206,12 +206,14 @@ not moved.
     `insecureAcceptAnything`, the permissive default that `skopeo`'s
     dependency `golang-github-containers-common` ships. The copy exits
     zero, prints nothing, and takes seconds. Step 3 pulls the proxy's
-    and both resolvers' images at the same time over this uplink —
-    nothing orders the three trees against each other — and holds each
-    pull to one command under the session's `DEFAULT_TIMEOUT`
-    (`providers/device_files/ssh.py`); their images together are several
-    times this one, so a copy here that takes a noticeable fraction of
-    that bound is step 3's pulls running out of it.
+    image and the first resolver's at the same time over this uplink,
+    and each later resolver's only once every file of the resolver
+    before it has landed (gateway.md §1.1). It holds each pull to one
+    command under the session's `DEFAULT_TIMEOUT`
+    (`providers/device_files/ssh.py`), and a pull that shares the uplink
+    is slower than this copy alone, so a copy here that takes a
+    noticeable fraction of that bound is step 3's pulls running out of
+    it.
     And the unpack exits zero with `ls` listing a root filesystem's top
     level — `etc`, `usr` and the rest — rather than a `config.json`
     beside a `rootfs`, which is the runtime bundle that `umoci unpack`

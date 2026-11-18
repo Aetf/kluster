@@ -49,7 +49,14 @@ import pulumi
 from kluster import conventions
 from kluster.components.gateway import access, nspawn
 from kluster.components.gateway.access import AuthorizedKeys, PublicKey
-from kluster.components.gateway.container import CaddyService, Container, OverlayDaemon, ResolverService, Rootfs
+from kluster.components.gateway.container import (
+    CaddyService,
+    Container,
+    OverlayDaemon,
+    ResolverService,
+    Rootfs,
+    ServiceDeclaration,
+)
 from kluster.components.gateway.nspawn import WATCHDOG_UNIT, NspawnRuntime
 from kluster.components.gateway.persistence import (
     NETWORKD_UNIT,
@@ -472,16 +479,31 @@ class Gateway(Component, pulumi_type='kluster:gateway:Gateway'):
         # component's files are the same on a gateway running one service and
         # on one running five, and adding a service pushes none of them again.
         self.runtime = NspawnRuntime(f'{name}-nspawn', mechanism=self.persistence, opts=self.child_opts())
-        self.containers: tuple[Container, ...] = tuple(
-            Container(
+
+        def machine(declaration: ServiceDeclaration, after: Sequence[pulumi.Resource] = ()) -> Container:
+            return Container(
                 f'{name}-{declaration.service.name}',
                 declaration=declaration,
                 runtime=self.runtime,
                 connection=connection,
+                after=after,
                 opts=self.child_opts(),
             )
-            for declaration in (caddy, *resolvers)
-        )
+
+        proxy = machine(caddy)
+        # The resolvers go one at a time, each behind the one declared before
+        # it. Their pins move in one change, and machines left unordered would
+        # restart together, leaving the site with no resolver for as long as
+        # the restarts overlap. Every piece of a machine runs the hook that
+        # restarts it where its definition moved and then holds it to systemd
+        # reporting it active, so the next resolver starts moving only once
+        # that holds for the one before it -- which is not the same as that one
+        # answering on port 53 (physical/gateway.md §1.1).
+        ordered: list[Container] = []
+        for declaration in resolvers:
+            ordered.append(machine(declaration, after=ordered[-1:]))
+        self.resolvers: tuple[Container, ...] = tuple(ordered)
+        self.containers: tuple[Container, ...] = (proxy, *self.resolvers)
         # The same address the shell goes to, for the same reason: the
         # controller answers on the gateway itself. Recording it separately
         # would be a second copy of one fact, free to disagree with the first.

@@ -49,9 +49,9 @@ both manipulate systemd's own configuration:
     state a machine that has never run is given.
 
 **The machine set is unordered.** Which machine is actuated when is a push-time
-constraint — the machine carrying the deployment's own session must go last —
-and that belongs to the dependency graph the push has, not to a script that
-runs at boot where no apply is in flight.
+constraint — the machine carrying the deployment's own session must go last,
+and the resolvers go one at a time — and that belongs to the dependency graph
+the push has, not to a script that runs at boot where no apply is in flight.
 
 **`systemd-nspawn@.service` is the unit, not a unit per machine.** It is
 systemd's own template, so what a machine says about itself is said in its
