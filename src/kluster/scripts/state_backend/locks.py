@@ -63,7 +63,7 @@ log = logging.getLogger(__name__)
 #: `machine/butane.yaml.j2`), with the pooler's unit waiting until it
 #: serves. Ten minutes is far above both. What bounds it from above is the
 #: `Up` step that runs it: the worst case, the wait and then one last attempt
-#: of two `state.LISTING_TIMEOUT`s, stays well inside that step's bound.
+#: of two `table.LISTING_TIMEOUT`s, stays well inside that step's bound.
 WAIT = 600
 INTERVAL = 15
 

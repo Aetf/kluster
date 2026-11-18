@@ -146,7 +146,10 @@ def form(url: str, purpose: Purpose) -> str:
 def read(bundle_dir: Path, purpose: Purpose) -> str | None:
     """The connection string of the bundle in `bundle_dir`, in the form `purpose` reads; None where it holds none.
 
-    The one reader of the stored string. A file that is there and empty is
+    The reader of the stored string for code that imports `kluster`; a
+    program that imports the standard library alone reads it through
+    `kluster.lib.state_backend.table.Settings.client`, from a settings file
+    that carries this module's file names (`state.table_settings`). A file that is there and empty is
     read as the empty string, which names no backend in any form, so a
     caller can tell the two apart.
     """

@@ -36,7 +36,7 @@ import pytest
 from scratch_projects import PASSPHRASE, cli_directories, scrubbed
 
 from kluster.lib import bundle, stack_environment
-from kluster.lib.state_backend import settings, state
+from kluster.lib.state_backend import settings, state, table
 from kluster.scripts.state_backend import cli, locks
 
 IMAGE = settings.POSTGRES_IMAGE
@@ -66,7 +66,7 @@ UNLOCK_FAILED = 'there was a problem deleting the lock'
 
 pytestmark = [
     pytest.mark.skipif(shutil.which('pulumi') is None, reason='pulumi is not on PATH (mise x -- ...)'),
-    pytest.mark.skipif(shutil.which(state.PSQL) is None, reason='psql is not on PATH (mise x -- ...)'),
+    pytest.mark.skipif(shutil.which(table.PSQL) is None, reason='psql is not on PATH (mise x -- ...)'),
     pytest.mark.timeout(CASE_TIMEOUT),
 ]
 
@@ -84,7 +84,7 @@ class Box:
     def sql(self, statement: str) -> str:
         """`statement` as the superuser, its rows printed unaligned."""
         done = process_sessions.run(
-            [state.PSQL, '--no-psqlrc', '-v', 'ON_ERROR_STOP=1', '-At', f'--dbname={self.url("postgres")}'],
+            [table.PSQL, '--no-psqlrc', '-v', 'ON_ERROR_STOP=1', '-At', f'--dbname={self.url("postgres")}'],
             input=statement,
             text=True,
             timeout=COMMAND_TIMEOUT,
@@ -241,11 +241,11 @@ def _leave_lock(box: Box, root: Path) -> Left:
 
 @pytest.fixture
 def release(box: Box, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """The bundle `release-lock` reads the box over, and the command's `psql` bounded below the case."""
+    """The bundle `release-lock` reads the box over, and each of its `psql` statements bounded below the case."""
     directory = tmp_path / 'bundle'
     directory.mkdir()
     _ = (directory / bundle.URL_FILE).write_text(f'{box.url("postgres")}\n')
-    monkeypatch.setattr(state, 'LISTING_TIMEOUT', COMMAND_TIMEOUT)
+    monkeypatch.setattr(table, 'LISTING_TIMEOUT', COMMAND_TIMEOUT)
     return directory
 
 

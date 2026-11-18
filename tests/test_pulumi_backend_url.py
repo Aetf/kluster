@@ -28,7 +28,7 @@ from root_credentials import fake
 
 from kluster.conventions import identity
 from kluster.lib import bundle, pulumi_cli, stack_environment
-from kluster.lib.state_backend import settings, state
+from kluster.lib.state_backend import settings, state, table
 from kluster.scripts.credentials import pulumi_config
 
 #: The connection string `state-backend bundle` writes.
@@ -153,7 +153,7 @@ class Tools:
         if Path(argv[0]).name == Path(state.PG_DUMP).name:
             destination = next(value.removeprefix('--file=') for value in argv if value.startswith('--file='))
             _ = Path(destination).write_bytes(state.ARCHIVE_MAGIC)
-        elif Path(argv[0]).name == Path(state.PSQL).name:
+        elif Path(argv[0]).name == Path(table.PSQL).name:
             stdout = '[]'
         return sp.CompletedProcess(args=list(argv), returncode=0, stdout=stdout, stderr='')
 
@@ -179,7 +179,7 @@ def test_each_libpq_tool_is_handed_the_form_its_purpose_reads(
     slot.mkdir()
     _ = (slot / bundle.URL_FILE).write_text(written + '\n')
     tools = Tools()
-    monkeypatch.setattr(state.sp, 'run', tools)
+    monkeypatch.setattr(table.sp, 'run', tools)
     target = state.connection(slot)
 
     state.pg_dump(target, tmp_path / 'taken.dump')
@@ -189,12 +189,12 @@ def test_each_libpq_tool_is_handed_the_form_its_purpose_reads(
     assert tools.dbnames() == {
         Path(state.PG_DUMP).name: bundle.dump_url(written),
         Path(state.PG_RESTORE).name: bundle.dump_url(written),
-        Path(state.PSQL).name: written,
+        Path(table.PSQL).name: written,
     }
     assert not any(_carries_the_parameter(url) for url in tools.dbnames().values())
 
 
-@pytest.mark.skipif(shutil.which(state.PSQL) is None, reason='psql is not on PATH (mise x -- ...)')
+@pytest.mark.skipif(shutil.which(table.PSQL) is None, reason='psql is not on PATH (mise x -- ...)')
 def test_the_pinned_libpq_refuses_the_url_pulumi_is_given_and_takes_the_bundles() -> None:
     # Why the two are kept apart, held to the client `mise.toml` pins: libpq
     # reads a connection string before it opens anything, so the URL `pulumi`

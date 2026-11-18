@@ -25,6 +25,10 @@ same rule (physical/state-backend.md §5). A restore ends by asking the
 `pulumi` CLI what the restored backend serves, because a database that is
 full of rows but cannot be logged in to has restored nothing anyone needs.
 
+**The rows of the table are `table`'s.** Its key grammar, the census and
+the prunes are written there, in a module a program runs on its own, and
+read here for what a dump needs of them.
+
 **Bytes, which is why this is not the escrow's `age` wrapper**
 (`kluster.scripts.credentials.age`). That wrapper is text in, text out, and a
 custom-format archive is neither. The invocations here keep its discipline —
@@ -38,9 +42,6 @@ import datetime as dt
 import enum
 import json
 import logging
-import os
-import re
-import subprocess as sp
 import tempfile
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -50,7 +51,7 @@ from typing import cast
 from kluster.lib import age, bundle, pulumi_cli
 from kluster.lib import config as lib_config
 
-from . import settings
+from . import settings, table
 
 log = logging.getLogger(__name__)
 
@@ -65,12 +66,6 @@ PG_RESTORE = 'pg_restore'
 #: transfer because it is local work on a file that already exists.
 TRANSFER_TIMEOUT = 1800
 AGE_TIMEOUT = 600
-LISTING_TIMEOUT = 120
-#: How long a connection to the backend may take to open before the question
-#: of what it serves is answered "it does not answer", and the variable libpq
-#: and the driver behind Pulumi's Postgres backend read it from.
-CONNECT_TIMEOUT = 5
-CONNECT_TIMEOUT_ENV = 'PGCONNECT_TIMEOUT'
 
 #: What the two file formats announce themselves as, in their first bytes.
 #: The appliance writes `age` binary output; the escrow's ciphertexts are
@@ -79,32 +74,20 @@ AGE_MAGIC = b'age-encryption.org/'
 ARMOR_MAGIC = age.ARMOR_BEGIN.encode()
 ARCHIVE_MAGIC = b'PGDMP'
 
-#: Where the state is: the table Pulumi's Postgres backend keeps it in -- the
-#: backend's default name, since a client bundle's URL names no `table=`
-#: -- and the directory, under the database's own prefix, that holds one
-#: checkpoint key per stack. The appliance's dump script carries the same
-#: two (`STATE_TABLE`, `STACKS`), and the suite holds them equal.
-STATE_TABLE = 'pulumi_state'
-STACKS = '.pulumi/stacks/'
-
-#: The suffix after `.json` that names the format a key's value was written
-#: in, for each compression the backend writes (`PULUMI_DIY_BACKEND_GZIP`,
-#: `PULUMI_DIY_BACKEND_ZSTD`); a value written plain has none.
-COMPRESSED = ('.gz', '.zst')
-_FORMAT = '(' + '|'.join(re.escape(suffix) for suffix in COMPRESSED) + ')?'
-
-#: What follows `STACKS` in a checkpoint's key: `<project>/<name>.json`, or
-#: that and a suffix of `COMPRESSED` when the backend compresses. The `.bak`
-#: beside each is not one.
-CHECKPOINT = re.compile(rf'.+\.json{_FORMAT}')
-
-#: The client tool the state table is read and pruned with, from the same
-#: `postgres` pin as the dump's.
-PSQL = 'psql'
-
-
-class StateError(RuntimeError):
-    """A dump or a restore did not happen, and says which step refused."""
+#: The state table's grammar and its reads, as `table` writes them: what a
+#: dump reads of the table, and what the release of a lock
+#: (`kluster.scripts.state_backend.locks`) reads and runs through this module.
+#: The bounds and the client a statement runs under are read from `table`
+#: where they are used, since the suite replaces them there.
+STATE_TABLE = table.STATE_TABLE
+STACKS = table.STACKS
+BOOKKEEPING = table.BOOKKEEPING
+CHECKPOINT = table.CHECKPOINT
+Kind = table.Kind
+StateError = table.StateError
+endpoint = table.endpoint
+query = table.query
+census = table.census
 
 
 class NoStack(StateError):
@@ -234,15 +217,22 @@ def connection(bundle_dir: Path) -> Connection:
     return Connection(url=url, env=bundle.ssl_env(path.parent))
 
 
-def endpoint(url: str) -> str:
-    """A connection string with its query dropped — what a log line may say.
+def table_settings() -> table.Settings:
+    """What `table`'s program reads in place of what it cannot import: the values of `settings`, and a bundle's layout.
 
-    The query is the TLS mode, and on a bundle written before the certificate
-    paths moved into the environment it is three absolute paths as well:
-    nothing secret, nothing informative, and longer than everything else the
-    run prints.
+    The same values `kluster.scripts.state_backend.census` passes a run as
+    arguments on a workstation, each read from where it is defined: the
+    database, the retention rule's lengths and the ceiling from `settings`,
+    and the client bundle's file names from `bundle`.
     """
-    return url.split('?', 1)[0]
+    return table.Settings(
+        database=settings.DATABASE,
+        expiry_age=settings.EXPIRY_AGE,
+        history_records=settings.HISTORY_RECORDS,
+        largest_row_bytes=settings.LARGEST_ROW_BYTES,
+        url_file=bundle.URL_FILE,
+        ssl_files={variable: Path(path).name for variable, path in bundle.ssl_env(Path()).items()},
+    )
 
 
 def _run(
@@ -253,7 +243,7 @@ def _run(
     stdin: str | None = None,
     env: Mapping[str, str] | None = None,
 ) -> str:
-    """One external tool, with its failure turned into something readable.
+    """One external tool, with its failure turned into something readable (`table.execute`).
 
     Every caller here is a long-running local process or a network transfer,
     so a timeout is a real outcome rather than a guard, and it says which
@@ -264,29 +254,17 @@ def _run(
     what a caller adds is the bundle's three `PGSSL*` paths, while `PATH`, a
     home directory and the rest still have to reach the tool.
     """
-    try:
-        proc = sp.run(
-            list(argv),
-            input=stdin,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            env={**os.environ, **env} if env else None,
-        )
-    except FileNotFoundError as exc:
-        raise StateError(
-            f'{argv[0]} is not on PATH: {PG_DUMP}, {PG_RESTORE} and {PSQL} are the `postgres` pin in mise.toml, '
+    return table.execute(
+        argv,
+        what=what,
+        timeout=timeout,
+        stdin=stdin,
+        env=env,
+        hint=(
+            f'{PG_DUMP} and {PG_RESTORE} are the `postgres` pin in mise.toml, '
             f'and {age.BINARY} the `age` pin (`mise x -- ...`)'
-        ) from exc
-    except sp.TimeoutExpired as exc:
-        raise StateError(f'{what} did not finish within {timeout}s') from exc
-    if proc.returncode != 0:
-        detail = (proc.stderr or proc.stdout).strip().splitlines()
-        # The pg tools echo the failing statement after the diagnosis, so the
-        # last line is as likely to be a fragment of SQL as the error itself.
-        found = next((line for line in reversed(detail) if 'error' in line.lower()), None)
-        raise StateError(f'{what} failed: {found or (detail[-1] if detail else f"exit {proc.returncode}")}')
-    return proc.stdout
+        ),
+    )
 
 
 def pg_dump(target: Connection, destination: Path) -> None:
@@ -355,489 +333,6 @@ def checkpoints(rows: str, database: str) -> list[str]:
     return sorted(found)
 
 
-#: The directory, under the database's own prefix, that every key the backend
-#: writes lies under; `STACKS` is one of its directories.
-BOOKKEEPING = '.pulumi/'
-
-
-class Kind(enum.Enum):
-    """What a key of the state table is, read off its path under `<database>/` + `BOOKKEEPING`.
-
-    The layout is the backend's (`pkg/backend/diy` at the pinned CLI), and
-    each member's value is how a census prints it.
-    """
-
-    #: A stack's checkpoint: `CHECKPOINT` under `STACKS`.
-    CHECKPOINT = 'checkpoint'
-    #: The copy of a checkpoint every save makes before it replaces one
-    #: (`COPIES`).
-    PREVIOUS = 'checkpoint .bak'
-    #: One copy of the checkpoint per writing operation (`backupStack`), which
-    #: `PULUMI_DIY_BACKEND_DISABLE_CHECKPOINT_BACKUPS` turns off.
-    BACKUPS = 'backups/'
-    #: Two files per writing operation, the update's record and a copy of the
-    #: checkpoint (`addToHistory`), which no switch turns off.
-    HISTORY = 'history/'
-    #: One per operation that holds a stack's lock, while it holds it.
-    LOCKS = 'locks/'
-    #: The layout's version.
-    META = 'meta.yaml'
-    #: Anything else: a tags file, a retained checkpoint, a key outside the
-    #: layout.
-    OTHER = 'other'
-
-
-#: The directories under `BOOKKEEPING` whose every key is one kind.
-_DIRECTORIES = (Kind.BACKUPS, Kind.HISTORY, Kind.LOCKS)
-
-#: A stack's directory under `history/` or `backups/`, as the backend names
-#: it (`HistoryDir` and `BackupDir` in `pkg/backend/diy/store.go`):
-#: `<project>/<stack>`, or `<stack>` alone in its project-less layout. The
-#: first group is the whole, which is the stack's path under `STACKS` less
-#: `.json`; the second is its last element, the stack's name.
-_STACK_DIRECTORY = r'((?:[^/]+/)*([^/]+))'
-
-#: The copies the backend keeps of a stack's checkpoint, each a pattern the
-#: path of the copy's key under `<database>/` + `BOOKKEEPING` matches whole,
-#: as `pkg/backend/diy/state.go` at the pinned CLI names them. In each, the
-#: first group is the stack's path under `STACKS` less `.json`, and the last
-#: is the suffix of `COMPRESSED` naming the format the copy was written in,
-#: or nothing for a plain one. Two dialects read them, Python's and
-#: Postgres's (`PRUNE_STATEMENT`), so they are written in what the two read
-#: alike, and no key matches one of them in two ways.
-COPIES: dict[Kind, str] = {
-    # `<checkpoint>.bak` (`backupTarget`), in the format of the checkpoint it
-    # copied.
-    Kind.PREVIOUS: rf'{STACKS.removeprefix(BOOKKEEPING)}(.+)\.json{_FORMAT}\.bak',
-    # `<stack>-<unix nanoseconds>.checkpoint.json` (`addToHistory`), in the
-    # format its writer was set to write. The `.history.json` record beside
-    # it is the update's own, not a copy, and is what `pulumi stack history`
-    # reads (`getHistory`).
-    Kind.HISTORY: rf'{Kind.HISTORY.value}{_STACK_DIRECTORY}/\2-[0-9]+\.checkpoint\.json{_FORMAT}',
-    # `<stack>.<unix nanoseconds>.json` (`backupStack`), in the format of the
-    # checkpoint it copied.
-    Kind.BACKUPS: rf'{Kind.BACKUPS.value}{_STACK_DIRECTORY}/\2\.[0-9]+\.json{_FORMAT}',
-}
-_COPIES = tuple(re.compile(pattern) for pattern in COPIES.values())
-
-
-@dataclass(frozen=True)
-class Row:
-    """One key of the state table, and the size its value is stored at.
-
-    `size` is `pg_column_size` of the value: the bytes Postgres stores,
-    after its own compression where it applied any, and read without
-    fetching an out-of-line value, so a census costs the backend nothing a
-    statement over the value itself would.
-    """
-
-    key: str
-    size: int
-
-
-def kind(key: str, database: str) -> Kind:
-    """What `key` is, in the backend's layout under `database`'s prefix."""
-    rest = key.removeprefix(f'{database}/{BOOKKEEPING}')
-    if rest == key:
-        return Kind.OTHER
-    if rest == Kind.META.value:
-        return Kind.META
-    stacks = STACKS.removeprefix(BOOKKEEPING)
-    if rest.startswith(stacks):
-        if CHECKPOINT.fullmatch(rest.removeprefix(stacks)):
-            return Kind.CHECKPOINT
-        if re.fullmatch(COPIES[Kind.PREVIOUS], rest):
-            return Kind.PREVIOUS
-        return Kind.OTHER
-    return next((member for member in _DIRECTORIES if rest.startswith(member.value)), Kind.OTHER)
-
-
-def _copy_of(path: str) -> tuple[str, str] | None:
-    """The stack whose checkpoint the key at `path` is a copy of, and the format it is in; `None` for no copy."""
-    for pattern in _COPIES:
-        if found := pattern.fullmatch(path):
-            return found.group(1), found.group(pattern.groups) or ''
-    return None
-
-
-def superseded(rows: Sequence[Row], database: str) -> list[Row]:
-    """The copies of a checkpoint stored in a format their stack no longer writes.
-
-    A stack's checkpoint is one key, `<stack>.json` and the suffix of the
-    format its last save wrote, and a save that changes the format writes
-    the new key and deletes the old (`saveCheckpoint` in the backend's
-    `state.go`). Every copy the backend makes carries a suffix too
-    (`COPIES`), and nothing it does ever replaces or removes one written in
-    the old format: a stack whose writers turned compression on keeps
-    `<stack>.json.bak` and every `history/` and `backups/` copy written
-    before, all full-size uncompressed values. Nothing reads them back.
-    `pulumi stack history` reads the `.history.json` records alone
-    (`getHistory`), and no command reads `backups/`.
-
-    A definition rather than a list: a copy is superseded when its stack
-    has a checkpoint and none under the suffix the copy carries. A stack
-    with no checkpoint keeps its copies, which are all that is left of a
-    removed stack; a copy in a format some checkpoint of its stack is
-    stored in is kept, however many suffixes the stack has; and the
-    update records under `history/` are no copies.
-    """
-    prefix = f'{database}/{BOOKKEEPING}'
-    stacks = STACKS.removeprefix(BOOKKEEPING)
-    live: dict[str, set[str]] = {}
-    copies: list[tuple[Row, str, str]] = []
-    for row in rows:
-        if not row.key.startswith(prefix):
-            continue
-        path = row.key.removeprefix(prefix)
-        checkpoint = path.removeprefix(stacks)
-        if checkpoint != path and (found := CHECKPOINT.fullmatch(checkpoint)):
-            suffix = found.group(1) or ''
-            live.setdefault(checkpoint.removesuffix(f'.json{suffix}'), set()).add(suffix)
-        elif copied := _copy_of(path):
-            copies.append((row, *copied))
-    return [row for row, stack, suffix in copies if stack in live and suffix not in live[stack]]
-
-
-#: Every key of the state table and its stored size, as one JSON document.
-CENSUS_QUERY = (
-    f"SELECT coalesce(json_agg(json_build_array(key, pg_column_size(data)) ORDER BY key), '[]') FROM {STATE_TABLE}"
-)
-
-#: The delete of the keys in the `keys` variable, a JSON array, answering with
-#: the keys it deleted. It applies `superseded`'s definition again, to the
-#: table as of the statement's snapshot, from the same patterns and suffixes
-#: (`COPIES`, `COMPRESSED`), which `prune` hands it as variables beside the
-#: prefixes they are read under. So it deletes only a copy of a checkpoint
-#: whose stack has a checkpoint and none in the copy's format: never a
-#: checkpoint, never a key that is no copy, and never a copy in a format its
-#: stack is stored in, whatever the list says and whatever a writer
-#: committed since the list was read.
-PRUNE_STATEMENT = f"""
-WITH asked AS (
-    SELECT listed.key, substr(listed.key, length(:'layout') + 1) AS path
-    FROM json_array_elements_text(:'keys'::json) AS listed (key)
-    WHERE starts_with(listed.key, :'layout')
-),
-copies AS (
-    SELECT asked.key,
-           :'layout' || :'stacks' || parsed.parts[1] || '.json' AS checkpoint,
-           coalesce(parsed.parts[cardinality(parsed.parts)], '') AS format
-    FROM asked
-    CROSS JOIN LATERAL (
-        SELECT matched.parts
-        FROM json_array_elements_text(:'copies'::json) AS copy (pattern),
-             regexp_match(asked.path, '^(?:' || copy.pattern || ')$') AS matched (parts)
-        WHERE matched.parts IS NOT NULL
-        LIMIT 1
-    ) AS parsed
-),
-gone AS (
-    DELETE FROM {STATE_TABLE} AS stale
-    USING copies
-    WHERE stale.key = copies.key
-      AND EXISTS (
-          SELECT 1
-          FROM {STATE_TABLE} AS live, json_array_elements_text(:'formats'::json) AS stored (format)
-          WHERE live.key = copies.checkpoint || stored.format
-      )
-      AND NOT EXISTS (SELECT 1 FROM {STATE_TABLE} AS live WHERE live.key = copies.checkpoint || copies.format)
-    RETURNING stale.key
-)
-SELECT coalesce(json_agg(key ORDER BY key), '[]') FROM gone;
-"""
-
-#: The variable libpq hands the server a session's settings in, and what a
-#: census session is opened with: it may not write, whatever its statements
-#: say.
-SESSION_OPTIONS_ENV = 'PGOPTIONS'
-_READ_ONLY = {SESSION_OPTIONS_ENV: '-c default_transaction_read_only=on'}
-
-
-def query(
-    target: Connection,
-    sql: str,
-    *,
-    what: str,
-    variables: Mapping[str, str],
-    env: Mapping[str, str] | None = None,
-) -> object:
-    """One script through `psql` over the query form of the connection, its one value read back as JSON.
-
-    The script travels on standard input, which is where `psql` interpolates
-    `variables` -- quoted as literals, `:'name'` -- so no key is spliced into
-    SQL text here. `env` is overlaid on the connection's own variables, as
-    the census's read-only session setting is. `what` names the statement in
-    a refusal.
-    """
-    argv = [
-        PSQL,
-        '--no-psqlrc',
-        '--no-password',
-        '--quiet',
-        '--tuples-only',
-        '--no-align',
-        '--set=ON_ERROR_STOP=1',
-        *(f'--set={name}={value}' for name, value in variables.items()),
-        f'--dbname={target.form(bundle.Purpose.QUERY)}',
-    ]
-    printed = _run(
-        argv,
-        what=what,
-        timeout=LISTING_TIMEOUT,
-        stdin=sql,
-        env={**target.env, CONNECT_TIMEOUT_ENV: str(CONNECT_TIMEOUT), **(env or {})},
-    )
-    try:
-        return json.loads(printed)
-    except ValueError as exc:
-        raise StateError(f'{what} printed something other than JSON: {printed[:120]!r}') from exc
-
-
-def census(target: Connection) -> list[Row]:
-    """Every key of the state table and the size its value is stored at, in key order.
-
-    Read in a session the server holds read-only, and with `pg_column_size`,
-    never with an expression over the value: the backend's own size check,
-    `octet_length((data->>'data')::text)`, parses the whole value in the
-    serving backend (physical/state-backend.md §2).
-    """
-    log.info(
-        'reading every key of %s and its stored size from %s',
-        STATE_TABLE,
-        endpoint(target.url),
-    )
-    what = f'the census of {STATE_TABLE}'
-    listing = query(target, CENSUS_QUERY, what=what, variables={}, env=_READ_ONLY)
-    if not isinstance(listing, list):
-        raise StateError(f'{what} printed a {type(listing).__name__}, not a list of keys')
-    found: list[Row] = []
-    for entry in cast('list[object]', listing):
-        pair = cast('list[object]', entry) if isinstance(entry, list) else []
-        if len(pair) != 2 or not isinstance(pair[0], str) or not isinstance(pair[1], int):
-            raise StateError(f'{what} printed an entry that is no key and size: {entry!r}')
-        found.append(Row(key=pair[0], size=pair[1]))
-    return found
-
-
-def prune(target: Connection, keys: Sequence[str]) -> list[str]:
-    """Delete the superseded copies named, returning the keys deleted.
-
-    A key is deleted only where it is a copy of a checkpoint superseded as
-    of the statement's snapshot (`PRUNE_STATEMENT`), so a key the statement
-    passes over is a row a writer has made current again, one whose stack
-    has gone, one already gone, or no copy at all; the caller compares what
-    it asked for with what came back.
-    """
-    if not keys:
-        return []
-    log.info('deleting %d superseded row(s) from %s', len(keys), endpoint(target.url))
-    variables = {
-        'keys': json.dumps(list(keys)),
-        'layout': f'{settings.DATABASE}/{BOOKKEEPING}',
-        'stacks': STACKS.removeprefix(BOOKKEEPING),
-        'copies': json.dumps(list(COPIES.values())),
-        'formats': json.dumps(['', *COMPRESSED]),
-    }
-    deleted = query(target, PRUNE_STATEMENT, what=f'the prune of {STATE_TABLE}', variables=variables)
-    if not isinstance(deleted, list) or not all(isinstance(key, str) for key in cast('list[object]', deleted)):
-        raise StateError(f'the prune of {STATE_TABLE} answered something other than the keys it deleted: {deleted!r}')
-    return cast('list[str]', deleted)
-
-
-#: An update's own record under `history/`: `<stack>-<unix nanoseconds>.history.json`
-#: and the suffix of its writer's format (`addToHistory`), beside the
-#: checkpoint copy `COPIES` names, and the file `pulumi stack history` reads
-#: (`getHistory`). Written like `COPIES`, for the same two dialects.
-RECORD = rf'{Kind.HISTORY.value}{_STACK_DIRECTORY}/\2-[0-9]+\.history\.json{_FORMAT}'
-
-
-class Expiry(enum.Enum):
-    """The clause of the retention rule that expires a row (`EXPIRED`); each member's value is how a listing prints it."""
-
-    #: A checkpoint copy under `history/` or `backups/`.
-    COPY = 'checkpoint copy'
-    #: An update record beyond the newest of its history directory.
-    RECORD = 'update record'
-    #: A `.bak` whose stack has no checkpoint under any suffix.
-    LONE = 'lone .bak'
-
-
-@dataclass(frozen=True)
-class Expired:
-    """A row the retention rule expires, its stored size as `Row` reads it, and the clause that expires it."""
-
-    key: str
-    size: int
-    clause: Expiry
-
-
-#: The retention rule (physical/state-backend.md §2), the one place it is
-#: written: the common table expressions ending in `expired`, the key of
-#: every row of the table the rule expires as of the statement's snapshot,
-#: and the clause that expires it. A row is expired when it was written more
-#: than `age` ago and it is a checkpoint copy under `history/` or `backups/`
-#: (`COPIES`), in any format and whether or not its stack still exists; an
-#: update record (`RECORD`) that is not among the newest `records` records
-#: of its directory, newest by key, the order `getHistory` returns; or a
-#: `.bak` (`COPIES`) whose stack has no checkpoint under any suffix of
-#: `COMPRESSED`. Nothing else expires. Age is the row's `updated_at`, which
-#: the backend sets on every write, against the server's `now()`. Only
-#: `key` and `updated_at` are read, so the rule costs what a listing of keys
-#: costs. `EXPIRED_QUERY` lists from it and `EXPIRE_STATEMENT` deletes by
-#: it, each as of its own snapshot, from the variables `_retention` names.
-EXPIRED = f"""
-laid_out AS (
-    SELECT key, updated_at, substr(key, length(:'layout') + 1) AS path
-    FROM {STATE_TABLE}
-    WHERE starts_with(key, :'layout')
-      AND updated_at < now() - make_interval(secs => :'age'::double precision)
-),
-ranked AS (
-    SELECT key,
-           row_number() OVER (
-               PARTITION BY regexp_replace(path, '/[^/]*$', '')
-               ORDER BY key COLLATE "C" DESC
-           ) AS newest
-    FROM (
-        SELECT key, substr(key, length(:'layout') + 1) AS path
-        FROM {STATE_TABLE}
-        WHERE starts_with(key, :'layout')
-    ) AS everything
-    WHERE path ~ ('^(?:' || :'record' || ')$')
-),
-expired AS (
-    SELECT laid_out.key, :'copy' AS clause
-    FROM laid_out
-    WHERE EXISTS (
-        SELECT 1
-        FROM json_array_elements_text(:'copies'::json) AS copy (pattern)
-        WHERE laid_out.path ~ ('^(?:' || copy.pattern || ')$')
-    )
-    UNION ALL
-    SELECT laid_out.key, :'record_clause'
-    FROM laid_out
-    JOIN ranked USING (key)
-    WHERE ranked.newest > :'records'::integer
-    UNION ALL
-    SELECT laid_out.key, :'lone'
-    FROM laid_out
-    CROSS JOIN LATERAL regexp_match(laid_out.path, '^(?:' || :'previous' || ')$') AS matched (parts)
-    WHERE matched.parts IS NOT NULL
-      AND NOT EXISTS (
-          SELECT 1
-          FROM {STATE_TABLE} AS live, json_array_elements_text(:'formats'::json) AS stored (format)
-          WHERE live.key = :'layout' || :'stacks' || matched.parts[1] || '.json' || stored.format
-      )
-)
-"""
-
-#: Every row `EXPIRED` expires, as one JSON document: its key, its stored
-#: size (`Row`) and its clause.
-EXPIRED_QUERY = f"""
-WITH {EXPIRED}
-SELECT coalesce(
-    json_agg(json_build_array(expired.key, pg_column_size(listed.data), expired.clause) ORDER BY expired.key),
-    '[]'
-)
-FROM expired
-JOIN {STATE_TABLE} AS listed USING (key);
-"""
-
-#: The delete of the keys in the `keys` variable, a JSON array, answering with
-#: the keys it deleted: those among them that `EXPIRED` expires as of the
-#: statement's snapshot. A row written again since a listing named it, or a
-#: record that is among the newest of its directory again, is not deleted,
-#: whatever the list says.
-EXPIRE_STATEMENT = f"""
-WITH {EXPIRED},
-asked AS (
-    SELECT listed.key FROM json_array_elements_text(:'keys'::json) AS listed (key)
-),
-gone AS (
-    DELETE FROM {STATE_TABLE} AS stale
-    USING expired
-    WHERE stale.key = expired.key
-      AND expired.key IN (SELECT asked.key FROM asked)
-    RETURNING stale.key
-)
-SELECT coalesce(json_agg(key ORDER BY key), '[]') FROM gone;
-"""
-
-
-def _retention(age: dt.timedelta, records: int) -> dict[str, str]:
-    """The variables `EXPIRED` reads: the rule's two lengths, the key grammar, and each clause's label."""
-    return {
-        'layout': f'{settings.DATABASE}/{BOOKKEEPING}',
-        'stacks': STACKS.removeprefix(BOOKKEEPING),
-        'copies': json.dumps([COPIES[Kind.HISTORY], COPIES[Kind.BACKUPS]]),
-        'previous': COPIES[Kind.PREVIOUS],
-        'record': RECORD,
-        'formats': json.dumps(['', *COMPRESSED]),
-        'age': str(age.total_seconds()),
-        'records': str(records),
-        'copy': Expiry.COPY.value,
-        'record_clause': Expiry.RECORD.value,
-        'lone': Expiry.LONE.value,
-    }
-
-
-def expired(target: Connection, *, age: dt.timedelta, records: int) -> list[Expired]:
-    """Every row the retention rule expires (`EXPIRED`), in key order, read in a session that cannot write.
-
-    `age` and `records` are the rule's two lengths, `settings.EXPIRY_AGE` and
-    `settings.HISTORY_RECORDS` where an operator runs it.
-    """
-    log.info(
-        'listing the rows of %s older than %s that the retention rule expires, from %s',
-        STATE_TABLE,
-        age,
-        endpoint(target.url),
-    )
-    what = f'the listing of the expired rows of {STATE_TABLE}'
-    listing = query(target, EXPIRED_QUERY, what=what, variables=_retention(age, records), env=_READ_ONLY)
-    if not isinstance(listing, list):
-        raise StateError(f'{what} printed a {type(listing).__name__}, not a list of rows')
-    clauses = {member.value: member for member in Expiry}
-    found: list[Expired] = []
-    for entry in cast('list[object]', listing):
-        row = cast('list[object]', entry) if isinstance(entry, list) else []
-        if (
-            len(row) != 3
-            or not isinstance(row[0], str)
-            or not isinstance(row[1], int)
-            or not isinstance(row[2], str)
-            or row[2] not in clauses
-        ):
-            raise StateError(f'{what} printed an entry that is no key, size and clause: {entry!r}')
-        found.append(Expired(key=row[0], size=row[1], clause=clauses[row[2]]))
-    return found
-
-
-def prune_expired(target: Connection, keys: Sequence[str], *, age: dt.timedelta, records: int) -> list[str]:
-    """Delete the expired rows named, returning the keys deleted.
-
-    A key is deleted only where the rule expires it as of the statement's
-    snapshot (`EXPIRE_STATEMENT`), under the same lengths the listing was
-    read with, so a key the statement passes over is a row a writer has
-    written again, a record among the newest of its directory again, one
-    already gone, or one the rule never expired; the caller compares what it
-    asked for with what came back.
-    """
-    if not keys:
-        return []
-    log.info('deleting %d expired row(s) from %s', len(keys), endpoint(target.url))
-    what = f'the delete of the expired rows of {STATE_TABLE}'
-    deleted = query(
-        target,
-        EXPIRE_STATEMENT,
-        what=what,
-        variables={**_retention(age, records), 'keys': json.dumps(list(keys))},
-    )
-    if not isinstance(deleted, list) or not all(isinstance(key, str) for key in cast('list[object]', deleted)):
-        raise StateError(f'{what} answered something other than the keys it deleted: {deleted!r}')
-    return cast('list[str]', deleted)
-
-
 def verify_dump(archive: Path) -> list[str]:
     """The stack checkpoints the archive carries. An archive that holds none is not a dump.
 
@@ -860,13 +355,13 @@ def verify_dump(archive: Path) -> list[str]:
     _ = _run(
         [PG_RESTORE, '--list', str(archive)],
         what=f'{PG_RESTORE} --list {archive}',
-        timeout=LISTING_TIMEOUT,
+        timeout=table.LISTING_TIMEOUT,
     )
     log.info('reading the stack checkpoints out of its %s rows', STATE_TABLE)
     rows = _run(
         [PG_RESTORE, '--data-only', f'--table={STATE_TABLE}', '--file=-', str(archive)],
         what=f'{PG_RESTORE} --data-only {archive}',
-        timeout=LISTING_TIMEOUT,
+        timeout=table.LISTING_TIMEOUT,
     )
     found = checkpoints(rows, settings.DATABASE)
     if not found:
@@ -937,7 +432,7 @@ def stacks(target: Connection) -> list[str]:
     `--all` because the question is about the backend rather than about the
     project directory the answer is asked from.
 
-    **The connection attempt is bounded** (`CONNECT_TIMEOUT`, as
+    **The connection attempt is bounded** (`table.CONNECT_TIMEOUT`, as
     `PGCONNECT_TIMEOUT`, which the driver behind Pulumi's Postgres backend
     reads): an address whose traffic is dropped -- a lost box, or an address
     not yet pointed at a new one -- would otherwise hold the question for as
@@ -949,7 +444,7 @@ def stacks(target: Connection) -> list[str]:
     log.info(
         'asking pulumi which stacks %s serves; a connection not made within %ds is a backend that does not answer',
         endpoint(target.url),
-        CONNECT_TIMEOUT,
+        table.CONNECT_TIMEOUT,
         extra={'step': Step.LIST_STACKS},
     )
     try:
@@ -958,7 +453,7 @@ def stacks(target: Connection) -> list[str]:
             cwd=pulumi_cli.project_dir(),
             env={
                 'PULUMI_BACKEND_URL': target.form(bundle.Purpose.PULUMI),
-                CONNECT_TIMEOUT_ENV: str(CONNECT_TIMEOUT),
+                table.CONNECT_TIMEOUT_ENV: str(table.CONNECT_TIMEOUT),
                 **target.env,
             },
             stdin=None,

@@ -87,7 +87,7 @@ from scratch_projects import cli_directories
 from kluster.conventions import identity
 from kluster.lib import bundle, pulumi_cli, stack_environment, workstation
 from kluster.lib.bundle import CA_ENV, CERT_ENV, KEY_ENV, ssl_env
-from kluster.lib.state_backend import render, settings, state
+from kluster.lib.state_backend import render, settings, state, table
 from kluster.providers import postgres_tls
 from kluster.scripts.credentials import pki, pulumi_config
 from kluster.scripts.operator_stack import driver
@@ -147,7 +147,7 @@ OWNED = '.kluster-test-owned'
 #: has them: the bundle's three files, which every connection reads, and the
 #: two `state` adds to a connection of its own -- the bound on opening it, and
 #: the settings a census session is opened with.
-TOOL_ENV = (CA_ENV, CERT_ENV, KEY_ENV, state.CONNECT_TIMEOUT_ENV, state.SESSION_OPTIONS_ENV)
+TOOL_ENV = (CA_ENV, CERT_ENV, KEY_ENV, table.CONNECT_TIMEOUT_ENV, table.SESSION_OPTIONS_ENV)
 
 #: The units whose `podman run` this repeats: Postgres, and the pooler in
 #: front of it.
@@ -819,7 +819,7 @@ def tools(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Path]:
     with _removing(name):
         _ = _podman(*_client(name))
         _ = _podman('exec', name, 'mkdir', '-p', str(directory))
-        for tool in (state.PSQL, state.PG_RESTORE, state.PG_DUMP):
+        for tool in (table.PSQL, state.PG_RESTORE, state.PG_DUMP):
             script = directory / tool
             run = (
                 f'podman exec --interactive {" ".join(f"--env {variable}" for variable in TOOL_ENV)} {name} {tool} "$@"'
@@ -852,9 +852,9 @@ def clients(tools: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Pat
     """
     monkeypatch.setattr(state, 'PG_RESTORE', str(tools / state.PG_RESTORE))
     monkeypatch.setattr(state, 'PG_DUMP', str(tools / state.PG_DUMP))
-    monkeypatch.setattr(state, 'PSQL', str(tools / state.PSQL))
+    monkeypatch.setattr(table, 'PSQL', str(tools / table.PSQL))
     monkeypatch.setattr(pulumi_cli, 'TIMEOUT', COMMAND_TIMEOUT)
-    monkeypatch.setattr(state, 'LISTING_TIMEOUT', COMMAND_TIMEOUT)
+    monkeypatch.setattr(table, 'LISTING_TIMEOUT', COMMAND_TIMEOUT)
     monkeypatch.setattr(state, 'TRANSFER_TIMEOUT', COMMAND_TIMEOUT)
     for variable, directory in cli_directories(tmp_path).items():
         monkeypatch.setenv(variable, directory)
@@ -1551,7 +1551,7 @@ def test_a_switch_to_compression_leaves_plain_copies_and_the_prune_takes_those_a
     listing = listed.getvalue().split('superseded copies:', 1)[1]
     assert {line.split()[0] for line in listing.splitlines()[1:] if line.strip()} == stale
 
-    assert state.prune(operator, sorted(current | kept_copies | records)) == []
+    assert table.prune(operator, sorted(current | kept_copies | records), database=settings.DATABASE) == []
     assert _keys(box) == before
 
     pruned = io.StringIO()
@@ -1585,14 +1585,14 @@ def test_a_copy_its_stack_is_written_in_again_is_kept_by_the_delete_listed_befor
     _stack_init(operator, project, STACK)
     _up(operator, project, STACK)
     _up(operator, project, STACK, stack_environment.state_switches())
-    listing = [row.key for row in state.superseded(state.census(operator), settings.DATABASE)]
+    listing = [row.key for row in table.superseded(table.census(operator), settings.DATABASE)]
     assert listing
 
     _up(operator, project, STACK)
     after = _keys(box)
     assert f'{settings.DATABASE}/{BACKEND_STACKS}{project.name}/{STACK}.json' in after
 
-    assert state.prune(operator, listing) == []
+    assert table.prune(operator, listing, database=settings.DATABASE) == []
     assert _keys(box) == after
 
 
@@ -1737,8 +1737,11 @@ def test_a_lone_bak_goes_and_a_bak_beside_its_checkpoint_stays(
     assert f'{stacks}{removed}.json' not in keys
     _age(box, keys)
 
-    listing = {row.key: row.clause for row in state.expired(operator, age=EXPIRY, records=settings.HISTORY_RECORDS)}
-    assert listing[lone] is state.Expiry.LONE
+    listing = {
+        row.key: row.clause
+        for row in table.expired(operator, database=settings.DATABASE, age=EXPIRY, records=settings.HISTORY_RECORDS)
+    }
+    assert listing[lone] is table.Expiry.LONE
     assert beside not in listing
 
     assert (
@@ -1781,16 +1784,21 @@ def test_the_delete_applies_the_rule_as_of_its_own_snapshot(
     _up(operator, project, STACK)
     _up(operator, project, STACK)
     _age(box, _keys(box))
-    listing = [row.key for row in state.expired(operator, age=EXPIRY, records=settings.HISTORY_RECORDS)]
+    listing = [
+        row.key
+        for row in table.expired(operator, database=settings.DATABASE, age=EXPIRY, records=settings.HISTORY_RECORDS)
+    ]
     assert len(listing) > 1
     young = listing[0]
-    delete = state.prune_expired
+    delete = table.prune_expired
 
-    def written_again_first(target: state.Connection, keys: list[str], *, age: dt.timedelta, records: int) -> list[str]:
+    def written_again_first(
+        target: table.Target, keys: list[str], *, database: str, age: dt.timedelta, records: int
+    ) -> list[str]:
         _ = box.local(f"UPDATE {BACKEND_TABLE} SET updated_at = now() WHERE key = '{young}'")
-        return delete(target, keys, age=age, records=records)
+        return delete(target, keys, database=database, age=age, records=records)
 
-    monkeypatch.setattr(state, 'prune_expired', written_again_first)
+    monkeypatch.setattr(table, 'prune_expired', written_again_first)
     pruned = io.StringIO()
     assert (
         census.run(
@@ -1807,7 +1815,9 @@ def test_the_delete_applies_the_rule_as_of_its_own_snapshot(
     stacks = f'{settings.DATABASE}/{BACKEND_STACKS}{project.name}/'
     assert {f'{stacks}{STACK}.json', f'{stacks}{STACK}.json.bak', f'{settings.DATABASE}/.pulumi/meta.yaml'} <= left
     assert {key for key in left if '.history.json' in key}
-    assert delete(operator, sorted(left), age=EXPIRY, records=settings.HISTORY_RECORDS) == []
+    assert (
+        delete(operator, sorted(left), database=settings.DATABASE, age=EXPIRY, records=settings.HISTORY_RECORDS) == []
+    )
     assert _keys(box) == left
 
 
@@ -1821,31 +1831,31 @@ def test_census_takes_one_mode_a_run(capsys: pytest.CaptureFixture[str]) -> None
 
 #: Keys under `<database>/.pulumi/`, whether a case ages each, and the clause
 #: that expires it with a bound of two records per directory, or `None`.
-EXPIRING: list[tuple[str, bool, state.Expiry | None]] = [
+EXPIRING: list[tuple[str, bool, table.Expiry | None]] = [
     ('stacks/p/a.json.zst', True, None),
     ('stacks/p/a.json.zst.bak', True, None),
     ('stacks/p/a.json.bak', True, None),
     ('stacks/p/a.pulumi-tags', True, None),
-    ('stacks/p/gone.json.zst.bak', True, state.Expiry.LONE),
+    ('stacks/p/gone.json.zst.bak', True, table.Expiry.LONE),
     ('stacks/p/young.json.bak', False, None),
-    ('stacks/solo.json.bak', True, state.Expiry.LONE),
+    ('stacks/solo.json.bak', True, table.Expiry.LONE),
     ('stacks/i.json', True, None),
     ('stacks/i.json.bak', True, None),
-    ('history/p/a/a-1790591454000000001.history.json', True, state.Expiry.RECORD),
+    ('history/p/a/a-1790591454000000001.history.json', True, table.Expiry.RECORD),
     ('history/p/a/a-1790591454000000002.history.json.zst', True, None),
     ('history/p/a/a-1790591454000000003.history.json.zst', False, None),
-    ('history/p/a/a-1790591454000000001.checkpoint.json', True, state.Expiry.COPY),
-    ('history/p/a/a-1790591454000000002.checkpoint.json.zst', True, state.Expiry.COPY),
+    ('history/p/a/a-1790591454000000001.checkpoint.json', True, table.Expiry.COPY),
+    ('history/p/a/a-1790591454000000002.checkpoint.json.zst', True, table.Expiry.COPY),
     ('history/p/a/a-1790591454000000003.checkpoint.json.zst', False, None),
     ('history/p/b/b-1790591454000000005.history.json.gz', True, None),
-    ('history/p/c/c-1790591454000000001.history.json', True, state.Expiry.RECORD),
+    ('history/p/c/c-1790591454000000001.history.json', True, table.Expiry.RECORD),
     ('history/p/c/c-1790591454000000002.history.json', True, None),
     ('history/p/c/c-1790591454000000003.history.json', True, None),
-    ('history/p/gone/gone-1790591454000000001.checkpoint.json.gz', True, state.Expiry.COPY),
+    ('history/p/gone/gone-1790591454000000001.checkpoint.json.gz', True, table.Expiry.COPY),
     ('history/i/i-1790591454000000001.history.json', True, None),
-    ('history/i/i-1790591454000000001.checkpoint.json', True, state.Expiry.COPY),
-    ('backups/p/a/a.1790591454000000001.json', True, state.Expiry.COPY),
-    ('backups/k-8s.x/k-8s.x.1790591454000000017.json.zst', True, state.Expiry.COPY),
+    ('history/i/i-1790591454000000001.checkpoint.json', True, table.Expiry.COPY),
+    ('backups/p/a/a.1790591454000000001.json', True, table.Expiry.COPY),
+    ('backups/k-8s.x/k-8s.x.1790591454000000017.json.zst', True, table.Expiry.COPY),
     ('backups/p/a/a.1790591454000000002.json', False, None),
     ('history/p/j/k-1.checkpoint.json', True, None),
     ('history/p/j/j-1.checkpoint.json.bak', True, None),
@@ -1877,10 +1887,261 @@ def test_the_rule_reads_the_backends_layout_and_the_delete_takes_what_it_lists(
     _age(box, {prefix + path for path, aged, _ in EXPIRING if aged for prefix in (layout, 'other/.pulumi/')})
     expected = {layout + path: clause for path, _, clause in EXPIRING if clause is not None}
 
-    listing = state.expired(operator, age=EXPIRY, records=2)
+    listing = table.expired(operator, database=settings.DATABASE, age=EXPIRY, records=2)
     assert {row.key: row.clause for row in listing} == expected
 
-    assert sorted(state.prune_expired(operator, keys, age=EXPIRY, records=2)) == sorted(expected)
+    assert sorted(table.prune_expired(operator, keys, database=settings.DATABASE, age=EXPIRY, records=2)) == sorted(
+        expected
+    )
+
+
+#: The ceiling the ceiling cases hold the table to in place of
+#: `settings.LARGEST_ROW_BYTES`, and the size of the value each writes over
+#: it: twice the ceiling, and repetitive, so TOAST's compression stores it
+#: in a fraction of the ceiling.
+CEILING = 100_000
+OVER = 2 * CEILING
+
+
+def _put(box: Box, rows: Mapping[str, int]) -> None:
+    """Write each key of `rows` with a value of that many bytes, shaped as the backend stores one, as the superuser.
+
+    The value is `{"data":"<payload>"}` with a payload of one repeated
+    four-character group, which compresses to almost nothing: its stored
+    size is far under its own.
+    """
+    for key, size in rows.items():
+        payload = size - len('{"data":""}')
+        _ = box.local(
+            f'INSERT INTO {BACKEND_TABLE} (key, data) '
+            f"VALUES ('{key}', ('{{\"data\":\"' || rpad('', {payload}, 'QUJD') || '\"}}')::json) "
+            'ON CONFLICT (key) DO UPDATE SET data = EXCLUDED.data, updated_at = now()'
+        )
+
+
+def _over_listed(printed: str) -> dict[str, int]:
+    """The rows a `--ceiling` run names over the ceiling, and each one's value size, read off what it printed."""
+    listing = printed.split('values over the ceiling:', 1)[1]
+    return {
+        line.split()[0]: int(line.split()[1].replace(',', ''))
+        for line in listing.splitlines()[1:]
+        if line.startswith('  ')
+    }
+
+
+def test_a_value_over_the_ceiling_fails_the_run_by_name_whatever_size_it_is_stored_at(
+    start: Start, ignition: dict[str, Any], roots: config.Roots, clients: Path, tmp_path: Path
+) -> None:
+    """Every row is held to the ceiling by its value's size, which is what a statement's memory is a multiple of.
+
+    A checkpoint and an update record, each of a value over the ceiling
+    stored in a fraction of it, are named with their value sizes and fail
+    the run; a row under the ceiling is not named, and the largest value is
+    printed. The census alone, the same table, passes.
+    """
+    box = _appliance(start, ignition)
+    operator = _bundle(roots, box, clients, settings.OPERATOR_ROLE)
+    project = tmp_path / 'project'
+    _stack_init(operator, project, STACK)
+    layout = f'{settings.DATABASE}/.pulumi/'
+    checkpoint = f'{layout}stacks/{project.name}/big.json'
+    record = f'{layout}history/{project.name}/big/big-1790591454000000001.history.json'
+    under = f'{layout}stacks/{project.name}/small.json'
+    sizes = {checkpoint: OVER, record: CEILING + 1}
+    _put(box, sizes | {under: CEILING})
+    for key, size in sizes.items():
+        stored, value = box.local(
+            f"SELECT pg_column_size(data) || ' ' || octet_length(data::text) FROM {BACKEND_TABLE} WHERE key = '{key}'"
+        ).split()
+        assert int(stored) < CEILING < int(value) == size
+
+    assert census.run(operator, prune=False, yes=False, out=io.StringIO(), bound=CEILING) == 0
+    printed = io.StringIO()
+    assert census.run(operator, prune=False, yes=False, ceiling=True, out=printed, bound=CEILING) == 1
+    assert _over_listed(printed.getvalue()) == sizes
+    assert f'largest value: {checkpoint}  {OVER:,} bytes' in printed.getvalue()
+
+
+def test_a_copy_over_the_ceiling_that_the_rule_expires_passes_after_the_prune(
+    start: Start, ignition: dict[str, Any], roots: config.Roots, clients: Path, tmp_path: Path
+) -> None:
+    """The ceiling reads the table as the prune left it: an expired copy over it fails a read before, and is gone."""
+    box = _appliance(start, ignition)
+    operator = _bundle(roots, box, clients, settings.OPERATOR_ROLE)
+    project = tmp_path / 'project'
+    _stack_init(operator, project, STACK)
+    copy = f'{settings.DATABASE}/.pulumi/history/{project.name}/{STACK}/{STACK}-1790591454000000001.checkpoint.json'
+    _put(box, {copy: OVER})
+    _age(box, {copy})
+
+    before = io.StringIO()
+    assert census.run(operator, prune=False, yes=False, ceiling=True, out=before, bound=CEILING) == 1
+    assert _over_listed(before.getvalue()) == {copy: OVER}
+
+    pruned = io.StringIO()
+    assert (
+        census.run(operator, prune=False, expire=True, yes=True, ceiling=True, out=pruned, age=EXPIRY, bound=CEILING)
+        == 0
+    )
+    assert f'deleted  {copy}' in pruned.getvalue()
+    assert _over_listed(pruned.getvalue()) == {}
+    assert copy not in _keys(box)
+
+
+@pytest.mark.parametrize('over', [True, False], ids=['a row over the ceiling', 'every row within it'])
+def test_the_ceiling_runs_after_a_row_the_delete_kept_and_the_run_fails(
+    start: Start,
+    ignition: dict[str, Any],
+    roots: config.Roots,
+    clients: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    over: bool,
+) -> None:
+    """A listed row written again before the delete is kept and fails the run, and the ceiling still runs.
+
+    With a row over the ceiling, the ceiling names it; with every row
+    within it, the ceiling passes and the kept row alone fails the run.
+    """
+    box = _appliance(start, ignition)
+    operator = _bundle(roots, box, clients, settings.OPERATOR_ROLE)
+    project = tmp_path / 'project'
+    _stack_init(operator, project, STACK)
+    history = f'{settings.DATABASE}/.pulumi/history/{project.name}/{STACK}/{STACK}-'
+    copies = {f'{history}179059145400000000{n}.checkpoint.json' for n in range(1, 3)}
+    big = f'{settings.DATABASE}/{BACKEND_STACKS}{project.name}/big.json'
+    _put(box, dict.fromkeys(copies, CEILING // 2) | ({big: OVER} if over else {}))
+    _age(box, copies)
+    young = min(copies)
+    delete = table.prune_expired
+
+    def written_again_first(
+        target: table.Target, keys: list[str], *, database: str, age: dt.timedelta, records: int
+    ) -> list[str]:
+        _ = box.local(f"UPDATE {BACKEND_TABLE} SET updated_at = now() WHERE key = '{young}'")
+        return delete(target, keys, database=database, age=age, records=records)
+
+    monkeypatch.setattr(table, 'prune_expired', written_again_first)
+    printed = io.StringIO()
+    assert (
+        census.run(operator, prune=False, expire=True, yes=True, ceiling=True, out=printed, age=EXPIRY, bound=CEILING)
+        == 1
+    )
+    assert f'kept  {young}' in printed.getvalue()
+    assert 'largest value: ' in printed.getvalue()
+    assert _over_listed(printed.getvalue()) == ({big: OVER} if over else {})
+
+
+def test_the_program_does_what_the_census_with_its_prune_and_its_ceiling_does(
+    start: Start, ignition: dict[str, Any], roots: config.Roots, clients: Path, tmp_path: Path
+) -> None:
+    """`table.py`, run as an interpreter runs it, over a bundle and a settings file, against the same table twice.
+
+    Its exit status, what it prints and the table it leaves are those of
+    `census --prune-expired --yes --ceiling` with the same lengths and
+    ceiling, run over the table filled the same way again. The client it
+    runs is found on `PATH`, where these cases' `psql` is put first. That
+    the program needs nothing beyond the standard library is held by its
+    imports (`tests/test_state_table.py`), not here: `-I` leaves out the
+    user's site directory, and the environment's packages stay reachable.
+    """
+    box = _appliance(start, ignition)
+    operator = _bundle(roots, box, clients, settings.OPERATOR_ROLE)
+    project = tmp_path / 'project'
+    _stack_init(operator, project, STACK)
+    history = f'{settings.DATABASE}/.pulumi/history/{project.name}/{STACK}/{STACK}-'
+    aged = {f'{history}1790591454000000001.checkpoint.json': OVER, f'{history}1790591454000000002.checkpoint.json': 15}
+    rows = aged | {f'{settings.DATABASE}/{BACKEND_STACKS}{project.name}/big.json': OVER}
+
+    def fill() -> set[str]:
+        _put(box, rows)
+        _age(box, set(aged))
+        return _keys(box)
+
+    program = clients / f'program-{uuid.uuid4().hex[:12]}'
+    shutil.copytree(clients / settings.OPERATOR_ROLE, program)
+    _ = (program / bundle.URL_FILE).write_text(f'{operator.url}\n')
+    configured = tmp_path / 'settings.json'
+    _ = configured.write_text(
+        dataclasses.replace(state.table_settings(), expiry_age=EXPIRY, largest_row_bytes=CEILING).dumps()
+    )
+
+    filled = fill()
+    ran = process_sessions.run(
+        [sys.executable, '-I', '-B', table.__file__, str(configured), str(program)],
+        env={**os.environ, 'PATH': f'{clients}{os.pathsep}{os.environ["PATH"]}'},
+        text=True,
+        timeout=COMMAND_TIMEOUT,
+    )
+    left = _keys(box)
+
+    assert fill() == filled
+    printed = io.StringIO()
+    status = census.run(
+        operator, prune=False, expire=True, yes=True, ceiling=True, out=printed, age=EXPIRY, bound=CEILING
+    )
+    assert (ran.returncode, ran.stdout, left) == (status, printed.getvalue(), _keys(box))
+    assert status == 1
+    assert left == filled - set(aged)
+
+
+def _status(text: str) -> dict[str, int]:
+    """The memory fields of a `/proc/<pid>/status`, in kB."""
+    fields = (line.split(':', 1) for line in text.splitlines() if ':' in line)
+    return {name: int(value.split()[0]) for name, value in fields if value.strip().endswith('kB')}
+
+
+def test_a_write_costs_its_server_process_no_more_than_the_multiple_the_cap_assumes(
+    start: Start, ignition: dict[str, Any], roots: config.Roots, clients: Path, tmp_path: Path
+) -> None:
+    """The private memory of a server process writing a checkpoint, per byte of the value, held to `WRITE_MULTIPLE`.
+
+    The write is the backend's: an upsert with the key and the value as its
+    parameters, over a row that already holds a value of the size, as a
+    save replaces a checkpoint, and the value is shaped as the backend
+    stores a compressed checkpoint, base64 that compression cannot shrink.
+    The server process reads its own status before and after. Its peak
+    (`VmHWM`) counts the shared and file-backed pages it maps beside its
+    private memory, and a process keeps every such page mapped once it
+    has touched it, so the peak less what it maps of them after the write
+    is a lower bound on the private peak: the case fails only on a write
+    that is certainly dearer than the cap assumes.
+    """
+    box = _appliance(start, ignition)
+    operator = _bundle(roots, box, clients, settings.OPERATOR_ROLE)
+    _stack_init(operator, tmp_path / 'project', STACK)
+    raw = 22_800_000
+    value = '/tmp/kluster-test-value.json'
+    _ = _podman(
+        'exec',
+        box.name,
+        'sh',
+        '-c',
+        f'head -c {raw} /dev/urandom | base64 -w0 | {{ printf \'{{"data":"\'; cat; printf \'"}}\'; }} > {value}',
+    )
+    size = int(_podman('exec', box.name, 'stat', '-c', '%s', value))
+    write = (
+        f'INSERT INTO {BACKEND_TABLE} (key, data) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET data = $2 '
+        "\\bind 'written' :v \\g\n"
+    )
+    read = "SELECT pg_read_file('/proc/self/status');\n"
+
+    def session(script: str) -> str:
+        done = process_sessions.run(
+            ['podman', 'exec', '--interactive', box.name, 'psql', '--no-psqlrc', '-v', 'ON_ERROR_STOP=1', '-qAt']  # noqa: RUF005 -- keeps -U, -d and -f beside their values
+            + ['-U', box.superuser, '-d', settings.DATABASE, '-f', '-'],
+            input=f'\\set v `cat {value}`\n{script}',
+            text=True,
+            timeout=COMMAND_TIMEOUT,
+        )
+        assert done.returncode == 0, done.stderr
+        return done.stdout
+
+    _ = session(write)
+    before, after = (_status(part) for part in session(f'{read}\\echo @@@\n{write}{read}').split('@@@'))
+
+    private = after['VmHWM'] - after['RssFile'] - after['RssShmem'] - before['RssAnon']
+    assert private * 1024 / size <= settings.WRITE_MULTIPLE, (before, after, size)
 
 
 def test_a_credentials_run_against_an_operator_stack_in_the_box_reaches_it_with_its_bundles_files(
@@ -1961,7 +2222,7 @@ def test_an_operator_stack_in_the_box_is_stored_as_the_stacks_ci_deploys_are(
 
     pulumi_config.Stack(name=stack, directory=checkout, environment=environment).ensure()
 
-    checkpoints = {key for key in _keys(box) if state.kind(key, settings.DATABASE) is state.Kind.CHECKPOINT}
+    checkpoints = {key for key in _keys(box) if table.kind(key, settings.DATABASE) is table.Kind.CHECKPOINT}
     assert checkpoints == {f'{stored}{stack}.json.zst'}
 
     run = driver.Run.open(stack, checkout)
@@ -1970,33 +2231,43 @@ def test_an_operator_stack_in_the_box_is_stored_as_the_stacks_ci_deploys_are(
     )
 
     keys = _keys(box)
-    checkpoints = {key for key in keys if state.kind(key, settings.DATABASE) is state.Kind.CHECKPOINT}
+    checkpoints = {key for key in keys if table.kind(key, settings.DATABASE) is table.Kind.CHECKPOINT}
     assert checkpoints == {f'{stored}{stack}.json.zst'}
-    assert [key for key in keys if state.kind(key, settings.DATABASE) is state.Kind.HISTORY]
-    assert [key for key in keys if state.kind(key, settings.DATABASE) is state.Kind.BACKUPS] == []
+    assert [key for key in keys if table.kind(key, settings.DATABASE) is table.Kind.HISTORY]
+    assert [key for key in keys if table.kind(key, settings.DATABASE) is table.Kind.BACKUPS] == []
 
 
+#: Each read of the whole table, as the statement it runs and the function
+#: that runs it: the census's, and the ceiling's.
+READS: dict[str, Callable[[table.Target], list[table.Row]]] = {
+    'CENSUS_QUERY': table.census,
+    'VALUE_SIZES_QUERY': table.value_sizes,
+}
+
+
+@pytest.mark.parametrize('statement', list(READS))
 @pytest.mark.parametrize('role', CLIENT_ROLES)
 def test_the_census_reads_in_a_session_that_cannot_write(
-    box: Box, roots: config.Roots, clients: Path, monkeypatch: pytest.MonkeyPatch, role: str
+    box: Box, roots: config.Roots, clients: Path, monkeypatch: pytest.MonkeyPatch, role: str, statement: str
 ) -> None:
-    """Through the pooler's transaction entry, for either role.
+    """Through the pooler's transaction entry, for either role, and for the census's read and the ceiling's.
 
-    The census's statement is replaced by a write: the server refuses it,
+    The read's statement is replaced by a write: the server refuses it,
     because the session was opened read-only, not because of what the
-    census's own statement happens to be. The setting reaches the server
+    read's own statement happens to be. The setting reaches the server
     process that serves the statement because the pooler carries it from the
-    client's startup, and it stays with the census: the role's next client,
+    client's startup, and it stays with the read: the role's next client,
     served by the same pool, writes.
     """
     target = _bundle(roots, box, clients, role)
-    monkeypatch.setattr(state, 'CENSUS_QUERY', 'CREATE TABLE census_wrote (x int)')
+    monkeypatch.setattr(table, statement, 'CREATE TABLE census_wrote (x int)')
 
     with pytest.raises(state.StateError, match='read-only transaction'):
-        _ = state.census(target)
+        _ = READS[statement](target)
     assert box.local("SELECT to_regclass('census_wrote') IS NULL") == 't'
-    _ = _psql(clients, target, f'CREATE TABLE census_after_{role} (x int)')
-    assert box.local(f'DROP TABLE census_after_{role}') == 'DROP TABLE'
+    after = f'census_after_{role}_{statement.lower()}'
+    _ = _psql(clients, target, f'CREATE TABLE {after} (x int)')
+    assert box.local(f'DROP TABLE {after}') == 'DROP TABLE'
 
 
 def _until(read: Callable[[], object], done: Callable[[Any], bool], what: str) -> Any:
@@ -2746,9 +3017,10 @@ def test_the_expiry_probe_reads_the_pooler_certificate_with_no_credential(box: B
     assert verdict.passed, str(verdict)
 
 
-def test_census_yes_is_refused_without_prune_superseded(capsys: pytest.CaptureFixture[str]) -> None:
+@pytest.mark.parametrize('argv', [['census', '--yes'], ['census', '--ceiling', '--yes']])
+def test_census_yes_is_refused_without_prune_superseded(capsys: pytest.CaptureFixture[str], argv: list[str]) -> None:
     with pytest.raises(SystemExit) as refused:
-        _ = cli.main(['census', '--yes'])
+        _ = cli.main(argv)
 
     assert refused.value.code == 2
     assert '--prune-superseded' in capsys.readouterr().err
@@ -2857,11 +3129,11 @@ SUPERSEDED: list[tuple[str, list[str], list[str]]] = [
 ]
 
 
-def _superseded_rows(keys: list[str]) -> list[state.Row]:
+def _superseded_rows(keys: list[str]) -> list[table.Row]:
     """`keys` under the database's own prefix, and the same names under another database's, which nothing selects."""
     layout = f'{settings.DATABASE}/.pulumi/'
     return [
-        state.Row(key=key, size=1)
+        table.Row(key=key, size=1)
         for key in [*(layout + key for key in keys), *(f'other/.pulumi/{key}' for key in keys)]
     ]
 
@@ -2872,7 +3144,7 @@ def test_a_copy_is_superseded_when_its_stack_has_a_checkpoint_and_none_under_its
 ) -> None:
     layout = f'{settings.DATABASE}/.pulumi/'
 
-    assert sorted(row.key for row in state.superseded(_superseded_rows(keys), settings.DATABASE)) == sorted(
+    assert sorted(row.key for row in table.superseded(_superseded_rows(keys), settings.DATABASE)) == sorted(
         layout + key for key in stale
     )
 
@@ -2895,30 +3167,30 @@ def test_the_delete_takes_what_the_listing_selects_and_nothing_else_it_is_handed
     rows = _superseded_rows([key for case in SUPERSEDED for key in case[1]])
     values = ', '.join(f'(\'{row.key}\', \'{{"data":""}}\')' for row in rows)
     _ = box.local(f'INSERT INTO {BACKEND_TABLE} (key, data) VALUES {values}')
-    selected = sorted(row.key for row in state.superseded(rows, settings.DATABASE))
+    selected = sorted(row.key for row in table.superseded(rows, settings.DATABASE))
     assert selected
 
-    assert sorted(state.prune(operator, [row.key for row in rows])) == selected
+    assert sorted(table.prune(operator, [row.key for row in rows], database=settings.DATABASE)) == selected
 
 
 @pytest.mark.parametrize(
     ('path', 'kind'),
     [
-        ('.pulumi/meta.yaml', state.Kind.META),
-        ('.pulumi/stacks/project/a.json', state.Kind.CHECKPOINT),
-        ('.pulumi/stacks/project/a.json.gz', state.Kind.CHECKPOINT),
-        ('.pulumi/stacks/project/a.json.zst', state.Kind.CHECKPOINT),
-        ('.pulumi/stacks/project/a.json.bak', state.Kind.PREVIOUS),
-        ('.pulumi/stacks/project/a.json.zst.bak', state.Kind.PREVIOUS),
-        ('.pulumi/stacks/project/a.pulumi-tags', state.Kind.OTHER),
-        ('.pulumi/stacks/project/a.json.1790591454000000000', state.Kind.OTHER),
-        ('.pulumi/backups/project/a/a.1790591454000000000.json', state.Kind.BACKUPS),
-        ('.pulumi/history/project/a/a-1790591454000000000.history.json', state.Kind.HISTORY),
-        ('.pulumi/history/project/a/a-1790591454000000000.checkpoint.json.zst', state.Kind.HISTORY),
-        ('.pulumi/locks/organization/project/a/id.json', state.Kind.LOCKS),
-        ('elsewhere', state.Kind.OTHER),
+        ('.pulumi/meta.yaml', table.Kind.META),
+        ('.pulumi/stacks/project/a.json', table.Kind.CHECKPOINT),
+        ('.pulumi/stacks/project/a.json.gz', table.Kind.CHECKPOINT),
+        ('.pulumi/stacks/project/a.json.zst', table.Kind.CHECKPOINT),
+        ('.pulumi/stacks/project/a.json.bak', table.Kind.PREVIOUS),
+        ('.pulumi/stacks/project/a.json.zst.bak', table.Kind.PREVIOUS),
+        ('.pulumi/stacks/project/a.pulumi-tags', table.Kind.OTHER),
+        ('.pulumi/stacks/project/a.json.1790591454000000000', table.Kind.OTHER),
+        ('.pulumi/backups/project/a/a.1790591454000000000.json', table.Kind.BACKUPS),
+        ('.pulumi/history/project/a/a-1790591454000000000.history.json', table.Kind.HISTORY),
+        ('.pulumi/history/project/a/a-1790591454000000000.checkpoint.json.zst', table.Kind.HISTORY),
+        ('.pulumi/locks/organization/project/a/id.json', table.Kind.LOCKS),
+        ('elsewhere', table.Kind.OTHER),
     ],
 )
-def test_a_key_is_the_kind_its_place_in_the_layout_says(path: str, kind: state.Kind) -> None:
-    assert state.kind(f'{settings.DATABASE}/{path}', settings.DATABASE) is kind
-    assert state.kind(f'other/{path}', settings.DATABASE) is state.Kind.OTHER
+def test_a_key_is_the_kind_its_place_in_the_layout_says(path: str, kind: table.Kind) -> None:
+    assert table.kind(f'{settings.DATABASE}/{path}', settings.DATABASE) is kind
+    assert table.kind(f'other/{path}', settings.DATABASE) is table.Kind.OTHER

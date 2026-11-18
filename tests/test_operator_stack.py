@@ -74,7 +74,7 @@ from scratch_projects import cli_directories
 
 from kluster.conventions import identity
 from kluster.lib import acquisition, bundle, pulumi_cli, stack_environment, state_only, workstation
-from kluster.lib.state_backend import permission, settings, state
+from kluster.lib.state_backend import permission, settings, state, table
 from kluster.scripts.credentials import derived, escrow
 from kluster.scripts.credentials import workstation as credential_slots
 from kluster.scripts.operator_stack import appliance, checkpoint, cli, driver
@@ -3183,8 +3183,8 @@ def test_a_backend_whose_traffic_is_dropped_does_not_answer(
     # The variable is libpq's, which the driver behind Pulumi's Postgres
     # backend reads: its name is that contract's, not this repository's.
     (env,) = unanswered
-    assert env['PGCONNECT_TIMEOUT'] == str(state.CONNECT_TIMEOUT)
-    assert state.CONNECT_TIMEOUT < pulumi_cli.TIMEOUT
+    assert env['PGCONNECT_TIMEOUT'] == str(table.CONNECT_TIMEOUT)
+    assert table.CONNECT_TIMEOUT < pulumi_cli.TIMEOUT
 
 
 def test_a_checkout_with_no_bundle_is_refused_before_anything_runs(repository: Repository) -> None:

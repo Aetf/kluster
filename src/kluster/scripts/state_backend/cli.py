@@ -6,7 +6,8 @@ this command keeps what declares nothing (rfc-006 §4.5). `dump` and `restore`
 are the standalone moves of the playbooks (physical/state-backend.md §7), each
 of which verifies rather than reports, and the restore a run of the stack
 owes after a replacement it took no dump for. `census` reads what the state
-table holds and prunes the rows nothing reads, `render` renders a scratch
+table holds, prunes the rows nothing reads and holds every value to the
+ceiling the pooler's cap is derived for, `render` renders a scratch
 box for the rebuild drill, `ssh` logs in for diagnosis, `bundle` writes a
 client bundle, and `pins` checks the pinned artifacts. `probe` and
 `release-lock` are the commands written to run somewhere other than a
@@ -115,7 +116,7 @@ def build_parser() -> argparse.ArgumentParser:
     # Needs no offline database: the client bundle is the whole credential.
     counting = actions.add_parser(
         'census',
-        help='count the state table by kind of key, and prune the rows nothing reads',
+        help='count the state table by kind of key, prune the rows nothing reads, and check the ceiling',
         description=census.__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -138,6 +139,14 @@ def build_parser() -> argparse.ArgumentParser:
         '--yes',
         action='store_true',
         help='with --prune-superseded or --prune-expired, delete the rows it lists',
+    )
+    _ = counting.add_argument(
+        '--ceiling',
+        action='store_true',
+        help=(
+            "after any prune, read every row's value size and fail, naming each row, where one exceeds "
+            f'{settings.LARGEST_ROW_BYTES:,} bytes (settings.LARGEST_ROW_BYTES)'
+        ),
     )
     _ = counting.add_argument(
         '--bundle',
@@ -340,6 +349,7 @@ def main(argv: list[str] | None = None) -> int:
                     state.connection(args.bundle),
                     prune=args.prune_superseded,
                     expire=args.prune_expired,
+                    ceiling=args.ceiling,
                     yes=args.yes,
                     out=sys.stdout,
                 )

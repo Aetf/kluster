@@ -295,7 +295,7 @@ longer run a `finally`. Today's instances:
     `setsid()`.
 -   **A process code under test starts through a runner of its own** --
     `pulumi_cli.run_pulumi`, `github_secrets.run_gh`, the client tools
-    `state` runs. Those keep `subprocess.run`'s kill of the child alone.
+    `state` and `table` run. Those keep `subprocess.run`'s kill of the child alone.
 -   **The test process killed outright.** SIGKILL, or the outer `timeout`'s
     SIGTERM (§1), which Python turns into no exception, runs no clean-up.
     And because each command leads a group of its own, the outer `timeout`'s

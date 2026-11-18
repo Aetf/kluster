@@ -16,6 +16,9 @@ beside it (docs/style/pulumi.md, "Layering"):
     as an argument: minting and recovering them is the caller's.
 -   `committed`: the readers of the files a command commits into `machine/`.
 -   `state`: taking the Pulumi state out of the box, and putting it back.
+-   `table`: the state table, read and pruned in place -- its key grammar,
+    the census, the prunes and the ceiling. It imports the standard library
+    alone, so a cluster job runs it as a program of its own.
 -   `readiness`: waiting for a box to answer.
 -   `permission`: the permission a run carries to replace the box.
 

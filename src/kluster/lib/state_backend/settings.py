@@ -144,11 +144,16 @@ SHARED_BUFFERS_MIB = 128
 WRITE_MULTIPLE = 5.8
 BACKEND_BASELINE_MIB = 3
 
-#: The largest row in the state table, in bytes, as `state-backend census`
-#: last read it: `physical`'s checkpoint, stored uncompressed. A reading, not
-#: a forecast: it moves when the census reads another largest row. Every row
-#: is one a statement through the pooler can touch -- a listing sizes each
-#: key it finds -- and one each dump reads, so the one value bounds all three.
+#: The largest row in the state table, in bytes, as `state-backend census
+#: --ceiling` last read it, rounded up: a plain `backups/` copy of
+#: `physical`'s checkpoint. A row's size here is its value's, the size the
+#: ceiling reads: the bytes a client writes and reads, which is what each
+#: multiple below is per byte of, and not the smaller size TOAST's
+#: compression stores it at. A reading, not a forecast: it moves
+#: when the ceiling reads another largest row, and the ceiling fails naming
+#: any row over it, a row the cap was not derived for. Every row is one a
+#: statement through the pooler can touch -- a listing sizes each key it
+#: finds -- and one each dump reads, so the one value bounds all three.
 LARGEST_ROW_BYTES = 2_130_000
 
 #: The nightly dump reaches Postgres on the box's local socket, around the
@@ -225,7 +230,7 @@ DUMP_PERIOD = dt.timedelta(days=1)
 DUMP_MAX_AGE = backup.max_age(DUMP_PERIOD)
 
 #: The retention rule of the state table (state-backend.md §2), which
-#: `state-backend census --prune-expired` enforces (`state.expired`). No row
+#: `state-backend census --prune-expired` enforces (`table.expired`). No row
 #: younger than `EXPIRY_AGE` expires: two dump periods, so a row that old has
 #: stood through two scheduled dumps and one missed run leaves it in the
 #: other, and half a period past `DUMP_MAX_AGE`, so while the dump-age probe
