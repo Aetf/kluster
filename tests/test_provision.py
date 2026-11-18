@@ -343,32 +343,25 @@ def host_key(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
 def test_ssh_holds_the_box_to_the_committed_host_key(
     execed: list[list[str]], host_key: Path, credential_files: Path
 ) -> None:
-    """First contact is not trust-on-first-use: a wrong answer is refused.
+    """The client is exec'd with `pin_options` for a known-hosts file holding the committed pin, and the command whole.
 
-    Every option here is load-bearing. Without the strict setting the client
-    accepts an unknown key and writes it down; without a file of its own it
-    would consult whatever this machine already trusts; without the algorithm
-    the box's other host key types are answers the pin does not cover; and
-    without `-F /dev/null` the client still reads a configuration whose
-    `ControlMaster` or `KnownHostsCommand` decides the question instead
-    (`test_ssh_pin.py` holds that one against a live client). The pin is the
-    committed public half, at the address the repository records: no OCI call
-    stands between the operator and the box.
+    What those options make a client do is `test_ssh_pin.py`'s, which drives
+    a live OpenSSH client with them. This case holds what that one cannot
+    see: the options the tool execs with are `pin_options` and nothing
+    beside them, the file they name is the tool's own and holds the committed
+    public half at the address the repository records -- no OCI call stands
+    between the operator and the box -- and the remote command reaches the
+    end of the argument vector as it was given.
     """
     with pytest.raises(_Execed):
         provision.ssh(['journalctl', '-u', 'postgres'])
 
     argv = execed[0]
-    assert argv[argv.index('-F') + 1] == '/dev/null'
-    options = [argv[index + 1] for index, token in enumerate(argv) if token == '-o']
-    assert 'StrictHostKeyChecking=yes' in options
-    assert 'GlobalKnownHostsFile=/dev/null' in options
-    assert 'HostKeyAlgorithms=ssh-ed25519' in options
     assert argv[-4:] == [f'core@{settings.ADDRESS}', 'journalctl', '-u', 'postgres']
-
-    named = [option.removeprefix('UserKnownHostsFile=') for option in options if 'UserKnownHostsFile=' in option]
-    assert len(named) == 1
-    known_hosts = Path(named[0])
+    (known_hosts,) = {
+        Path(token.removeprefix('UserKnownHostsFile=')) for token in argv if token.startswith('UserKnownHostsFile=')
+    }
+    assert argv[:-4] == ['ssh', *provision.pin_options(known_hosts)]
     # The tool's own file, in the checkout's layer -- never the operator's,
     # which the tool neither reads nor writes.
     assert known_hosts.is_relative_to(credential_files)

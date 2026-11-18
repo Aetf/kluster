@@ -1374,27 +1374,12 @@ module's own temporary directory. Its CLI, its backend and its home are as
 the case above has them; it runs no program, and:
 
 -   **It fetches the Kubernetes provider plugin**, an exception to
-    fetching nothing that `tests/test_admission_wait_engine.py` (below)
+    fetching nothing that one case of `tests/test_update_crds.py` (below)
     shares. The extension is that provider's, so generating it needs the
     plugin.
 -   **The plugin is downloaded once per worker that runs the module's
     cases**, into a `PULUMI_HOME` of the module's own that the module
     removes when it finishes, rather than into one per case.
-
-`tests/test_admission_wait_engine.py` holds what a chart's readiness rests
-on ([declarative/cluster-infra.md](../declarative/cluster-infra.md) §1.2):
-the transform `helm_chart` binds on a chart reaches each object the chart
-renders, so a webhook configuration rendered with a Service-backed entry and
-no CA bundle reaches the provider carrying `pulumi.com/waitFor`, and an object
-of another kind does not. Its chart is the case's own, served from a Helm
-repository the case runs on `127.0.0.1`, and installed through `helm_chart`
-itself, so dropping the transform from the helper fails it. It fetches the
-Kubernetes provider plugin, as the case above does and for the same reason: a
-chart is that provider's component. The provider runs in its
-`renderYamlToDirectory` mode, which writes each object as a manifest rather
-than sending it to a cluster, so the case runs an `up` with no cluster, and
-its plugin is downloaded into the case's own `PULUMI_HOME`, which the case
-removes when it finishes.
 
 `tests/test_update_crds.py` holds the Helm `mise.toml` pins, which
 `update_crds` renders the chart set with, to the Helm SDK the cluster's
@@ -1433,7 +1418,8 @@ command reads each as one an `up` would write, and as nothing once an
 that rewrites a secret prints no secret. It runs the command as the
 console script the package installs. The operator driver reads the same
 reading, through its second preview, and its own real-engine cases in
-`tests/test_operator_stack.py` plan, show and apply each such change.
+`tests/test_operator_stack.py` plan, show and apply one such change from
+each surface of that preview, a state field and a component's output.
 The module also holds the layer's tripwire, a workaround's in the sense
 of the bullet above, for the command and the driver both: the bare
 preview under `--expect-no-changes` still exits 0 on each of those
@@ -1460,7 +1446,6 @@ the case it was started from and hands over to the pinned one. Today's
 are:
 
 -   the engine modules above, `tests/test_homelab_engine.py`,
-    `tests/test_admission_wait_engine.py`,
     `tests/test_targeted_import_engine.py` and
     `tests/test_stack_plan_engine.py`;
 -   `tests/test_extension_provider.py`, which runs `gen-sdk` and no
