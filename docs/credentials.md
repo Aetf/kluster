@@ -885,8 +885,9 @@ reads it. Which namespaces back up is the census
 `conventions.backup.BACKED_NAMESPACES`: `physical` mints one key per
 family of each from it, and the seal covers every namespace at once,
 and the etcd snapshots' key beside them. `--only <value>` seals one key
-alone, which is how the etcd snapshots' key is sealed at the sitting
-that seals the cluster's own values (§4.1 stage 11).
+alone, which is how each key whose readers `k8s-base` declares, the etcd
+snapshots' and the one of `monitoring`, is sealed at the sitting that
+seals the cluster's own values (§4.1 stage 11).
 
 **The OCI rows are one mint and two stacks.** Both are the same act — the
 seed creates a user, the group that holds it and a policy confining that
@@ -1203,7 +1204,7 @@ name.
 | `credentials derived bgp seal` | Once, after `physical` has brought the cluster up and `k8s-base` runs the sealed-secrets controller, for a password recorded before there was a cluster. Reads the password back out of `physical`'s config, seals it with `kubeseal` to the cluster's certificate — fetched from the controller with the kubeconfig in `physical`'s state — strict, for the Secret Cilium reads, and writes the ciphertext in the clear at `sealedSecrets.bgp-password.password` in `k8s-base`'s config, reading it back; the stack file is then committed. Every run writes fresh ciphertext. |
 | `credentials derived alert-webhook record` | After `physical` has brought the cluster up and `k8s-base` runs the sealed-secrets controller, and after the operator has made alertmanager's intake automation in Home Assistant — which the command prints the steps for. Takes the webhook id without echoing it, and refuses a value not shaped as one, a whole URL among them; seals it with `kubeseal` strict for the Secret alertmanager's receiver reads, to which the SealedSecret adds the URL built from the id, and writes the ciphertext in the clear at `sealedSecrets.alert-webhook.id` in `k8s-base`'s config, reading it back; the stack file is then committed. No stack holds the id as a secret: its one consumer is in the cluster. A new webhook id and this command again is the rotation. |
 | `credentials derived dkim-exim record [--key-file <path>]` | Once, after `k8s-base` runs the sealed-secrets controller and before exim moves in Wave A1 ([cluster/migration.md](cluster/migration.md) §2). Takes the mail relay's DKIM private key whole on standard input, piped from the legacy cluster's `cert-dkim-exim` Secret by the command it prints, or from the file `--key-file` names, and echoes it nowhere. Before anything is sealed it refuses a key whose public half's SHA-256 over the DER differs from `conventions.DKIM_K8S`'s, the key every mail zone publishes as `k8s._domainkey`, printing the two digests and nothing of the key. Then it seals the key with `kubeseal` strict for the Secret exim reads, and writes the ciphertext in the clear at `sealedSecrets["dkim-exim"]["tls.key"]` in the `apps` stack's config, reading it back; `Pulumi.apps.yaml` is then committed. The key is never rotated in place (§2.2). |
-| `credentials derived b2-writer seal [--only <value>]` | Once, at the hand-over to the first wave ([physical/bring-up.md](physical/bring-up.md) stage 9), after the legacy sealing key is carried and the certificate the controller serves is confirmed as the cluster's own; and again after a `physical` apply that mints a writer key for a newly backed namespace. `--only writer-etcd` earlier, at the sitting that seals the cluster's own values (§4.1 stage 11), and again after a rebuild. Fetches the cluster's sealing certificate with the kubeconfig in `physical`'s state, reads every writer key `physical` exports under `backup_keys` out of that state under `physical`'s passphrase, or the one `--only` names: the etcd snapshots', and one per family of each namespace in `conventions.backup.BACKED_NAMESPACES`. It seals a backed namespace's key with `kubeseal` namespace-wide and the etcd snapshots' strict, and writes the ciphertexts in the clear at their rows' paths in the config of the stack each row names, `apps`'s or, for `monitoring` and the etcd snapshots, `k8s-base`'s, reading each back; `Pulumi.apps.yaml` and `Pulumi.k8s-base.yaml` are then committed. A declaring stack that does not exist, or a key `physical` does not export yet refuses the run before anything is written, and a `--only` that names no writer key refuses it before anything is read. |
+| `credentials derived b2-writer seal [--only <value>]` | Once, at the hand-over to the first wave ([physical/bring-up.md](physical/bring-up.md) stage 9), after the legacy sealing key is carried and the certificate the controller serves is confirmed as the cluster's own; and again after a `physical` apply that mints a writer key for a newly backed namespace. `--only writer-etcd` and `--only writer-vm-monitoring` earlier, at the sitting that seals the cluster's own values (§4.1 stage 11), and again after a rebuild. Fetches the cluster's sealing certificate with the kubeconfig in `physical`'s state, reads every writer key `physical` exports under `backup_keys` out of that state under `physical`'s passphrase, or the one `--only` names: the etcd snapshots', and one per family of each namespace in `conventions.backup.BACKED_NAMESPACES`. It seals a backed namespace's key with `kubeseal` namespace-wide and the etcd snapshots' strict, and writes the ciphertexts in the clear at their rows' paths in the config of the stack each row names, `apps`'s or, for `monitoring` and the etcd snapshots, `k8s-base`'s, reading each back; `Pulumi.apps.yaml` and `Pulumi.k8s-base.yaml` are then committed. A declaring stack that does not exist, or a key `physical` does not export yet refuses the run before anything is written, and a `--only` that names no writer key refuses it before anything is read. |
 | `credentials derived authelia-storage-key import` | Once, while the legacy cluster still holds the key: at the bring-up's last kit sitting ([physical/bring-up.md](physical/bring-up.md) stage 9), beside `b2-writer seal`, or, on an installation past that stage, at a kit sitting of its own before Wave A1's head (rfc-008 §5.2). Takes Authelia's storage encryption key on standard input, piped from the legacy cluster's `authelia` Secret by the command it prints, and with the surrounding whitespace stripped, as every piped value is; refuses, filing nothing, a key shorter than Authelia accepts; escrows it as the next generation of `authelia/storage-key`; and seals what the registry then returns, read back out of the ciphertext, strict for the Secret the server reads, into `apps`'s config, reading it back. The cluster's certificate and the `apps` stack are held to exist before anything is escrowed. A seal that fails after the escrow is repaired by `seal` below, not by a second `import`, which would file the same key again as the next generation. The escrow file and `Pulumi.apps.yaml` are committed together. Wave A1's sign-in with a second factor against the migrated database, before the cut (rfc-008 §5.2), is what proves the escrowed key, whitespace stripped, is the one Authelia encrypted with. |
 | `credentials derived authelia-storage-key seal` | After a rebuild of the cluster, which is the whole of that key's recovery, and after an `import` whose seal failed. Opens the newest escrowed generation with the kit, seals it to the cluster's certificate strict for the Secret the server reads, and writes the ciphertext into `apps`'s config, reading it back; `Pulumi.apps.yaml` is then committed. On an installation whose Authelia has no database yet, it is also the step after `generate`. While the escrow holds no generation it refuses, naming `import`, and writes nothing. |
 | `credentials derived github-admin record` | Once per installation, and again on each rotation, for the GitHub admin token — into the `github` stack's config, which is where the stack and every command that pushes a GitHub secret read it. Nothing in this repository can create the value: GitHub publishes no API that makes a personal access token, so a token generated on the account's settings page and recorded here is the whole of a rotation, and the superseded one is deleted on the same page. It runs before `derived sync`, which authenticates as it. |
@@ -1690,21 +1691,28 @@ operator-passphrase generate` and `recover`.
 11. `credentials derived cloudflare-dns01 mint`,
     `credentials derived oci-metrics mint`,
     `credentials derived bgp seal`,
-    `credentials derived alert-webhook record` and
-    `credentials derived b2-writer seal --only writer-etcd` — the values
-    the cluster consumes, once `physical` has brought the cluster up and
-    `k8s-base` runs the sealed-secrets controller. Each is sealed to the
-    cluster and its ciphertext written into `k8s-base`'s configuration
-    (§4): cert-manager's DNS-01 token, minted for the zones the cluster
-    serves; the metrics reader's OCI key, minted from the OCI seed to
-    read the block volumes' metrics in the `physical` compartment; the
-    BGP session password stage 8 recorded, read back out of
-    `physical`'s configuration; alertmanager's own Home Assistant
+    `credentials derived alert-webhook record`,
+    `credentials derived b2-writer seal --only writer-etcd` and
+    `credentials derived b2-writer seal --only writer-vm-monitoring` —
+    every value a stack program reads before the first wave, today every
+    value `k8s-base` reads, once `physical` has brought the cluster up
+    and `k8s-base` runs the sealed-secrets controller. Each is sealed to
+    the cluster and its ciphertext written into `k8s-base`'s
+    configuration (§4): cert-manager's DNS-01 token, minted for the zones
+    the cluster serves; the metrics reader's OCI key, minted from the OCI
+    seed to read the block volumes' metrics in the `physical`
+    compartment; the BGP session password stage 8 recorded, read back
+    out of `physical`'s configuration; alertmanager's own Home Assistant
     webhook, made by the operator in Home Assistant; and the backup
-    bucket's `etcd` writer key, which `physical`'s apply minted, read
-    out of `physical`'s state, which the hourly etcd snapshot uploads
-    with. The stack file is then committed, and the next `k8s-base`
-    apply hands each to what reads it.
+    bucket's writer keys whose readers `k8s-base` declares, which
+    `physical`'s apply minted, read out of `physical`'s state: the
+    `etcd` key, which the hourly etcd snapshot uploads with, and the
+    `monitoring` namespace's, which the metrics stores' backups upload
+    with and their restores read. The stack file is then committed, and
+    the next `k8s-base` apply hands each to what reads it. A value whose
+    reader merges after this stage has run is sealed by its own command,
+    on its own, before the last step of physical/bring-up.md stage 8,
+    from which an absent value stops the run by name.
 12. `credentials derived b2-writer seal` — the backup bucket's writer
     keys, at the hand-over to the first wave (physical/bring-up.md stage
     9): after the legacy sealing key is carried into the cluster and the
@@ -1713,8 +1721,9 @@ operator-passphrase generate` and `recover`.
     `conventions.backup.BACKED_NAMESPACES` names; each is read out of
     `physical`'s state and sealed namespace-wide into the configuration of
     the stack that declares its readers, `apps`'s, or `k8s-base`'s for
-    `monitoring`, every namespace in one run, with stage 11's etcd
-    snapshots' key sealed again beside them. `Pulumi.apps.yaml` and
+    `monitoring`, every namespace in one run, the key of `monitoring`
+    sealed again among them and stage 11's etcd snapshots' key beside
+    them. `Pulumi.apps.yaml` and
     `Pulumi.k8s-base.yaml` are then committed. At the same sitting, Authelia's storage encryption key
     is carried from the legacy cluster by the pipe that
     `credentials derived authelia-storage-key import` prints, from the
@@ -1806,9 +1815,10 @@ kubeconfig's copy into `k8s-base`'s and `apps`'s configuration, at
 `k8s-base`'s bring-up; and, once `k8s-base` runs the sealed-secrets
 controller, the values sealed into its configuration — the DNS-01 token,
 the metrics reader's OCI key, the BGP session password's copy,
-alertmanager's webhook and the etcd snapshots' writer key; and, at the
-hand-over to the first wave, the writer keys sealed into `apps`'s and,
-for `monitoring`, into `k8s-base`'s. The commands outside that sequence deliver the drill's keys and the
+alertmanager's webhook, and the writer keys of the etcd snapshots and
+of `monitoring`; and, at the hand-over to the first wave, every writer
+key, sealed into `apps`'s and, for `monitoring` and the etcd snapshots,
+into `k8s-base`'s. The commands outside that sequence deliver the drill's keys and the
 dump freshness key. The rest of §3 is design rather
 than procedure.
 

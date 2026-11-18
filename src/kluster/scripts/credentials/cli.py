@@ -207,34 +207,41 @@ _ORDER = """when to run what:
        credentials derived bgp seal
        credentials derived alert-webhook record
        credentials derived b2-writer seal --only writer-etcd
-         The values the cluster consumes, once physical has brought the
-         cluster up and k8s-base runs the sealed-secrets controller. Each
-         is sealed with kubeseal to the cluster's certificate, fetched with
-         the kubeconfig in physical's state, and its ciphertext -- which
-         anyone may read and only the cluster can open -- written into the
-         k8s-base stack's config: cert-manager's DNS-01 token, scoped to
-         the zones the cluster serves; the OCI key that reads the block
-         volumes' metrics in physical's compartment, minted from the OCI
-         seed; the BGP session password stage 8 recorded, read back out of
-         physical's config; alertmanager's own Home Assistant webhook,
-         made by the operator in Home Assistant; and the backup bucket's
-         key the hourly etcd snapshot uploads with, which physical's apply
-         minted, read out of physical's state. Commit the stack file;
-         the next k8s-base apply hands each to what reads it. Re-running
-         either mint rotates what it minted; a `bgp record` from here on
-         seals in the same run.
+       credentials derived b2-writer seal --only writer-vm-monitoring
+         Every value a stack program reads before the first wave, which is
+         every value k8s-base reads, once physical has brought the cluster up
+         and k8s-base runs the sealed-secrets controller. Each is sealed with
+         kubeseal to the cluster's certificate, fetched with the kubeconfig
+         in physical's state, and its ciphertext -- which anyone may read and
+         only the cluster can open -- written into the k8s-base stack's
+         config: cert-manager's DNS-01 token, scoped to the zones the cluster
+         serves; the OCI key that reads the block volumes' metrics in
+         physical's compartment, minted from the OCI seed; the BGP session
+         password stage 8 recorded, read back out of physical's config;
+         alertmanager's own Home Assistant webhook, made by the operator in
+         Home Assistant; and the backup bucket's keys whose readers k8s-base
+         declares, the one the hourly etcd snapshot uploads with and the
+         monitoring namespace's, which the metrics stores' backups upload
+         with and their restores read, each minted by physical's apply and
+         read out of physical's state. Commit the stack file; the next
+         k8s-base apply hands each to what reads it. A value whose reader
+         merges after this stage has run is sealed on its own before the
+         bring-up's gate ends, after which an absent value stops the run.
+         Re-running either mint rotates what it minted; a `bgp record` from
+         here on seals in the same run.
    12. credentials derived b2-writer seal
-         The backup bucket's writer keys, at the hand-over to the first
-         wave: after the legacy sealing key is carried into the cluster and
-         the certificate its controller serves is confirmed as the cluster's
-         own. physical's apply mints one key per family of each namespace
+         The backup bucket's writer keys, at the hand-over to the first wave:
+         after the legacy sealing key is carried into the cluster and the
+         certificate its controller serves is confirmed as the cluster's own.
+         physical's apply mints one key per family of each namespace
          conventions.backup names; this reads them out of physical's state
          and seals each namespace-wide into the config of the stack that
          declares what reads it -- apps for an application's namespace,
-         k8s-base for monitoring's -- for every namespace at once, and the
-         etcd snapshots' key of stage 11 again beside them. Commit
-         Pulumi.apps.yaml and Pulumi.k8s-base.yaml. Re-run it after an
-         apply of physical that mints a key for a newly backed namespace.
+         k8s-base for monitoring's -- for every namespace at once,
+         monitoring's key again among them, and the etcd snapshots' key of
+         stage 11 beside them. Commit Pulumi.apps.yaml and
+         Pulumi.k8s-base.yaml. Re-run it after an apply of physical that
+         mints a key for a newly backed namespace.
        kubectl --context <legacy> -n serving-system get secret authelia \\
            -o jsonpath='{.data.STORAGE_ENCRYPTION_KEY}' | base64 -d \\
            | credentials derived authelia-storage-key import
@@ -391,6 +398,21 @@ _ORDER = """when to run what:
 
 See also: docs/credentials.md -- §2 the seeds, §3 the derived rows, §4 this order.
 """
+
+
+def _k8s_base_writer_keys() -> list[str]:
+    """The writer keys whose readers `k8s-base` declares, by name.
+
+    The sitting that seals the cluster's own values seals each with `--only`,
+    one run apiece. Read off the census rather than spelled, so a writer key
+    that comes to be declared in `k8s-base` is named in the help without
+    anyone editing it.
+    """
+    return [
+        value.name
+        for value in conventions.sealed.WRITER_KEYS_BY_SCOPE.values()
+        if value.stack == conventions.STACK_NAMES.k8s_base
+    ]
 
 
 def _add_bundle_dir(command: argparse.ArgumentParser) -> None:
@@ -1085,8 +1107,8 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         metavar='<value>',
         help=(
-            f'seal this writer key alone; `--only {conventions.sealed.ETCD_WRITER_KEY.name}` is the etcd '
-            "snapshots' key, sealed at the sitting that seals the cluster's own values"
+            "seal this writer key alone; the sitting that seals the cluster's own values seals each key whose "
+            f'readers k8s-base declares this way: {", ".join(_k8s_base_writer_keys())}'
         ),
     )
     _add_bundle_dir(writer_seal)
