@@ -8,6 +8,8 @@ which files exist; the census and the shape test also read them through the
 rest of the loaders here, so those agree on how a failure names a file and
 what a job is. The suites that hold another pin of mise to CI's read CI's
 through `mise_action_versions`, so they agree on which steps install it.
+Both read a workflow's events through `workflow_triggers`, so they agree on
+which workflows run for a pull request and which on `main`.
 """
 
 from __future__ import annotations
@@ -59,6 +61,27 @@ def mapping(value: object, what: str) -> dict[str, object]:
 def read_workflow(path: Path) -> dict[str, object]:
     """A workflow or action file, parsed."""
     return mapping(yaml.safe_load(path.read_text()), github_name(path))
+
+
+def workflow_on(workflow: dict[str, object]) -> object:
+    """A workflow's `on:` block, under the key PyYAML reads it as.
+
+    YAML 1.1 reads a bare `on` key as the boolean `true`, which is how PyYAML
+    hands it back, so a read under the string alone finds no trigger in any
+    workflow here.
+    """
+    keyed = cast('dict[object, object]', workflow)
+    return keyed.get('on', keyed.get(True))
+
+
+def workflow_triggers(workflow: dict[str, object]) -> set[str]:
+    """The events a workflow runs on, in any of the three shapes `on:` takes."""
+    on = workflow_on(workflow)
+    if isinstance(on, str):
+        return {on}
+    if isinstance(on, list):
+        return {str(event) for event in cast('list[object]', on)}
+    return {str(event) for event in mapping(on, 'on:')}
 
 
 def workflow_jobs(workflow: dict[str, object], what: str) -> dict[str, dict[str, object]]:

@@ -8,6 +8,11 @@ name: preview
 # code here, and its resource diff is read in plan-physical's output on main —
 # that reading is the approval moment.
 #
+# No preview here joins the overlay: a `dns` preview without `--refresh` dials
+# nothing over it, and `k8s-base` and `apps` reach nothing on the LAN. The join
+# action is proved by `join (dns)`, under the `dns` identity's inputs, on a
+# change to `.github/` (framework/ci.md §2).
+#
 # `pull_request`, never `pull_request_target`: a preview executes the PR's
 # Python with provider credentials, so fork PRs must not get secrets.
 
@@ -33,6 +38,9 @@ jobs:
       # at all (it is not in scope there), so selecting stacks has to happen
       # by building the matrix rather than by filtering it afterwards.
       stacks: ${{ steps.filter.outputs.changes }}
+      # Whether the change touches what the join proof below exercises. A
+      # filter of its own, so that its name never lands in `stacks`.
+      join: ${{ steps.join.outputs.join }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       # Path filtering saves job setup, nothing more, so it is a deny-list:
@@ -65,6 +73,16 @@ jobs:
               - '!checkpoints/**'
             k8s-base: *code
             apps: *code
+      - uses: dorny/paths-filter@0e4a8c6effa4802afeda77dc8d303f8176d7dfad # v3.0.4
+        id: join
+        with:
+          # The join action, the release it pins, the runner labels the jobs
+          # that join run on: all of it is under `.github/`. A change to the
+          # flow rules or the roster can break a join too, and only a run on
+          # `main` proves that one (framework/ci.md §2).
+          filters: |
+            join:
+              - '.github/**'
 
   preview:
     needs: changes
@@ -81,16 +99,10 @@ jobs:
     # Per-stack Environments are the credential partition: the dns job sees
     # only the Cloudflare token, apps never holds the UDM key.
     environment: ${{ matrix.stack }}
-    # The dns preview joins ZeroTier with the dns environment's identity, and
-    # ZeroTier maps a member to one endpoint at a time, so it must never be
-    # live in two jobs at once — including two pull requests' previews, and
-    # including a deploy or drift job elsewhere in the repository. A shared
-    # `zt-dns` group is that lock; every other stack keeps a per-run key so it
-    # is serialized against nothing (framework/ci.md §2). Unlike a job-level
-    # `if`, a job-level `concurrency` may read the matrix context.
-    concurrency:
-      group: ${{ matrix.stack == 'dns' && 'zt-dns' || format('preview-{0}-{1}', github.ref, matrix.stack) }}
-      cancel-in-progress: false
+    # No entry joins the overlay: a `dns` preview without `--refresh` dials
+    # nothing over it, and `k8s-base` and `apps` reach nothing on the LAN, so no
+    # entry waits on the gateway or holds an identity's lock (framework/ci.md
+    # §2).
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
@@ -103,21 +115,6 @@ jobs:
           experimental: true
 
       - run: mise x uv -- uv sync --locked
-
-      # Only dns touches the LAN (the AdGuard rewrites live on the UDM).
-      - name: Join ZeroTier
-        if: matrix.stack == 'dns'
-        uses: ./.github/actions/zerotier
-        with:
-          network_id: ${{ secrets.ZEROTIER_NETWORK_ID }}
-          identity: ${{ secrets.ZEROTIER_IDENTITY }}
-          # The two resolver APIs, reached through the gateway by routes this
-          # run installs for itself, and the first to answer ends the join
-          # (framework/ci.md §2).
-          routes: |
-            10.0.5.3/32 via 10.144.1.1
-            10.0.5.4/32 via 10.144.1.1
-          wait_for_any: '10.0.5.3:80 10.0.5.4:80'
 
       - uses: ./.github/actions/state-backend
         with:
@@ -138,3 +135,41 @@ jobs:
         env:
           PULUMI_CONFIG_PASSPHRASE: ${{ secrets.PULUMI_CONFIG_PASSPHRASE }}
         run: mise x -- pulumi preview --stack ${{ matrix.stack }} --diff
+
+  # The join proof: the one job a pull request runs that joins the overlay, and
+  # it runs nothing but the join. It proves the join action under the `dns`
+  # identity's inputs, the one identity a pull request may name, and waits as
+  # `up-dns` does; `physical`'s join is first exercised by `plan-physical` on
+  # `main` (framework/ci.md §2).
+  join:
+    name: join (dns)
+    needs: changes
+    if: needs.changes.outputs.join == 'true'
+    runs-on: ubuntu-26.04
+    # The sum of its steps' bounds, a `uses:` step twice, plus five minutes
+    # for the runner's own phases: a backstop for what no step bound reaches
+    # (framework/ci.md §3).
+    timeout-minutes: 25
+    environment: dns
+    # The identity is live in one job at a time, and a group it shares with
+    # the merge chain delays this job rather than cancelling it, or being
+    # cancelled by it (framework/ci.md §2).
+    concurrency:
+      group: zt-dns
+      cancel-in-progress: false
+      queue: max
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        timeout-minutes: 5
+      - uses: ./.github/actions/zerotier
+        timeout-minutes: 5
+        with:
+          network_id: ${{ secrets.ZEROTIER_NETWORK_ID }}
+          identity: ${{ secrets.ZEROTIER_IDENTITY }}
+          # `up-dns`'s routes and wait: the two resolver APIs, reached through
+          # the gateway by routes this run installs for itself, and the first
+          # to answer ends the join (framework/ci.md §2).
+          routes: |
+            10.0.5.3/32 via 10.144.1.1
+            10.0.5.4/32 via 10.144.1.1
+          wait_for_any: '10.0.5.3:80 10.0.5.4:80'

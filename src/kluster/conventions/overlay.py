@@ -241,7 +241,7 @@ ROSTER: tuple[RosterEntry, ...] = (
         name=MEMBER_CI_DNS,
         address=CI_DNS,
         role=Role.CI,
-        note="the dns stack: previews, proofs, and the resolvers' rewrites",
+        note="the dns stack: the resolvers' rewrites, their drift check, and a join proof",
     ),
     EnrolledMember(
         name='Aetf-Arch-XPS', node_id='0d83052605', address=IPv4Address('10.144.175.24'), role=Role.PERSONAL

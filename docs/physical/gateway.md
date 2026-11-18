@@ -1440,7 +1440,7 @@ deletes its member.
 | `Aetf-Arch-VPS` | `infra` | The legacy deployment. Its entry leaves the roster in Wave F, no later than the machine is cancelled (cluster/migration.md §4). |
 | `haos` | `infra` | Home automation, reachable while the cluster is not. A Linux client on its defaults, so it installs the subnet route alone (§2.2). |
 | `ci-physical` | `ci` | The `physical` stack's identity: `plan-physical`, `up-physical`, and the drift matrix's `physical` entry join with it. Identity generated in state (`zerotier_identity`), private key an Environment secret; `zt-physical` keeps it live in one job at a time (§2.6). IPv4-only (§2.3). |
-| `ci-dns` | `ci` | The `dns` stack's identity: `up-dns`, a pull request's `preview (dns)` and `prove (dns)`, and the drift matrix's `dns` entry join with it — the LAN-touching work is the AdGuard rewrites (declarative/dns.md §3). Same generation, its own confinement (§2.3), serialized by `zt-dns` (§2.6). IPv4-only (§2.3). |
+| `ci-dns` | `ci` | The `dns` stack's identity: `up-dns`, the drift matrix's `dns` entry, and a pull request's join proof `join (dns)` join with it — the LAN-touching work is the AdGuard rewrites (declarative/dns.md §3). A pull request's previews of `dns` dial nothing over the overlay and do not join (ci.md §2). Same generation, its own confinement (§2.3), serialized by `zt-dns` (§2.6). IPv4-only (§2.3). |
 | Personal devices | `personal` | Phones and laptops, each named in the roster. Full access — parity with sitting on the LAN — and the escape hatch: the tunnel into the home, which the device opens itself. Whether a device holds the tunnel and applies its resolver (§2.2, §2.7) is its own setting, decided on the device: not a roster field, because the controller can neither read nor set it. |
 
 ### 2.2 Managed routes
@@ -2828,11 +2828,11 @@ Facts that shape it (decided 2026-08-24):
     the two stacks whose jobs join — and each stack serialized by a
     **job-level `concurrency` group named after it**, `zt-physical` or
     `zt-dns`. The group has to name the identity rather than the
-    workflow because previews, proofs, drift and the merge chain are
-    different workflows joining with the same two identities, and a
-    concurrency group is repository-wide. Mechanics and the accepted
-    residual (a pending joining job can be superseded by a newer one):
-    ci.md §2.
+    workflow because the merge chain, drift and a pull request's join
+    proof are different workflows joining with the same two
+    identities, and a concurrency group is repository-wide. Every such
+    group queues, so it delays a joining job and never cancels it.
+    Which jobs join, and the queue: ci.md §2.
 -   **Rejected: per-run generated identities** self-authorizing via
     the Central API — that puts the network-admin Central token into
     every environment that joins, dissolving the confinement the flow

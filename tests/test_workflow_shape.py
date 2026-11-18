@@ -14,7 +14,12 @@ outside this repository by commit, and ZeroTier, which the composite action
 installs from its apt repository, by release and by signing key. And every
 job that joins the overlay is held to the wait its identity calls for: a
 `physical` join waits for every shell it dials, a `dns` join for the first
-resolver API to answer.
+resolver API to answer. Which jobs join, and the lock they take, are held as
+relations (framework/ci.md §2): a joining job enters its identity's one
+job-level group, which no other identity's join enters; every entry of such a
+group declares `queue: max`; no job a pull request runs both runs `pulumi`
+and joins; and the one that joins, the join proof, runs on every change to the
+join action or to a workflow that holds a join.
 
 And the merge chain applies in the order that section gives it: `up-k8s-base`
 and `up-apps` follow `up-dns`, each on a gate of its own, whatever `up-dns`
@@ -70,9 +75,19 @@ from urllib.parse import parse_qs, urlsplit
 
 import process_sessions
 import pytest
+import yaml
 from renovate_text import as_python_spells_it
 from scratch_projects import scratch_project
-from workflow_files import GITHUB, github_name, mapping, read_workflow, workflow_jobs, workflows_and_actions
+from workflow_files import (
+    GITHUB,
+    github_name,
+    mapping,
+    read_workflow,
+    workflow_jobs,
+    workflow_on,
+    workflow_triggers,
+    workflows_and_actions,
+)
 
 from kluster import conventions
 from kluster.components.overlay.flow_rules import SSH_PORT
@@ -415,6 +430,64 @@ MATRIX_EQUALS = re.compile(r"^matrix\.([\w-]+) == '([^']*)'$")
 MATRIX_FLAG = re.compile(r'^matrix\.([\w-]+)$')
 
 
+#: An expression anywhere in a value.
+EXPRESSION = re.compile(r'\$\{\{.*?\}\}')
+
+
+@dataclass(frozen=True)
+class Concurrency:
+    """A `concurrency` block as one matrix combination makes it.
+
+    `group` is the group's name as GitHub compares it, without regard to
+    case, and empty for a block that is absent. A part of it this read cannot
+    evaluate -- an expression other than a matrix property the combination
+    carries -- stays in it as written and stands for any text (`enters`).
+    `cancels` is whether the block may cancel what is in progress, an
+    expression counting as one that may. `queue` is the `queue` value as
+    written, empty where the block leaves it out.
+    """
+
+    group: str
+    cancels: bool
+    queue: str
+
+    @property
+    def literal(self) -> bool:
+        """Whether the group's name is known whole."""
+        return '${{' not in self.group
+
+    def enters(self, group: str) -> bool:
+        """Whether this block's group can be `group`, an unread expression matching any text."""
+        if not self.group:
+            return False
+        pattern = ''.join(
+            '.*' if EXPRESSION.fullmatch(part) else re.escape(part) for part in re.split(r'(\$\{\{.*?\}\})', self.group)
+        )
+        return re.fullmatch(pattern, group.casefold()) is not None
+
+
+def _concurrency(block: object, row: dict[str, object] | None) -> Concurrency:
+    """A `concurrency` block, workflow- or job-level, in one matrix combination, in either shape GitHub takes it.
+
+    `row` is `None` where the combination cannot be read, which leaves every
+    matrix property unread.
+    """
+    if block is None:
+        return Concurrency('', cancels=False, queue='')
+    if not isinstance(block, dict):
+        block = {'group': block}
+    block = cast('dict[str, object]', block)
+
+    def matrix(reference: re.Match[str]) -> str:
+        if row is None or reference.group(1) not in row:
+            return reference.group(0)
+        return str(row[reference.group(1)])
+
+    group = MATRIX_REFERENCE.sub(matrix, str(block.get('group', ''))).casefold()
+    cancels = block.get('cancel-in-progress', False)
+    return Concurrency(group, cancels=cancels is not False, queue=str(block.get('queue', '')))
+
+
 @dataclass(frozen=True)
 class Join:
     """One way a job can join the overlay: where, in which Environment, what it routes, and what it waits for.
@@ -428,6 +501,8 @@ class Join:
     routes: str
     wait_for: str
     wait_for_any: str
+    #: The job-level concurrency group the job enters in this combination.
+    concurrency: Concurrency
 
 
 def _matrix_rows(job: dict[str, object], where: str) -> list[dict[str, object]] | None:
@@ -502,6 +577,7 @@ def _joins() -> list[Join]:
                     _resolved(inputs.get('routes'), row, where),
                     _resolved(inputs.get('wait_for'), row, where),
                     _resolved(inputs.get('wait_for_any'), row, where),
+                    _concurrency(job.get('concurrency'), row),
                 )
                 for row in rows
             )
@@ -563,6 +639,245 @@ def test_a_physical_join_waits_for_every_shell_it_dials_and_a_dns_join_routes_to
     assert [join.where for join in dns if _routes(join.routes) != routes] == []
     assert [join.where for join in dns if set(join.wait_for_any.split()) != apis] == []
     assert [join.where for join in dns if join.wait_for.strip()] == []
+
+
+def _identity(environment: str) -> tuple[str, ...]:
+    """The identity a job in `environment` joins with, as the Environments that carry it."""
+    (identity,) = [carriers for carriers in (slots.ZEROTIER_PHYSICAL, slots.ZEROTIER_DNS) if environment in carriers]
+    return identity
+
+
+def test_a_joining_job_takes_its_identitys_one_group_and_no_other_identity_shares_it() -> None:
+    """The lock that keeps an identity live in one job at a time is a group named for the identity.
+
+    ZeroTier maps a member to one endpoint at a time, and the jobs that join
+    with one identity sit in different workflows, so the lock is a job-level
+    group, which is repository-wide (framework/ci.md §2). Held as relations
+    rather than names: every combination a join runs in enters a job-level
+    group; every join with one identity enters the same one; and no two
+    identities share a group, which would serialize one against the other for
+    nothing.
+    """
+    joins = _joins()
+    # A read that stopped finding joins would pass on nothing.
+    assert joins, 'no job joins the overlay'
+
+    assert [join.where for join in joins if not join.concurrency.group] == []
+    # A group this read cannot name could be any identity's.
+    assert [join.where for join in joins if not join.concurrency.literal] == []
+    groups: dict[tuple[str, ...], set[str]] = {}
+    for join in joins:
+        groups.setdefault(_identity(join.environment), set()).add(join.concurrency.group)
+    assert {identity: entered for identity, entered in groups.items() if len(entered) != 1} == {}
+    entered = [group for each in groups.values() for group in each]
+    assert len(set(entered)) == len(entered), groups
+
+
+#: The `queue` value that keeps up to GitHub's ceiling of entries pending in a
+#: group rather than one, which a newer entry cancels.
+QUEUE_MAX = 'max'
+
+
+def _group_entries() -> list[tuple[str, Concurrency]]:
+    """Every group any workflow or job enters, one per matrix combination where it can be read, with where.
+
+    A workflow's own group is read beside its jobs', and a job that calls a
+    reusable workflow beside a job that runs steps: each is an entrant of
+    the group it names. A matrix this read cannot expand leaves the matrix
+    properties in the group unread.
+    """
+    entries: list[tuple[str, Concurrency]] = []
+    for path in workflows_and_actions():
+        if path.parent.name != 'workflows':
+            continue
+        workflow = read_workflow(path)
+        if 'concurrency' in workflow:
+            entries.append((github_name(path), _concurrency(workflow['concurrency'], {})))
+        for name, job in workflow_jobs(workflow, github_name(path)).items():
+            if 'concurrency' not in job:
+                continue
+            where = f'{github_name(path)}: {name}'
+            rows: list[dict[str, object]] | list[None] = _matrix_rows(job, where) or [None]
+            entries.extend((where, _concurrency(job['concurrency'], row)) for row in rows)
+    return entries
+
+
+def test_every_group_a_joining_job_enters_queues() -> None:
+    """A group delays a joining job and never cancels it.
+
+    With GitHub's default, a group keeps one pending entry and a newer one
+    cancels it, and a cancelled job is neither success nor failure: a deploy
+    job cancelled that way silently does not apply, and a drift check silently
+    does not run (framework/ci.md §2). `queue: max` keeps the pending entries
+    in order instead. Held for every entry of every such group, a job that
+    does not join included, since one entry that cancels is enough to cancel
+    the joining job pending beside it. A workflow's own group is an entrant
+    too, group names compare without regard to case, as GitHub compares
+    them, and a group this read cannot name counts as an entrant of every
+    group it could be.
+    """
+    joining = {join.concurrency.group for join in _joins()}
+    entries = [(where, entry) for where, entry in _group_entries() if any(entry.enters(group) for group in joining)]
+
+    # A read that stopped finding the groups would pass on nothing.
+    assert entries, 'no job enters a group a joining job enters'
+    assert [where for where, entry in entries if entry.queue != QUEUE_MAX or entry.cancels] == []
+
+
+#: The events that run a workflow for a pull request.
+PULL_REQUEST_EVENTS = frozenset({'pull_request', 'pull_request_target'})
+#: A job that calls a reusable workflow of this repository.
+LOCAL_WORKFLOW = re.compile(r'^\./\.github/workflows/([\w.-]+)$')
+
+
+def _pull_request_jobs() -> dict[str, dict[str, object]]:
+    """Every job that runs steps for a pull request, the jobs of a workflow a pull request's run calls included."""
+    workflows = {path.name: read_workflow(path) for path in workflows_and_actions() if path.parent.name == 'workflows'}
+    reached = [name for name, workflow in workflows.items() if workflow_triggers(workflow) & PULL_REQUEST_EVENTS]
+    for name in reached:
+        for job in workflow_jobs(workflows[name], name).values():
+            called = LOCAL_WORKFLOW.match(str(job.get('uses', '')))
+            if called and called.group(1) not in reached:
+                reached.append(called.group(1))
+    return {
+        f'workflows/{name}: {job_name}': job
+        for name in reached
+        for job_name, job in workflow_jobs(workflows[name], name).items()
+        if 'uses' not in job
+    }
+
+
+def _steps(job: dict[str, object], where: str) -> list[dict[str, object]]:
+    return [mapping(step, f'{where} step') for step in cast('list[object]', job.get('steps', []))]
+
+
+def test_no_job_that_runs_pulumi_for_a_pull_request_joins() -> None:
+    """A job joins only when its run dials something over the overlay.
+
+    A pull request's `pulumi` runs are previews without `--refresh` of `dns`,
+    `k8s-base` and `apps`. The `dns` preview calls its dynamic providers'
+    `configure`, `check` and `diff`, none of which dials
+    (`test_dns_preview_dials_nothing`), and the other two reach nothing on
+    the LAN. A join there would hold the
+    identity's lock, wait on the gateway, and fail the preview when the
+    gateway is down, for nothing (framework/ci.md §2). So no job a pull request
+    runs both runs `pulumi` and joins.
+    """
+    jobs = _pull_request_jobs()
+    running = {
+        where
+        for where, job in jobs.items()
+        for step in _steps(job, where)
+        if isinstance(run := step.get('run'), str) and _pulumi_commands(run, where)
+    }
+    joining = {where for where, job in jobs.items() for step in _steps(job, where) if step.get('uses') == JOIN_ACTION}
+
+    # A read that stopped finding the previews would pass on nothing.
+    assert running, 'no job runs pulumi for a pull request'
+    assert running & joining == set()
+
+
+#: How a job's condition reads a path filter's answer: one output of a job it
+#: needs, compared with the string the filter action writes for a match.
+FILTER_CONDITION = re.compile(r"^needs\.([\w-]+)\.outputs\.([\w-]+) == 'true'$")
+#: How that job's output names the step that answers it.
+STEP_OUTPUT = re.compile(r'^\$\{\{\s*steps\.([\w-]+)\.outputs\.([\w-]+)\s*\}\}$')
+#: The action that answers a path filter.
+PATHS_FILTER = 'dorny/paths-filter@'
+
+
+def _glob(pattern: str) -> re.Pattern[str]:
+    """A path filter's glob as a pattern over a path from the repository root: `**` crosses directories, `*` does not."""
+    parts = re.split(r'(\*\*/?|\*)', pattern)
+    translated = ''.join(
+        '(?:.*/)?' if part == '**/' else '.*' if part == '**' else '[^/]*' if part == '*' else re.escape(part)
+        for part in parts
+    )
+    return re.compile(f'^{translated}$')
+
+
+def _filter_patterns(workflow: dict[str, object], name: str, condition: object, where: str) -> list[str]:
+    """The globs a job's condition reads through a path filter of a job it needs."""
+    assert isinstance(condition, str), f'{where}: a join for a pull request runs under no path filter'
+    read = FILTER_CONDITION.match(condition.strip())
+    assert read, f'{where}: a join for a pull request runs under {condition!r}, a condition this case does not read'
+    needed, output = read.groups()
+    producer = workflow_jobs(workflow, name)[needed]
+    answer = STEP_OUTPUT.match(str(mapping(producer.get('outputs'), f'{where} {needed} outputs:').get(output)))
+    assert answer, f'{where}: {needed}.outputs.{output} is not one step output'
+    step_id, filter_name = answer.groups()
+    (step,) = [step for step in _steps(producer, needed) if step.get('id') == step_id]
+    assert str(step.get('uses', '')).startswith(PATHS_FILTER), f'{where}: {needed} step {step_id} is not a path filter'
+    inputs = mapping(step.get('with'), f'{where} {needed} step {step_id} with:')
+    # Read under the action's default quantifier, `some`: a path matches when
+    # any glob does, which only holds for globs that are not negated.
+    assert 'predicate-quantifier' not in inputs, f'{where}: the filter sets a quantifier this case does not read'
+    filters = mapping(yaml.safe_load(str(inputs.get('filters'))), f'{where} filters')
+    patterns = [str(pattern) for pattern in cast('list[object]', filters[filter_name])]
+    assert not [pattern for pattern in patterns if pattern.startswith('!')], f'{where}: a negated glob'
+    return patterns
+
+
+def _last_match(patterns: object, path: str, where: str) -> bool:
+    """Whether `path` is selected by a trigger's `paths` or `paths-ignore` list.
+
+    GitHub reads the list in order, and the last glob that matches decides: a
+    plain glob selects the path and a `!` glob deselects it.
+    """
+    assert isinstance(patterns, list), f'{where}: a path list that is not a list'
+    selected = False
+    for pattern in cast('list[object]', patterns):
+        text = str(pattern)
+        if _glob(text.removeprefix('!')).match(path):
+            selected = not text.startswith('!')
+    return selected
+
+
+def _trigger_admits(workflow: dict[str, object], path: str, where: str) -> bool:
+    """Whether a pull request that changes `path` alone starts the workflow, by the path lists of its triggers."""
+    on = workflow_on(workflow)
+    events = workflow_triggers(workflow) & PULL_REQUEST_EVENTS
+    assert events, f'{where}: the workflow does not run for a pull request'
+    for event in sorted(events):
+        settings = cast('dict[object, object]', on).get(event) if isinstance(on, dict) else None
+        if not isinstance(settings, dict):
+            return True
+        settings = cast('dict[str, object]', settings)
+        if 'paths' in settings and not _last_match(settings['paths'], path, where):
+            continue
+        if 'paths-ignore' in settings and _last_match(settings['paths-ignore'], path, where):
+            continue
+        return True
+    return False
+
+
+def test_a_pull_request_that_changes_what_a_join_runs_proves_the_join() -> None:
+    """The join is proved before a merge whenever a change could break it.
+
+    A pull request's `pulumi` jobs do not join, so the one job that does is the
+    proof: it runs whenever the change touches the join action, which carries
+    the pinned release, or a workflow holding a join, which carries the runner
+    label and the inputs it is called with (framework/ci.md §2). Held at both
+    places a change can be filtered out before the join runs: the path lists
+    of the workflow's own pull-request triggers, and the path filter the job's
+    condition answers to, each matched against every one of those files.
+    """
+    workflows = {path.name: read_workflow(path) for path in workflows_and_actions() if path.parent.name == 'workflows'}
+    proofs = [
+        (where, job)
+        for where, job in _pull_request_jobs().items()
+        if any(step.get('uses') == JOIN_ACTION for step in _steps(job, where))
+    ]
+    # `where` names a job as `<file under .github/>: <job>`.
+    holding = {GITHUB / join.where.split(': ')[0] for join in _joins()}
+    exercised = sorted(str(path.relative_to(ROOT)) for path in {ZEROTIER, *holding})
+
+    assert proofs, 'no job a pull request runs joins the overlay'
+    for where, job in proofs:
+        name = where.split(': ')[0].removeprefix('workflows/')
+        assert [path for path in exercised if not _trigger_admits(workflows[name], path, where)] == [], where
+        patterns = [_glob(pattern) for pattern in _filter_patterns(workflows[name], name, job.get('if'), where)]
+        assert [path for path in exercised if not any(pattern.match(path) for pattern in patterns)] == [], where
 
 
 #: A token of a job condition, by kind: a string literal, an operator or
