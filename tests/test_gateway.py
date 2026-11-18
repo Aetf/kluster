@@ -161,6 +161,42 @@ async def test_the_machine_carrying_the_session_actuates_after_every_other_child
     assert str(await gateway.firewall.network.urn.future()) not in monitor.depends_on(f'{NAME}-caddy-nspawn')
 
 
+def machine_pieces(machine: container.Container) -> tuple[pulumi.Resource, ...]:
+    """Every file of one machine: each runs the hook that may restart it, and so each is a step of its restart."""
+    return (
+        *machine.mounted_files.values(),
+        *(() if machine.initial_state is None else (machine.initial_state,)),
+        machine.dropin,
+        machine.settings,
+        machine.image,
+    )
+
+
+async def urns(resources: tuple[pulumi.Resource, ...]) -> set[str]:
+    return {str(await resource.urn.future()) for resource in resources}
+
+
+@pytest.mark.asyncio
+async def test_each_resolver_actuates_behind_the_one_declared_before_it(gateway: Gateway, monitor: Controller) -> None:
+    """One change moves every resolver's pin, and two resolvers restarting at once leave the site with none.
+
+    So every piece of a resolver waits for every piece of the one declared
+    before it, whose hooks hold that machine to systemd reporting it active,
+    and the first resolver waits for no other. The relation is read pair by
+    pair off the declared list, so it holds for however many the site has.
+    """
+    first, *rest = gateway.resolvers
+    assert rest, 'the site declares more than one resolver'
+    for earlier, later in zip(gateway.resolvers, rest, strict=False):
+        ahead = await urns(machine_pieces(earlier))
+        for urn in await urns(machine_pieces(later)):
+            assert ahead <= set(monitor.depends_on(urn.split('::')[-1])), urn
+
+    behind = await urns(tuple(piece for machine in rest for piece in machine_pieces(machine)))
+    for urn in await urns(machine_pieces(first)):
+        assert not behind & set(monitor.depends_on(urn.split('::')[-1])), urn
+
+
 def rendered_packages(monitor: Controller) -> list[str]:
     """The package set the device's boot chain reinstalls, as the script spells it."""
     script = str(monitor.inputs_of(f'{NAME}-persistence-on-boot-{persistence.PACKAGES_SCRIPT}')['content'])
