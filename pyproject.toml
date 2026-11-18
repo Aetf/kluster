@@ -252,7 +252,7 @@ allowed-confusables = ["–"]
 # Modules the test harness replaces an attribute of, which are imported as a
 # module and never by member (docs/style/python.md, "Repository rules"):
 # `from module import name` binds a copy the replacement never reaches.
-banned-from = ["kluster.lib.workstation"]
+banned-from = ["kluster.lib.state_backend.table", "kluster.lib.workstation"]
 
 ##
 ## Type checker
