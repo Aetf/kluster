@@ -89,6 +89,7 @@ from kluster.lib.secret import Secret
 
 from ... import conventions
 from ...conventions import CLUSTER_NAME, OCI_SEED_USER_EMAIL, Compartment
+from ...conventions.providers import OCI_BLOCKSTORE_METRICS
 from ...lib import templates
 from . import entries, masters
 from .delivery import Delivery
@@ -132,11 +133,6 @@ METRICS_READER_POLICY = 'templates/metrics-reader-policy.oci.j2'
 #: (`Identity.name_for`): a role rather than a consumer's compartment, since
 #: the reader administers none.
 METRICS_READER = 'metrics-reader'
-
-#: The metric namespace OCI publishes the block and boot volumes' series in
-#: (its Block Volume metrics reference), and the whole of what the reader's
-#: policy lets it read.
-BLOCKSTORE_METRICS = 'oci_blockstore'
 
 #: What a consumer holds in the tenancy itself, beside its compartment, by
 #: consumer: the policy file whose statements its group carries as well. A
@@ -1831,7 +1827,7 @@ def mint_api_key(
 def mint_metrics_reader(kit: KdbxStore, *, seed_entry: str, connect: Connect = identity_client) -> Delivery[ApiKey]:
     """Mint the metrics reader's API key from the seed, with the IAM objects under it.
 
-    The reader reads `BLOCKSTORE_METRICS` in `physical`'s compartment
+    The reader reads `conventions.providers.OCI_BLOCKSTORE_METRICS` in `physical`'s compartment
     (`Identity.metrics_reader`), because that is where the volumes are. The
     compartment is `physical`'s to create, so this mint creates none: it
     refuses by naming `physical`'s mint while `conventions` records no OCID
@@ -1850,7 +1846,7 @@ def mint_metrics_reader(kit: KdbxStore, *, seed_entry: str, connect: Connect = i
     seed = _seed_session(kit, seed_entry, connect=connect)
     verify_tenancy(seed.row.tenancy)
     found = ensure_compartment(seed.iam, conventions.PHYSICAL)
-    return _mint_for(seed, Identity.metrics_reader(compartment_id=found, namespace=BLOCKSTORE_METRICS))
+    return _mint_for(seed, Identity.metrics_reader(compartment_id=found, namespace=OCI_BLOCKSTORE_METRICS))
 
 
 def _mint_for(seed: _SeedSession, identity: Identity) -> Delivery[ApiKey]:

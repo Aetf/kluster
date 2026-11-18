@@ -583,6 +583,11 @@ SCHEMES = {
     'ghcr.io/aetf/emailproxy': Scheme(
         ('2025.6.24-0123456789ab', '2025.6.25-ba9876543210'), ('2026.7.3', '2026.7.3-84bf8a9443e6-amd64')
     ),
+    # The OCI SDK runtime's tag is the SDK release it installs and the
+    # fingerprint of its build, beside a tag per architecture of each build.
+    'ghcr.io/aetf/oci-sdk': Scheme(
+        ('2.191.0-0123456789ab', '2.192.0-ba9876543210'), ('2.191.0-cc74b1a9273b-amd64', '2.191.0-cc74b1a9273b-arm64')
+    ),
     'ghcr.io/aetf/golinks': Scheme(
         ('20261018-1c6080a-0123456789ab', '20261026-7d51de8-ba9876543210'),
         ('20260821-df12751', '20260821-df12751-e28925ffa30c-arm64'),

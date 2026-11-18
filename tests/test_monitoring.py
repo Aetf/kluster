@@ -32,7 +32,7 @@ import pytest
 import pytest_asyncio
 import yaml
 from fences import prose
-from k8s_base_installation import SEALED, VERSIONS_CONFIG, Autonaming, Run, applied, release_assets
+from k8s_base_installation import PUBLISHED, SEALED, VERSIONS_CONFIG, Autonaming, Run, applied, release_assets
 from mock_monitor import declaring, run_under_backstop
 from renovate_text import listed, package_rules, scalar
 from section_numbers import sections
@@ -40,11 +40,13 @@ from section_numbers import sections
 from kluster import conventions
 from kluster.components.monitoring import DATASOURCES_DIGEST_ENV, RECEIVER, memory, stack_values
 from kluster.components.monitoring.operator_objects import type_token
-from kluster.components.monitoring.rules import HEARTBEAT, HEARTBEAT_TIMER
+from kluster.components.monitoring.rules import HEARTBEAT, HEARTBEAT_TIMER, TIER_LABEL
 from kluster.components.talos import ETCD_METRICS_PORT
 from kluster.conventions import backup
 from kluster.conventions.alert import Tier
 from kluster.conventions.backup import BackupFamily
+from kluster.conventions.outputs import BOOT_VOLUME
+from kluster.conventions.providers import OCI_BLOCKSTORE_METRICS
 from kluster.lib.k8s import KUBECONFIG_KEY
 from kluster.lib.versions import ChartPin, versions
 
@@ -1335,8 +1337,12 @@ def test_without_the_writer_key_nothing_backs_up_or_restores_and_the_key_is_name
 
 def _backup_jobs(run: Run) -> dict[str, dict[str, Any]]:
     """Each backup CronJob's spec, by the claim its pod mounts."""
+    from kluster.components.monitoring import stores
+
     jobs: dict[str, dict[str, Any]] = {}
     for job in run.monitor.of_type(CRONJOB):
+        if not job.inputs['metadata']['name'].startswith(stores.BACKUP_JOB_PREFIX):
+            continue
         pod = job.inputs['spec']['jobTemplate']['spec']['template']['spec']
         (claim,) = [it['persistentVolumeClaim'] for it in pod['volumes'] if 'persistentVolumeClaim' in it]
         jobs[claim['claimName']] = job.inputs
@@ -1972,3 +1978,254 @@ def test_a_backup_job_that_stopped_succeeding_or_never_did_raises_an_alert(absen
     ]
 
     assert reading
+
+
+# -- The pull of OCI's block-volume series ------------------------------------------
+
+OCI_KEY = conventions.sealed.OCI_METRICS
+
+
+@pytest_asyncio.fixture(scope='module', loop_scope='module')
+async def without_oci_key() -> Run:
+    """Every sealed value the stack declares sealed in but the metrics reader's key."""
+    return await applied(sealed={name: value for name, value in SEALED.items() if name != OCI_KEY.name})
+
+
+def _named(run: Run, typ: str, name: str) -> list[dict[str, Any]]:
+    return [it.inputs for it in run.monitor.of_type(typ) if it.inputs.get('metadata', {}).get('name') == name]
+
+
+def _monitoring_objects(run: Run) -> set[tuple[str, str]]:
+    """Each object the monitoring component declares, by its type and the name it gives it, or its logical name."""
+    return {
+        (typ, run.inputs(typ, name).get('metadata', {}).get('name', name))
+        for typ, name, _ in run.children('kluster:monitoring:Monitoring')
+    }
+
+
+def test_the_metrics_readers_key_adds_its_sealed_secret_the_pulls_config_map_and_its_cron_job(
+    sealed: Run, without_oci_key: Run
+) -> None:
+    """The preview the key's commit shows: three objects created, and the rule already there."""
+    from kluster.components.monitoring import oci_metrics
+
+    added = _monitoring_objects(sealed) - _monitoring_objects(without_oci_key)
+
+    assert added == {
+        (SEALED_SECRET, OCI_KEY.name),
+        (CONFIGMAP, oci_metrics.PULL_CONFIGMAP),
+        (CRONJOB, oci_metrics.PULL_JOB),
+    }
+    assert _monitoring_objects(without_oci_key) <= _monitoring_objects(sealed)
+    assert _declared_rules(sealed) == _declared_rules(without_oci_key)
+
+
+def test_without_the_metrics_readers_key_the_pull_is_not_declared_and_the_key_is_named(
+    absent: tuple[Run, list[str]], without_oci_key: Run
+) -> None:
+    """The bring-up's tolerance: nothing of the pull until the key is sealed in, and the warning says which value."""
+    from kluster.components.monitoring import oci_metrics
+
+    run, warned = absent
+    for declared in (run, without_oci_key):
+        assert _named(declared, CRONJOB, oci_metrics.PULL_JOB) == []
+        assert _named(declared, CONFIGMAP, oci_metrics.PULL_CONFIGMAP) == []
+        assert _named(declared, SEALED_SECRET, OCI_KEY.name) == []
+    assert [message for message in warned if repr(OCI_KEY.name) in message]
+
+
+def _pull(run: Run) -> tuple[dict[str, Any], dict[str, Any]]:
+    """The pull's CronJob spec and its ConfigMap's data."""
+    from kluster.components.monitoring import oci_metrics
+
+    (job,) = _named(run, CRONJOB, oci_metrics.PULL_JOB)
+    (program,) = _named(run, CONFIGMAP, oci_metrics.PULL_CONFIGMAP)
+    return job['spec'], program['data']
+
+
+def _pull_pod(run: Run) -> dict[str, Any]:
+    job, _ = _pull(run)
+    return job['jobTemplate']['spec']['template']['spec']
+
+
+def _settings(run: Run, tmp_path: Path) -> Any:
+    """The pull's settings, read as the program reads them."""
+    from kluster.components.monitoring import oci_metrics, oci_pull
+
+    _, data = _pull(run)
+    path = tmp_path / oci_metrics.SETTINGS_FILE
+    path.write_text(data[oci_metrics.SETTINGS_FILE])
+    return oci_pull.Job.read(path, credentials=tmp_path)
+
+
+def test_the_pull_runs_hourly_one_run_at_a_time_apart_from_the_backups(sealed: Run) -> None:
+    """A hung run is cut off before the next is due, and no run shares a minute with a store's backup."""
+    from kluster.components.monitoring import oci_metrics
+
+    job, _ = _pull(sealed)
+    minute, *every = job['schedule'].split()
+    backups = {it['spec']['schedule'].split()[0] for it in _backup_jobs(sealed).values()}
+
+    assert every == ['*'] * 4
+    assert minute not in backups
+    assert job['concurrencyPolicy'] == 'Forbid'
+    assert dt.timedelta(seconds=job['jobTemplate']['spec']['activeDeadlineSeconds']) < oci_metrics.PULL_PERIOD
+
+
+def test_the_pull_runs_its_pin_on_the_program_and_settings_its_config_map_carries(sealed: Run) -> None:
+    """The image is the runtime alone; the program and its settings arrive as files of the mounted ConfigMap."""
+    from kluster.components.monitoring import oci_metrics, oci_pull
+
+    pod = _pull_pod(sealed)
+    _, data = _pull(sealed)
+    (container,) = pod['containers']
+    (program_volume,) = [
+        it for it in pod['volumes'] if it.get('configMap', {}).get('name') == oci_metrics.PULL_CONFIGMAP
+    ]
+    (mount,) = [it for it in container['volumeMounts'] if it['name'] == program_volume['name']]
+    files = [arg for arg in container['command'] if arg.startswith(f'{mount["mountPath"]}/')]
+
+    assert container['image'] == VERSIONS_CONFIG['versions:image-oci-sdk']
+    assert [Path(it).name for it in files] == [oci_metrics.PROGRAM_FILE, oci_metrics.SETTINGS_FILE]
+    assert data[oci_metrics.PROGRAM_FILE] == Path(oci_pull.__file__).read_text()
+
+
+def test_the_key_is_declared_where_the_pull_reads_it_as_the_files_the_program_opens(sealed: Run) -> None:
+    """The SealedSecret opens into the Secret the pod mounts, at the directory the program is told, a file per key."""
+    from kluster.components.monitoring import oci_pull
+
+    (secret,) = _named(sealed, SEALED_SECRET, OCI_KEY.name)
+    pod = _pull_pod(sealed)
+    (container,) = pod['containers']
+    (key_volume,) = [it for it in pod['volumes'] if it.get('secret', {}).get('secretName') == OCI_KEY.name]
+    (mount,) = [it for it in container['volumeMounts'] if it['name'] == key_volume['name']]
+
+    assert secret['metadata']['namespace'] == conventions.MONITORING_NAMESPACE
+    assert secret['spec']['encryptedData'] == SEALED[OCI_KEY.name]
+    assert set(secret['spec']['encryptedData']) == set(oci_pull.CREDENTIAL_KEYS)
+    assert container['command'][-1] == mount['mountPath']
+    assert not [arg for arg in container['command'] if 'AgB-sealed' in arg]
+
+
+def _census() -> set[tuple[str, str]]:
+    """Every volume the census declares: each cloud node's boot volume, and each node volume on its node."""
+    return {
+        *((node, BOOT_VOLUME) for node in conventions.CLOUD_NODES),
+        *((entry.attached_node, name) for name, entry in conventions.NODE_VOLUMES.items()),
+    }
+
+
+def test_the_pulls_targets_are_every_declared_volume_by_the_ocid_physical_published(
+    sealed: Run, tmp_path: Path
+) -> None:
+    """OCI names a volume by its OCID alone, so the settings carry the node and the name `conventions` gives it."""
+    published = cast('dict[str, dict[str, str]]', PUBLISHED[conventions.PHYSICAL_OUTPUTS.volume_ids])
+
+    targets = _settings(sealed, tmp_path).targets
+
+    assert {(it.node, it.volume) for it in targets.values()} == _census()
+    assert all(published[it.node][it.volume] == ocid for ocid, it in targets.items())
+
+
+def test_the_pull_reads_the_history_store_and_writes_through_vmagent_in_physicals_compartment(
+    sealed: Run, tmp_path: Path
+) -> None:
+    """The newest samples are the history's; the samples reach both stores the way a scraped series does.
+
+    vmagent's address is the operator's Service for the stack's VMAgent, which
+    the chart names as it names the recent store (`vmagent-<object>` on 8429,
+    `vmagent_types.go` L567-572 and L615-619 at operator v0.74.0).
+    """
+    settings = _settings(sealed, tmp_path)
+    stack_object = f'{conventions.MONITORING_NAMESPACE}-victoria-metrics-k8s-stack'
+
+    assert f'{settings.history}/api/v1/write' == _history_write(sealed)['url']
+    assert settings.importer == f'http://vmagent-{stack_object}.{conventions.MONITORING_NAMESPACE}.svc:8429'
+    assert settings.compartment == conventions.OCI_TENANCY.compartments[conventions.PHYSICAL].ocid
+
+
+def test_every_series_the_pull_writes_is_kept_by_the_history_store(absent: tuple[Run, list[str]]) -> None:
+    """The pull names its series after the namespace its requests name, and the history's class keeps that prefix."""
+    from kluster.components.monitoring import oci_pull
+
+    run, _ = absent
+    relabeling = _history_write(run)['inlineUrlRelabelConfig']
+
+    for metric in oci_pull.METRICS:
+        series = {'__name__': f'{OCI_BLOCKSTORE_METRICS}_{metric}', 'node': 'cp1', 'volume': BOOT_VOLUME}
+        assert _relabel(series, relabeling) is not None, metric
+
+
+def test_the_pull_can_schedule_on_the_worker_alone(sealed: Run) -> None:
+    """With the rest of the stack, off the cores the cloud nodes share with etcd."""
+    pod = _pull_pod(sealed)
+
+    schedulable = {
+        name
+        for name, labels in _talos_nodes().items()
+        if _admits(labels, pod.get('nodeSelector', {}), pod.get('affinity', {}))
+    }
+
+    assert schedulable == {conventions.HOMELAB_NODE}
+
+
+def test_a_declared_volume_physical_published_no_ocid_for_is_refused_by_name() -> None:
+    """A targeted `physical` apply that left a volume uncreated would otherwise leave it pulled by nothing, silently."""
+    from kluster.components.monitoring import oci_metrics
+
+    (name, entry), *_ = conventions.NODE_VOLUMES.items()
+    published = {node: {BOOT_VOLUME: f'ocid1.bootvolume.oc1.phx.{node}'} for node in conventions.CLOUD_NODES}
+
+    with pytest.raises(oci_metrics.VolumeUnpublished) as refused:
+        _ = oci_metrics.targets(
+            published, nodes=conventions.CLOUD_NODES, boot_volume=BOOT_VOLUME, node_volumes=conventions.NODE_VOLUMES
+        )
+
+    assert refused.value.target == oci_metrics.Target(entry.attached_node, name)
+    assert repr(name) in str(refused.value)
+    assert entry.attached_node in str(refused.value)
+
+
+def test_a_volume_physical_published_that_the_census_does_not_declare_is_not_pulled() -> None:
+    """Only what the census declares is a target; the map's other entries are ignored."""
+    from kluster.components.monitoring import oci_metrics
+
+    published = {
+        node: {
+            BOOT_VOLUME: f'ocid1.bootvolume.oc1.phx.{node}',
+            'undeclared': f'ocid1.volume.oc1.phx.undeclared-{node}',
+            **{
+                name: f'ocid1.volume.oc1.phx.{name}'
+                for name, entry in conventions.NODE_VOLUMES.items()
+                if entry.attached_node == node
+            },
+        }
+        for node in conventions.CLOUD_NODES
+    }
+
+    targets = oci_metrics.targets(
+        published, nodes=conventions.CLOUD_NODES, boot_volume=BOOT_VOLUME, node_volumes=conventions.NODE_VOLUMES
+    )
+
+    assert {(it.node, it.volume) for it in targets.values()} == _census()
+
+
+def test_a_pull_that_stopped_succeeding_or_never_did_raises_an_alert(absent: tuple[Run, list[str]]) -> None:
+    """Read as the backups' freshness is, over its own CronJob and period, in the same tier and under the same labels."""
+    from kluster.components.monitoring import oci_metrics, stores
+
+    run, _ = absent
+    threshold = backup.duration(backup.max_age(oci_metrics.PULL_PERIOD))
+    declared = _declared_rules(run)
+    (backups,) = [rule for rule in declared if f'cronjob=~"{stores.BACKUP_JOB_PREFIX}.*"' in rule['expr']]
+    reading = [
+        rule
+        for rule in declared
+        if 'kube_cronjob_status_last_successful_time' in rule['expr']
+        and 'kube_cronjob_created' in rule['expr']
+        and f'cronjob="{oci_metrics.PULL_JOB}"' in rule['expr']
+        and rule['expr'].endswith(f'> {threshold}')
+    ]
+
+    assert [rule['labels'] for rule in reading] == [backups['labels']]
+    assert backups['labels'][TIER_LABEL] == Tier.ACTIONABLE.value

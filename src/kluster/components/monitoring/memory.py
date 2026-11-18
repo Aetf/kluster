@@ -2,9 +2,10 @@
 
 The budget is the monitoring line of nodes.md §4.4, which rfc-008 §6.1
 reserves on the worker as a request: 0.7 GiB (`BUDGET_MIB`). Every container
-the component runs on the worker is a row of `WORKER_CONTAINERS`, and both
-charts take each row's request and limit from there (`chart_values`), so a
-container the program runs is a container some line of that table counts.
+the component runs on the worker for as long as the stack runs, the charts'
+and the history store's, is a row of `WORKER_CONTAINERS`, and both charts take
+each row's request and limit from there (`chart_values`), so such a container
+is one some line of that table counts.
 Each row names its line (`Line`): the stack's containers are charged to
 monitoring's, which the budget holds, metrics-server to the line for
 everything else in kube-system, where nodes.md §4.4 counts it, and the
@@ -37,6 +38,12 @@ live size (`GRAFANA_GOGC`) rather than doubled, the runtime's default; the
 chart sets its `GOMEMLIMIT` to the container's limit whenever one is set
 (grafana chart 12.7.3, `templates/_pod.tpl` L1482-1488), so under a query
 that needs more the runtime collects harder before the kernel stops it.
+
+**A job's container is no row.** The stores' backups and the pull of OCI's
+series run for minutes of each hour, and a line charged with them would hold
+the budget for memory the worker gives them only then. The backups declare no
+memory. The pull's is declared here (`OCI_PULL`): its request is what a run
+peaks at, so the scheduler places it where that fits.
 """
 
 from __future__ import annotations
@@ -52,6 +59,7 @@ __all__ = (
     'HISTORY_BUDGET_MIB',
     'HISTORY_STORE',
     'METRICS_SERVER_CHART',
+    'OCI_PULL',
     'STACK_CHART',
     'WORKER_CONTAINERS',
     'Container',
@@ -143,10 +151,17 @@ HISTORY_STORE = Container(
     'vmsingle-history', None, ('spec', 'resources'), Memory(HISTORY_BUDGET_MIB, 512), Line.HISTORY
 )
 
-#: Every container the component runs on the worker. The node exporter runs on
-#: every node, and its row is the worker's copy. The stack's operator also runs
-#: an init container beside each config reloader, from the reloader's
-#: resources, which counts toward its pod only while it runs.
+#: The pull of OCI's block-volume series, a job's one container: the
+#: interpreter with the `oci` SDK imported and a request made is about 55 MiB,
+#: read in the image, and a run holds one day of one series at a time, which
+#: for four volumes is a few MiB of the SDK's objects on a workstation.
+OCI_PULL = Memory(request=96, limit=256)
+
+#: Every container the component runs on the worker for as long as the stack
+#: runs. The node exporter runs on every node, and its row is the worker's
+#: copy. The stack's operator also runs an init container beside each config
+#: reloader, from the reloader's resources, which counts toward its pod only
+#: while it runs.
 WORKER_CONTAINERS: tuple[Container, ...] = (
     GRAFANA,
     # The dashboard sidecar, a Python process: the interpreter and the

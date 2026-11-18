@@ -26,6 +26,7 @@ import pytest
 from mock_monitor import Recorder, declaring, run_under_backstop
 
 from kluster import conventions
+from kluster.conventions.outputs import BOOT_VOLUME
 from kluster.lib.k8s import KUBECONFIG_KEY
 from kluster.lib.stack_addresses import UnusableAddressOutput
 from kluster.lib.versions import ManifestPin, SourcePin
@@ -44,6 +45,17 @@ PUBLISHED: dict[str, object] = {
     OUTPUTS.node_private_ips: {'cp-1': '10.0.1.11', 'cp-2': '10.0.1.12', 'cp-3': '10.0.1.13'},
     OUTPUTS.node_guas: {'cp-1': '2001:db8:1::11', 'cp-2': '2001:db8:1::12', 'cp-3': '2001:db8:1::13'},
     OUTPUTS.worker_gua: '2001:db8:70::10',
+    OUTPUTS.volume_ids: {
+        node: {
+            BOOT_VOLUME: f'ocid1.bootvolume.oc1.phx.{node}',
+            **{
+                name: f'ocid1.volume.oc1.phx.{name}'
+                for name, entry in conventions.NODE_VOLUMES.items()
+                if entry.attached_node == node
+            },
+        }
+        for node in conventions.CLOUD_NODES
+    },
     OUTPUTS.kubeconfig: {},
 }
 
@@ -158,6 +170,7 @@ VERSIONS_CONFIG = {
     'versions:image-metrics-backup': f'registry.example.invalid/vmbackup:v9.15.0@sha256:{"1" * 64}',
     'versions:image-metrics-restore': f'registry.example.invalid/vmrestore:v9.15.0@sha256:{"2" * 64}',
     'versions:image-metrics-bucket': f'registry.example.invalid/curl:9.16.0@sha256:{"3" * 64}',
+    'versions:image-oci-sdk': f'registry.example.invalid/oci-sdk:9.17.0-{"a" * 12}@sha256:{"4" * 64}',
     'versions:manifest-gateway-api': json.dumps(
         {
             'repository': 'example/gateway-api',

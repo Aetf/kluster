@@ -191,6 +191,32 @@ classes its objects fall into (§1.2):
     backup older than an hour and a half raises `MetricsBackupStale`
     ([operations.md](../operations.md) §6.2), and the whole-cluster
     rebuild is the history's restore drill (operations.md §3.5).
+    **OCI's block-volume series are pulled in every hour**, since only
+    OCI says when a volume refused I/O to hold its performance level:
+    a CronJob runs a program of this repository, which the component
+    renders into a `ConfigMap`, in the `oci-sdk` image, the interpreter
+    and the `oci` SDK this repository builds (`versions:image-oci-sdk`).
+    It signs with the metrics reader's key, sealed in the monitoring
+    namespace (§1.1), whose one statement reads that metric namespace
+    of `physical`'s compartment, and every request names the namespace,
+    which the statement is conditioned on. OCI names a volume by its
+    OCID alone, so the pull's targets are the volumes the census
+    declares, every cloud node's boot volume and every node volume on
+    its node, each looked up in `physical`'s `volume_ids` output; a
+    declared volume the output lacks stops the run by name. A series
+    is written to vmagent as `oci_blockstore_<metric>`, labeled with
+    the node and the volume's name, so both stores receive it and the
+    history keeps it. Each run reads from the newest sample the history
+    holds of each volume, seven days back at most, a day at a time,
+    writing each day before it asks for the next, so the first run
+    after a gap fills it. A metric that meets an error stops alone,
+    where it stopped, and the run goes on to the next. A run fails,
+    after writing the rest, where a metric stopped, where OCI answered
+    with a series that names no volume, or where a declared volume got
+    no sample, and a pull older than an hour and a half raises
+    `OciMetricsPullStale` (operations.md §6.3). Until
+    the key is sealed in, neither the key's SealedSecret nor the pull
+    is declared, and `volume_ids` is not read.
     Grafana is reached by a port-forward until its name moves (§3). The namespace is `privileged`, for the node
     exporter (§0). **What the chart would add is off**: the sync job,
     which fetches rules and dashboards off upstream default branches at

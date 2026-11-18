@@ -157,8 +157,9 @@ ALERT_WEBHOOK = SealedValue(
 )
 
 #: The OCI API key the block-volume metrics pull signs with: its own user's,
-#: whose one statement reads the block-volume metrics of `physical`'s
-#: compartment (credentials.md §3). Its data keys are what the OCI SDK's
+#: whose one statement reads the metric namespace
+#: `providers.OCI_BLOCKSTORE_METRICS` of `physical`'s compartment
+#: (credentials.md §3). Its data keys are what the OCI SDK's
 #: configuration calls the three parts a key carries -- the user it signs as,
 #: the key's fingerprint and the PEM -- so a reader hands them over by name;
 #: the tenancy and the region are constants of `conventions`, and travel with

@@ -1,0 +1,1014 @@
+{
+ "provenance": "Shaped after SummarizeMetricsData's response in OCI's Monitoring API reference (an array of MetricData, each with its dimensions and aggregatedDatapoints), for a query grouped by resourceId over one compartment. Written, not recorded: every OCID, value and timestamp is invented.",
+ "compartmentId": "ocid1.compartment.oc1..examplephysical",
+ "responses": {
+  "VolumeReadOps": [
+   {
+    "namespace": "oci_blockstore",
+    "compartmentId": "ocid1.compartment.oc1..examplephysical",
+    "name": "VolumeReadOps",
+    "dimensions": {
+     "resourceId": "ocid1.bootvolume.oc1.phx.exampleboot1"
+    },
+    "metadata": {
+     "displayName": "VolumeReadOps",
+     "unit": ""
+    },
+    "resolution": "1m",
+    "aggregatedDatapoints": [
+     {
+      "timestamp": "2026-11-17T09:00:00.000Z",
+      "value": 100.0
+     },
+     {
+      "timestamp": "2026-11-17T09:01:00.000Z",
+      "value": 101.0
+     },
+     {
+      "timestamp": "2026-11-17T09:02:00.000Z",
+      "value": 102.0
+     },
+     {
+      "timestamp": "2026-11-17T09:03:00.000Z",
+      "value": 103.0
+     }
+    ]
+   },
+   {
+    "namespace": "oci_blockstore",
+    "compartmentId": "ocid1.compartment.oc1..examplephysical",
+    "name": "VolumeReadOps",
+    "dimensions": {
+     "resourceId": "ocid1.bootvolume.oc1.phx.exampleboot2"
+    },
+    "metadata": {
+     "displayName": "VolumeReadOps",
+     "unit": ""
+    },
+    "resolution": "1m",
+    "aggregatedDatapoints": [
+     {
+      "timestamp": "2026-11-17T09:00:00.000Z",
+      "value": 110.0
+     },
+     {
+      "timestamp": "2026-11-17T09:01:00.000Z",
+      "value": 111.0
+     },
+     {
+      "timestamp": "2026-11-17T09:02:00.000Z",
+      "value": 112.0
+     },
+     {
+      "timestamp": "2026-11-17T09:03:00.000Z",
+      "value": 113.0
+     }
+    ]
+   },
+   {
+    "namespace": "oci_blockstore",
+    "compartmentId": "ocid1.compartment.oc1..examplephysical",
+    "name": "VolumeReadOps",
+    "dimensions": {
+     "resourceId": "ocid1.volume.oc1.phx.examplecache"
+    },
+    "metadata": {
+     "displayName": "VolumeReadOps",
+     "unit": ""
+    },
+    "resolution": "1m",
+    "aggregatedDatapoints": [
+     {
+      "timestamp": "2026-11-17T09:00:00.000Z",
+      "value": 120.0
+     },
+     {
+      "timestamp": "2026-11-17T09:01:00.000Z",
+      "value": 121.0
+     },
+     {
+      "timestamp": "2026-11-17T09:02:00.000Z",
+      "value": 122.0
+     },
+     {
+      "timestamp": "2026-11-17T09:03:00.000Z",
+      "value": 123.0
+     }
+    ]
+   },
+   {
+    "namespace": "oci_blockstore",
+    "compartmentId": "ocid1.compartment.oc1..examplephysical",
+    "name": "VolumeReadOps",
+    "dimensions": {
+     "resourceId": "ocid1.bootvolume.oc1.phx.exampleretired"
+    },
+    "metadata": {
+     "displayName": "VolumeReadOps",
+     "unit": ""
+    },
+    "resolution": "1m",
+    "aggregatedDatapoints": [
+     {
+      "timestamp": "2026-11-17T09:00:00.000Z",
+      "value": 130.0
+     },
+     {
+      "timestamp": "2026-11-17T09:01:00.000Z",
+      "value": 131.0
+     },
+     {
+      "timestamp": "2026-11-17T09:02:00.000Z",
+      "value": 132.0
+     },
+     {
+      "timestamp": "2026-11-17T09:03:00.000Z",
+      "value": 133.0
+     }
+    ]
+   }
+  ],
+  "VolumeWriteOps": [
+   {
+    "namespace": "oci_blockstore",
+    "compartmentId": "ocid1.compartment.oc1..examplephysical",
+    "name": "VolumeWriteOps",
+    "dimensions": {
+     "resourceId": "ocid1.bootvolume.oc1.phx.exampleboot1"
+    },
+    "metadata": {
+     "displayName": "VolumeWriteOps",
+     "unit": ""
+    },
+    "resolution": "1m",
+    "aggregatedDatapoints": [
+     {
+      "timestamp": "2026-11-17T09:00:00.000Z",
+      "value": 200.0
+     },
+     {
+      "timestamp": "2026-11-17T09:01:00.000Z",
+      "value": 201.0
+     },
+     {
+      "timestamp": "2026-11-17T09:02:00.000Z",
+      "value": 202.0
+     },
+     {
+      "timestamp": "2026-11-17T09:03:00.000Z",
+      "value": 203.0
+     }
+    ]
+   },
+   {
+    "namespace": "oci_blockstore",
+    "compartmentId": "ocid1.compartment.oc1..examplephysical",
+    "name": "VolumeWriteOps",
+    "dimensions": {
+     "resourceId": "ocid1.bootvolume.oc1.phx.exampleboot2"
+    },
+    "metadata": {
+     "displayName": "VolumeWriteOps",
+     "unit": ""
+    },
+    "resolution": "1m",
+    "aggregatedDatapoints": [
+     {
+      "timestamp": "2026-11-17T09:00:00.000Z",
+      "value": 210.0
+     },
+     {
+      "timestamp": "2026-11-17T09:01:00.000Z",
+      "value": 211.0
+     },
+     {
+      "timestamp": "2026-11-17T09:02:00.000Z",
+      "value": 212.0
+     },
+     {
+      "timestamp": "2026-11-17T09:03:00.000Z",
+      "value": 213.0
+     }
+    ]
+   },
+   {
+    "namespace": "oci_blockstore",
+    "compartmentId": "ocid1.compartment.oc1..examplephysical",
+    "name": "VolumeWriteOps",
+    "dimensions": {
+     "resourceId": "ocid1.volume.oc1.phx.examplecache"
+    },
+    "metadata": {
+     "displayName": "VolumeWriteOps",
+     "unit": ""
+    },
+    "resolution": "1m",
+    "aggregatedDatapoints": [
+     {
+      "timestamp": "2026-11-17T09:00:00.000Z",
+      "value": 220.0
+     },
+     {
+      "timestamp": "2026-11-17T09:01:00.000Z",
+      "value": 221.0
+     },
+     {
+      "timestamp": "2026-11-17T09:02:00.000Z",
+      "value": 222.0
+     },
+     {
+      "timestamp": "2026-11-17T09:03:00.000Z",
+      "value": 223.0
+     }
+    ]
+   },
+   {
+    "namespace": "oci_blockstore",
+    "compartmentId": "ocid1.compartment.oc1..examplephysical",
+    "name": "VolumeWriteOps",
+    "dimensions": {
+     "resourceId": "ocid1.bootvolume.oc1.phx.exampleretired"
+    },
+    "metadata": {
+     "displayName": "VolumeWriteOps",
+     "unit": ""
+    },
+    "resolution": "1m",
+    "aggregatedDatapoints": [
+     {
+      "timestamp": "2026-11-17T09:00:00.000Z",
+      "value": 230.0
+     },
+     {
+      "timestamp": "2026-11-17T09:01:00.000Z",
+      "value": 231.0
+     },
+     {
+      "timestamp": "2026-11-17T09:02:00.000Z",
+      "value": 232.0
+     },
+     {
+      "timestamp": "2026-11-17T09:03:00.000Z",
+      "value": 233.0
+     }
+    ]
+   }
+  ],
+  "VolumeReadThroughput": [
+   {
+    "namespace": "oci_blockstore",
+    "compartmentId": "ocid1.compartment.oc1..examplephysical",
+    "name": "VolumeReadThroughput",
+    "dimensions": {
+     "resourceId": "ocid1.bootvolume.oc1.phx.exampleboot1"
+    },
+    "metadata": {
+     "displayName": "VolumeReadThroughput",
+     "unit": ""
+    },
+    "resolution": "1m",
+    "aggregatedDatapoints": [
+     {
+      "timestamp": "2026-11-17T09:00:00.000Z",
+      "value": 300.0
+     },
+     {
+      "timestamp": "2026-11-17T09:01:00.000Z",
+      "value": 301.0
+     },
+     {
+      "timestamp": "2026-11-17T09:02:00.000Z",
+      "value": 302.0
+     },
+     {
+      "timestamp": "2026-11-17T09:03:00.000Z",
+      "value": 303.0
+     }
+    ]
+   },
+   {
+    "namespace": "oci_blockstore",
+    "compartmentId": "ocid1.compartment.oc1..examplephysical",
+    "name": "VolumeReadThroughput",
+    "dimensions": {
+     "resourceId": "ocid1.bootvolume.oc1.phx.exampleboot2"
+    },
+    "metadata": {
+     "displayName": "VolumeReadThroughput",
+     "unit": ""
+    },
+    "resolution": "1m",
+    "aggregatedDatapoints": [
+     {
+      "timestamp": "2026-11-17T09:00:00.000Z",
+      "value": 310.0
+     },
+     {
+      "timestamp": "2026-11-17T09:01:00.000Z",
+      "value": 311.0
+     },
+     {
+      "timestamp": "2026-11-17T09:02:00.000Z",
+      "value": 312.0
+     },
+     {
+      "timestamp": "2026-11-17T09:03:00.000Z",
+      "value": 313.0
+     }
+    ]
+   },
+   {
+    "namespace": "oci_blockstore",
+    "compartmentId": "ocid1.compartment.oc1..examplephysical",
+    "name": "VolumeReadThroughput",
+    "dimensions": {
+     "resourceId": "ocid1.volume.oc1.phx.examplecache"
+    },
+    "metadata": {
+     "displayName": "VolumeReadThroughput",
+     "unit": ""
+    },
+    "resolution": "1m",
+    "aggregatedDatapoints": [
+     {
+      "timestamp": "2026-11-17T09:00:00.000Z",
+      "value": 320.0
+     },
+     {
+      "timestamp": "2026-11-17T09:01:00.000Z",
+      "value": 321.0
+     },
+     {
+      "timestamp": "2026-11-17T09:02:00.000Z",
+      "value": 322.0
+     },
+     {
+      "timestamp": "2026-11-17T09:03:00.000Z",
+      "value": 323.0
+     }
+    ]
+   },
+   {
+    "namespace": "oci_blockstore",
+    "compartmentId": "ocid1.compartment.oc1..examplephysical",
+    "name": "VolumeReadThroughput",
+    "dimensions": {
+     "resourceId": "ocid1.bootvolume.oc1.phx.exampleretired"
+    },
+    "metadata": {
+     "displayName": "VolumeReadThroughput",
+     "unit": ""
+    },
+    "resolution": "1m",
+    "aggregatedDatapoints": [
+     {
+      "timestamp": "2026-11-17T09:00:00.000Z",
+      "value": 330.0
+     },
+     {
+      "timestamp": "2026-11-17T09:01:00.000Z",
+      "value": 331.0
+     },
+     {
+      "timestamp": "2026-11-17T09:02:00.000Z",
+      "value": 332.0
+     },
+     {
+      "timestamp": "2026-11-17T09:03:00.000Z",
+      "value": 333.0
+     }
+    ]
+   }
+  ],
+  "VolumeWriteThroughput": [
+   {
+    "namespace": "oci_blockstore",
+    "compartmentId": "ocid1.compartment.oc1..examplephysical",
+    "name": "VolumeWriteThroughput",
+    "dimensions": {
+     "resourceId": "ocid1.bootvolume.oc1.phx.exampleboot1"
+    },
+    "metadata": {
+     "displayName": "VolumeWriteThroughput",
+     "unit": ""
+    },
+    "resolution": "1m",
+    "aggregatedDatapoints": [
+     {
+      "timestamp": "2026-11-17T09:00:00.000Z",
+      "value": 400.0
+     },
+     {
+      "timestamp": "2026-11-17T09:01:00.000Z",
+      "value": 401.0
+     },
+     {
+      "timestamp": "2026-11-17T09:02:00.000Z",
+      "value": 402.0
+     },
+     {
+      "timestamp": "2026-11-17T09:03:00.000Z",
+      "value": 403.0
+     }
+    ]
+   },
+   {
+    "namespace": "oci_blockstore",
+    "compartmentId": "ocid1.compartment.oc1..examplephysical",
+    "name": "VolumeWriteThroughput",
+    "dimensions": {
+     "resourceId": "ocid1.bootvolume.oc1.phx.exampleboot2"
+    },
+    "metadata": {
+     "displayName": "VolumeWriteThroughput",
+     "unit": ""
+    },
+    "resolution": "1m",
+    "aggregatedDatapoints": [
+     {
+      "timestamp": "2026-11-17T09:00:00.000Z",
+      "value": 410.0
+     },
+     {
+      "timestamp": "2026-11-17T09:01:00.000Z",
+      "value": 411.0
+     },
+     {
+      "timestamp": "2026-11-17T09:02:00.000Z",
+      "value": 412.0
+     },
+     {
+      "timestamp": "2026-11-17T09:03:00.000Z",
+      "value": 413.0
+     }
+    ]
+   },
+   {
+    "namespace": "oci_blockstore",
+    "compartmentId": "ocid1.compartment.oc1..examplephysical",
+    "name": "VolumeWriteThroughput",
+    "dimensions": {
+     "resourceId": "ocid1.volume.oc1.phx.examplecache"
+    },
+    "metadata": {
+     "displayName": "VolumeWriteThroughput",
+     "unit": ""
+    },
+    "resolution": "1m",
+    "aggregatedDatapoints": [
+     {
+      "timestamp": "2026-11-17T09:00:00.000Z",
+      "value": 420.0
+     },
+     {
+      "timestamp": "2026-11-17T09:01:00.000Z",
+      "value": 421.0
+     },
+     {
+      "timestamp": "2026-11-17T09:02:00.000Z",
+      "value": 422.0
+     },
+     {
+      "timestamp": "2026-11-17T09:03:00.000Z",
+      "value": 423.0
+     }
+    ]
+   },
+   {
+    "namespace": "oci_blockstore",
+    "compartmentId": "ocid1.compartment.oc1..examplephysical",
+    "name": "VolumeWriteThroughput",
+    "dimensions": {
+     "resourceId": "ocid1.bootvolume.oc1.phx.exampleretired"
+    },
+    "metadata": {
+     "displayName": "VolumeWriteThroughput",
+     "unit": ""
+    },
+    "resolution": "1m",
+    "aggregatedDatapoints": [
+     {
+      "timestamp": "2026-11-17T09:00:00.000Z",
+      "value": 430.0
+     },
+     {
+      "timestamp": "2026-11-17T09:01:00.000Z",
+      "value": 431.0
+     },
+     {
+      "timestamp": "2026-11-17T09:02:00.000Z",
+      "value": 432.0
+     },
+     {
+      "timestamp": "2026-11-17T09:03:00.000Z",
+      "value": 433.0
+     }
+    ]
+   }
+  ],
+  "VolumeThrottledIOs": [
+   {
+    "namespace": "oci_blockstore",
+    "compartmentId": "ocid1.compartment.oc1..examplephysical",
+    "name": "VolumeThrottledIOs",
+    "dimensions": {
+     "resourceId": "ocid1.bootvolume.oc1.phx.exampleboot1"
+    },
+    "metadata": {
+     "displayName": "VolumeThrottledIOs",
+     "unit": ""
+    },
+    "resolution": "1m",
+    "aggregatedDatapoints": [
+     {
+      "timestamp": "2026-11-17T09:00:00.000Z",
+      "value": 500.0
+     },
+     {
+      "timestamp": "2026-11-17T09:01:00.000Z",
+      "value": 501.0
+     },
+     {
+      "timestamp": "2026-11-17T09:02:00.000Z",
+      "value": 502.0
+     },
+     {
+      "timestamp": "2026-11-17T09:03:00.000Z",
+      "value": 503.0
+     }
+    ]
+   },
+   {
+    "namespace": "oci_blockstore",
+    "compartmentId": "ocid1.compartment.oc1..examplephysical",
+    "name": "VolumeThrottledIOs",
+    "dimensions": {
+     "resourceId": "ocid1.bootvolume.oc1.phx.exampleboot2"
+    },
+    "metadata": {
+     "displayName": "VolumeThrottledIOs",
+     "unit": ""
+    },
+    "resolution": "1m",
+    "aggregatedDatapoints": [
+     {
+      "timestamp": "2026-11-17T09:00:00.000Z",
+      "value": 510.0
+     },
+     {
+      "timestamp": "2026-11-17T09:01:00.000Z",
+      "value": 511.0
+     },
+     {
+      "timestamp": "2026-11-17T09:02:00.000Z",
+      "value": 512.0
+     },
+     {
+      "timestamp": "2026-11-17T09:03:00.000Z",
+      "value": 513.0
+     }
+    ]
+   },
+   {
+    "namespace": "oci_blockstore",
+    "compartmentId": "ocid1.compartment.oc1..examplephysical",
+    "name": "VolumeThrottledIOs",
+    "dimensions": {
+     "resourceId": "ocid1.volume.oc1.phx.examplecache"
+    },
+    "metadata": {
+     "displayName": "VolumeThrottledIOs",
+     "unit": ""
+    },
+    "resolution": "1m",
+    "aggregatedDatapoints": [
+     {
+      "timestamp": "2026-11-17T09:00:00.000Z",
+      "value": 520.0
+     },
+     {
+      "timestamp": "2026-11-17T09:01:00.000Z",
+      "value": 521.0
+     },
+     {
+      "timestamp": "2026-11-17T09:02:00.000Z",
+      "value": 522.0
+     },
+     {
+      "timestamp": "2026-11-17T09:03:00.000Z",
+      "value": 523.0
+     }
+    ]
+   },
+   {
+    "namespace": "oci_blockstore",
+    "compartmentId": "ocid1.compartment.oc1..examplephysical",
+    "name": "VolumeThrottledIOs",
+    "dimensions": {
+     "resourceId": "ocid1.bootvolume.oc1.phx.exampleretired"
+    },
+    "metadata": {
+     "displayName": "VolumeThrottledIOs",
+     "unit": ""
+    },
+    "resolution": "1m",
+    "aggregatedDatapoints": [
+     {
+      "timestamp": "2026-11-17T09:00:00.000Z",
+      "value": 530.0
+     },
+     {
+      "timestamp": "2026-11-17T09:01:00.000Z",
+      "value": 531.0
+     },
+     {
+      "timestamp": "2026-11-17T09:02:00.000Z",
+      "value": 532.0
+     },
+     {
+      "timestamp": "2026-11-17T09:03:00.000Z",
+      "value": 533.0
+     }
+    ]
+   }
+  ],
+  "VolumeGuaranteedIOPS": [
+   {
+    "namespace": "oci_blockstore",
+    "compartmentId": "ocid1.compartment.oc1..examplephysical",
+    "name": "VolumeGuaranteedIOPS",
+    "dimensions": {
+     "resourceId": "ocid1.bootvolume.oc1.phx.exampleboot1"
+    },
+    "metadata": {
+     "displayName": "VolumeGuaranteedIOPS",
+     "unit": ""
+    },
+    "resolution": "1m",
+    "aggregatedDatapoints": [
+     {
+      "timestamp": "2026-11-17T09:00:00.000Z",
+      "value": 3000.0
+     },
+     {
+      "timestamp": "2026-11-17T09:01:00.000Z",
+      "value": 3000.0
+     },
+     {
+      "timestamp": "2026-11-17T09:02:00.000Z",
+      "value": 3000.0
+     },
+     {
+      "timestamp": "2026-11-17T09:03:00.000Z",
+      "value": 3000.0
+     }
+    ]
+   },
+   {
+    "namespace": "oci_blockstore",
+    "compartmentId": "ocid1.compartment.oc1..examplephysical",
+    "name": "VolumeGuaranteedIOPS",
+    "dimensions": {
+     "resourceId": "ocid1.bootvolume.oc1.phx.exampleboot2"
+    },
+    "metadata": {
+     "displayName": "VolumeGuaranteedIOPS",
+     "unit": ""
+    },
+    "resolution": "1m",
+    "aggregatedDatapoints": [
+     {
+      "timestamp": "2026-11-17T09:00:00.000Z",
+      "value": 3000.0
+     },
+     {
+      "timestamp": "2026-11-17T09:01:00.000Z",
+      "value": 3000.0
+     },
+     {
+      "timestamp": "2026-11-17T09:02:00.000Z",
+      "value": 3000.0
+     },
+     {
+      "timestamp": "2026-11-17T09:03:00.000Z",
+      "value": 3000.0
+     }
+    ]
+   },
+   {
+    "namespace": "oci_blockstore",
+    "compartmentId": "ocid1.compartment.oc1..examplephysical",
+    "name": "VolumeGuaranteedIOPS",
+    "dimensions": {
+     "resourceId": "ocid1.volume.oc1.phx.examplecache"
+    },
+    "metadata": {
+     "displayName": "VolumeGuaranteedIOPS",
+     "unit": ""
+    },
+    "resolution": "1m",
+    "aggregatedDatapoints": [
+     {
+      "timestamp": "2026-11-17T09:00:00.000Z",
+      "value": 3000.0
+     },
+     {
+      "timestamp": "2026-11-17T09:01:00.000Z",
+      "value": 3000.0
+     },
+     {
+      "timestamp": "2026-11-17T09:02:00.000Z",
+      "value": 3000.0
+     },
+     {
+      "timestamp": "2026-11-17T09:03:00.000Z",
+      "value": 3000.0
+     }
+    ]
+   },
+   {
+    "namespace": "oci_blockstore",
+    "compartmentId": "ocid1.compartment.oc1..examplephysical",
+    "name": "VolumeGuaranteedIOPS",
+    "dimensions": {
+     "resourceId": "ocid1.bootvolume.oc1.phx.exampleretired"
+    },
+    "metadata": {
+     "displayName": "VolumeGuaranteedIOPS",
+     "unit": ""
+    },
+    "resolution": "1m",
+    "aggregatedDatapoints": [
+     {
+      "timestamp": "2026-11-17T09:00:00.000Z",
+      "value": 3000.0
+     },
+     {
+      "timestamp": "2026-11-17T09:01:00.000Z",
+      "value": 3000.0
+     },
+     {
+      "timestamp": "2026-11-17T09:02:00.000Z",
+      "value": 3000.0
+     },
+     {
+      "timestamp": "2026-11-17T09:03:00.000Z",
+      "value": 3000.0
+     }
+    ]
+   }
+  ],
+  "VolumeGuaranteedThroughput": [
+   {
+    "namespace": "oci_blockstore",
+    "compartmentId": "ocid1.compartment.oc1..examplephysical",
+    "name": "VolumeGuaranteedThroughput",
+    "dimensions": {
+     "resourceId": "ocid1.bootvolume.oc1.phx.exampleboot1"
+    },
+    "metadata": {
+     "displayName": "VolumeGuaranteedThroughput",
+     "unit": ""
+    },
+    "resolution": "1m",
+    "aggregatedDatapoints": [
+     {
+      "timestamp": "2026-11-17T09:00:00.000Z",
+      "value": 25165824.0
+     },
+     {
+      "timestamp": "2026-11-17T09:01:00.000Z",
+      "value": 25165824.0
+     },
+     {
+      "timestamp": "2026-11-17T09:02:00.000Z",
+      "value": 25165824.0
+     },
+     {
+      "timestamp": "2026-11-17T09:03:00.000Z",
+      "value": 25165824.0
+     }
+    ]
+   },
+   {
+    "namespace": "oci_blockstore",
+    "compartmentId": "ocid1.compartment.oc1..examplephysical",
+    "name": "VolumeGuaranteedThroughput",
+    "dimensions": {
+     "resourceId": "ocid1.bootvolume.oc1.phx.exampleboot2"
+    },
+    "metadata": {
+     "displayName": "VolumeGuaranteedThroughput",
+     "unit": ""
+    },
+    "resolution": "1m",
+    "aggregatedDatapoints": [
+     {
+      "timestamp": "2026-11-17T09:00:00.000Z",
+      "value": 25165824.0
+     },
+     {
+      "timestamp": "2026-11-17T09:01:00.000Z",
+      "value": 25165824.0
+     },
+     {
+      "timestamp": "2026-11-17T09:02:00.000Z",
+      "value": 25165824.0
+     },
+     {
+      "timestamp": "2026-11-17T09:03:00.000Z",
+      "value": 25165824.0
+     }
+    ]
+   },
+   {
+    "namespace": "oci_blockstore",
+    "compartmentId": "ocid1.compartment.oc1..examplephysical",
+    "name": "VolumeGuaranteedThroughput",
+    "dimensions": {
+     "resourceId": "ocid1.volume.oc1.phx.examplecache"
+    },
+    "metadata": {
+     "displayName": "VolumeGuaranteedThroughput",
+     "unit": ""
+    },
+    "resolution": "1m",
+    "aggregatedDatapoints": [
+     {
+      "timestamp": "2026-11-17T09:00:00.000Z",
+      "value": 25165824.0
+     },
+     {
+      "timestamp": "2026-11-17T09:01:00.000Z",
+      "value": 25165824.0
+     },
+     {
+      "timestamp": "2026-11-17T09:02:00.000Z",
+      "value": 25165824.0
+     },
+     {
+      "timestamp": "2026-11-17T09:03:00.000Z",
+      "value": 25165824.0
+     }
+    ]
+   },
+   {
+    "namespace": "oci_blockstore",
+    "compartmentId": "ocid1.compartment.oc1..examplephysical",
+    "name": "VolumeGuaranteedThroughput",
+    "dimensions": {
+     "resourceId": "ocid1.bootvolume.oc1.phx.exampleretired"
+    },
+    "metadata": {
+     "displayName": "VolumeGuaranteedThroughput",
+     "unit": ""
+    },
+    "resolution": "1m",
+    "aggregatedDatapoints": [
+     {
+      "timestamp": "2026-11-17T09:00:00.000Z",
+      "value": 25165824.0
+     },
+     {
+      "timestamp": "2026-11-17T09:01:00.000Z",
+      "value": 25165824.0
+     },
+     {
+      "timestamp": "2026-11-17T09:02:00.000Z",
+      "value": 25165824.0
+     },
+     {
+      "timestamp": "2026-11-17T09:03:00.000Z",
+      "value": 25165824.0
+     }
+    ]
+   }
+  ],
+  "VolumeGuaranteedVPUsPerGB": [
+   {
+    "namespace": "oci_blockstore",
+    "compartmentId": "ocid1.compartment.oc1..examplephysical",
+    "name": "VolumeGuaranteedVPUsPerGB",
+    "dimensions": {
+     "resourceId": "ocid1.bootvolume.oc1.phx.exampleboot1"
+    },
+    "metadata": {
+     "displayName": "VolumeGuaranteedVPUsPerGB",
+     "unit": ""
+    },
+    "resolution": "1m",
+    "aggregatedDatapoints": [
+     {
+      "timestamp": "2026-11-17T09:00:00.000Z",
+      "value": 10.0
+     },
+     {
+      "timestamp": "2026-11-17T09:01:00.000Z",
+      "value": 10.0
+     },
+     {
+      "timestamp": "2026-11-17T09:02:00.000Z",
+      "value": 10.0
+     },
+     {
+      "timestamp": "2026-11-17T09:03:00.000Z",
+      "value": 10.0
+     }
+    ]
+   },
+   {
+    "namespace": "oci_blockstore",
+    "compartmentId": "ocid1.compartment.oc1..examplephysical",
+    "name": "VolumeGuaranteedVPUsPerGB",
+    "dimensions": {
+     "resourceId": "ocid1.bootvolume.oc1.phx.exampleboot2"
+    },
+    "metadata": {
+     "displayName": "VolumeGuaranteedVPUsPerGB",
+     "unit": ""
+    },
+    "resolution": "1m",
+    "aggregatedDatapoints": [
+     {
+      "timestamp": "2026-11-17T09:00:00.000Z",
+      "value": 10.0
+     },
+     {
+      "timestamp": "2026-11-17T09:01:00.000Z",
+      "value": 10.0
+     },
+     {
+      "timestamp": "2026-11-17T09:02:00.000Z",
+      "value": 10.0
+     },
+     {
+      "timestamp": "2026-11-17T09:03:00.000Z",
+      "value": 10.0
+     }
+    ]
+   },
+   {
+    "namespace": "oci_blockstore",
+    "compartmentId": "ocid1.compartment.oc1..examplephysical",
+    "name": "VolumeGuaranteedVPUsPerGB",
+    "dimensions": {
+     "resourceId": "ocid1.volume.oc1.phx.examplecache"
+    },
+    "metadata": {
+     "displayName": "VolumeGuaranteedVPUsPerGB",
+     "unit": ""
+    },
+    "resolution": "1m",
+    "aggregatedDatapoints": [
+     {
+      "timestamp": "2026-11-17T09:00:00.000Z",
+      "value": 10.0
+     },
+     {
+      "timestamp": "2026-11-17T09:01:00.000Z",
+      "value": 10.0
+     },
+     {
+      "timestamp": "2026-11-17T09:02:00.000Z",
+      "value": 10.0
+     },
+     {
+      "timestamp": "2026-11-17T09:03:00.000Z",
+      "value": 10.0
+     }
+    ]
+   },
+   {
+    "namespace": "oci_blockstore",
+    "compartmentId": "ocid1.compartment.oc1..examplephysical",
+    "name": "VolumeGuaranteedVPUsPerGB",
+    "dimensions": {
+     "resourceId": "ocid1.bootvolume.oc1.phx.exampleretired"
+    },
+    "metadata": {
+     "displayName": "VolumeGuaranteedVPUsPerGB",
+     "unit": ""
+    },
+    "resolution": "1m",
+    "aggregatedDatapoints": [
+     {
+      "timestamp": "2026-11-17T09:00:00.000Z",
+      "value": 10.0
+     },
+     {
+      "timestamp": "2026-11-17T09:01:00.000Z",
+      "value": 10.0
+     },
+     {
+      "timestamp": "2026-11-17T09:02:00.000Z",
+      "value": 10.0
+     },
+     {
+      "timestamp": "2026-11-17T09:03:00.000Z",
+      "value": 10.0
+     }
+    ]
+   }
+  ]
+ }
+}
