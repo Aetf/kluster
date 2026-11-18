@@ -315,17 +315,35 @@ its own.
 terminal. A fake reads its stdin only where the tool it stands in for does.
 
 **A container a case starts carries `--rm`, a `--timeout` at the run's outer
-bound, and the test label**, `--label kluster-test=<module>`. Its processes
-are the container service's rather than the case's, so it is the one kind of
-process that ends by itself however the test process ends, and the label is
-the census of what is left. The exception is a pasta a case has stopped. The
-tripwire on the pasta workaround in `tests/test_state_roles.py` stops its own
-box's pasta with SIGSTOP and resumes it on every way out, and a watchdog
-resumes it once the test process is gone. A SIGKILL that reaches the
-watchdog before it can, such as a SIGKILL of the control group the two
-share, leaves that pasta stopped, and pasta, once stopped, does not end with
-its container: it keeps the box's port, listening and never serving, until
-something kills it.
+bound, and the test label**, `--label kluster-test=<module>`. A started
+container's processes are the container service's rather than the case's:
+its `conmon` ends the container at its `--timeout`, and `--rm` removes it
+then, so it is the one kind of process that ends by itself however the test
+process ends, and the label is the census of what is left,
+`podman ps --all --filter label=kluster-test=<module>`. The exception is a
+pasta a case has stopped. The tripwire on the pasta workaround in
+`tests/test_state_roles.py` stops its own box's pasta with SIGSTOP and
+resumes it on every way out, and a watchdog resumes it once the test
+process is gone. A SIGKILL that reaches the watchdog before it can, such as
+a SIGKILL of the control group the two share, leaves that pasta stopped, and
+pasta, once stopped, does not end with its container: it keeps the box's
+port, listening and never serving, until something kills it.
+
+**A container created and never started does not end by itself.** The
+`--timeout` counts from the start, and `--rm` acts when the container ends,
+so neither reaches a container left in the `Created` state: a
+`podman create` whose `podman start` never ran, or a `podman run` killed
+between creating the container and starting it, such as at the bound on that
+command. What removes one is the teardown of the case that created it, which
+removes by the name the case gave it every container it named, whatever
+state each is in, with `--force` passing over one already gone: `_remove` in
+`tests/test_state_roles.py`, whose `_bounded` states the same window, and
+the `finally` that removes the container in `tests/image_busybox.py` and in
+`tests/test_release_lock.py`. Nothing in the suite removes a `Created`
+container that no teardown names -- one run without a name, or one created
+ahead of the block whose teardown removes it -- nor any `Created` container
+once the test process can no longer run a `finally`. The label census lists
+each of them, in the `Created` state.
 
 **A container a case starts mounts no named volume.** A named volume outlives every container
 that mounts it and holds one of the host's podman locks until something

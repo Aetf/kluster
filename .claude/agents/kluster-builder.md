@@ -17,7 +17,9 @@ can match on, and it keeps the command independent of the directory:
 
     gh pr create --repo Aetf/kluster --head <branch> --title "..." --body-file <file>
 
-A cloud session has no `gh`; there the pull request is opened with the
-session's GitHub tools instead (`docs/framework/dispatch.md` §1.4).
+In a cloud session `gh` is on the image but `gh pr` is refused: the
+session's GitHub proxy blocks the GraphQL endpoint it calls, so there the
+pull request is opened with the session's GitHub tools instead
+(`docs/framework/dispatch.md` §1.4).
 
 Never merge the PR yourself; the dispatcher reviews and merges.

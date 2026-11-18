@@ -116,8 +116,11 @@ def _answers(box: Box) -> bool:
 def box() -> Iterator[Box]:
     """The pinned image, serving on a port this module reserved, with a role that writes the state and cannot delete it.
 
-    `--timeout` has conmon end the container at `CONTAINER_TIMEOUT` and `--rm`
-    removes it then, however this process ended. The data directory, the
+    Once started, `--timeout` has conmon end the container at
+    `CONTAINER_TIMEOUT` and `--rm` removes it then, however this process
+    ended. One a `podman run` killed before the start leaves `Created` is
+    removed by name in the teardown, which a test process killed outright
+    never runs. The data directory, the
     image's one `VOLUME`, is a tmpfs, so the container has no anonymous
     volume to leave. `podman run` creates and starts it in one command, so
     the port it publishes is bound before the reservation is let go: the

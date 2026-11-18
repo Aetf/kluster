@@ -437,16 +437,22 @@ builder of §1.3, and §1 holds except where this list says otherwise:
     queue below — and dies with the session, so no `jj` workspace is
     added and none is removed. Scratch goes under the clone's
     `.claude/`, as in §1.2.
--   **git is the version control, and `gh` is not on the image.** The
-    work is committed with `git add <path>` on each path it touched —
-    never `git commit -a`, whose scope is the whole tree rather than the
-    work — and pushed with `git push origin HEAD` to the session's
-    branch, the only one it may push to. The `jj` push form and its
+-   **git is the version control, and the session's GitHub tools are
+    the forge's client.** The work is committed with `git add <path>` on
+    each path it touched — never `git commit -a`, whose scope is the
+    whole tree rather than the work — and pushed with
+    `git push origin HEAD` to the session's branch, the only one it may
+    push to. The `jj` push form and its
     failure modes (§1.2) do not arise, and in a plain clone git answers
     about the clone itself, so `git rev-parse HEAD` after the push is the
     head SHA the report names (§4). The pull request is opened and read
     with the session's GitHub tools, which reach this repository and no
-    other unless the operator attaches it.
+    other unless the operator attaches it. `gh` is on the image, but the
+    session's GitHub proxy refuses GitHub's GraphQL endpoint, which
+    `gh pr` and `gh issue` call, so of `gh` only `gh api` and the
+    commands that call the REST API reach the forge, for the same
+    repositories (the Claude Code documentation's cloud environments
+    page, "Installed tools" and "GitHub proxy").
 -   **A fix cycle goes back to the session that opened the pull
     request.** A session started on claude.ai gets a branch of its own
     and pushes only that one, so a fix cycle (§3), and the conflicting
