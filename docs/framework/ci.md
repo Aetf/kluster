@@ -215,8 +215,8 @@ PR      preview.yml:        changes ─→ preview (dns | k8s-base | apps)
                                the pushed head's runs start on their own
                                — see the bridged-SDK bullet)
 
-merge   deploy.yml:         plan-physical ──zero diff──→ (up-physical skipped)
-                                   └───────── diff ────→ up-physical [gate]
+merge   deploy.yml:         plan-physical ──writes nothing──→ (up-physical skipped)
+                                   └───────── would write ──→ up-physical [gate]
                             ──→ up-dns ──any result──→ up-k8s-base ──needs──→ up-apps
                                    └──────────────── any result ─────────────────┘
                             any of the five failed ──→ notify-failure
@@ -331,26 +331,48 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     phase one and a separate preview job would be a duplicate; the
     zero-diff "gate" is simply that an up with nothing to do is a fast
     no-op. `physical` differs because its up sits behind the approval
-    gate: **`plan-physical`** runs `pulumi preview --expect-no-changes`
-    in the ungated `physical-plan` environment first — zero diff (the
-    common case: shared-code/lockfile merges) skips `up-physical`
-    entirely and the chain proceeds with **zero clicks**; a real diff
-    routes to `up-physical` in the gated `physical` environment, and
-    the whole chain waits for the approval (correct: downstream layers
-    may depend on the physical change). **The plan has three outcomes,
-    read off the preview's exit**: 0 is a zero diff; 7 is
-    `--expect-no-changes` refusing the changes the preview proposed,
-    the code the CLI's exit-code table gives that refusal
+    gate: **`plan-physical`** runs `stack-plan --stack physical` in the
+    ungated `physical-plan` environment first — an `up` that would
+    write nothing (the common case: shared-code/lockfile merges) skips
+    `up-physical` entirely and the chain proceeds with **zero clicks**;
+    one that would write routes to `up-physical` in the gated
+    `physical` environment, and the whole chain waits for the approval
+    (correct: downstream layers may depend on the physical change).
+    **A job skips an `up` only on a verdict that the `up` would write
+    nothing, and that verdict is `stack-plan`'s; the exit of
+    `pulumi preview --expect-no-changes` counts steps, and an `up`
+    writes more than steps.** An `up` whose preview plans no step still
+    rewrites the state the program registers: a resource option on an
+    unchanged resource, `protect` among them, and an output of the
+    stack or of a component. The engine enforces `protect` from the
+    state, so one that never reached it refuses no delete. The command
+    answers in the preview's own table of exits, and the job reads the
+    plan's three outcomes off it: 0 is an `up` that would write nothing;
+    7 is one that would write, a step or state with no step, the code
+    the CLI's exit-code table gives `--expect-no-changes` refusing a plan
     ([`ExitNoChanges` at 3.274.1](https://github.com/pulumi/pulumi/blob/v3.274.1/pkg/cmd/pulumi/cmd/exit_codes.go),
-    a table the CLI calls a stable contract); and any other exit is a
-    preview that failed, a plugin it could not install or a provider it
-    could not reach, which proposed no plan at all. That one fails
+    a table the CLI calls a stable contract); and any other exit is no
+    answer: a preview that failed, a plugin it could not install or a
+    provider it could not reach, or a record of the plan the command
+    could not read, which leaves no plan to approve. That one fails
     `plan-physical` by name and sets no diff, so `up-physical` never
-    waits for an approval with nothing to approve; every later job's
-    condition reads `plan-physical`'s success, so the chain stops there,
-    and `notify-failure` fires. `tests/test_workflow_shape.py` runs the
-    plan step against a stand-in preview for each outcome. Workflow
-    mechanics on record:
+    waits for an approval with nothing to approve; every later
+    job's condition reads `plan-physical`'s success, so the chain stops
+    there, and `notify-failure` fires. **What the approver reads** is
+    the plan step's log: the preview's `--diff`, as for any change, and
+    for a plan that changes no resource the command's own section
+    after it, one line per field of the state the `up` would rewrite,
+    with the resource it belongs to and the field's old and new value,
+    a secret printed as the CLI's placeholder. The run's page carries a
+    notice saying the plan changes no resource and rewrites state. The
+    cost is one more preview on every merge whose first preview plans
+    no step, about as long as the first, and one approval for each
+    state-only change to `physical`.
+    `tests/test_workflow_shape.py` runs the plan step against a
+    stand-in for the command for each outcome, and runs it as written
+    against the pinned CLI over a scratch stack, where a `protect` set
+    with no other change routes to the gated apply. Workflow mechanics
+    on record:
     downstream jobs need skip-tolerant conditions — `always()`, and
     `up-physical`'s result either `success` or `skipped` — because a
     skipped gate job must not cascade-skip the chain, while any other
@@ -691,7 +713,9 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     not adopted** initially: it would guarantee merge applies exactly the
     reviewed plan, but adds plan-artifact plumbing and hard-fails on any
     benign drift between review and merge. Revisit if
-    reviewed-vs-applied divergence ever actually bites.
+    reviewed-vs-applied divergence ever actually bites. It would not
+    close the gap the plan job's verdict closes (above): pinning binds
+    what an `up` applies, and that gap is in whether the `up` runs.
 -   Ported from kluster-code: rebase-merge (not squash — committer
     identity), the zero-diff **noop-automerge**, and the **Home
     Assistant push on a failed deploy**. The push is the one that

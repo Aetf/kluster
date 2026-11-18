@@ -329,9 +329,10 @@ _ORDER = """when to run what:
          nothing else merged and no drift dispatched in between: the merge
          starts deploy, whose plan-physical reads the passphrase when it
          starts. A physical job that runs between the two meets incorrect
-         passphrase, which plan-physical reports as a diff; reject the
-         approval up-physical asks for, and dispatch deploy again once
-         both have landed.
+         passphrase and fails: plan-physical fails by name and asks for no
+         approval, and an up-physical already waiting for one fails if
+         approved, so reject that one. Dispatch deploy again once both
+         have landed.
 
   one-time repair
     credentials seed oci domain

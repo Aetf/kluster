@@ -1502,7 +1502,11 @@ are:
     gives `butane` in the module's set-up;
 -   `tests/test_unifi_probe.py`'s
     `test_the_probes_project_runs_its_program_from_a_checkout`, at its
-    `COMMAND_TIMEOUT` and `CASE_TIMEOUT`.
+    `COMMAND_TIMEOUT` and `CASE_TIMEOUT`;
+-   `tests/test_workflow_shape.py`'s
+    `test_the_plan_step_routes_to_the_gated_apply_whatever_an_up_would_write`,
+    which runs `deploy.yml`'s plan step against a scratch stack, at its
+    `ENGINE_COMMAND_TIMEOUT` and `ENGINE_CASE_TIMEOUT`.
 
 Others start the CLI and run under the suite's bound, short of the rule
 until the issue named beside each gives them bounds of their own:
