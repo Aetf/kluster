@@ -1362,8 +1362,8 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
 
 ## 4. Self-built images (decided 2026-08-22: they live in this repo)
 
-The cluster-consumed custom images — the CNPG operands (pg_cron,
-vchord/pgvecto-rs), emailproxy, golinks, `oci-sdk` — stay **in the
+The custom images the cluster consumes — each one
+`docker/<image>.Containerfile` with its `.conf` — stay **in the
 kluster repo** (`docker/` + an `images.yml` workflow ported from
 kluster-code), not in homelab-containers: ownership follows the
 consumer (the same co-location principle as DNS records and firewall
@@ -1493,14 +1493,18 @@ image: `python` at the line, slim and pinned by digest, and the `oci`
 SDK at the release its conf pins under a `pypi` hint. It carries no code
 of this repository, since `tests/test_images.py` refuses any read from
 the build context, which the fingerprint does not cover; a consumer
-supplies its program at run time. That test holds both relations, for
-every image whose conf pins a package `pyproject.toml` declares; an
+supplies its program at run time. That test holds both relations for
+every image whose conf pins a package `pyproject.toml` declares. An
 image that runs this repository's code on the standard library alone
-installs none of them, so it is outside that census and held by review.
-A renovate `allowedVersions` bound keeps such an image's `python` base
-on its line, and the test holds the bound to the base's tag. The
-pull request that moves `.python-version` to another line moves the base
-and the bound by hand, and the test holds it red until both have moved.
+installs none of them, so it is outside that census, and review is what
+puts it under the bound below: `postgres-client` is such an image, the
+same base with the Postgres client of the state backend's major, which
+the test holds equal to the server's. A renovate `allowedVersions`
+bound keeps each such image's `python` base on its line, and the test
+holds the line and the bound to the base's tag for every image in the
+census and every image the bound names. The pull request that moves
+`.python-version` to another line moves the bases and the bound by
+hand, and the test holds it red until all of them have moved.
 Renovate offers the conf's packages in the monthly window of the base
 refreshes: the `oci` SDK releases about weekly, and each release is a
 conf pull request and then a deploy pull request. Equality with
