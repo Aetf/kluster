@@ -1484,6 +1484,7 @@ Owning docs keep the content — the index only locates it.
 | CI alerts (a red `checks` or `images` run; a drift diff) | framework/ci.md §3.1 and §3.2 |
 | The metrics stores (rows a store ignores; a backup run that failed, a backup gone stale or refused, or a store that does not restore; a pull of OCI's block-volume series that failed or went stale; a scrape job that reports nothing, or no scrape job at all) | §6 here |
 | The etcd snapshot (a run that failed, or snapshots gone stale) | §7 here |
+| The control planes (etcd slow or stalled, its leader changed or gone, a control plane under CPU or I/O pressure, a boot volume throttled) | §8 here |
 
 vmalert rule families adopt this index as they are ported: an alert
 that cannot point at a row (or at its owner doc's census) does not
@@ -1760,8 +1761,9 @@ held for five minutes (the scrape-target family,
 `kluster.components.monitoring.rules`). A rule reads only what a scrape
 job reports, so a job that reports nothing leaves every rule that reads
 it evaluating over no series: silent, whatever it watches. The family
-watches every job some other rule reads, which the program derives
-from the rules' expressions. `ScrapeTargetDown` names the `job` it is
+watches every job some other alert reads, directly or through the
+recording rules it reads, which the program derives from the rules'
+expressions. `ScrapeTargetDown` names the `job` it is
 about: a target of it whose scrape fails, or no target of it listed at
 all. `ScraperDown` is no target of any job reporting, which is vmagent
 stopped, or none of what it scrapes reaching the recent store; while it
@@ -1941,3 +1943,159 @@ nothing from the ones that failed.
    `Uploading <file> to bucket aetf-kluster-backup with key etcd/<file>`,
    its Job reads `Complete`, and both alerts resolve at the next
    evaluation after it.
+
+## 8. The control planes' playbooks
+
+What to do when a reading of the control planes leaves the budget
+[cluster/nodes.md](cluster/nodes.md) §1.1–1.2 gives it. The readings,
+the rules that record them and the alerts over them are
+`kluster.components.monitoring.readings` and `rules`
+([declarative/cluster-infra.md](declarative/cluster-infra.md) §1,
+item 6). The `Control planes` dashboard in Grafana draws every reading
+from the history store, each beside the same reading an earlier period
+back, the dashboard's variable setting how far:
+`mise x -- kubectl -n monitoring port-forward svc/monitoring-grafana 3000:80`,
+then `http://localhost:3000`. The commands below run from the root of
+the checkout, and `<node>` is the node the alert carries.
+
+A planned peak produces most of these alerts once: a bring-up or a
+rebuild (§3), a Talos upgrade (§2), a wave's land
+([cluster/migration.md](cluster/migration.md) §0 rule 6), hath's warm
+copy, VolSync's movers at 03:00. One that comes during such a peak and
+resolves after it is recorded on the work's issue with the reading
+beside it, which is what the per-wave gate reads; one that comes
+outside any is what the steps below are for.
+
+### 8.1 etcd is slow
+
+**Trigger**: one of four alerts, each naming the member by its `node`.
+
+-   `EtcdWalFsyncSlow`, `actionable`: the member's WAL fsync p99 over
+    5 minutes is over 10 ms, and has been for 10 minutes.
+-   `EtcdBackendCommitSlow`, `actionable`: its backend commit p99 is
+    over 25 ms, and has been for 10 minutes.
+-   `EtcdApplySlow`, `actionable`: its mean apply over 5 minutes is
+    over 100 ms.
+-   `EtcdDiskStall`, `notify`: a WAL fsync took over a second in the
+    last 5 minutes, which is what etcd's own `slow fdatasync` warning
+    reports ([declarative/physical.md](declarative/physical.md) §6).
+
+The first three are the targets of etcd's FAQ, which bind at every
+moment, peaks included (nodes.md §1.2 rule 1). A fsync and a commit wait
+on the boot volume, which etcd shares with the images, the logs and
+every cloud-pool claim; an apply waits on the member's CPU as well.
+
+**Gist**:
+
+1.  **Read the disk beside etcd.** On the dashboard, the member's node
+    on the Disk row: the boot volume's writes, bytes written, mean
+    write latency and I/O in flight, its I/O pressure, and OCI's
+    throttled I/O. Write latency in tens of milliseconds with tens of
+    requests in flight is the volume saturated, the shape of a
+    bring-up (nodes.md §1.2); throttled I/O above 0 is the volume held
+    to its performance level, which is §8.4.
+2.  **Read etcd's own view.**
+    `mise x -- talosctl -n <node> logs etcd | grep -E 'slow fdatasync|took too long'`
+    names each slow write and each request that waited on one, with
+    its time.
+3.  **Find the writer.** The volume's writes come from what ran on the
+    node at that time: image pulls
+    (`mise x -- kubectl get events -A --field-selector reason=Pulling`),
+    a pod starting or a claim filling, VolSync's movers. The Load
+    classes row's bytes written by class say which class grew; etcd's
+    share there is its WAL alone, so its backend's writes show as the
+    platform's. An apply that is slow while the disk is quiet is CPU
+    instead, which is §8.3.
+4.  **Repair**: a peak that was not planned is shaped as nodes.md §1.2
+    shapes a planned one, by the pulls the kubelet runs at once and the
+    resource operations an apply runs at once. A steady writer past the
+    budget nodes.md §1.2 rule 2 gives writers other than etcd, which the
+    Disk row reads as an upper bound over the hour, goes to the operator
+    with the reading, which is how the canon handles a reading that
+    contradicts the budget (nodes.md §1.1).
+5.  **Confirm**: the reading is back inside its budget on the
+    dashboard, and the alert resolves at the next evaluation after.
+
+### 8.2 etcd's leader changed or is gone
+
+**Trigger**: `EtcdLeaderChanged`, `notify`: the member saw the
+leader change in the last 15 minutes. `EtcdNoLeader`, `actionable`: the
+member has had no leader for a minute, which stops every write the
+cluster makes through it.
+
+**Gist**:
+
+1.  **A planned move.** A Talos upgrade (§2) or a node replacement
+    (§3) moves the leader as it restarts each member, and the alert
+    resolves 15 minutes after the last move.
+2.  **Read the members.** `mise x -- talosctl -n <node> etcd status`,
+    run against each control plane, reports the leader that member
+    sees and its raft term, and
+    `mise x -- talosctl -n <node> logs etcd` names each election and
+    why. On the dashboard, the etcd row: heartbeat send failures and
+    the peer round trip say whether the members reached one another
+    in time, and the WAL fsync whether the leader's disk held it back;
+    etcd's FAQ names a slow disk as the usual cause of a leader that
+    misses its heartbeats, which is §8.1.
+3.  **No leader.** A member with no leader is cut off from the others
+    or has lost quorum. The members reach one another over KubeSpan:
+    the dashboard's Network row shows each member's connected peers and
+    the worker's scrapes of each control plane, and
+    `mise x -- talosctl -n <node> get kubespanpeerstatuses` lists each
+    peer and whether it is up. Two members down is quorum lost, which
+    is §3's.
+4.  **Confirm**: `mise x -- talosctl -n <node> etcd status` names
+    one leader on every control plane, and the alert resolves.
+
+### 8.3 A control plane under pressure
+
+**Trigger**: `ControlPlaneCpuPressure`, `actionable`: the node's CPU
+pressure (some) averaged over 10 minutes is over 20 %, the state in
+which etcd missed its deadlines (nodes.md §1). `ControlPlaneIoPressure`,
+`actionable`: its I/O pressure (some) over 10 minutes is over 10 %. Both
+are the per-wave gate's own windows (migration.md §0 rule 6).
+
+**Gist**:
+
+1.  **Which class.** On the dashboard's Load classes row, CPU and memory
+    used by class on the node, and the CPU and memory limits of the
+    front and the workloads against the 0.5 core and 3.5 GiB nodes.md
+    §1.1 allows them.
+2.  **CPU.** A workload class past its limits is a workload's limit to
+    correct, in the `apps` declaration of its own. The control-plane
+    slice grows with what the API server is asked: an apply's burst of
+    creates, which the deploy chain's parallelism bounds (nodes.md
+    §1.2). The platform is the node less the two, Cilium's agent and the
+    controllers among it.
+3.  **I/O.** As §8.1 steps 1 and 3: the boot volume's readings say how
+    hard it was written, and the node's events what wrote it.
+4.  **Confirm**: the reading is back inside its budget and the alert
+    resolves.
+
+### 8.4 A boot volume throttled
+
+**Trigger**: `BootVolumeThrottled`, `notify`: OCI's
+`VolumeThrottledIOs` for a node's boot volume is above 0 in the last
+90 minutes, an hour and a half: OCI refused I/O to hold the volume to
+its performance level. OCI's series reach the stores through the hourly
+pull, up to an hour after the minute they describe (§6.3), so the alert
+follows the throttling by up to that.
+
+**Gist**:
+
+1.  **When and how hard.** On the dashboard's Disk row, throttled I/O
+    per volume beside the node's boot volume writes, and OCI's
+    guaranteed IOPS and throughput, which are the volume's live
+    performance level: 3,000 IOPS and 24 MB/s for a 50 GB Balanced
+    volume (nodes.md §1.2).
+2.  **A level below that** is a volume no longer at Balanced, the
+    level `components.cloud.nodes` leaves a boot volume at by declaring
+    none (nodes.md §1.2).
+3.  **Throttling at the level** is a peak past the rate nodes.md §1.2
+    rule 3 shapes peaks to: its shaping bounds the pulls the kubelet
+    runs at once and the resource operations an apply runs at once,
+    and a peak that exceeds the throttle with that shaping in place
+    goes to the operator with the reading, as every reading that
+    contradicts the budget does (nodes.md §1.1).
+4.  **Confirm**: throttled I/O is 0 for an hour and a half, and the
+    alert resolves.

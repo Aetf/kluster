@@ -50,7 +50,16 @@ from renovate_text import effective, package_rules, scalar
 from section_numbers import sections
 
 from kluster import conventions
-from kluster.components.monitoring import DATASOURCES_DIGEST_ENV, RECEIVER, memory, scrape_jobs, stack_values
+from kluster.components.monitoring import (
+    DATASOURCES_DIGEST_ENV,
+    RECEIVER,
+    dashboard,
+    memory,
+    readings,
+    rules,
+    scrape_jobs,
+    stack_values,
+)
 from kluster.components.monitoring.operator_objects import type_token
 from kluster.components.monitoring.rules import (
     HEARTBEAT,
@@ -166,13 +175,23 @@ def _values(run: Run) -> dict[str, Any]:
     return run.values(STACK)
 
 
-def _declared_rules(run: Run) -> list[dict[str, Any]]:
+def _declared(run: Run) -> list[dict[str, Any]]:
     return [
         rule
         for declared in run.monitor.of_type(VM_RULE)
         for group in declared.inputs['spec']['groups']
         for rule in group['rules']
     ]
+
+
+def _declared_rules(run: Run) -> list[dict[str, Any]]:
+    """Every alerting rule the program declares."""
+    return [rule for rule in _declared(run) if 'alert' in rule]
+
+
+def _declared_records(run: Run) -> dict[str, str]:
+    """Every recording rule the program declares: the series it writes, and its expression."""
+    return {rule['record']: rule['expr'] for rule in _declared(run) if 'record' in rule}
 
 
 def _receiver(run: Run) -> dict[str, Any]:
@@ -936,6 +955,276 @@ def test_the_rules_are_declared_behind_the_chart_that_defines_them(absent: tuple
         assert chart in run.dependencies(typ, name), name
 
 
+# -- The readings, their records, their alerts and the dashboard ---------------------
+
+
+def _vector_selectors(expr: str) -> list[Any]:
+    """Every vector selector of a PromQL expression, as `promql_parser` parses it."""
+    found: list[Any] = []
+
+    def visit(node: promql_parser.Expr) -> bool:
+        if isinstance(node, promql_parser.VectorSelector):
+            found.append(node)
+        return True
+
+    _ = promql_parser.walk(promql_parser.parse(expr), pre_visit=visit)
+    return found
+
+
+def _ranges(expr: str) -> set[dt.timedelta]:
+    """The range of every range selector of a PromQL expression."""
+    found: set[dt.timedelta] = set()
+
+    def visit(node: promql_parser.Expr) -> bool:
+        if isinstance(node, promql_parser.MatrixSelector):
+            found.add(node.range)
+        return True
+
+    _ = promql_parser.walk(promql_parser.parse(expr), pre_visit=visit)
+    return found
+
+
+def _equalities(selector: Any) -> set[tuple[str, str]]:
+    return {(m.name, m.value) for m in selector.matchers.matchers if m.op == promql_parser.MatchOp.Equal}
+
+
+def test_the_node_exporters_series_are_labeled_with_the_node_they_are_read_on(absent: tuple[Run, list[str]]) -> None:
+    """A reading of a node groups by `node`, which the operator gives a pod's target no other way.
+
+    The endpoint is stated whole, so the chart's own drop of the kubelet's pod
+    mounts is held too.
+    """
+    run, _ = absent
+    (endpoint,) = _values(run)['prometheus-node-exporter']['vmScrape']['spec']['endpoints']
+    target = {'__meta_kubernetes_pod_node_name': 'cp2', 'pod': 'node-exporter-x', 'namespace': STACK}
+    mounted = {'__name__': 'node_filesystem_avail_bytes', 'mountpoint': '/var/lib/kubelet/pods/0/volumes/v'}
+
+    assert (_relabel(target, endpoint['relabelConfigs']) or {}).get('node') == 'cp2'
+    assert _relabel(mounted, endpoint['metricRelabelConfigs']) is None
+    assert _relabel({**mounted, 'mountpoint': '/var'}, endpoint['metricRelabelConfigs']) is not None
+
+
+def test_each_reading_is_recorded_once_under_its_name_and_the_window_it_computes_over(
+    absent: tuple[Run, list[str]],
+) -> None:
+    """The window a record's name carries is the range of every range selector of its expression."""
+    run, _ = absent
+    records = _declared_records(run)
+
+    assert records == {reading.record: reading.expr for reading in readings.READINGS}
+    for reading in readings.READINGS:
+        assert reading.record.startswith(f'{readings.RECORD_PREFIX}:{reading.name}:'), reading.record
+        assert _ranges(reading.expr) == {reading.window}, reading.record
+
+
+def test_every_reading_selects_this_clusters_series_of_one_job(absent: tuple[Run, list[str]]) -> None:
+    """The history holds the legacy cluster's series beside this one's, under `cluster="legacy"`.
+
+    A sum by node, pod or namespace over both adds the two together, so every
+    selector names this cluster, and every scraped one its job.
+    """
+    run, _ = absent
+    for record, expr in _declared_records(run).items():
+        for selector in _vector_selectors(expr):
+            assert (readings.CLUSTER_LABEL, '') in _equalities(selector), f'{record}: {selector}'
+            scraped = not re.fullmatch(rules.IMPORTED, selector.name or '')
+            named = any(matcher.name == JOB_LABEL for matcher in selector.matchers.matchers)
+            assert not scraped or named, f'{record}: {selector}'
+
+
+def test_every_reading_reads_series_the_history_keeps_and_its_record_is_kept(absent: tuple[Run, list[str]]) -> None:
+    """A reading is computed again over every period on record, which the history holds only of the class it keeps.
+
+    The one reading whose inputs the history does not keep says so, and its
+    record is kept all the same.
+    """
+    run, _ = absent
+    relabeling = _history_write(run)['inlineUrlRelabelConfig']
+
+    for reading in readings.READINGS:
+        kept = [
+            _relabel(
+                {'__name__': selector.metric, **({JOB_LABEL: min(selector.jobs)} if selector.jobs else {})}, relabeling
+            )
+            is not None
+            for selector in selectors(reading.expr)
+        ]
+        assert all(kept) is reading.inputs_kept, reading.record
+        assert _relabel({'__name__': reading.record}, relabeling) is not None, reading.record
+
+
+def test_every_recorded_series_an_alert_or_the_dashboard_reads_is_declared(absent: tuple[Run, list[str]]) -> None:
+    run, _ = absent
+    records = _declared_records(run)
+    prefix = f'{readings.RECORD_PREFIX}:'
+    read = [
+        selector.metric
+        for rule in _declared_rules(run)
+        for selector in selectors(rule['expr'])
+        if selector.metric.startswith(prefix)
+    ] + [
+        selector.metric
+        for panel in _dashboard(run)['panels']
+        for target in panel.get('targets', [])
+        for selector in selectors(_offset(target['expr']))
+        if selector.metric.startswith(prefix)
+    ]
+
+    assert read
+    assert set(read) <= set(records)
+
+
+#: An SLO alert's expression: a recorded series, the matcher its budget binds
+#: by, and the comparison with the budget's limit.
+_SLO = re.compile(r'^(?P<record>[\w:]+)\{(?P<scope>[^}]*)\} (?P<bound>[<>]) (?P<limit>\S+)$')
+
+
+def test_each_slo_alert_fires_where_its_reading_leaves_its_budget(absent: tuple[Run, list[str]]) -> None:
+    """The threshold of an alert over a reading is the reading's budget, on the series the budget binds."""
+    run, _ = absent
+    by_record = {reading.record: reading for reading in readings.READINGS}
+    prefix = f'{readings.RECORD_PREFIX}:'
+    over_readings = [rule for rule in _declared_rules(run) if rule['expr'].startswith(prefix)]
+
+    assert over_readings
+    for rule in over_readings:
+        match = _SLO.match(rule['expr'])
+        assert match, rule['expr']
+        budget = by_record[match['record']].budget
+        assert budget is not None, rule['alert']
+        assert (match['scope'], match['bound'], float(match['limit'])) == (budget.scope, budget.bound, budget.limit)
+
+
+#: The multiplier of each unit a budget is stated in, to the unit its reading is in.
+_BUDGET_UNITS = {'ms': 1e-3, 's': 1.0, '%': 1e-2, 'GiB': 2.0**30, 'MB/s': 1e6, 'core': 1.0, 'IOPS': 1.0}
+_STATED = re.compile(r'(?<![\w.])(?P<number>\d+(?:\.\d+)?)\s*(?P<unit>ms|s|%|GiB|MB/s|core|IOPS)?(?!\w)')
+
+#: The window a budget's phrase states it over, where it states one.
+_STATED_WINDOW = re.compile(r'(?:in|over) every (?P<minutes>\d+) minutes|(?P<hour>averaged over an hour)')
+
+
+def _section(document: str, number: str) -> str:
+    """The prose of one numbered section of a document, its subsections included, on one line."""
+    lines = prose(document).splitlines()
+    heading = re.compile(rf'^(#+)\s+§?{re.escape(number)}\.?\s')
+    ((start, opened),) = [(index, match) for index, line in enumerate(lines) if (match := heading.match(line))]
+    depth = len(opened[1])
+    end = next(
+        (
+            index
+            for index in range(start + 1, len(lines))
+            if (other := re.match(r'^(#+)\s', lines[index])) and len(other[1]) <= depth
+        ),
+        len(lines),
+    )
+    return ' '.join(' '.join(lines[start:end]).split())
+
+
+def _limit(stated: str) -> float:
+    """The number a budget's phrase states, in its reading's unit: none at all where it states an absence."""
+    if stated.startswith('no ') or stated.endswith('not increasing'):
+        return 0.0
+    match = _STATED.search(stated)
+    assert match, stated
+    return float(match['number']) * _BUDGET_UNITS[match['unit'] or 's']
+
+
+def test_each_budget_is_the_one_its_source_states(absent: tuple[Run, list[str]]) -> None:
+    """A budget's limit is the number of the canon's phrase, and the phrase stands in the section it names.
+
+    Where the phrase states the window the budget holds over, that is the
+    reading's window.
+    """
+    _ = absent
+    budgeted = [reading for reading in readings.READINGS if reading.budget is not None]
+
+    assert budgeted
+    for reading in budgeted:
+        budget = reading.budget
+        assert budget is not None
+        text = _section((ROOT / budget.source.document).read_text(), budget.source.section)
+        assert budget.stated in text, f'{reading.record}: {budget.source} does not say {budget.stated!r}'
+        assert _limit(budget.stated) == pytest.approx(budget.limit), reading.record
+        if window := _STATED_WINDOW.search(budget.stated):
+            stated = dt.timedelta(hours=1) if window['hour'] else dt.timedelta(minutes=int(window['minutes']))
+            assert stated == reading.window, reading.record
+
+
+def _namespaces(run: Run) -> set[str]:
+    """Every namespace the program declares an object in, a chart's installation among them."""
+    found: set[str] = set()
+    for declared in run.monitor.declared:
+        metadata: Mapping[str, Any] = declared.inputs.get('metadata') or {}
+        named: list[object] = [metadata.get('namespace'), declared.inputs.get('namespace')]
+        if declared.typ == NAMESPACE:
+            named.append(metadata['name'])
+        found.update(it for it in named if isinstance(it, str))
+    return found
+
+
+def test_the_platforms_namespaces_are_the_ones_k8s_base_declares_objects_in(sealed: Run) -> None:
+    """A pod in a namespace `k8s-base` uses is the platform's, so a namespace it adds is never read as a workload's."""
+    assert set(readings.PLATFORM_NAMESPACES) == _namespaces(sealed)
+
+
+def _dashboard(run: Run) -> dict[str, Any]:
+    (declared,) = [
+        it for it in run.monitor.of_type(CONFIGMAP) if it.inputs['metadata'].get('name') == dashboard.CONFIGMAP
+    ]
+    return json.loads(declared.inputs['data'][dashboard.FILE])
+
+
+def _offset(expr: str) -> str:
+    """A panel's query as Grafana sends it, the offset variable and the panel's step at durations."""
+    return expr.replace('$__interval', '1m').replace(f'${dashboard.OFFSET_VARIABLE}', '1d')
+
+
+def test_the_dashboard_is_a_configmap_the_charts_sidecar_hands_to_grafana(absent: tuple[Run, list[str]]) -> None:
+    """The stack's sidecar collects a `ConfigMap` labeled `grafana_dashboard: "1"` in the namespace it runs in.
+
+    `values.yaml`, `grafana.sidecar.dashboards`, at stack chart 0.91.2, with
+    the grafana chart's `searchNamespace` left unset (12.7.3).
+    """
+    run, _ = absent
+    (declared,) = [
+        it for it in run.monitor.of_type(CONFIGMAP) if it.inputs['metadata'].get('name') == dashboard.CONFIGMAP
+    ]
+    metadata = declared.inputs['metadata']
+
+    assert metadata['labels'] == {'grafana_dashboard': '1'}
+    assert metadata['namespace'] == conventions.MONITORING_NAMESPACE
+    assert 'dashboards' not in _values(run)['grafana'].get('sidecar', {})
+
+
+def test_every_reading_has_a_panel_computing_it_and_an_earlier_period_from_the_history(
+    absent: tuple[Run, list[str]],
+) -> None:
+    """Each panel computes its reading from the history's series, and draws the same query as of an earlier time.
+
+    The history keeps every period of a reading's inputs, so a panel reads
+    those, and the record only where the history keeps no input. A reading
+    per node is drawn for the control planes.
+    """
+    run, _ = absent
+    model = _dashboard(run)
+    (history,) = [it['uid'] for it in _values(run)['defaultDatasources']['extra'] if it['url'] == _history_service(run)]
+    variables = {it['name'] for it in model['templating']['list']}
+    panels = [panel for panel in model['panels'] if panel['type'] != 'row']
+
+    assert dashboard.OFFSET_VARIABLE in variables
+    assert len(panels) == len(readings.READINGS)
+    for reading in readings.READINGS:
+        (panel,) = [it for it in panels if it['description'].startswith(f'`{reading.record}`')]
+        now, earlier = panel['targets']
+        computed = reading.expr if reading.inputs_kept else reading.record
+        assert {panel['datasource']['uid'], now['datasource']['uid'], earlier['datasource']['uid']} == {history}
+        assert set(selectors(now['expr'])) == set(selectors(computed)), reading.record
+        assert set(selectors(_offset(earlier['expr']))) == set(selectors(computed)), reading.record
+        assert f'offset ${dashboard.OFFSET_VARIABLE}' in earlier['expr'], reading.record
+        shown = set(re.findall(r'"node", "([^"]+)"', now['expr']))
+        assert shown == (set(conventions.CLOUD_NODES) if 'node' in reading.per else set()), reading.record
+
+
 # -- The scrape-target family -------------------------------------------------------
 
 #: The scrape-target family's two alerts, by name.
@@ -1033,19 +1322,37 @@ def test_a_metric_no_job_exports_is_refused_naming_it(metric: str) -> None:
         _ = inputs(f'{metric} > 0', _scrape_jobs())
 
 
+def test_a_recorded_series_is_read_from_the_jobs_its_recording_rule_reads() -> None:
+    """An alert over a reading reads the jobs the reading does, through every record it is built on."""
+    jobs = (ScrapeJob('one', 'one_.+'),)
+    records = {'kluster:a:5m': 'sum(rate(one_a[5m]))', 'kluster:b:5m': 'kluster:a:5m + two_b{job="two"}'}
+
+    assert inputs('kluster:b:5m > 0', jobs, records) == {'one', 'two'}
+    with pytest.raises(ValueError, match=re.escape("'kluster:b:5m'")):
+        _ = inputs('kluster:b:5m > 0', jobs)
+
+
+def test_an_imported_series_is_read_from_no_scrape_job() -> None:
+    """OCI's series are written by the pull, which its own scheduled-job rows watch, and no target stands for them."""
+    metric = f'{OCI_BLOCKSTORE_METRICS}_VolumeThrottledIOs'
+
+    assert inputs(f'{metric} > 0', _scrape_jobs()) == frozenset()
+
+
 def test_every_job_an_alerting_rule_reads_has_a_target_alert_and_no_other_job_has_one(
     absent: tuple[Run, list[str]],
 ) -> None:
     """The family is a definition: the jobs whose series the declared rules read, each watched once.
 
-    Read off the declaration, every rule outside the family through the
-    reader and the scrape jobs' exports, against the job each target alert
-    is labeled with and reads.
+    Read off the declaration, every alert outside the family through the
+    reader, the declared recording rules and the scrape jobs' exports,
+    against the job each target alert is labeled with and reads.
     """
     run, _ = absent
     watching, reading = _family(_declared_rules(run))
     jobs = _scrape_jobs()
-    read = {job for rule in reading for job in inputs(rule['expr'], jobs)}
+    records = _declared_records(run)
+    read = {job for rule in reading for job in inputs(rule['expr'], jobs, records)}
     watched = [rule['labels'][JOB_LABEL] for rule in watching if rule['alert'] == TARGET_DOWN]
 
     assert read, 'no rule reads a scrape job'
@@ -1457,6 +1764,7 @@ def test_vmagent_writes_to_the_history_stores_service(absent: tuple[Run, list[st
         ({'__name__': 'process_resident_memory_bytes', 'job': 'etcd'}, True),
         ({'__name__': 'container_cpu_usage_seconds_total', 'job': 'kubelet'}, True),
         ({'__name__': 'kube_pod_container_resource_requests', 'job': 'kube-state-metrics'}, True),
+        ({'__name__': 'kube_pod_status_phase', 'job': 'kube-state-metrics'}, True),
         ({'__name__': 'apiserver_request_total', 'job': 'apiserver'}, True),
         ({'__name__': 'kluster:etcd_wal_fsync_p99:5m'}, True),
         ({'__name__': 'oci_blockstore_VolumeThrottledIOs', 'job': 'oci'}, True),

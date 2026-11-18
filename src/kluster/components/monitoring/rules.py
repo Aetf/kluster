@@ -21,6 +21,13 @@ every expression through it, and it refuses MetricsQL's own syntax (`WITH`,
 `default`, `if`, `limit`, `keep_metric_names`): a rule using that is refused
 rather than declared.
 
+**Each reading is recorded, and the SLO alerts read the records**
+(`READING_GROUPS`): a group per `readings.Resource`, holding a
+`RecordingRule` for every reading of it and the alerts over them. An alert
+over a reading compares its recorded series with the reading's budget
+(`readings.Budget.breach`), so its threshold is the budget the canon states,
+and the alert's tier and playbook are its own (operations.md §8).
+
 **Every CronJob a stack program declares is watched by the scheduled-job
 family**: each row of `conventions.schedule.SCHEDULED_JOBS` gives a *stale*
 alert (`stale`) and a *failed* one (`failed`), read off kube-state-metrics'
@@ -30,12 +37,17 @@ series for that CronJob, both `actionable` and both naming the row's playbook
 **Every scrape job some alerting rule reads is watched by the scrape-target
 family** (`rule_groups`): a rule that reads no series evaluates over none and
 is silent, so a job that stops reporting raises `ScrapeTargetDown` for that
-job instead. The set is read off the rules: the metric names each
+job instead. The set is read off the alerts: the metric names each
 expression selects (`selectors`, through GreptimeDB's `promql_parser`), mapped
 to the jobs that export them
-(`inputs`). A selector that names its `job` reads that job; one that does not
+(`inputs`). A recorded series is read through the recording rule that writes
+it (`recorded`), so an alert over a reading watches the jobs the reading
+reads. A selector that names its `job` reads that job; one that does not
 reads every `ScrapeJob` whose `exports` matches the name, and a name no job
-exports is refused, so a rule cannot read a series whose job goes unwatched.
+exports is refused, so an alert cannot read a series whose job goes
+unwatched -- apart from OCI's series, which the pull writes rather than
+vmagent scrapes, and which the pull's own rows of the scheduled-job family
+watch instead (`IMPORTED`). A recording rule no alert reads adds no job.
 `ScraperDown` is the one alert for every job at once, when no target reports
 at all, and while it holds the per-job alerts hold back
 (operations.md §6.4).
@@ -61,9 +73,13 @@ from types import MappingProxyType
 
 import promql_parser
 
+from kluster.components.monitoring import readings
+from kluster.components.monitoring.jobs import ETCD_JOB
+from kluster.components.monitoring.readings import Reading, Resource
 from kluster.conventions import backup, schedule
 from kluster.conventions.alert import Playbook, Tier
 from kluster.conventions.cluster import KUBECONFIG_ALERT_MARGIN
+from kluster.conventions.providers import OCI_BLOCKSTORE_METRICS
 from kluster.conventions.schedule import ScheduledJob
 
 __all__ = (
@@ -73,21 +89,27 @@ __all__ = (
     'HEARTBEAT',
     'HEARTBEAT_REPEAT',
     'HEARTBEAT_TIMER',
+    'IMPORTED',
     'JOB_LABEL',
     'KUBECONFIG_COPY',
+    'READING_GROUPS',
     'SCRAPER_DOWN',
+    'SLO_ALERTS',
     'TARGET_DOWN_PENDING',
     'TIER_LABEL',
     'AlertRule',
+    'RecordingRule',
     'RuleGroup',
     'ScrapeJob',
     'Selector',
     'failed',
     'inputs',
     'kubeconfig_copy',
+    'recorded',
     'rule_groups',
     'scrape_targets',
     'selectors',
+    'slo',
     'stale',
     'target_down',
 )
@@ -139,11 +161,19 @@ class AlertRule:
 
 
 @dataclass(frozen=True)
+class RecordingRule:
+    """One recording rule: the series it writes, and the expression it writes there at each evaluation."""
+
+    record: str
+    expr: str
+
+
+@dataclass(frozen=True)
 class RuleGroup:
-    """Rules vmalert evaluates together."""
+    """Rules vmalert evaluates together, in order: a recording rule ahead of the alerts that read it."""
 
     name: str
-    rules: Sequence[AlertRule]
+    rules: Sequence[AlertRule | RecordingRule]
 
 
 #: The cluster's check-in: a rule that always fires, which alertmanager repeats
@@ -156,6 +186,143 @@ HEARTBEAT = AlertRule(
     tier=Tier.HEARTBEAT,
     summary="The cluster's alerting is evaluating rules and delivering them",
     playbook=Playbook('docs/operations.md', '4'),
+)
+
+
+# -- The readings and their SLO alerts ----------------------------------------------
+
+#: Where the SLO alerts' playbooks are: operations.md §8, a subsection per kind.
+_SLO_PLAYBOOKS = 'docs/operations.md'
+
+
+def _reading(name: str, window: dt.timedelta) -> Reading:
+    (found,) = (reading for reading in readings.READINGS if reading.name == name and reading.window == window)
+    return found
+
+
+def slo(
+    reading: Reading,
+    *,
+    alert: str,
+    tier: Tier,
+    summary: str,
+    section: str,
+    pending: dt.timedelta | None = None,
+) -> AlertRule:
+    """An SLO alert over a reading: its recorded series outside the budget the canon gives it."""
+    if reading.budget is None:
+        raise ValueError(f'{reading.record} has no budget to alert on')
+    return AlertRule(
+        alert=alert,
+        expr=reading.budget.breach(reading.record),
+        tier=tier,
+        summary=summary,
+        playbook=Playbook(_SLO_PLAYBOOKS, section),
+        pending=pending,
+    )
+
+
+_FIVE = dt.timedelta(minutes=5)
+_TEN = dt.timedelta(minutes=10)
+
+#: The SLO alerts, by the resource whose readings they read (Aetf/kluster-ops#790
+#: §5). `notify` where the event resolves itself and a planned peak produces
+#: it -- a Talos upgrade moves the leader -- and `actionable` where a
+#: sustained state needs a person. A latency's p99 is held over two of its
+#: windows before it fires, so a single slow window is a reading and not an
+#: alert; the pressures' ten-minute window is the gate's own.
+SLO_ALERTS: Mapping[Resource, Sequence[AlertRule]] = MappingProxyType(
+    {
+        Resource.ETCD: (
+            slo(
+                _reading('etcd_wal_fsync_p99', _FIVE),
+                alert='EtcdWalFsyncSlow',
+                tier=Tier.ACTIONABLE,
+                summary="An etcd member's WAL fsync p99 is over its budget",
+                section='8.1',
+                pending=_TEN,
+            ),
+            slo(
+                _reading('etcd_backend_commit_p99', _FIVE),
+                alert='EtcdBackendCommitSlow',
+                tier=Tier.ACTIONABLE,
+                summary="An etcd member's backend commit p99 is over its budget",
+                section='8.1',
+                pending=_TEN,
+            ),
+            slo(
+                _reading('etcd_apply_mean', _FIVE),
+                alert='EtcdApplySlow',
+                tier=Tier.ACTIONABLE,
+                summary="An etcd member's mean apply is over its budget",
+                section='8.1',
+            ),
+            slo(
+                _reading('etcd_wal_fsyncs_over_1s', _FIVE),
+                alert='EtcdDiskStall',
+                tier=Tier.NOTIFY,
+                summary='An etcd member waited over a second for a WAL fsync',
+                section='8.1',
+            ),
+            slo(
+                _reading('etcd_leader_changes', dt.timedelta(minutes=15)),
+                alert='EtcdLeaderChanged',
+                tier=Tier.NOTIFY,
+                summary="etcd's leader changed",
+                section='8.2',
+            ),
+            AlertRule(
+                alert='EtcdNoLeader',
+                expr=f'{readings.series("etcd_server_has_leader", job=ETCD_JOB)} == 0',
+                tier=Tier.ACTIONABLE,
+                summary='An etcd member has no leader',
+                playbook=Playbook(_SLO_PLAYBOOKS, '8.2'),
+                pending=dt.timedelta(minutes=1),
+            ),
+        ),
+        Resource.CPU: (
+            slo(
+                _reading('node_cpu_pressure_some', _TEN),
+                alert='ControlPlaneCpuPressure',
+                tier=Tier.ACTIONABLE,
+                summary="A control plane's CPU pressure is over its budget",
+                section='8.3',
+            ),
+        ),
+        Resource.DISK: (
+            slo(
+                _reading('node_io_pressure_some', _TEN),
+                alert='ControlPlaneIoPressure',
+                tier=Tier.ACTIONABLE,
+                summary="A control plane's I/O pressure is over its budget",
+                section='8.3',
+            ),
+            slo(
+                _reading('volume_throttled_ios', readings.OCI_WINDOW),
+                alert='BootVolumeThrottled',
+                tier=Tier.NOTIFY,
+                summary='OCI throttled I/O on a boot volume',
+                section='8.4',
+            ),
+        ),
+    }
+)
+
+#: A group per resource: each reading's recording rule, then the SLO alerts
+#: that read them, which vmalert evaluates after the records in each round.
+READING_GROUPS: Sequence[RuleGroup] = tuple(
+    RuleGroup(
+        resource.value,
+        (
+            *(
+                RecordingRule(reading.record, reading.expr)
+                for reading in readings.READINGS
+                if reading.resource is resource
+            ),
+            *SLO_ALERTS.get(resource, ()),
+        ),
+    )
+    for resource in Resource
 )
 
 
@@ -283,6 +450,7 @@ ALERT_GROUPS: Sequence[RuleGroup] = (
             ),
         ),
     ),
+    *READING_GROUPS,
     RuleGroup('scheduled-jobs', tuple(rule for job in schedule.SCHEDULED_JOBS for rule in (stale(job), failed(job)))),
 )
 
@@ -455,12 +623,35 @@ def selectors(expr: str) -> tuple[Selector, ...]:
     return tuple(found)
 
 
-def inputs(expr: str, jobs: Sequence[ScrapeJob]) -> frozenset[str]:
-    """The jobs whose series an expression reads, refusing a metric it reads by name alone that no job exports."""
+#: The names of the series a job writes into the stores rather than vmagent
+#: scrapes: OCI's block-volume series, which the pull imports (`oci_metrics`).
+#: No target stands for them and no `up` is written for them, so the
+#: scrape-target family has nothing to watch; the pull's own rows of the
+#: scheduled-job family watch them instead (`conventions.schedule.OCI_METRICS_PULL`).
+IMPORTED = f'{OCI_BLOCKSTORE_METRICS}_.+'
+
+
+def recorded(groups: Sequence[RuleGroup]) -> dict[str, str]:
+    """Each series the groups' recording rules write, and the expression each is written from."""
+    return {rule.record: rule.expr for group in groups for rule in group.rules if isinstance(rule, RecordingRule)}
+
+
+def inputs(expr: str, jobs: Sequence[ScrapeJob], records: Mapping[str, str] = MappingProxyType({})) -> frozenset[str]:
+    """The jobs whose series an expression reads, refusing a metric it reads by name alone that no job exports.
+
+    A series one of `records` writes is read through the expression it is
+    written from, so an alert over a reading reads the jobs the reading does.
+    One of `IMPORTED` is read from no job.
+    """
     read: set[str] = set()
     for selector in selectors(expr):
+        if selector.metric in records:
+            read |= inputs(records[selector.metric], jobs, records)
+            continue
         if selector.jobs is not None:
             read |= selector.jobs
+            continue
+        if re.fullmatch(IMPORTED, selector.metric):
             continue
         exporters = {job.job for job in jobs if re.fullmatch(job.exports, selector.metric)}
         if not exporters:
@@ -472,8 +663,10 @@ def inputs(expr: str, jobs: Sequence[ScrapeJob]) -> frozenset[str]:
 
 
 def scrape_targets(groups: Sequence[RuleGroup], jobs: Sequence[ScrapeJob]) -> RuleGroup:
-    """The scrape-target family over `groups`: `ScraperDown`, and an alert for each job some rule of them reads."""
-    read = {job for group in groups for rule in group.rules for job in inputs(rule.expr, jobs)}
+    """The scrape-target family over `groups`: `ScraperDown`, and an alert for each job some alert of them reads."""
+    records = recorded(groups)
+    alerts = [rule for group in groups for rule in group.rules if isinstance(rule, AlertRule)]
+    read = {job for rule in alerts for job in inputs(rule.expr, jobs, records)}
     return RuleGroup('scrape-targets', (SCRAPER_DOWN, *(target_down(job) for job in sorted(read))))
 
 
