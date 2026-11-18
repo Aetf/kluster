@@ -292,15 +292,16 @@ IMAGE_MATCH_STRING = (
 )
 
 
-def test_the_provisioners_patch_releases_reach_a_pull_request() -> None:
-    """Every provisioner release is `v0.0.N`, a patch to docker versioning, and patches are off unless a rule says so.
+def test_the_provisioners_patches_are_named_by_a_rule_of_its_own() -> None:
+    """Every provisioner release is `v0.0.N`, a patch to docker versioning, and one rule names the provisioner alone.
 
     The rule names the dependency the image manager reads off the pin's line,
-    re-enables patches and nothing else, and names no other dependency: an
+    matches patch updates and nothing else, and names no other dependency: an
     image whose releases are patches is named by a rule of its own, and a pin
-    no such rule names keeps its patches folded into its minors. Renovate
-    reads its configuration from the default branch, so nothing goes red
-    there when this breaks.
+    no such rule names keeps its patches folded into its minors. Whether
+    renovate proposes the next release, which turns on how it merges that
+    rule with the global `patch` object, is
+    `test_versions.py::test_renovate_offers_the_next_release_of_every_image_pin`.
     """
     config = (ROOT / 'renovate.json5').read_text()
     pin = re.search(r'^\s*versions:image-local-path-provisioner:.*$', (ROOT / 'Pulumi.yaml').read_text(), re.MULTILINE)
@@ -315,8 +316,6 @@ def test_the_provisioners_patch_releases_reach_a_pull_request() -> None:
     (rule,) = rules
     assert listed(rule, 'matchDepNames') == [read['depName']]
     assert listed(rule, 'matchUpdateTypes') == ['patch']
-    assert re.search(r'^\s*enabled: true,$', rule, re.MULTILINE)
-    assert re.search(r'^\s*patch: \{\s*(//[^\n]*\s*)*enabled: false,', config, re.MULTILINE)
 
 
 # -- reloader -----------------------------------------------------------------
