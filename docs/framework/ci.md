@@ -134,50 +134,108 @@ this installation's naming rather than only its LAN half. `apps`, the
 tier that changes daily, holds neither that credential nor a ZeroTier
 identity.
 
-**Join mechanics, and why they need a lock of their own.** The
-identity a job joins with is whatever its Environment's
-`ZEROTIER_IDENTITY` holds, so the Environment is the identity's
-carrier, and the jobs that join are exactly those whose Environment
-has one: `plan-physical` and `up-physical` on the merge chain, `up-dns`
-beside them, the `preview (dns)` and `prove (dns)` jobs a pull request
-runs, and the `physical` and `dns` entries of the drift matrix. A join
-cannot span jobs — each is its own runner VM — and ZeroTier maps a
+**Join mechanics: which jobs join.** **A job joins the overlay exactly
+when its run dials an address the overlay carries, and never because
+its Environment happens to carry an identity.** The identity a job
+joins with is whatever its Environment's `ZEROTIER_IDENTITY` holds, so
+the Environment is the identity's carrier, but carrying one is no
+reason to join. Whether a run dials is a property of the stack's
+providers and of the command. The runs that dial today are an `up` of
+`physical` or `dns`; any `physical` preview, because every device-files
+resource diffs against the device and `pd_lease` reads the lease in
+`check` ([physical/gateway.md](../physical/gateway.md) §3, §4.2); a
+`--refresh` of either stack; and the join proof below. A `dns` preview
+without `--refresh` calls only `configure`, `check` and `diff` on its
+dynamic providers, none of which opens a connection, so it dials
+nothing over the overlay, and `k8s-base` and `apps` reach nothing on
+the LAN. The jobs that join today are therefore `plan-physical` and
+`up-physical` on the merge chain, `up-dns` beside them, the `physical`
+and `dns` entries of the drift matrix, and the join proof. A pull
+request's `preview (dns)` and `prove (dns)` do not
+join: they hold no identity's lock, wait on no gateway, and do not fail
+when the gateway is down. `test_workflow_shape` holds that no job a pull
+request runs both runs `pulumi` and joins, and
+`test_dns_preview_dials_nothing` holds the premise under it: every
+dynamic provider the `dns` program declares answers `configure`,
+`check` and `diff` with every connection refused.
+
+**The join proof**, `join (dns)` in `preview.yml`, is the one job a pull
+request runs that joins. It proves the join action, under the `dns`
+identity's inputs, on a change under `.github/` — to the action, the
+release it pins, a runner label, or the inputs a workflow joins with —
+which is the kind of change a pull request's run can prove. `physical`'s
+join, whose wait needs every target to answer, is first exercised by
+`plan-physical` on `main`, and a change to the flow rules or the roster
+is proved by no pull request at all. It runs the checkout and the join
+and nothing else, with `up-dns`'s routes and wait, in the `dns`
+Environment, and only when the change touches `.github/`, by a path
+filter of its own, so that the previews' stack matrix never picks it up.
+It reports like the previews and is no required check.
+`test_workflow_shape` holds both the workflow's trigger and the job's
+filter to match the join action and every workflow that holds a join.
+
+**Why the `dns` identity stays in the any-branch `dns` Environment.**
+Moving it to an Environment that only protected branches can name would
+stop no actor, because a pull request's run already reaches what the
+identity reaches. It holds the AdGuard login, which is `dns`
+configuration under the stack passphrase, and the kubeconfig, which is
+`k8s-base` and `apps` configuration. A pod the kubeconfig places on the
+worker, outside the application base's egress block
+([declarative/workloads.md](../declarative/workloads.md), "Network
+policy"), reaches the resolvers' API through the cluster zone's allow
+toward Internal
+([physical/gateway.md](../physical/gateway.md) §4.2 rule 3; the
+container VLAN sits in the LAN zone, gateway.md §4.1). The move becomes a control
+the day that path closes or the kubeconfig leaves the reach of pull
+requests, and this paragraph is false from that day.
+
+**One identity is live in one job at a time, and the lock queues.** A
+join cannot span jobs — each is its own runner VM — and ZeroTier maps a
 member to one endpoint at a time, so **one identity must never be live
-in two jobs at once**; two that share it flap.
+in two jobs at once**; two that share it flap. No workflow-level setting
+arranges that. The deploy chain's `concurrency: deploy` group
+serializes deploys against deploys, but a drift run joins with the very
+same Environments' identities, and a pull request's join proof joins
+with the `dns` one. The lock therefore has to name the identity rather
+than the workflow: every joining job takes a **job-level `concurrency`
+group named for the stack whose identity it joins with** — `zt-dns` or
+`zt-physical` — and because a concurrency group is repository-wide,
+that one name serializes the merge chain, drift and the join proof
+against each other. The two physical Environments share `zt-physical`:
+the plan and the apply are separate credential partitions but are meant
+to carry the same member. A job-level group may read the `matrix`
+context, which a job-level `if` cannot, so the drift matrix keys each
+entry on a lock of its own; its entries that do not join take a key
+that only another drift run collides with, because two entries of one
+run sharing a key is the case GitHub does not serialize reliably.
 
-No workflow-level setting arranges that. The deploy chain's
-`concurrency: deploy` group serializes deploys against deploys, but a
-drift run joins with the very same Environments' identities, and any
-pull request's preview joins with the `dns` one. The lock therefore has
-to name the identity rather than the workflow: every joining job takes
-a **job-level `concurrency` group named for the stack whose identity it
-joins with** — `zt-dns` or `zt-physical` — and because a concurrency group is
-repository-wide, that one name serializes previews, proofs, drift and
-the merge chain against each other. The two physical Environments share
-`zt-physical`: the plan and the apply are separate credential
-partitions but are meant to carry the same member. A job-level group
-may read the `matrix` context, which a job-level `if` cannot, so the
-matrix jobs key on their own stack; their non-joining entries take a
-per-run key that collides with nothing, because two entries of one run
-sharing a key is the case GitHub does not serialize reliably.
+**Every job-level concurrency group a joining job enters declares
+`queue: max`, so a group delays a joining job and never cancels it.**
+Under GitHub's default a group keeps one pending entry, and a newer
+entry cancels it; a cancelled job is neither success nor failure, so a
+deploy job cancelled that way would silently not apply, and a drift
+check silently not run. Under `queue: max` a group keeps up to 100
+pending entries and starts them in roughly the order each started
+waiting (GitHub does not guarantee the order, and nothing here depends
+on it); GitHub refuses it beside `cancel-in-progress: true`.
+The entrants of each group are few — `zt-physical`'s are the physical
+plan and apply and the drift check, `zt-dns`'s are `up-dns`, the drift
+check and the join proof — so the ceiling is out of reach. A merge-chain
+job therefore ends `cancelled` only by a hand, by its own bound outside
+every step (§3), or with a pending run that a newer push replaces
+(below). `test_workflow_shape` holds every joining job to its
+identity's one group, no two identities to one group, and every entry of
+such a group, a workflow-level one included, to `queue: max`, reading
+group names without regard to case, as GitHub does.
 
-What that buys, and what it costs:
-
--   At most one joining job per stack runs; a second waits.
--   A **third supersedes the second**: GitHub keeps one pending entry
-    per group and cancels the older one. For a preview or a proof this
-    is a re-run button rather than a correctness problem — pull
-    requests are not cumulative, and `preview` is deliberately not a
-    required check (github.md §3).
--   Residual, accepted: a *deploy* job that is waiting on a stack's
-    group can be superseded the same way, and a canceled job is neither success
-    nor failure, so that layer would silently not apply — and for
-    `plan-physical` or `up-physical`, neither would the layers the
-    chain runs after them (§3). The window is
-    small — drift fires weekly, previews last minutes — and the next
-    merge applies the same code again. Making it impossible would mean
-    a second identity per stack, which is credential surface bought to
-    close a rare and self-healing hole.
+What the lock still costs is waiting. Per stack, a deploy job waits
+behind a drift check that holds the identity, and an `up-dns` also
+behind a join proof. A drift identity of its own would let them run side
+by side, for the price of a roster entry, a flow-rules block, a secret
+row and a rotation, to save a few minutes of overlap a week. The
+workflow-level `deploy` group stays at its default: a pending deploy
+run that a newer push supersedes is replaced by a run that applies a
+superset of its changes.
 
 Rejected alternatives and the join-latency expectation:
 physical/gateway.md §2.6. The member roster the two identities sit in,
@@ -203,6 +261,10 @@ PR      preview.yml:        changes ─→ preview (dns | k8s-base | apps)
                                none for a change that reaches no stack;
                                physical has no PR preview — its credentials
                                are main-only, see partitioning below)
+                            └─→ join (dns)
+                              (only on a change under .github/;
+                               report-only like the previews, and not a
+                               required check)
 
         noop-automerge.yml: classify ─→ prove (dns | k8s-base | apps) ─→ merge
                               (its own workflow, not a reader of
@@ -398,9 +460,9 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     driver, which keeps the separation
     [declarative/dns.md](../declarative/dns.md) §3 puts there. A slow or
     hung `up-dns` delays both, by up to its job's bound, and so does its
-    wait on the `zt-dns` group it shares with the previews, proofs and
-    drift checks that join with the same identity (§2): that is the cost
-    of the order. Where `up-dns` deleted a cut's legacy records and
+    wait on the `zt-dns` group it shares with the drift checks and join
+    proofs that join with the same identity (§2): that is the cost of
+    the order. Where `up-dns` deleted a cut's legacy records and
     `up-k8s-base` then failed, `up-apps` is skipped and the cut's names
     resolve nowhere until a run succeeds, so a migration window re-runs
     the chain until it succeeds before it verifies the cut
@@ -436,7 +498,7 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
 -   **Path-filter skipping is a setup-cost optimization, not a
     correctness mechanism**, and **selection is all-or-nothing**: a
     change that reaches no stack skips the matrix entirely (saving
-    checkout/deps/overlay-join), and every other change runs all three
+    checkout and dependencies), and every other change runs all three
     layers and lets the internal previews no-op. There is no
     single-layer case to select — the three filters are one YAML anchor
     and its two aliases, so `changes` answers with all three names or
@@ -551,8 +613,8 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     above its normal duration.** GitHub's default is six hours, and a
     job holds its runner for as long as it runs — and a job that joins
     ZeroTier holds its job-level `zt-<stack>` group (§2) too, so one
-    hung `dns` preview would block every deploy, proof, drift check and
-    preview of that stack behind it. `timeout-minutes` is what bounds
+    hung `dns` drift check would block every deploy job and join proof
+    of that stack behind it. `timeout-minutes` is what bounds
     how long a hung job holds that group. The bound follows the rule
     [testing.md](testing.md) §1 sets for tests: a hang guard an order of
     magnitude above the job's normal duration, not a budget a healthy
@@ -568,8 +630,8 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     the job's bound holds them all.** A job that exceeds its own
     `timeout-minutes` ends **`cancelled`, not `failed`** — the state a
     job superseded in its group ends in, which must stay silent: a
-    `zt-<stack>` job while it waits (§2, accepted), or a `checks` run
-    on `main` that a newer push replaces — while a step that exceeds its own ends `failed`, names itself in
+    pending `deploy` run (§2) or a `checks` run on `main` that a newer
+    push replaces — while a step that exceeds its own ends `failed`, names itself in
     the annotation (`The action '<step>' has timed out after N
     minutes.`), and fails its job, which is what the alert conditions
     read. So every step of such a job carries a `timeout-minutes` set
@@ -767,8 +829,8 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     contains(needs.*.result, 'failure')`, until the exception retires.
     **No alert condition reads `cancelled`.** A `cancelled` job on
     `main` is then one of three things, none of which pages: superseded
-    in its group — a `zt-<stack>` job while it waits (§2, accepted), or
-    a `checks` run on `main` that a newer push replaces — cancelled by
+    in its group — a pending `deploy` run (§2) or a `checks` run on
+    `main` that a newer push replaces — cancelled by
     an actor, who already knows, or stopped by its job's own bound outside every step (the
     residual the step-bound bullet above accepts). A hang inside a step
     is a failure instead, and pages. **No job an alert reads sets

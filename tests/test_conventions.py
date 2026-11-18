@@ -44,7 +44,16 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from fences import prose
 from renovate_text import as_python_spells_it, as_renovate_spells_it, listed, package_rules
 from section_numbers import sections
-from workflow_files import GITHUB, github_name, mapping, read_workflow, workflow_jobs, workflows_and_actions
+from workflow_files import (
+    GITHUB,
+    github_name,
+    mapping,
+    read_workflow,
+    workflow_jobs,
+    workflow_on,
+    workflow_triggers,
+    workflows_and_actions,
+)
 
 from kluster import conventions
 from kluster.components.dns import base as dns_base
@@ -1848,26 +1857,6 @@ PLAYBOOK_REFERENCE = re.compile(r'^(docs/[\w./-]+\.md) §(\d+(?:\.\d+)*)$')
 PERMISSION_INPUT = 'permission-'
 
 
-def _on(workflow: dict[str, object]) -> object:
-    keyed = cast('dict[object, object]', workflow)
-    return keyed.get('on', keyed.get(True))
-
-
-def _triggers(workflow: dict[str, object]) -> set[str]:
-    """The events a workflow runs on, in any of the three shapes `on:` takes.
-
-    YAML 1.1 reads a bare `on` key as the boolean `true`, which is how PyYAML
-    hands it back, so a read under the string alone finds no trigger in any
-    workflow here.
-    """
-    on = _on(workflow)
-    if isinstance(on, str):
-        return {on}
-    if isinstance(on, list):
-        return {str(event) for event in cast('list[object]', on)}
-    return {str(event) for event in mapping(on, 'on:')}
-
-
 def _needs(job: dict[str, object]) -> set[str]:
     needs = job.get('needs', [])
     return {needs} if isinstance(needs, str) else {str(need) for need in cast('list[object]', needs)}
@@ -1877,7 +1866,7 @@ def _workflows_running_on_main() -> dict[str, dict[str, object]]:
     return {
         path.name: workflow
         for path in workflows_and_actions()
-        if path.parent.name == 'workflows' and _triggers(workflow := read_workflow(path)) - NOT_ON_MAIN
+        if path.parent.name == 'workflows' and workflow_triggers(workflow := read_workflow(path)) - NOT_ON_MAIN
     }
 
 
@@ -1909,7 +1898,7 @@ def _producer_step(uses: str | None) -> dict[str, object]:
 
 def _producer_call() -> dict[str, object]:
     """The producer's `on.workflow_call`: the inputs and the secrets it declares."""
-    return mapping(mapping(_on(read_workflow(PRODUCER)), 'on:').get('workflow_call'), 'workflow_call')
+    return mapping(mapping(workflow_on(read_workflow(PRODUCER)), 'on:').get('workflow_call'), 'workflow_call')
 
 
 def test_every_workflow_that_runs_on_main_ends_in_the_alert_job() -> None:

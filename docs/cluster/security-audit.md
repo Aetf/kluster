@@ -367,10 +367,21 @@ bump into `prove`.
 **Fix.** None at the credential: an admin login is the whole of what the
 appliance offers, and the rewrites are what makes LAN clients resolve
 split-horizon apps to their `lan` VIPs at all. The containment is
-positional — Central flow rules confine the `dns` stack's CI identity to
-the AdGuard APIs alone (L5), so the login is usable only from a joined
-member, and previews run for same-repo branches only, never a
-fork's. Accepted residual, and its detection gap is part of what is
+positional. The API the login opens is reachable from every overlay
+member the flow rules admit to it — the `dns` stack's CI identity,
+confined to the AdGuard APIs alone (L5), and every `personal` and
+`infra` member, whose reach is the LAN's through the rules' final
+`accept` (physical/gateway.md §2.3), the legacy cluster's
+self-authorized CI members among them until kluster-code retires
+(threat-model.md §2.10) — and from inside the home: the LAN reaches its
+own resolvers, and a pod the kubeconfig places on the cluster's worker,
+outside the application base's egress block (declarative/workloads.md,
+"Network policy"), reaches them through the cluster zone's allow toward
+Internal (physical/gateway.md §4.2 rule 3). A same-repo branch's run
+holds both the identity and the kubeconfig, so the line that keeps the
+login from an outsider is that previews run for same-repo branches only,
+never a fork's; why the identity stays in this Environment is ci.md §2.
+Accepted residual, and its detection gap is part of what is
 accepted: a refresh reads back the rewrites the stack declares, so one
 added beside them is not something the weekly drift run compares.
 

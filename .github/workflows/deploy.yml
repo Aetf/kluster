@@ -18,7 +18,8 @@ on:
 # Serialized: one chain at a time, which state locking wants anyway. It is not
 # by itself enough to keep a ZeroTier identity from being live twice — drift.yml
 # joins with the same environments' identities — so every job that joins also
-# takes a `zt-<domain>` group of its own (framework/ci.md §2).
+# takes a `zt-<domain>` group of its own, which queues, so that a group delays
+# a joining job and never cancels it (framework/ci.md §2).
 concurrency:
   group: deploy
   cancel-in-progress: false
@@ -46,10 +47,12 @@ jobs:
     environment: physical-plan
     # Both physical environments are one ZeroTier domain: the plan and the
     # apply are meant to carry the same pre-authorized member, so they share a
-    # key even though they are separate credential partitions.
+    # key even though they are separate credential partitions. The group
+    # queues, as every group a joining job enters does (framework/ci.md §2).
     concurrency:
       group: zt-physical
       cancel-in-progress: false
+      queue: max
     outputs:
       diff: ${{ steps.plan.outputs.diff }}
     steps:
@@ -148,6 +151,7 @@ jobs:
     concurrency:
       group: zt-physical
       cancel-in-progress: false
+      queue: max
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         timeout-minutes: 5
@@ -230,10 +234,12 @@ jobs:
     timeout-minutes: 180
     environment: dns
     # Shared with every other job that joins on the dns environment's identity:
-    # a preview, a noop-automerge proof, a drift check.
+    # a drift check, and a pull request's join proof. The group queues, so
+    # neither can cancel this job while it waits (framework/ci.md §2).
     concurrency:
       group: zt-dns
       cancel-in-progress: false
+      queue: max
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         timeout-minutes: 5
