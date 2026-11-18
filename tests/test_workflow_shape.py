@@ -721,7 +721,14 @@ def test_every_group_a_joining_job_enters_queues() -> None:
 
     # A read that stopped finding the groups would pass on nothing.
     assert entries, 'no job enters a group a joining job enters'
-    assert [where for where, entry in entries if entry.queue != QUEUE_MAX or entry.cancels] == []
+    failing = [(where, entry) for where, entry in entries if entry.queue != QUEUE_MAX or entry.cancels]
+    # A group this read cannot name whole is read as entering each joining
+    # group its literal text admits, whatever it evaluates to on the forge.
+    assert [where for where, entry in failing if not entry.literal] == [], (
+        'a group this read cannot name whole counts as an entrant of each joining group its literal text admits: '
+        'give it a literal prefix no joining group shares, or queue it'
+    )
+    assert [where for where, _ in failing] == []
 
 
 #: The events that run a workflow for a pull request.
@@ -786,8 +793,31 @@ STEP_OUTPUT = re.compile(r'^\$\{\{\s*steps\.([\w-]+)\.outputs\.([\w-]+)\s*\}\}$'
 PATHS_FILTER = 'dorny/paths-filter@'
 
 
-def _glob(pattern: str) -> re.Pattern[str]:
-    """A path filter's glob as a pattern over a path from the repository root: `**` crosses directories, `*` does not."""
+#: A character a path glob is read as itself here: one a path in this repository is written with.
+GLOB_LITERAL = re.compile(r'[\w./-]')
+
+
+def _glob(pattern: str, where: str) -> re.Pattern[str]:
+    """A path filter's glob as a pattern over a path from the repository root: `**` crosses directories, `*` does not.
+
+    A character that is neither a literal path character nor `*` is refused by
+    name rather than read as itself. GitHub's filter patterns give `?`, `+`,
+    `[]` and the escaping `\\` meanings of their own, and the path filter's
+    matcher has a syntax of its own besides; read here as a literal, such a
+    character leaves unmatched a path the forge matches, which in a `!` glob or
+    a `paths-ignore` list keeps a path the forge drops.
+
+    A `**` that is not a whole path segment is refused too. The path filter's
+    matcher, `picomatch`, reads one as a plain `*`, which does not cross a
+    `/`, so `.github**` there matches nothing under `.github/`, where this
+    read's `.*` would match all of it.
+    """
+    unread = sorted(set(GLOB_LITERAL.sub('', pattern)) - {'*'})
+    assert not unread, f'{where}: the glob {pattern!r} uses {"".join(unread)!r}, which this read does not model'
+    partial = [segment for segment in pattern.split('/') if '**' in segment and segment != '**']
+    assert not partial, (
+        f'{where}: the glob {pattern!r} has a `**` in {partial}, not a whole path segment, which this read does not model'
+    )
     parts = re.split(r'(\*\*/?|\*)', pattern)
     translated = ''.join(
         '(?:.*/)?' if part == '**/' else '.*' if part == '**' else '[^/]*' if part == '*' else re.escape(part)
@@ -818,6 +848,11 @@ def _filter_patterns(workflow: dict[str, object], name: str, condition: object, 
     return patterns
 
 
+def _filter_globs(workflow: dict[str, object], name: str, condition: object, where: str) -> list[re.Pattern[str]]:
+    """The globs a job's condition reads through a path filter of a job it needs, each as a pattern."""
+    return [_glob(pattern, where) for pattern in _filter_patterns(workflow, name, condition, where)]
+
+
 def _last_match(patterns: object, path: str, where: str) -> bool:
     """Whether `path` is selected by a trigger's `paths` or `paths-ignore` list.
 
@@ -828,7 +863,7 @@ def _last_match(patterns: object, path: str, where: str) -> bool:
     selected = False
     for pattern in cast('list[object]', patterns):
         text = str(pattern)
-        if _glob(text.removeprefix('!')).match(path):
+        if _glob(text.removeprefix('!'), where).match(path):
             selected = not text.startswith('!')
     return selected
 
@@ -849,6 +884,48 @@ def _trigger_admits(workflow: dict[str, object], path: str, where: str) -> bool:
             continue
         return True
     return False
+
+
+def _triggered(paths: dict[str, list[str]]) -> Callable[[], object]:
+    """A read of whether a workflow whose pull-request trigger carries `paths` runs for a change to the join action."""
+    workflow: dict[str, object] = {'on': {'pull_request': paths}}
+    return lambda: _trigger_admits(workflow, str(ZEROTIER.relative_to(ROOT)), 'preview.yml')
+
+
+def _filtered(*globs: str) -> Callable[[], object]:
+    """A read of the globs a job's path filter answers its condition with, the filter holding `globs`."""
+    step = {'id': 'join', 'uses': f'{PATHS_FILTER}pinned', 'with': {'filters': yaml.safe_dump({'join': list(globs)})}}
+    producer = {'outputs': {'join': '${{ steps.join.outputs.join }}'}, 'steps': [step]}
+    workflow: dict[str, object] = {'jobs': {'changes': producer}}
+    return lambda: _filter_globs(workflow, 'preview.yml', "needs.changes.outputs.join == 'true'", 'preview.yml: join')
+
+
+@pytest.mark.parametrize(
+    ('read', 'glob'),
+    [
+        (_triggered({'paths-ignore': ['.github/[a]ctions/**']}), '.github/[a]ctions/**'),
+        (
+            _triggered({'paths': ['**', '!.github/actions/zerotier/action.y?ml']}),
+            '.github/actions/zerotier/action.y?ml',
+        ),
+        (_triggered({'paths-ignore': ['.github/actions+/**']}), '.github/actions+/**'),
+        (_filtered('.github**'), '.github**'),
+    ],
+    ids=['paths-ignore-class', 'negated-question-mark', 'paths-ignore-plus', 'filter-partial-globstar'],
+)
+def test_a_path_glob_in_syntax_this_read_does_not_model_is_refused_by_name(
+    read: Callable[[], object], glob: str
+) -> None:
+    """A glob the forge reads differently is refused by name, never read as this case would read it.
+
+    On the forge each of these keeps a change to the join action from the
+    proof: the trigger's from the workflow's run, the filter's from the job.
+    Read as this case reads the rest of a glob -- a character as itself, a
+    `**` as crossing directories -- each would leave the join proof's case
+    green.
+    """
+    with pytest.raises(AssertionError, match=re.escape(repr(glob))):
+        _ = read()
 
 
 def test_a_pull_request_that_changes_what_a_join_runs_proves_the_join() -> None:
@@ -876,7 +953,7 @@ def test_a_pull_request_that_changes_what_a_join_runs_proves_the_join() -> None:
     for where, job in proofs:
         name = where.split(': ')[0].removeprefix('workflows/')
         assert [path for path in exercised if not _trigger_admits(workflows[name], path, where)] == [], where
-        patterns = [_glob(pattern) for pattern in _filter_patterns(workflows[name], name, job.get('if'), where)]
+        patterns = _filter_globs(workflows[name], name, job.get('if'), where)
         assert [path for path in exercised if not any(pattern.match(path) for pattern in patterns)] == [], where
 
 
