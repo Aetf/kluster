@@ -1,10 +1,11 @@
 """Cilium: the datapath, the Gateway API's definitions, class and Gateways, the address pools and the baseline policy.
 
 The installation is the one Cilium's and Talos' guides both document for Talos,
-and every value beyond theirs is one the design needs (rfc-007 §4.1,
-cluster-infra.md §2). What the machine configuration carries of the same
-installation -- no CNI of Talos' own, no kube-proxy, host DNS forwarding and
-KubeSpan's MTU -- is the `physical` stack's Talos component.
+with the Gateway API switches Talos' guide alone sets, and every value beyond
+theirs is one the design needs (rfc-007 §4.1, cluster-infra.md §2). What the
+machine configuration carries of the same installation -- no CNI of Talos' own,
+no kube-proxy, host DNS forwarding and KubeSpan's MTU -- is the `physical`
+stack's Talos component.
 
 Declared in the order the cluster needs them in, which the dependencies carry:
 the Gateway API definitions, a release asset rather than a chart, then the
@@ -118,7 +119,7 @@ HOST_DNS_ADDRESS = ipaddress.IPv4Network('169.254.116.108/32')
 
 
 def chart_values() -> dict[str, Any]:
-    """The chart's values: both guides' installation for Talos, and what the design adds to it.
+    """The chart's values: both guides' installation for Talos, Talos' Gateway API switches, and the design's.
 
     What is left unset is as deliberate as what is set. BPF masquerading, the
     legacy host-routing switch and the Egress Gateway stay at their defaults,
@@ -155,6 +156,12 @@ def chart_values() -> dict[str, Any]:
         'ipv6': {'enabled': True},
         'gatewayAPI': {
             'enabled': True,
+            # Talos' guide's, beside `enabled`; Cilium's guide for Talos names
+            # neither. A TLS listener offers HTTP/2 ahead of HTTP/1.1 by ALPN,
+            # and Envoy speaks HTTP/2 to a backend only where the backend's
+            # Service port names it in `appProtocol` (cluster-infra.md §2).
+            'enableAlpn': True,
+            'enableAppProtocol': True,
             'gatewayClass': {'create': 'false'},
             'secretsNamespace': {'sync': True},
         },

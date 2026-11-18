@@ -899,9 +899,18 @@ All decided behavior from architecture.md §3, expressed as config:
     names, held or not (`conventions.routes.served_zones`, which the
     DNS-01 token's scope reads too) — on the zone's wildcard, terminating
     with the zone's certificate, and one HTTP listener whose only route
-    is a redirect to HTTPS. The ports are `conventions.GATEWAY_PORTS`,
-    the same structure the node firewall opens for them (physical.md §2)
-    and the balancer forwards. A route attaches to the HTTPS listeners from a
+    is a redirect to HTTPS. **An HTTPS listener offers HTTP/2 ahead of
+    HTTP/1.1 in the TLS handshake, and Envoy speaks HTTP/2 to a backend
+    only where the backend's Service port names it in `appProtocol`**:
+    the chart's `gatewayAPI.enableAlpn` and
+    `gatewayAPI.enableAppProtocol`, both on as Talos' guide for Cilium
+    sets them beside `gatewayAPI.enabled`, since the installation is the
+    guides' as written (rfc-007 §4.1); Cilium's guide for Talos names
+    neither. So a backend that speaks HTTP/2 declares it on its Service
+    port, and a backend whose port declares nothing is spoken to over
+    HTTP/1.1. The ports are `conventions.GATEWAY_PORTS`, the same
+    structure the node firewall opens for them (physical.md §2) and the
+    balancer forwards. A route attaches to the HTTPS listeners from a
     namespace carrying `conventions.routes.ROUTE_LABEL`, which
     `allowedRoutes` selects on, and from no other; the HTTP listener
     admits only its own namespace, where the redirect is the one route.
