@@ -19,7 +19,7 @@ from typing import cast
 
 import pulumi
 import pytest
-from renovate_text import as_python_spells_it, as_renovate_spells_it, listed, package_rules, scalar
+from renovate_text import as_python_spells_it, as_renovate_spells_it, enabled, listed, package_rules, scalar
 
 from kluster.lib.versions import (
     CHART,
@@ -504,15 +504,21 @@ def _versioning(config: str, dependency: str) -> Callable[[str], Parsed | None]:
 
 
 def _offered(config: str, dependency: str, update: str) -> bool:
-    """Whether renovate proposes an update of this type: a major on the dashboard, a minor outright, a patch by rule."""
-    if update != 'patch':
-        return True
-    patches_off = re.search(r'^  patch: \{\s*(//[^\n]*\s*)*enabled: false,', config, re.MULTILINE)
-    if patches_off is None:
-        return True
-    return any(
-        'patch' in listed(rule, 'matchUpdateTypes') and re.search(r'^\s*enabled: true,$', rule, re.MULTILINE)
-        for rule in _rules_naming(config, dependency)
+    """Whether renovate proposes an update of this type of a `Pulumi.yaml` image pin: one it keeps enabled.
+
+    A major is proposed on the dashboard, and the global `patch` block
+    drops a patch unless a rule turns it back on (`renovate_text.enabled`).
+    """
+    return enabled(
+        config,
+        {
+            'matchDepNames': (dependency,),
+            'matchPackageNames': (dependency,),
+            'matchManagers': ('custom.regex', 'regex'),
+            'matchFileNames': ('Pulumi.yaml',),
+            'matchDatasources': ('docker',),
+            'matchUpdateTypes': (update,),
+        },
     )
 
 

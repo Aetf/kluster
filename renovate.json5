@@ -733,8 +733,13 @@
       //
       // No release age: the images are ones the cluster only pulls, which
       // the first rule exempts, and CI runs them only in a check holding no
-      // stack's secret (docs/threat-model.md §2.6). Matched by name alone:
-      // nothing else in the repository names these images.
+      // stack's secret (docs/threat-model.md §2.6). Matched by the settings
+      // as well as by name: a pin of either image in another file is not the
+      // box's, and on this branch it would bring a window of its own. A test
+      // holds such a pin off both of the appliance's branches.
+      matchFileNames: [
+        'src/kluster/lib/state_backend/settings.py',
+      ],
       matchDepNames: [
         'docker.io/library/postgres',
         'ghcr.io/cloudnative-pg/pgbouncer',
@@ -755,7 +760,12 @@
       // listener on the network without them until the next minor. A patch
       // travels as the image's minors do, in the appliance's group, with no
       // window. The Postgres tag names a major alone, so it has no patch to
-      // re-enable. Matched by name alone, as the rule above is.
+      // re-enable. Matched by the settings as well as by name, as the rule
+      // above is: a pin of the image in another file is no listener of the
+      // box's, and is left to the global block.
+      matchFileNames: [
+        'src/kluster/lib/state_backend/settings.py',
+      ],
       matchDepNames: [
         'ghcr.io/cloudnative-pg/pgbouncer',
       ],

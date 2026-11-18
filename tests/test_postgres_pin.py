@@ -28,7 +28,19 @@ import tomllib
 from pathlib import Path
 from typing import cast
 
-from renovate_text import as_python_spells_it, effective, group, listed, matches, package_rule, package_rules, scalar
+from renovate_text import (
+    as_python_spells_it,
+    effective,
+    group,
+    listed,
+    matchers,
+    matches,
+    package_rule,
+    package_rules,
+    reaches,
+    scalar,
+    string_value,
+)
 
 from kluster.lib.state_backend import settings
 
@@ -61,14 +73,10 @@ def _client_rules(config: str) -> list[str]:
     return [rule for rule in package_rules(config) if _for_the_client(rule)]
 
 
-def _matchers(rule: str) -> list[str]:
-    """The keys a rule matches on: renovate tells them from the fields it applies by their prefix."""
-    return [key for key in re.findall(r'^\s*(\w+):', rule, re.MULTILINE) if key.startswith(('match', 'exclude'))]
-
-
 def _appliance_rule(config: str) -> str:
-    """The rule grouping every pin of the appliance's settings: the one matching that file and setting a group."""
-    (rule,) = [rule for rule in package_rules(config) if APPLIANCE in listed(rule, 'matchFileNames') and group(rule)]
+    """The rule grouping the appliance's releases: the one a release of the Postgres image takes its branch from."""
+    rule = effective(config, APPLIANCE_UPDATES['Postgres image major'], 'groupSlug')
+    assert rule is not None, 'no rule names the branch a release of the appliance travels on'
     return rule
 
 
@@ -80,7 +88,7 @@ def test_renovate_reads_the_client_from_the_channel_mise_installs_it_from() -> N
     named = [rule for rule in _client_rules(config) if scalar(rule, 'overridePackageName') is not None]
     assert len(named) == 1, 'no rule names the conda package, so renovate looks up a name nothing answers'
     (rule,) = named
-    assert _matchers(rule) == ['matchDatasources', 'matchDepNames']
+    assert matchers(rule) == ['matchDatasources', 'matchDepNames']
     assert scalar(rule, 'overridePackageName') == f'{pin["channel"]}/{PACKAGE}'
 
 
@@ -96,7 +104,7 @@ def test_renovate_moves_the_clients_major_with_the_appliance() -> None:
     ]
     assert len(grouping) == 1, "no rule puts the client's major in the appliance's group"
     ((at, rule),) = grouping
-    assert _matchers(rule) == ['matchDatasources', 'matchDepNames', 'matchUpdateTypes']
+    assert matchers(rule) == ['matchDatasources', 'matchDepNames', 'matchUpdateTypes']
     assert listed(rule, 'matchUpdateTypes') == ['major']
     assert len(group(appliance_rule)) == 2
     assert group(rule) == group(appliance_rule)
@@ -262,14 +270,18 @@ def test_every_update_on_an_appliance_branch_carries_that_branchs_window() -> No
     image would travel on a release's day, and a release would wait for the
     rebuilds' window. One window per branch is what makes the sort
     immaterial. The releases' branch takes none, so a release is offered the
-    day renovate finds it.
+    day renovate finds it. Every update listed travels on one of the two,
+    since a pin of the appliance moving on a branch of its own is a
+    replacement of the box that the appliance's pull requests do not show.
 
     The two branches are the appliance rule's and the one its rebuilds take,
     and each rule that names either is reached by some update listed here, so
     a rule bringing a dependency onto either branch names one this check
     does not hold until it is listed; a pin the appliance rule brings in by
-    its file is held to the list by the census below. Held as text, because
-    there is no JSON5 parser here (`renovate_text`).
+    its file is held to the list by the census below, and a pin of the same
+    dependencies in any other file is held off both branches by the case
+    after this one. Held as text, because there is no JSON5 parser here
+    (`renovate_text`).
     """
     config = (ROOT / 'renovate.json5').read_text()
     releases = scalar(_appliance_rule(config), 'groupSlug')
@@ -278,10 +290,10 @@ def test_every_update_on_an_appliance_branch_carries_that_branchs_window() -> No
     assert rebuilds is not None
 
     windows: dict[str, set[tuple[str, ...]]] = {releases: set(), rebuilds: set()}
-    for update in APPLIANCE_UPDATES.values():
+    for name, update in APPLIANCE_UPDATES.items():
         branch = _branch(config, update)
-        if branch in windows:
-            windows[branch].add(_window(config, update))
+        assert branch in windows, f'the {name} travels on {branch}, apart from the appliance'
+        windows[branch].add(_window(config, update))
     for branch, carried in windows.items():
         assert len(carried) == 1, f'{branch} opens on the window of whichever update sorts first: {carried}'
     assert windows[releases] == {()}, f'a release of the appliance is held to a window: {windows[releases]}'
@@ -291,6 +303,46 @@ def test_every_update_on_an_appliance_branch_carries_that_branchs_window() -> No
         assert any(effective(config, update, 'groupSlug') == rule for update in APPLIANCE_UPDATES.values()), (
             f'a rule brings onto an appliance branch an update this check does not hold:\n{rule}'
         )
+
+
+#: Files the appliance rule does not match that a pin of one of its
+#: dependencies could sit in: a module beside the settings, in their package,
+#: and a settings module of another package.
+ELSEWHERE = ('src/kluster/lib/state_backend/images.py', 'src/kluster/lib/settings.py')
+
+
+def test_a_pin_of_the_appliances_dependencies_in_another_file_joins_neither_branch() -> None:
+    """The census reads only the appliance's files, which covers every update on its branches because no other can join.
+
+    A second pin of the Postgres image in another file, with a rule giving it
+    a window of its own, would otherwise join the refreshes' branch by name,
+    and the branch would open on whichever window sorts first, unseen by the
+    census, which reads the appliance's files, and by the check above, which
+    holds the updates listed. So no rule naming either branch can reach an
+    update of a pin the custom managers read off the settings, presented
+    from a file the appliance rule does not match and by any manager. That
+    is a miss `renovate_text.reaches` proves, whichever rule renovate would
+    take the update's group from. Held as text, because there is no JSON5
+    parser here (`renovate_text`).
+    """
+    config = (ROOT / 'renovate.json5').read_text()
+    patterns = listed(_appliance_rule(config), 'matchFileNames')
+    branches = {
+        scalar(_appliance_rule(config), 'groupSlug'),
+        _branch(config, APPLIANCE_UPDATES['Postgres image digest']),
+    }
+    assert None not in branches
+    naming = [rule for rule in package_rules(config) if scalar(rule, 'groupSlug') in branches]
+
+    for path in ELSEWHERE:
+        assert not any(matches(pattern, path) for pattern in patterns), f'the appliance rule matches {path}'
+        for name, update in APPLIANCE_UPDATES.items():
+            if update['matchFileNames'] != (APPLIANCE,):
+                continue
+            stray = {key: value for key, value in update.items() if key != 'matchManagers'}
+            stray['matchFileNames'] = (path,)
+            joining = [rule for rule in naming if reaches(rule, stray)]
+            assert not joining, f'a {name} pinned in {path} can join an appliance branch:\n' + '\n'.join(joining)
 
 
 def _appliance_files(config: str) -> list[str]:
@@ -309,11 +361,6 @@ def _custom_managers(config: str) -> list[str]:
     """
     block = config[config.index('customManagers: [') : config.index('customDatasources: {')]
     return block.split('customType:')[1:]
-
-
-def _from_json5(written: str) -> str:
-    """A JSON5 string's value from the text between its quotes: each escaped character taken as itself."""
-    return re.sub(r'\\(.)', r'\1', written)
 
 
 def test_every_pin_of_the_appliance_is_an_update_listed() -> None:
@@ -338,13 +385,13 @@ def test_every_pin_of_the_appliance_is_an_update_listed() -> None:
             continue
         template = scalar(entry, 'depNameTemplate')
         if template is not None:
-            names = {_from_json5(template)}
+            names = {string_value(template)}
         else:
             names = {
                 found['depName']
                 for written in listed(entry, 'matchStrings')
                 for path in read
-                for found in as_python_spells_it(_from_json5(written)).finditer((ROOT / path).read_text())
+                for found in as_python_spells_it(string_value(written)).finditer((ROOT / path).read_text())
             }
         assert names, f'a manager on the appliance reads a dependency this census cannot name:\n{entry}'
         assert names <= listed_names, f'{sorted(names - listed_names)} move on an appliance branch unlisted'

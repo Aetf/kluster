@@ -18,7 +18,7 @@ from pathlib import Path
 import pinned_tools
 import process_sessions
 import pytest
-from renovate_text import group, listed, package_rule
+from renovate_text import effective, group, listed, package_rule
 
 from kluster.scripts.credentials import age
 
@@ -353,9 +353,21 @@ def test_renovate_bumps_both_pins_in_one_pull_request() -> None:
 
     root = Path(__file__).parent.parent
     config = (root / 'renovate.json5').read_text()
-    appliance = "'src/kluster/lib/state_backend/settings.py'"
-    assert config.count(appliance) == 1
-    _, appliance_rule = package_rule(config, config.index(appliance))
+    # The rule grouping the appliance's releases: the one a release of the
+    # settings' age pin, read by its custom manager, takes its branch from.
+    appliance_rule = effective(
+        config,
+        {
+            'matchDepNames': ('FiloSottile/age',),
+            'matchPackageNames': ('FiloSottile/age',),
+            'matchManagers': ('custom.regex', 'regex'),
+            'matchFileNames': ('src/kluster/lib/state_backend/settings.py',),
+            'matchDatasources': ('github-releases',),
+            'matchUpdateTypes': ('minor',),
+        },
+        'groupSlug',
+    )
+    assert appliance_rule is not None
 
     # Two entries name the mise manager: the toolchain rule matches all of it,
     # and the rule for age narrows it to one dependency.

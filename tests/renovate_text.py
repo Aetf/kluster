@@ -38,6 +38,12 @@ closed. A pattern whose answer it cannot settle is taken as matching, so a
 rule is cleared only by a matcher that provably misses, and a reading that
 says no rule after another can reach an update holds in renovate too.
 `tests/test_renovate_text.py` holds `matches` to renovate's own rules.
+
+Whether renovate keeps an update at all is `enabled`, which reads the
+matching rules and the top-level object named for the update's type
+(`top_level_object`) the way renovate merges them, each through the same
+key reading, so a top-level object the scan cannot read fails rather than
+reads as setting nothing.
 """
 
 from __future__ import annotations
@@ -107,9 +113,15 @@ def _uncommented(text: str) -> str:
 #: `\u` escape.
 _WORD = re.compile(rf'{_TOKEN.pattern}|(?:[\w$]|\\u[0-9A-Fa-f]{{4}})+')
 
+#: Whitespace and comments, which JSON5 reads alike.
+_GAP = rf'(?:\s|{_COMMENT})*'
+
 #: What makes the string or name before it a key: a colon, past any
 #: whitespace and comments.
-_COLON = re.compile(rf'(?:\s|{_COMMENT})*:')
+_COLON = re.compile(rf'{_GAP}:')
+
+#: A key's colon and the gap after it, up to where its value starts.
+_TO_VALUE = re.compile(rf'{_GAP}:{_GAP}')
 
 
 def _keys(rule: str) -> list[tuple[str, int]]:
@@ -123,8 +135,13 @@ def _keys(rule: str) -> list[tuple[str, int]]:
         word = found[0]
         if word.startswith('/') or not _COLON.match(rule, found.end()):
             continue
-        keys.append((_value(word[1:-1] if word[0] in '\'"' else word), found.start()))
+        keys.append((string_value(word[1:-1] if word[0] in '\'"' else word), found.start()))
     return keys
+
+
+def matchers(rule: str) -> list[str]:
+    """The keys a rule matches on, in the order it sets them: renovate tells them from the rest by their prefix."""
+    return [name for name, _ in _keys(rule) if name.startswith(('match', 'exclude'))]
 
 
 def _set_at(rule: str, key: str) -> int | None:
@@ -242,6 +259,27 @@ def scalar(rule: str, key: str) -> str | None:
     return found[1][1:-1]
 
 
+#: A boolean a key is set to, followed by a comma and the end of its line.
+_FLAG = re.compile(r'(true|false),$', re.MULTILINE)
+
+
+def flag(rule: str, key: str) -> bool | None:
+    """The boolean a rule sets `key` to; `None` when it does not set it.
+
+    Read as `scalar` reads a string: at the last value, when the last
+    spelling of the key is the plain name, first on its line and followed by
+    `: `, and the value is `true` or `false` followed by a comma and the end
+    of the line; any other is `Unread`.
+    """
+    rule = _uncommented(rule)
+    at = _set_at(rule, key)
+    found = None if at is None else _FLAG.match(rule, at)
+    if found is None:
+        _refuse_unread(rule, key)
+        return None
+    return found[1] == 'true'
+
+
 def group(rule: str) -> list[str]:
     """The group name and slug a rule sets, each as `scalar` reads it, in the order it first writes them.
 
@@ -260,6 +298,36 @@ def constraints(config: str) -> dict[str, str]:
     blocks = re.findall(r'^  constraints: \{\n(.*?)^  \},$', config, re.MULTILINE | re.DOTALL)
     assert len(blocks) == 1, f'renovate.json5 holds {len(blocks)} top-level constraints blocks'
     return dict(re.findall(r"^    (\w+): '([^']*)',$", blocks[0], re.MULTILINE))
+
+
+def top_level_object(config: str, key: str) -> str | None:
+    """The object `renovate.json5` sets its top-level `key` to, its comments passed over; `None` when it sets none.
+
+    A top-level key is one set in the file's outermost object, in any
+    spelling JSON5 reads as the name, and a key set twice is read at its last
+    value. The object is read when it nests no object, which is the shape the
+    keys of a rule are read in (`scalar`, `flag`); a value that is no object,
+    or an object nesting one, is `Unread`.
+    """
+    structure = _structure(config)
+    setting = [
+        at
+        for name, at in _keys(config)
+        if name == key and structure.count('{', 0, at) - structure.count('}', 0, at) == 1
+    ]
+    if not setting:
+        return None
+    word = _WORD.match(config, setting[-1])
+    assert word is not None
+    to_value = _TO_VALUE.match(config, word.end())
+    assert to_value is not None
+    at = to_value.end()
+    if structure[at : at + 1] != '{':
+        raise Unread(f'the top-level {key} is no object')
+    end = structure.index('}', at)
+    if '{' in structure[at + 1 : end]:
+        raise Unread(f'the top-level {key} nests an object, which this scan does not read')
+    return _uncommented(config[at : end + 1])
 
 
 def as_renovate_spells_it(pattern: str) -> str:
@@ -281,8 +349,12 @@ _ESCAPE = re.compile(r'\\(x[0-9A-Fa-f]{2}|u[0-9A-Fa-f]{4}|.)', re.DOTALL)
 _ESCAPED = {'b': '\b', 'f': '\f', 'n': '\n', 'r': '\r', 't': '\t', 'v': '\v', '0': '\0', '\n': ''}
 
 
-def _value(written: str) -> str:
-    """The value of a JSON5 string the file writes as `written` between its quotes: each escape undone."""
+def string_value(written: str) -> str:
+    """The value of a JSON5 string the file writes as `written` between its quotes: each escape undone.
+
+    The one decoder of a string `renovate.json5` writes: a key's name, a
+    match pattern, and a custom manager's template and match strings.
+    """
     return _ESCAPE.sub(
         lambda escape: chr(int(escape[1][1:], 16)) if len(escape[1]) > 1 else _ESCAPED.get(escape[1], escape[1]),
         written,
@@ -309,6 +381,40 @@ def _regex(pattern: str) -> tuple[str, re.RegexFlag] | None:
 _UNSETTLED_REGEX = re.compile(r'\(\?<?[=!]|\\[1-9]|\[:')
 
 
+def _settled(pattern: str, value: str) -> bool | None:
+    """Whether one renovate match pattern matches `value`, or `None` where this reading cannot settle it.
+
+    Unsettled are what `matches` names, and a glob's match through a
+    wildcard or a class, which `fnmatch` makes across a `/` where
+    `minimatch` does not; a glob's miss is settled.
+    """
+    pattern = string_value(pattern)
+    if pattern.startswith('!'):
+        return None
+    regex = _regex(pattern)
+    if regex is not None:
+        source, flags = regex
+        if _UNSETTLED_REGEX.search(source):
+            return None
+        try:
+            return re.search(source, value, flags) is not None
+        except re.error:
+            return None
+    if any(char in pattern for char in '{(\\') or '[:' in pattern:
+        return None
+    if pattern == '*':
+        # Renovate matches a lone `*` against everything, before `minimatch`.
+        return True
+    # `fnmatch` spells a negated class `[!…]` alone; `minimatch` takes `[^…]`
+    # too. A `**/` segment spans zero or more directories, which `fnmatch`'s
+    # `*`, crossing `/`, covers. That crossing makes `fnmatch` match more than
+    # `minimatch`, whose `*`, `?` and classes stop at a `/`, so a miss is
+    # settled and a match through any of them is not.
+    if not fnmatch.fnmatchcase(value.lower(), pattern.lower().replace('[^', '[!').replace('**/', '*')):
+        return False
+    return None if any(char in pattern for char in '*?[') else True
+
+
 def matches(pattern: str, value: str) -> bool:
     """Whether one renovate match pattern -- a `/regex/` or `/regex/i`, a glob or a literal -- might match `value`.
 
@@ -322,24 +428,7 @@ def matches(pattern: str, value: str) -> bool:
     syntax `fnmatch` does not share with `minimatch` -- braces, extglobs,
     escapes and POSIX classes.
     """
-    pattern = _value(pattern)
-    if pattern.startswith('!'):
-        return True
-    regex = _regex(pattern)
-    if regex is not None:
-        source, flags = regex
-        if _UNSETTLED_REGEX.search(source):
-            return True
-        try:
-            return re.search(source, value, flags) is not None
-        except re.error:
-            return True
-    if any(char in pattern for char in '{(\\') or '[:' in pattern:
-        return True
-    # `fnmatch` spells a negated class `[!…]` alone; `minimatch` takes `[^…]`
-    # too. A `**/` segment spans zero or more directories, which `fnmatch`'s
-    # `*`, crossing `/`, covers.
-    return fnmatch.fnmatchcase(value.lower(), pattern.lower().replace('[^', '[!').replace('**/', '*'))
+    return _settled(pattern, value) is not False
 
 
 def reaches(rule: str, presents: dict[str, tuple[str, ...]]) -> bool:
@@ -384,6 +473,72 @@ def effective(config: str, presents: dict[str, tuple[str, ...]], key: str) -> st
     return setting[-1] if setting else None
 
 
+def provably_matches(rule: str, presents: dict[str, tuple[str, ...]]) -> bool:
+    """Whether a rule matches an update presenting these values, as far as this reading can prove it.
+
+    Every `match…` key the rule sets has a value presented for it, its list
+    is read, holds no negated pattern, and has a pattern this reading settles
+    as matching one of those values (`matches`); and the rule sets no
+    `exclude…` key, nor a deprecated key renovate merges into another
+    matcher's list (`reaches`). A rule this cannot prove may still match.
+    Each value presented is one the update holds once renovate has merged
+    its rules, not one it might hold, as `reaches` also allows: a value
+    presented in excess would prove a match on it.
+    """
+    keys = dict.fromkeys(name for name, _ in _keys(rule))
+    if any(key.startswith('exclude') or re.fullmatch(r'match\w+(?:Patterns|Prefixes)', key) for key in keys):
+        return False
+    for key in filter(re.compile(r'match\w+').fullmatch, keys):
+        values = presents.get(key)
+        try:
+            patterns = listed(rule, key)
+        except Unread:
+            return False
+        if values is None or not patterns or any(string_value(pattern).startswith('!') for pattern in patterns):
+            return False
+        if not any(_settled(pattern, value) for pattern in patterns for value in values):
+            return False
+    return True
+
+
+def enabled(config: str, presents: dict[str, tuple[str, ...]]) -> bool:
+    """Whether renovate keeps an update enabled once it merges its package rules over its update type's object.
+
+    Renovate merges the package rules, then the top-level object named for
+    the update's type -- `patch: { enabled: false }` -- and then the package
+    rules again, and drops an update whose `enabled` ends up `false`
+    (renovate 44.249.1, `lib/workers/repository/updates/flatten.ts`). So
+    the last matching rule that sets `enabled` decides, wherever it sits
+    among the rules; where none sets it, the object for the update's type
+    does, and where that sets nothing, the update is enabled. `presents`
+    names the update's one type under `matchUpdateTypes`.
+
+    The reading fails closed. The rules that set `enabled` are walked from
+    the last, passing over each that provably misses the update (`reaches`);
+    the first one left decides only when it provably matches
+    (`provably_matches`), and is otherwise `Unread`, since a rule this
+    reading cannot settle might not apply. Each value is read by `flag`, so
+    a setting it cannot read is `Unread` too.
+
+    Only that merge is read. What else drops or keeps an update is not:
+    `ignoreDeps`, `ignorePaths`, `enabledManagers`, an `enabled` set at the
+    top level or on a manager, and whatever a preset in `extends` sets.
+    """
+    (update_type,) = presents['matchUpdateTypes']
+    setting_rules = [rule for rule in package_rules(config) if any(name == 'enabled' for name, _ in _keys(rule))]
+    for rule in reversed(setting_rules):
+        if not reaches(rule, presents):
+            continue
+        if not provably_matches(rule, presents):
+            raise Unread(f'whether this rule applies to the update is not read here:\n{rule}')
+        setting = flag(rule, 'enabled')
+        assert setting is not None
+        return setting
+    block = top_level_object(config, update_type)
+    setting = None if block is None else flag(block, 'enabled')
+    return setting is not False
+
+
 def allowed_versions(rule: str) -> re.Pattern[str] | None:
     """The `allowedVersions` a rule sets, as the regular expression renovate reads; `None` when it sets none.
 
@@ -396,7 +551,7 @@ def allowed_versions(rule: str) -> re.Pattern[str] | None:
     written = scalar(rule, 'allowedVersions')
     if written is None:
         return None
-    pattern = _value(written)
+    pattern = string_value(written)
     regex = _regex(pattern)
     assert regex is not None, f'allowedVersions {written} is not a pattern'
     assert not pattern.startswith('!'), f'allowedVersions {written} is negated'

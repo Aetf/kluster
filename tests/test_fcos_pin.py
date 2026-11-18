@@ -12,7 +12,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from renovate_text import as_python_spells_it, group, package_rule
+from renovate_text import as_python_spells_it, effective, group
 
 from kluster.lib.state_backend import settings
 
@@ -85,7 +85,23 @@ def test_a_release_bump_moves_the_url_the_upload_fetches() -> None:
 
 def test_the_manager_falls_in_the_appliances_group() -> None:
     # A bump imports a new image, so it travels with the appliance's other pins
-    # rather than alone; the group rule matches the file.
+    # rather than alone: a release of the stream takes the group a release of
+    # the appliance's Postgres image does, read off the same file.
     config = _config()
-    _, rule = package_rule(config, config.index(f"'{_settings_path()}'"))
+
+    def release(dependency: str, datasource: str) -> dict[str, tuple[str, ...]]:
+        return {
+            'matchDepNames': (dependency,),
+            'matchPackageNames': (dependency,),
+            'matchManagers': ('custom.regex', 'regex'),
+            'matchFileNames': (_settings_path(),),
+            'matchDatasources': (datasource,),
+            'matchUpdateTypes': ('minor',),
+        }
+
+    rule = effective(config, release('fedora-coreos', f'custom.{DATASOURCE}'), 'groupSlug')
+    image = effective(config, release(settings.POSTGRES_REPOSITORY, 'docker'), 'groupSlug')
+    assert rule is not None, 'no rule names the group a release of the stream travels in'
+    assert image is not None
     assert len(group(rule)) == 2, 'the rule names a group and its slug'
+    assert group(rule) == group(image)

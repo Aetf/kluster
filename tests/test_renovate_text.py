@@ -28,13 +28,18 @@ from renovate_text import (
     Unread,
     allowed_versions,
     effective,
+    enabled,
+    flag,
     group,
     listed,
     matches,
     next_line,
     package_rules,
+    provably_matches,
     reaches,
     scalar,
+    string_value,
+    top_level_object,
 )
 
 #: Patterns renovate matches against the value, each with the rule that makes
@@ -336,6 +341,155 @@ def test_the_effective_rule_is_the_last_that_sets_the_key_and_can_match() -> Non
     assert found is not None
     assert listed(found, 'schedule') == ['* 0-3 2 * *']
     assert effective(config, {'matchDepNames': ('talosctl',)}, 'groupName') is None
+
+
+def test_a_boolean_is_read_at_its_last_value() -> None:
+    rule = """  {
+    enabled: true,
+    automerge: false,
+    enabled: false,
+  }"""
+    assert flag(rule, 'enabled') is False
+    assert flag(rule, 'automerge') is False
+    assert flag(rule, 'ignoreTests') is None
+    assert flag('  {\n    enabled: true,\n  }', 'enabled') is True
+
+
+@pytest.mark.parametrize(
+    'setting',
+    ['enabled: false, // folded into the minors', 'enabled:false,', "enabled: 'false',"],
+    ids=['a-comment-after-it', 'no-space-after-the-colon', 'a-string'],
+)
+def test_a_boolean_the_scan_cannot_read_is_refused(setting: str) -> None:
+    with pytest.raises(Unread):
+        _ = flag(f'  {{\n    {setting}\n  }}', 'enabled')
+
+
+#: A configuration with the top-level `patch` object written with a key ahead
+#: of `enabled` and comments around it, and a rule turning one dependency's
+#: patches back on, ahead of the object in the text.
+PATCHES_OFF = """{
+  packageRules: [
+    {
+      matchDepNames: ['talosctl'],
+      matchUpdateTypes: ['patch'],
+      enabled: true,
+    },
+  ],
+  patch: {
+    // Folded into the minors.
+    automerge: false,
+    /* off */ enabled: false,
+  },
+}
+"""
+
+
+def test_a_top_level_object_is_read_whatever_comes_ahead_of_its_keys() -> None:
+    block = top_level_object(PATCHES_OFF, 'patch')
+    assert block is not None
+    assert flag(block, 'enabled') is False
+    assert flag(block, 'automerge') is False
+    assert top_level_object(PATCHES_OFF, 'major') is None
+
+
+def test_a_top_level_key_is_one_the_outermost_object_sets() -> None:
+    """A rule's key of the same name is no top-level key, and a quoted name is the name."""
+    config = """{
+  packageRules: [
+    {
+      patch: 'not the top level',
+    },
+  ],
+  'patch': {
+    enabled: false,
+  },
+}
+"""
+    block = top_level_object(config, 'patch')
+    assert block is not None
+    assert flag(block, 'enabled') is False
+    assert top_level_object(config.replace("'patch': {", 'minor: {'), 'patch') is None
+
+
+@pytest.mark.parametrize(
+    'setting',
+    ['patch: { enabled: false },', 'patch: { prBodyDefinitions: { Notes: "" } },', 'patch: true,'],
+    ids=['one-line', 'nesting-an-object', 'no-object'],
+)
+def test_a_top_level_object_the_scan_cannot_read_is_refused(setting: str) -> None:
+    """A block read as setting nothing would read as patches left on, so one the scan cannot read fails."""
+    config = f'{{\n  packageRules: [\n  ],\n  {setting}\n}}\n'
+    with pytest.raises(Unread):
+        _ = enabled(config, {'matchDepNames': ('talosctl',), 'matchUpdateTypes': ('patch',)})
+
+
+def test_an_update_type_is_kept_as_renovate_merges_the_rules_over_its_object() -> None:
+    """A matching rule setting `enabled` beats the update type's object from anywhere in the rules."""
+    assert enabled(PATCHES_OFF, {'matchDepNames': ('talosctl',), 'matchUpdateTypes': ('patch',)})
+    assert not enabled(PATCHES_OFF, {'matchDepNames': ('kubectl',), 'matchUpdateTypes': ('patch',)})
+    assert enabled(PATCHES_OFF, {'matchDepNames': ('kubectl',), 'matchUpdateTypes': ('minor',)})
+    later = PATCHES_OFF.replace(
+        '  ],\n  patch:',
+        "    {\n      matchUpdateTypes: ['patch'],\n      enabled: false,\n    },\n  ],\n  patch:",
+    )
+    assert not enabled(later, {'matchDepNames': ('talosctl',), 'matchUpdateTypes': ('patch',)})
+
+
+def test_a_rule_is_proven_to_match_only_by_matchers_each_settled_on_a_value_presented() -> None:
+    rule = """  {
+    matchDepNames: ['talosctl', '{kubectl,cmctl}'],
+    matchUpdateTypes: ['patch'],
+  }"""
+    patch = {'matchDepNames': ('talosctl',), 'matchUpdateTypes': ('patch',)}
+    assert provably_matches(rule, patch)
+    assert not provably_matches(rule, {'matchDepNames': ('talosctl',)})
+    assert not provably_matches(rule, {**patch, 'matchDepNames': ('kubectl',)})
+
+
+def test_a_glob_proves_a_match_only_without_a_wildcard() -> None:
+    """`fnmatch` matches `*` across a `/`, which `minimatch` does not, so only a glob's miss settles through it."""
+    path = 'src/kluster/lib/state_backend/settings.py'
+    wildcard = "  {\n    matchFileNames: ['src/*/settings.py'],\n  }"
+    assert reaches(wildcard, {'matchFileNames': (path,)})
+    assert not provably_matches(wildcard, {'matchFileNames': (path,)})
+    assert not reaches(wildcard, {'matchFileNames': ('docs/settings.md',)})
+    assert provably_matches(f"  {{\n    matchFileNames: ['{path}'],\n  }}", {'matchFileNames': (path,)})
+    assert provably_matches("  {\n    matchFileNames: ['*'],\n  }", {'matchFileNames': (path,)})
+
+
+@pytest.mark.parametrize(
+    'setting',
+    ["matchCurrentVersion: '<1.0.0',", "excludeDepNames: ['kubectl'],", "matchDepNames: ['!kubectl'],"],
+    ids=['a-matcher-not-presented', 'an-exclusion', 'a-negated-pattern'],
+)
+def test_a_rule_that_might_not_apply_does_not_decide_whether_an_update_is_kept(setting: str) -> None:
+    """The last rule setting `enabled` that the reading cannot clear decides only where it provably applies."""
+    config = PATCHES_OFF.replace('      enabled: true,\n', f'      {setting}\n      enabled: true,\n')
+    assert config != PATCHES_OFF
+    rule = package_rules(config)[0]
+    patch = {'matchDepNames': ('talosctl',), 'matchUpdateTypes': ('patch',)}
+    assert reaches(rule, patch)
+    assert not provably_matches(rule, patch)
+    with pytest.raises(Unread):
+        _ = enabled(config, patch)
+
+
+@pytest.mark.parametrize(
+    ('written', 'value'),
+    [
+        (r'\\n', '\\n'),
+        (r'\n', '\n'),
+        (r'\t', '\t'),
+        (r'\u0041', 'A'),
+        (r'\x41', 'A'),
+        (r'it\'s', "it's"),
+        ('a\\\nb', 'ab'),
+    ],
+    ids=['an-escaped-backslash', 'a-line-feed', 'a-tab', 'a-u-escape', 'an-x-escape', 'a-quote', 'a-continued-line'],
+)
+def test_a_string_is_read_as_its_json5_value(written: str, value: str) -> None:
+    assert string_value(written) == value
 
 
 @pytest.mark.parametrize(
