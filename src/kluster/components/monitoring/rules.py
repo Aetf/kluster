@@ -25,7 +25,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from types import MappingProxyType
 
-from kluster.components.monitoring import stores
+from kluster.components.monitoring import oci_metrics, stores
 from kluster.conventions import MONITORING_NAMESPACE, backup
 from kluster.conventions.alert import Tier
 
@@ -36,6 +36,7 @@ __all__ = (
     'HEARTBEAT_REPEAT',
     'HEARTBEAT_TIMER',
     'METRICS_BACKUP_STALE',
+    'OCI_METRICS_PULL_STALE',
     'RULE_GROUPS',
     'TIER_LABEL',
     'AlertRule',
@@ -160,6 +161,30 @@ METRICS_BACKUP_STALE = AlertRule(
     playbook=Playbook('docs/operations.md', '6.2'),
 )
 
+
+def _pull_job() -> str:
+    """The matchers selecting the pull of OCI's block-volume series."""
+    return f'namespace="{MONITORING_NAMESPACE}", cronjob="{oci_metrics.PULL_JOB}"'
+
+
+#: The pull of OCI's block-volume series going stale, read as the metrics
+#: stores' backups are: its CronJob's last success, or its creation where it
+#: has not succeeded yet, older than the one rule for stale allows over its
+#: period. A run fails where OCI returned nothing of a volume the census
+#: declares, so that is reported here too. Silent until the CronJob is
+#: declared, which it is once the key is sealed in.
+OCI_METRICS_PULL_STALE = AlertRule(
+    alert='OciMetricsPullStale',
+    expr=(
+        f'time() - max by (cronjob) ('
+        f'kube_cronjob_status_last_successful_time{{{_pull_job()}}} or kube_cronjob_created{{{_pull_job()}}}'
+        f') > {backup.duration(backup.max_age(oci_metrics.PULL_PERIOD))}'
+    ),
+    tier=Tier.ACTIONABLE,
+    summary="OCI's block-volume series have not been pulled within their period",
+    playbook=Playbook('docs/operations.md', '6.3'),
+)
+
 #: Every rule the component declares, by group (rfc-007 §7.2).
 RULE_GROUPS: Sequence[RuleGroup] = (
     RuleGroup(
@@ -210,6 +235,7 @@ RULE_GROUPS: Sequence[RuleGroup] = (
                 playbook=Playbook('docs/operations.md', '6.1'),
             ),
             METRICS_BACKUP_STALE,
+            OCI_METRICS_PULL_STALE,
         ),
     ),
 )

@@ -3,8 +3,8 @@
 What is held here is where each program's providers' credentials come from --
 the kubeconfig and the zones token, both out of the stack's own configuration,
 the kubeconfig read so that anything but a kubeconfig stops the run -- what
-each reads across a StackReference, read so that anything but an address
-stops the run, and that each committed stack file turns a missed provider into
+each reads across a StackReference, with no sealed value configured and with
+every one, read so that anything but the machine fact it names stops the run, and that each committed stack file turns a missed provider into
 an error. What `k8s-base` installs is `test_cilium.py`'s
 and `test_standing_set.py`'s.
 
@@ -49,7 +49,7 @@ PROVIDER_PREFIX = 'pulumi:providers:'
 
 #: The outputs of `physical` the pools and the raw ports' fronts are made of
 #: (rfc-007 §4.4, rfc-008 §4.1): the `internet` pool's members and the
-#: worker's GUA, the only ones either program reads across a StackReference.
+#: worker's GUA, which both programs read across a StackReference.
 POOL_OUTPUTS = frozenset(
     {
         conventions.PHYSICAL_OUTPUTS.node_private_ips,
@@ -89,6 +89,19 @@ def _extensions() -> dict[str, str]:
 #: Extension package → the provider that serves it: the CRD SDK's `crds`,
 #: which the `kubernetes` provider serves.
 EXTENSIONS = _extensions()
+
+#: What each program reads across a StackReference, by stack and by whether
+#: its configuration holds every sealed value its stack declares or none: the
+#: pools' outputs, and for `k8s-base` with the metrics reader's key sealed in,
+#: the volumes' OCIDs the pull of OCI's block-volume series is configured with.
+#: The stack files hold every sealed value; a run with none is the bring-up's
+#: tolerance (physical/bring-up.md §1).
+READS: dict[tuple[str, bool], frozenset[str]] = {
+    (conventions.STACK_NAMES.k8s_base, False): POOL_OUTPUTS,
+    (conventions.STACK_NAMES.k8s_base, True): POOL_OUTPUTS | {conventions.PHYSICAL_OUTPUTS.volume_ids},
+    (conventions.STACK_NAMES.apps, False): POOL_OUTPUTS,
+    (conventions.STACK_NAMES.apps, True): POOL_OUTPUTS,
+}
 
 #: Stack name → the program it runs, read off the dispatch table, so a case
 #: parametrized over it asks about the program `pulumi up -s <name>` runs.
@@ -138,8 +151,22 @@ class Run(Physical):
         self.read_across: list[str] = []
 
 
-async def declare(name: str, *, kubeconfig: str | None = KUBECONFIG, preview: bool = False) -> Run:
+def sealed_values(name: str) -> dict[str, object]:
+    """A ciphertext for every key of every sealed value the census has the stack `name` declare."""
+    return {
+        value.name: {key: f'AgB-sealed-{value.name}-{key}' for key in value.keys}
+        for value in conventions.sealed.VALUES.values()
+        if value.stack == name
+    }
+
+
+async def declare(
+    name: str, *, kubeconfig: str | None = KUBECONFIG, preview: bool = False, sealed: bool = False
+) -> Run:
     """One program, declared once, with `kubeconfig` in its configuration, or none at all.
+
+    With `sealed`, the configuration holds every sealed value the census has
+    the stack declare (`sealed_values`), as the committed stack files do.
 
     The reads through a StackReference's by-name methods -- `get_output`,
     `require_output`, `get_output_details` -- are recorded on the way through.
@@ -150,7 +177,8 @@ async def declare(name: str, *, kubeconfig: str | None = KUBECONFIG, preview: bo
     secrets = {f'kluster:{apps.CLOUDFLARE_API_TOKEN}': ZONES_TOKEN}
     if kubeconfig is not None:
         secrets[f'kluster:{KUBECONFIG_KEY}'] = kubeconfig
-    pulumi.runtime.set_all_config(secrets | VERSIONS_CONFIG, secret_keys=list(secrets))
+    plain = {f'kluster:{conventions.sealed.CONFIG_KEY}': json.dumps(sealed_values(name))} if sealed else {}
+    pulumi.runtime.set_all_config(secrets | plain | VERSIONS_CONFIG, secret_keys=list(secrets))
     monitor = await run_under_backstop(Run(), stack=name, preview=preview)
 
     def recording(read: Callable[..., Any]) -> Callable[..., Any]:
@@ -174,6 +202,12 @@ async def applied() -> dict[str, Run]:
     return {name: await declare(name) for name in PROGRAMS}
 
 
+@pytest_asyncio.fixture(scope='module', loop_scope='module')
+async def sealed_in() -> dict[str, Run]:
+    """Each program as `applied` declares it, with every sealed value its stack declares in its configuration."""
+    return {name: await declare(name, sealed=True) for name in PROGRAMS}
+
+
 @pytest.mark.parametrize('name', PROGRAMS)
 def test_each_program_builds_one_kubernetes_provider_from_its_configured_kubeconfig(
     applied: dict[str, Run], name: str
@@ -194,31 +228,36 @@ def test_each_program_builds_one_kubernetes_provider_from_its_configured_kubecon
 
 
 @pytest.mark.parametrize('name', PROGRAMS)
-def test_no_program_reads_the_kubeconfig_across_a_stack_reference(applied: dict[str, Run], name: str) -> None:
-    """Each program reads only the pools' addresses from `physical`, and no kubeconfig crosses.
+@pytest.mark.parametrize('sealed', [False, True], ids=['nothing sealed', 'every value sealed'])
+def test_no_program_reads_the_kubeconfig_across_a_stack_reference(
+    applied: dict[str, Run], sealed_in: dict[str, Run], name: str, sealed: bool
+) -> None:
+    """Each program reads only its machine facts from `physical`, and no kubeconfig crosses, sealed values or none.
 
     `physical` is encrypted under a passphrase of its own (rfc-005 §5.1), and a
     StackReference from a stack that cannot decrypt it hands back `{}` for the
     kubeconfig; the copy in the stack's own configuration is the only route.
     What does cross is plain machine facts a program declares something
     from: the pools' members, which `k8s-base` builds its pools from and
-    `apps` hands a raw port's Service (rfc-007 §3.1, §4.4; rfc-008 §4.1).
+    `apps` hands a raw port's Service (rfc-007 §3.1, §4.4; rfc-008 §4.1),
+    and, once the metrics reader's key is sealed in, the volumes' OCIDs,
+    which `k8s-base` configures the pull of OCI's block-volume series with
+    (`READS`).
 
-    Held two ways. By name, every by-name read is one of the pool's outputs.
-    By value, the kubeconfig `physical` publishes here reaches no
-    registration's inputs, providers included, which a read through the
-    reference's `outputs` mapping would otherwise get past.
+    Held two ways. By name, the by-name reads are the program's machine facts
+    and nothing else. By value, the kubeconfig `physical` publishes here
+    reaches no registration's inputs, providers included, which a read
+    through the reference's `outputs` mapping would otherwise get past.
     """
-    read = set(applied[name].read_across)
+    run = (sealed_in if sealed else applied)[name]
+    read = set(run.read_across)
     carrying = [
-        f'{request.type}::{request.name}'
-        for request in applied[name].requested
-        if PUBLISHED_KUBECONFIG in str(request.object)
+        f'{request.type}::{request.name}' for request in run.requested if PUBLISHED_KUBECONFIG in str(request.object)
     ]
 
     assert carrying == []
     assert conventions.PHYSICAL_OUTPUTS.kubeconfig not in read
-    assert read == POOL_OUTPUTS
+    assert read == READS[name, sealed]
 
 
 @pytest.mark.parametrize('name', PROGRAMS)

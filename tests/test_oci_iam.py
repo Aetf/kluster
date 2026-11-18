@@ -43,6 +43,7 @@ from oci_tenancy import (
 )
 
 from kluster import conventions
+from kluster.conventions.providers import OCI_BLOCKSTORE_METRICS
 from kluster.scripts.credentials import derived, entries, masters, oci_iam
 from kluster.scripts.credentials.delivery import Delivery
 from kluster.scripts.credentials.kdbx import KdbxStore
@@ -830,7 +831,7 @@ def test_the_metrics_reader_reads_the_block_volumes_of_physicals_compartment(
     name = oci_iam.Identity.name_for(oci_iam.METRICS_READER)
     assert _policy(tenancy, name) == [
         f'Allow group {name} to read metrics in compartment id {physical_recorded.ocid} '
-        f"where target.metrics.namespace='{oci_iam.BLOCKSTORE_METRICS}'"
+        f"where target.metrics.namespace='{OCI_BLOCKSTORE_METRICS}'"
     ]
     assert list(tenancy.identity.compartments) == [physical_recorded.ocid]
     assert minted.user == _user(tenancy, name)

@@ -44,13 +44,14 @@ from __future__ import annotations
 import datetime as dt
 from collections.abc import Mapping
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 
 import pulumi_kubernetes as k8s
 
 from kluster import conventions
 from kluster.conventions.backup import metrics_repo_path
+from kluster.conventions.providers import OCI_BLOCKSTORE_METRICS
+from kluster.lib import templates
 
 __all__ = (
     'BACKUP_JOB_PREFIX',
@@ -67,6 +68,7 @@ __all__ = (
     'SHELL_MODE',
     'SHELL_VOLUME',
     'SNAPSHOT_KEY_ENV',
+    'VMAGENT_PORT',
     'WORK_DIR',
     'WORK_VOLUME',
     'Bucket',
@@ -81,6 +83,7 @@ __all__ = (
     'shell_volume',
     'stack_fullname',
     'stores',
+    'vmagent_url',
     'work_volume',
 )
 
@@ -126,13 +129,28 @@ WORK_DIR = '/work'
 SNAPSHOT_KEY_ENV = 'SNAPSHOT_AUTH_KEY'
 
 #: The scripts, by file name, as the ConfigMap carries them.
-SHELL: Mapping[str, str] = {
-    path.name: path.read_text() for path in sorted((Path(__file__).parent / 'shell').glob('*.sh'))
-}
+SHELL: Mapping[str, str] = templates.render_tree('kluster.components.monitoring', 'shell')
 
 #: Where each image keeps its one binary.
 _VMBACKUP = '/vmbackup-prod'
 _VMRESTORE = '/vmrestore-prod'
+
+
+#: The port vmagent serves its HTTP API at, the operator's default for a
+#: VMAgent that sets none (`AsURL`, `api/operator/v1beta1/vmagent_types.go`
+#: L615-619 at operator v0.74.0).
+VMAGENT_PORT = 8429
+
+
+def vmagent_url(release: str, chart: str) -> str:
+    """The stack's vmagent in the cluster, which a series written to it reaches both stores through.
+
+    The stack names its VMAgent object `vm.cr.fullname`, as it names the recent
+    store's vmsingle (`stack_fullname`; `templates/victoria-metrics-operator/vmagent/vmagent.yaml`
+    at stack chart 0.91.2), and the operator names its Service `vmagent-<object>`
+    (`PrefixedName`, `vmagent_types.go` L567-572 at operator v0.74.0).
+    """
+    return f'http://vmagent-{stack_fullname(release, chart)}.{conventions.MONITORING_NAMESPACE}.svc:{VMAGENT_PORT}'
 
 
 def stack_fullname(release: str, chart: str) -> str:
@@ -232,7 +250,7 @@ HISTORY_CLASS: tuple[Kept, ...] = (
     ),
     Kept('kube_pod_container_resource_(requests|limits)|kube_node_status_allocatable|kube_pod_info'),
     Kept('apiserver_request_total|apiserver_current_inflight_requests'),
-    Kept('kluster:.*|oci_blockstore_.*'),
+    Kept(f'kluster:.*|{OCI_BLOCKSTORE_METRICS}_.*'),
 )
 
 #: Families of the class's patterns it keeps none of: etcd's debugging series,

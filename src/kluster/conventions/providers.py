@@ -200,6 +200,15 @@ OCI_TENANCY = OciTenancy(
     },
 )
 
+#: The metric namespace OCI publishes the block and boot volumes' series in
+#: (its Block Volume metrics reference). What names it reads it here: the
+#: metrics reader's one policy statement, which is conditioned on it
+#: (`scripts.credentials.oci_iam`); every request of the pull, which a request
+#: outside it would be refused for; and the name of every series the pull
+#: writes, which the history store keeps by that prefix
+#: (`components.monitoring`).
+OCI_BLOCKSTORE_METRICS = 'oci_blockstore'
+
 #: The seed user's primary email.
 OCI_SEED_USER_EMAIL = f'pulumi@{OCI_TENANCY.user_email_domain}'
 

@@ -29,6 +29,15 @@ for it, and neither the backup jobs nor the restore are declared: the stores
 then start empty and are copied nowhere (physical/bring-up.md §1). A backup
 older than its period allows raises `MetricsBackupStale` (`rules`).
 
+**OCI's block-volume series are pulled into the stores every hour**
+(`oci_metrics`): a CronJob runs `oci_pull`, a program of this repository
+rendered into a ConfigMap, in the `oci-sdk` image, under the metrics reader's
+key, which `k8s-base` holds sealed (`conventions.sealed.OCI_METRICS`). Its
+targets are the volumes the census declares, by the OCIDs `physical`
+publishes for them. While the stack's configuration holds no ciphertext for
+the key, neither the SealedSecret nor the pull is declared. A pull older than
+its period allows raises `OciMetricsPullStale` (`rules`).
+
 **What the chart would install that this cluster does not** is switched off
 (`stack_values`): the sync job, a Helm hook that fetches rules and dashboards
 off the upstream projects' default branches at install time, so that what a run
@@ -81,9 +90,10 @@ escrowed nowhere.
 
 **Its memory on the worker is held to nodes.md §4.4's budget** by the requests
 of `memory.WORKER_CONTAINERS` charged to monitoring's line of that table, the
-stack's containers; every container the component runs takes its memory from
-there, metrics-server too, which is charged to the line for the rest of
-kube-system. Grafana is trimmed to fit it. Its datasources are
+stack's containers; every container the component runs for as long as the
+stack does takes its memory from there, metrics-server too, which is charged
+to the line for the rest of kube-system, and a job's container is no row of
+it (`memory`). Grafana is trimmed to fit it. Its datasources are
 the chart's own ConfigMap, mounted where Grafana provisions them from at start
 (`grafana_datasources_mount`), rather than watched by a second sidecar, a
 Python process as large as the dashboards' one: a datasource changes only when
@@ -136,13 +146,14 @@ from kluster import conventions
 from kluster.components import cilium
 from kluster.components.backup import s3_endpoint
 from kluster.components.cilium.bgp import CONTROL_PLANE_LABEL
-from kluster.components.monitoring import memory, rules, stores
+from kluster.components.monitoring import memory, oci_metrics, rules, stores
 from kluster.components.monitoring.operator_objects import operator_object
 from kluster.components.monitoring.stores import Store, stack_fullname
 from kluster.components.talos import ETCD_METRICS_PORT
 from kluster.conventions import backup
 from kluster.conventions.alert import Tier
 from kluster.conventions.backup import BackupFamily
+from kluster.conventions.outputs import BOOT_VOLUME
 from kluster.lib.k8s import LooserLevel, PodSecurity, helm_chart, namespace, sealed_value
 from kluster.lib.versions import ChartPin, ImagePin
 from putils import Component
@@ -169,6 +180,7 @@ __all__ = (
     'WORKER_AFFINITY',
     'CiliumScrape',
     'Monitoring',
+    'OciPull',
     'etcd_scrape_spec',
     'grafana_datasources_mount',
     'history_store_spec',
@@ -190,6 +202,21 @@ WORKER_AFFINITY: Mapping[str, Any] = {
         },
     },
 }
+
+#: `WORKER_AFFINITY`, as a pod the component declares itself takes it.
+_WORKER_AFFINITY_ARGS = k8s.core.v1.AffinityArgs(
+    node_affinity=k8s.core.v1.NodeAffinityArgs(
+        required_during_scheduling_ignored_during_execution=k8s.core.v1.NodeSelectorArgs(
+            node_selector_terms=[
+                k8s.core.v1.NodeSelectorTermArgs(
+                    match_expressions=[
+                        k8s.core.v1.NodeSelectorRequirementArgs(key=CONTROL_PLANE_LABEL, operator='DoesNotExist')
+                    ]
+                )
+            ]
+        )
+    )
+)
 
 #: alertmanager's one receiver, Home Assistant's webhook for alertmanager.
 RECEIVER = 'home-assistant'
@@ -508,6 +535,16 @@ CILIUM_SCRAPES: tuple[CiliumScrape, ...] = (
 )
 
 
+@dataclass(frozen=True)
+class OciPull:
+    """What the pull of OCI's block-volume series is declared from, once the metrics reader's key is sealed in."""
+
+    ciphertext: Mapping[str, str]
+    """The ciphertext the stack's configuration holds for `conventions.sealed.OCI_METRICS`."""
+    volume_ids: pulumi.Output[dict[str, dict[str, str]]]
+    """`physical`'s `volume_ids` output, read through `kluster.lib.stack_volumes`."""
+
+
 class Monitoring(Component, pulumi_type='kluster:monitoring:Monitoring'):
     """The VictoriaMetrics stack and metrics-server, the history store, the rules, the receiver and the scrape objects.
 
@@ -529,6 +566,12 @@ class Monitoring(Component, pulumi_type='kluster:monitoring:Monitoring'):
     `alert_webhook` is the ciphertext the stack's configuration holds for
     `conventions.sealed.ALERT_WEBHOOK`, `None` while it holds none; the `None`
     is the bring-up's tolerance, and goes with it (physical/bring-up.md §1).
+
+    `oci_pull` is what the pull of OCI's block-volume series is declared
+    from, `None` while the configuration holds no ciphertext for the metrics
+    reader's key; until it holds one, the pull is not declared. The `None` is
+    the bring-up's tolerance, and goes with it (physical/bring-up.md §1).
+    `oci_sdk_image` is the pin it runs.
     """
 
     def __init__(
@@ -544,6 +587,8 @@ class Monitoring(Component, pulumi_type='kluster:monitoring:Monitoring'):
         backup_image: ImagePin,
         restore_image: ImagePin,
         bucket_image: ImagePin,
+        oci_pull: OciPull | None,
+        oci_sdk_image: ImagePin,
         opts: pulumi.ResourceOptions | None = None,
     ) -> None:
         super().__init__(name, opts=opts)
@@ -711,6 +756,50 @@ class Monitoring(Component, pulumi_type='kluster:monitoring:Monitoring'):
             if backups is not None
             else []
         )
+
+        # Behind the sealing controller, whose chart defines the kind, and the
+        # namespace the key is sealed to.
+        self.metrics_reader_key = sealed_value(
+            f'{name}-oci-metrics',
+            conventions.sealed.OCI_METRICS,
+            ciphertext=oci_pull.ciphertext if oci_pull is not None else None,
+            opts=self.child_opts(depends_on=[*after, self.namespace]),
+        )
+        self.oci_pull_program = None
+        self.oci_pull = None
+        if oci_pull is not None and self.metrics_reader_key is not None:
+            compartment = conventions.OCI_TENANCY.compartments[conventions.PHYSICAL].require()
+            importer = stores.vmagent_url(name, stack_chart.name)
+            settings = oci_pull.volume_ids.apply(
+                lambda ids: oci_metrics.settings(
+                    oci_metrics.targets(
+                        ids,
+                        nodes=conventions.CLOUD_NODES,
+                        boot_volume=BOOT_VOLUME,
+                        node_volumes=conventions.NODE_VOLUMES,
+                    ),
+                    compartment=compartment,
+                    history=history.url,
+                    importer=importer,
+                )
+            )
+            self.oci_pull_program = k8s.core.v1.ConfigMap(
+                f'{name}-oci-pull',
+                metadata=k8s.meta.v1.ObjectMetaArgs(
+                    name=oci_metrics.PULL_CONFIGMAP, namespace=self.namespace.metadata.name
+                ),
+                data={oci_metrics.PROGRAM_FILE: oci_metrics.PROGRAM, oci_metrics.SETTINGS_FILE: settings},
+                opts=self.child_opts(depends_on=[self.namespace]),
+            )
+            # Behind the stores it writes to, and what its pod mounts.
+            self.oci_pull = k8s.batch.v1.CronJob(
+                f'{name}-{oci_metrics.PULL_JOB}',
+                metadata=k8s.meta.v1.ObjectMetaArgs(name=oci_metrics.PULL_JOB, namespace=self.namespace.metadata.name),
+                spec=oci_metrics.cronjob_spec(image=oci_sdk_image, affinity=_WORKER_AFFINITY_ARGS),
+                opts=self.child_opts(
+                    depends_on=[self.chart, self.history, self.oci_pull_program, self.metrics_reader_key]
+                ),
+            )
 
         self.register_outputs({})
 

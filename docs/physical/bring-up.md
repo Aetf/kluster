@@ -40,9 +40,11 @@ waits.** A sealed value can be made only once the controller runs, and
 the controller runs only after the first `up`. So until stage 8 ends, an
 absent value declares no SealedSecret and warns at the run, and whatever
 reads it stays pending: the issuer's certificates, the BGP session,
-alertmanager's receiver, and the metrics stores' backups and restores,
+alertmanager's receiver, the metrics stores' backups and restores,
 which are not declared at all until the monitoring namespace's writer
-key is, stage 9 (declarative/cluster-infra.md §1 item 6). The value's arrival is a commit to the stack
+key is, stage 9 (declarative/cluster-infra.md §1 item 6), and the pull
+of OCI's block-volume series, which is not declared at all until the
+metrics reader's key is, stage 6. The value's arrival is a commit to the stack
 file, stage 6, and no code changes with it. Stage 8's last step is the
 pull request that deletes the tolerance, and from then on an absent
 value stops the run by name, as an unusable kubeconfig does. rfc-007

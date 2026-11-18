@@ -1375,7 +1375,7 @@ Owning docs keep the content — the index only locates it.
 | Backup restores (CNPG, VolSync, etcd) | storage.md §5; the drills are §4 here |
 | Alert-channel failure (HA push down → meta-alert; GitHub leg down; a scheduled ops-repo workflow that stopped checking in) | architecture.md §4.3; the contract and the dead-man are §4 here |
 | CI alerts (a red `checks` or `images` run; a drift diff) | framework/ci.md §3.1 and §3.2 |
-| The metrics stores (rows a store ignores; a backup gone stale, refused, or a store that does not restore) | §6 here |
+| The metrics stores (rows a store ignores; a backup gone stale, refused, or a store that does not restore; the pull of OCI's block-volume series gone stale) | §6 here |
 
 vmalert rule families adopt this index as they are ported: an alert
 that cannot point at a row (or at its owner doc's census) does not
@@ -1437,10 +1437,12 @@ behind, and a rebuild would restore it only as far as its last success
 **Gist**:
 
 1. **Read the last run.**
-   `mise x -- kubectl -n monitoring get jobs -l batch.kubernetes.io/cronjob=<job>`
-   lists the runs; the newest's pod log, `mise x -- kubectl -n monitoring logs
-   <pod> --all-containers`, says where it stopped. Each line before the
-   failure names the step it starts.
+   `mise x -- kubectl -n monitoring get jobs --sort-by=.metadata.creationTimestamp`
+   lists the namespace's runs from the oldest, each named `<job>-<n>`; the
+   newest of the alert's job is the last of its name, and
+   `mise x -- kubectl -n monitoring logs job/<run> --all-containers` says
+   where it stopped. Each line before the failure names the step it
+   starts.
 2. **A pod that never started.** It waits on what it mounts or reads:
    the writer key's Secret, `writer-vm-monitoring`, which a SealedSecret
    the controller cannot open never creates, and which the sealing
@@ -1517,3 +1519,71 @@ behind, and a rebuild would restore it only as far as its last success
 6. **Confirm**: the next run's log ends with the backup, and for the
    history with `recorded <n> rows`; the alert resolves at the next
    evaluation.
+
+### 6.3 The pull of OCI's block-volume series is stale
+
+**Trigger**: `OciMetricsPullStale`, `actionable`. The CronJob
+`oci-metrics-pull` has not succeeded for an hour and a half, the one
+rule for stale over its hourly period (`conventions.backup.max_age`),
+or has never succeeded since it was created that long ago. The stores
+hold none of OCI's block-volume series since its last success, the
+throttled I/O among them. A run reads up to seven days back from the
+newest sample the history store holds of each volume, so a gap shorter
+than that is filled by the first run that succeeds after it; a longer
+one is lost, since OCI keeps one-minute data for seven days.
+
+**Gist**:
+
+1. **Read the last run.**
+   `mise x -- kubectl -n monitoring get jobs --sort-by=.metadata.creationTimestamp`
+   lists the namespace's runs from the oldest, each named `<job>-<n>`; the
+   newest `oci-metrics-pull-<n>` is the last of its name, and
+   `mise x -- kubectl -n monitoring logs job/<run>` says which step it
+   was in when it failed, each step announced before it starts. A
+   metric that meets an error stops alone, logged as `<metric> stopped
+   <step>`, and the run goes on to the next metric and exits 1 at the
+   end; the steps below say what each error is.
+2. **A pod that never started.** It waits on what it mounts: the key's
+   Secret, `oci-metrics`, which a SealedSecret the controller cannot
+   open never creates, and which the sealing sitting of bring-up stage 6
+   (physical/bring-up.md §2) mints and seals again after a rebuild; or
+   the `ConfigMap`, `oci-metrics-pull`.
+   `mise x -- kubectl -n monitoring describe pod` names which.
+3. **OCI refused the key** (`NotAuthenticated`, a 401). The key the
+   cluster holds is not one the reader's user carries: re-running
+   `credentials derived oci-metrics mint` retires the old key once its
+   ciphertext is committed, and every run fails until `k8s-base` is
+   applied with the new one. Apply `k8s-base` through the merge chain;
+   the next run fills the gap.
+4. **OCI refused the request** (`NotAuthorizedOrNotFound`). The
+   reader's policy reads one metric namespace of `physical`'s
+   compartment and nothing else (credentials.md §3). A request that does
+   not name that namespace is refused by the policy's condition, as is
+   one for another compartment: compare the namespace and the
+   compartment in the run's settings, the `settings.json` of the
+   `ConfigMap`, with `conventions`.
+5. **A volume with no sample.** The log ends with `no sample of <volume>
+   on <node> in the window`, after every other volume was written: OCI
+   returned no series under that volume's OCID. The OCID is the one
+   `physical` published for it when `k8s-base` was last applied, so a
+   volume replaced since, from the workstation, is one: apply
+   `k8s-base` again, which reads the new OCID. A series the log reports
+   `skipping` is the replaced volume's old one, which needs nothing.
+   Where the OCID is current, OCI has no series for the volume, and its
+   console's Block Volume metrics page says whether it has any.
+6. **A series that names no volume.** The log reads `a series of
+   <metric> carries no resourceId, only the dimensions <names>`: OCI
+   answered with series of another shape than the query asks for,
+   which groups each metric's series by the volume's OCID. No apply
+   repairs that; the fix is the query in
+   `kluster.components.monitoring.oci_pull`, by a pull request, and the
+   dimensions the log names are what the new query reads. The runs
+   between keep failing for that metric, and the first one after the
+   fix merges fills the gap, up to seven days of it.
+7. **A plan of `k8s-base` refuses the volume map**: `physical`'s output
+   holds no OCID for a volume the census declares, the state a
+   targeted `physical` apply leaves a volume it did not create in.
+   Apply `physical`, then `k8s-base`.
+8. **Confirm**: the next run logs every volume written and exits 0, and
+   the alert resolves at the next evaluation. The history store answers
+   `oci_blockstore_VolumeReadOps` for each volume up to the run.

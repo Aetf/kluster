@@ -35,7 +35,11 @@ address and the balancer's two public ones (rfc-007 §4.4,
 `kluster.components.cilium.internet_pool_members`), and for the worker's own
 pool, the worker's GUA beside its IPv4, which is a convention (rfc-008 §4.1);
 each is read so that anything but an address stops the run
-(`kluster.lib.stack_addresses`). And the sealed values
+(`kluster.lib.stack_addresses`). The OCIDs of the cloud nodes' volumes cross
+the same way, which the pull of OCI's block-volume series names its series
+by; they are read only once that pull's key is sealed in, since nothing else
+reads them, and so that anything but a map of OCIDs stops the run
+(`kluster.lib.stack_volumes`). And the sealed values
 it declares are plain values of this stack's configuration, under the one key
 `conventions.sealed.CONFIG_KEY`, read out per value by the value's census row
 (`kluster.lib.k8s.sealed_ciphertext`) and handed to the component that
@@ -49,8 +53,8 @@ pin in `Pulumi.yaml`'s `config:` block, which renovate moves
 (framework/pulumi.md §3.2), as the Gateway API definitions are a
 `versions:manifest-<name>` pin, the volume snapshot definitions a
 `versions:source-<name>` pin and the images a component runs beside a chart,
-local-path-provisioner's two and the monitoring stack's history store, backups
-and restores, `versions:image-<name>` pins; a component installs what the program reads
+local-path-provisioner's two and the monitoring stack's history store, backups,
+restores and OCI pull, `versions:image-<name>` pins; a component installs what the program reads
 through `kluster.lib.versions` and hands it. The custom resources are written
 against `sdks/crds`, which `mise x -- uv run update_crds` regenerates from the
 same pins, but for the VictoriaMetrics operator's, which that SDK cannot import
@@ -70,12 +74,12 @@ from kluster.components.certificates import CertManager
 from kluster.components.cilium import BgpSession, Cilium, internet_pool_members
 from kluster.components.gpu import IntelGpuPlugin, NodeFeatureDiscovery
 from kluster.components.local_path import LocalPathProvisioner
-from kluster.components.monitoring import Monitoring
+from kluster.components.monitoring import Monitoring, OciPull
 from kluster.components.postgres import PostgresOperator
 from kluster.components.reloader import Reloader
 from kluster.components.sealing import SealedSecretsController
 from kluster.conventions.backup import BackupFamily
-from kluster.lib import stack_addresses
+from kluster.lib import stack_addresses, stack_volumes
 from kluster.lib.k8s import KUBECONFIG_KEY, kubeconfig_from, sealed_ciphertext
 from kluster.lib.release_assets import fetch_manifest
 from kluster.lib.source_files import fetch_source_files
@@ -157,6 +161,9 @@ async def main() -> None:
     # definitions.
     snapshots = SnapshotDefinitions('snapshot-definitions', definitions=snapshot_definitions, after=[cilium], opts=opts)
     _ = VolSync('volsync', chart=versions.chart['volsync'], after=[cert_manager, snapshots], opts=opts)
+    # The volumes' OCIDs are read only where the pull is declared, which is
+    # once the metrics reader's key is sealed in.
+    metrics_reader_key = sealed_ciphertext(conventions.sealed.OCI_METRICS, sealed)
     _ = Monitoring(
         'monitoring',
         stack_chart=versions.chart['victoria-metrics-k8s-stack'],
@@ -170,6 +177,13 @@ async def main() -> None:
         backup_image=versions.image['metrics-backup'],
         restore_image=versions.image['metrics-restore'],
         bucket_image=versions.image['metrics-bucket'],
+        oci_pull=OciPull(
+            ciphertext=metrics_reader_key,
+            volume_ids=stack_volumes.volume_ids(physical, conventions.PHYSICAL_OUTPUTS.volume_ids),
+        )
+        if metrics_reader_key is not None
+        else None,
+        oci_sdk_image=versions.image['oci-sdk'],
         opts=opts,
     )
     node_features = NodeFeatureDiscovery(
