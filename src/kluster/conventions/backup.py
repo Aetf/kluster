@@ -112,6 +112,11 @@ def metrics_repo_path(namespace: str, store: str) -> str:
 
 
 ETCD_SNAPSHOT_PREFIX = 'etcd'
+#: The name of the etcd snapshots' scope on the backup bucket: the name
+#: `physical` mints the scope's writer key under and exports it by, which
+#: `credentials` reads it by when it seals it for the snapshot
+#: (`conventions.sealed.ETCD_WRITER_KEY`).
+ETCD_SCOPE = 'etcd'
 STATE_DUMP_PREFIX = 'pulumi-state'
 
 #: The backup bucket, and it is not on the provider whose loss it insures
@@ -167,7 +172,7 @@ def writer_scope(namespace: str, family: BackupFamily) -> str:
 #: is not here (rfc-008 §4.2). Three programs agree on it: `physical` declares
 #: each family's writer key from it, `credentials` seals those keys into the
 #: configuration of the stack that declares what reads them
-#: (`conventions.sealed.WRITER_KEYS`), and that stack declares the claims,
+#: (`conventions.sealed.NAMESPACE_WRITER_KEYS`), and that stack declares the claims,
 #: databases and stores that use them -- `apps` for an application's
 #: namespace, `k8s-base` for the platform's. It names every namespace the
 #: waves back up from the start, so that the `physical` apply after it mints

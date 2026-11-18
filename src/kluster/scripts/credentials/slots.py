@@ -1079,14 +1079,13 @@ ROWS: dict[str, Row] = {
         ),
         # The appliance's cron is not among the consumers: the key it uploads
         # dumps with is `writeFiles` alone, which is the dump-key row below and
-        # not a writer key. The sealed copies are VolSync's, CNPG barman's and
+        # not a writer key. The sealed copies are the in-cluster etcd
+        # snapshot's (storage.md §5), and VolSync's, CNPG barman's and
         # `vmbackup`'s, one per family of each backed namespace, each in the
-        # stack its row names; the etcd snapshots' key is the in-cluster
-        # snapshot job's, and is sealed once that job is declared
-        # (storage.md §5).
+        # stack its row names.
         targets=(
             PulumiState(PHYSICAL_STACK, 'one key per scope of the backup bucket, exported as `backup_keys`'),
-            *(SealedSecret(value) for value in conventions.sealed.WRITER_KEYS),
+            *(SealedSecret(value) for value in conventions.sealed.WRITER_KEYS_BY_SCOPE.values()),
         ),
     ),
     'b2-dump': Row(

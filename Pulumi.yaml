@@ -50,6 +50,12 @@ config:
   versions:image-local-path-provisioner: docker.io/rancher/local-path-provisioner:v0.0.37@sha256:e757967a5ec338f6a9b371c5a9688bedaa8c3578ea3dd4db329ea0084be0a86f
   versions:image-local-path-helper: docker.io/library/busybox:1.38.0@sha256:fd7dc98638c8e305f4dc34e979f1c0fdfdcaeb0fbf8fcff77ae834b6da3d7e6e
 
+  # The hourly etcd snapshot, Sidero's `talos-backup`: it takes the snapshot
+  # through the Talos API, encrypts it to the escrowed backup generations and
+  # uploads it to the backup bucket (cluster/storage.md §5). It runs on the
+  # control planes, which are arm64, so the digest is the image index's.
+  versions:image-etcd-backup: ghcr.io/siderolabs/talos-backup:v0.1.0@sha256:3635df0be0862d71bba7a34dca3e7f7c790887f5c5d0129002191c4c2d92dd15
+
   # The monitoring component's own VictoriaMetrics images, beside the stack
   # chart's (declarative/cluster-infra.md §1 item 6): the history store, which
   # the operator would otherwise run at its own default release rather than

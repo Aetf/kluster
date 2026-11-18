@@ -2055,13 +2055,18 @@ def test_each_cronjob_runs_at_its_rows_period_and_is_cut_off_at_its_rows_deadlin
 
     A run is cut off at the deadline, which `Forbid` would otherwise let hold
     every later run back, so the failed alert finds the run either succeeded
-    or failed by then.
+    or failed by then. A run starts no later than the row's starting
+    deadline, which the row holds inside its slack with the deadline, and a
+    CronJob whose row has none sets none.
     """
     rows = {(job.namespace, job.cronjob): job for job in schedule.SCHEDULED_JOBS}
 
     for key, spec in _cronjobs(sealed.monitor, apps).items():
-        assert _period(spec['schedule']) == rows[key].period, key
-        assert spec['jobTemplate']['spec']['activeDeadlineSeconds'] == rows[key].deadline.total_seconds(), key
+        row = rows[key]
+        starting = row.starting_deadline.total_seconds() if row.starting_deadline is not None else None
+        assert _period(spec['schedule']) == row.period, key
+        assert spec['jobTemplate']['spec']['activeDeadlineSeconds'] == row.deadline.total_seconds(), key
+        assert spec.get('startingDeadlineSeconds') == starting, key
         assert spec['concurrencyPolicy'] == 'Forbid', key
 
 
@@ -2092,28 +2097,81 @@ def test_each_row_raises_a_stale_and_a_failed_alert_on_its_cronjob_naming_its_pl
             assert job.cronjob in rule['annotations']['summary']
 
 
+def _kube_state_metrics_endpoint(run: Run) -> dict[str, Any]:
+    """The one endpoint of kube-state-metrics' scrape, which publishes every CronJob's status."""
+    (endpoint,) = _values(run)['kube-state-metrics']['vmScrape']['spec']['endpoints']
+    return endpoint
+
+
 def test_a_status_reaches_the_rules_inside_the_lag_every_deadline_leaves(absent: tuple[Run, list[str]]) -> None:
     """A CronJob's status is published at the next scrape and read at the next evaluation after it.
 
-    Both intervals are read off what the program declares: vmagent's one
-    scrape interval, which kube-state-metrics' scrape keeps (the case on
-    vmagent's one interval), and vmalert's evaluation interval.
+    Both intervals are read off what the program declares: the interval of
+    kube-state-metrics' scrape, which publishes the status, and vmalert's
+    evaluation interval.
     """
     run, _ = absent
-    values = _values(run)
-    scrape = _duration(values['vmagent']['spec']['scrapeInterval'])
-    evaluation = _duration(values['vmalert']['spec']['evaluationInterval'])
+    scrape = _duration(_kube_state_metrics_endpoint(run)['interval'])
+    evaluation = _duration(_values(run)['vmalert']['spec']['evaluationInterval'])
 
     assert scrape + evaluation < schedule.REPORT_LAG
 
 
-def _row(*, period: dt.timedelta, deadline: dt.timedelta) -> schedule.ScheduledJob:
+#: The labels the operator gives a target of kube-state-metrics' scrape, from
+#: the Service and the pod it finds it through, in the namespace
+#: kube-state-metrics runs in (`vmservicescrape.go` at operator v0.74.0).
+KUBE_STATE_METRICS_TARGET = {
+    'namespace': conventions.MONITORING_NAMESPACE,
+    'service': 'kube-state-metrics',
+    'pod': 'kube-state-metrics-0',
+    'container': 'kube-state-metrics',
+    'endpoint': 'http',
+    'job': 'kube-state-metrics',
+    'instance': '10.244.0.10:8080',
+}
+
+
+def test_a_cronjobs_series_carries_the_namespace_its_rows_rules_select_it_by(absent: tuple[Run, list[str]]) -> None:
+    """kube-state-metrics publishes a CronJob's series under the CronJob's namespace, which the target's own would replace.
+
+    Without `honorLabels` a label the target carries wins, and the sample's is
+    kept as `exported_<name>` (Prometheus' semantics, which vmagent follows),
+    so every series would carry the namespace kube-state-metrics runs in. A
+    row in that namespace would still match; a row in any other would match
+    no series, and its alerts would never fire.
+    """
+    run, _ = absent
+    endpoint = _kube_state_metrics_endpoint(run)
+
+    for job in schedule.SCHEDULED_JOBS:
+        sample = {
+            '__name__': 'kube_cronjob_status_last_successful_time',
+            'namespace': job.namespace,
+            'cronjob': job.cronjob,
+        }
+        if endpoint.get('honorLabels'):
+            scraped = {**KUBE_STATE_METRICS_TARGET, **sample}
+        else:
+            clashing = {
+                f'exported_{name}': value for name, value in sample.items() if name in KUBE_STATE_METRICS_TARGET
+            }
+            scraped = {**sample, **clashing, **KUBE_STATE_METRICS_TARGET}
+        series = _relabel(scraped, endpoint.get('metricRelabelConfigs', []))
+
+        assert series is not None, job.cronjob
+        assert (series['namespace'], series['cronjob']) == (job.namespace, job.cronjob)
+
+
+def _row(
+    *, period: dt.timedelta, deadline: dt.timedelta, starting_deadline: dt.timedelta | None = None
+) -> schedule.ScheduledJob:
     return schedule.ScheduledJob(
         alert='Drill',
         namespace='a-namespace',
         cronjob='a-job',
         period=period,
         deadline=deadline,
+        starting_deadline=starting_deadline,
         playbook=conventions.alert.Playbook('docs/operations.md', '4'),
     )
 
@@ -2133,6 +2191,23 @@ def test_a_deadline_past_what_its_period_leaves_is_refused_naming_the_cronjob(pe
     for deadline in (slack + dt.timedelta(seconds=1), dt.timedelta(0)):
         with pytest.raises(ValueError, match="'a-job'"):
             _ = _row(period=period, deadline=deadline)
+
+
+@pytest.mark.parametrize('period', [dt.timedelta(hours=1), dt.timedelta(days=1), dt.timedelta(weeks=1)])
+def test_a_starting_deadline_takes_its_share_of_the_slack_and_one_that_starts_nothing_is_refused(
+    period: dt.timedelta,
+) -> None:
+    """A run that starts as late as the starting deadline succeeds that much later, so the two share the slack.
+
+    A starting deadline of nothing would skip every run, and is refused too.
+    """
+    slack = period / 2 - schedule.REPORT_LAG
+    late = slack / 3
+
+    assert _row(period=period, deadline=slack - late, starting_deadline=late).deadline == slack - late
+    for deadline, starting in ((slack - late + dt.timedelta(seconds=1), late), (slack / 2, dt.timedelta(0))):
+        with pytest.raises(ValueError, match="'a-job'"):
+            _ = _row(period=period, deadline=deadline, starting_deadline=starting)
 
 
 # -- The pull of OCI's block-volume series ------------------------------------------

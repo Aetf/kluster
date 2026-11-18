@@ -1141,13 +1141,14 @@ dispatches into the intake, whose handler is not built
 (`kluster-ops#715`), so a failing probe is a red run there and nothing
 more (the alert contract, below). The ops-repository row, the
 state-backend rebuild, has no workflow written (`kluster-ops#57`). No
-in-cluster row has its job written: not the etcd restore-verify, nor
-the hourly snapshot it would restore (storage.md §5), and not the two
-restores or the orphan-volume audit, whose recipe (storage.md §3.3) is
-not written either. `k8s-base` declares
-what they would stand on, the operators the two restores drive and
-the alerting every in-cluster row reports into, and none of it runs
-until the cluster's bring-up applies it (physical/bring-up.md).
+in-cluster row has its job written: not the etcd restore-verify, and
+not the two restores or the orphan-volume audit, whose recipe
+(storage.md §3.3) is not written either. `k8s-base` declares
+what they would stand on: the operators the two restores drive, the
+hourly etcd snapshot the restore-verify would read, which takes none
+until bring-up stage 6 seals its key (storage.md §5), and the alerting
+every in-cluster row reports into. None of it runs until the cluster's
+bring-up applies it (physical/bring-up.md).
 The last column is the designed form, and where each scheduled job
 runs is the census below. Every row is an operator act today, and
 the only one written out as a procedure is the state-backend restore
@@ -1185,8 +1186,15 @@ once `credentials derived check` passes and each generation is confirmed
 to open under that key, the retired database is destroyable on a
 property rather than after a wait (credentials.md §4.2). A retired **backup generation** keeps a real
 clock — its escrow ciphertext is the only copy of the identity that
-opens the dumps written under it, so it stays until the last of those
-objects falls out of the B2 prefix's retention (state-backend.md §5).
+opens the dumps and the etcd snapshots written under it, so it stays
+until the last of those objects falls out of its prefix's retention.
+The two prefixes keep an object for different lengths: a dump is gone
+30 days after the rotation that stops encrypting to the generation
+(state-backend.md §5), and an etcd snapshot is current for 14 days and
+hidden for 30 more, 44 in all (storage.md §5, `conventions.backup`),
+counted from the `k8s-base` apply that carries the rotation's
+recipients. The generation is destroyable once both have passed
+(state-backend.md §7.4).
 Nothing records that date: `credentials kit rotate` leaves the retired kit
 byte-for-byte as it was and a generation's ciphertext carries no expiry,
 so a probe has no field to read. Honoring it is part of the yearly
@@ -1214,7 +1222,13 @@ silently stops running is indistinguishable from a failing one: an
 ops-repository workflow by its dead-man timer, and an in-cluster
 CronJob by the scheduled-job rule family (the rule below) and, behind
 the family, the cluster's check-in (the alert contract). The family is
-declared with the rest of the cluster's rules in `k8s-base`. The timers
+declared with the rest of the cluster's rules in `k8s-base`, and it reads
+a CronJob only once the CronJob is declared: a job that waits for its
+sealed value, as the metrics stores' backups and the etcd snapshot do,
+reports nothing until the value is sealed in. For the etcd snapshot,
+whose key bring-up stage 6 seals, what bounds that is the pull request
+of stage 8 that deletes the sealed tolerance, from which an absent
+value stops the run by name (physical/bring-up.md). The timers
 do not exist yet, and until they do, an ops-repository workflow that
 stops running reports nothing. A device's own jobs are
 watched as the census below says, and the gateway's daily check by
@@ -1234,7 +1248,7 @@ for its place. The last column says which run, as of 2026-11-17:
 
 | Job | Runs in, and why | Credentials there | Liveness to Home Assistant | Built |
 | --- | --- | --- | --- | --- |
-| etcd snapshot, hourly | The cluster: `siderolabs/talos-backup` as a CronJob in `etcd-backup`, on the control planes (storage.md §5) | A certificate Talos issues for `os:etcd:backup` and renews itself; the `etcd` writer key, sealed | The family's rules, then the cluster's check-in | No (`kluster-ops#792`) |
+| etcd snapshot, hourly | The cluster: `siderolabs/talos-backup` as a CronJob in `etcd-backup`, on the control planes (storage.md §5) | A certificate Talos issues for `os:etcd:backup` and renews itself; the `etcd` writer key, sealed | The family's rules (§7.1), then the cluster's check-in | No: declared once bring-up stage 6 seals the `etcd` key (storage.md §5) |
 | Age of the newest object under `etcd/` | No job of its own: the snapshot job's stale rule stands in for it, since a run that succeeded is an object uploaded, and the monthly restore-verify reads the newest object's age as a second, independent reading | None | The snapshot job's rules | No, with the snapshot job |
 | VolSync backups, one `ReplicationSource` per backed claim | The cluster: VolSync's own schedule, the claim's retention class (`conventions.backup.RETENTION_CLASSES`, storage.md §5) | The namespace's writer key and each repository's password, sealed | The backup-freshness family (declarative/workloads.md §3), then the cluster's check-in | No: none is declared until the first claim under a class lands |
 | CNPG barman backups, per database cluster | The cluster: the operator's own schedule, beside continuous WAL archiving (storage.md §5) | The namespace's writer key, sealed | The backup-freshness family, then the cluster's check-in | No: no database cluster is declared yet |
@@ -1404,6 +1418,7 @@ Owning docs keep the content — the index only locates it.
 | Alert-channel failure (HA push down → meta-alert; GitHub leg down; a scheduled ops-repo workflow that stopped checking in) | architecture.md §4.3; the contract and the dead-man are §4 here |
 | CI alerts (a red `checks` or `images` run; a drift diff) | framework/ci.md §3.1 and §3.2 |
 | The metrics stores (rows a store ignores; a backup run that failed, a backup gone stale or refused, or a store that does not restore; a pull of OCI's block-volume series that failed or went stale) | §6 here |
+| The etcd snapshot (a run that failed, or snapshots gone stale) | §7 here |
 
 vmalert rule families adopt this index as they are ported: an alert
 that cannot point at a row (or at its owner doc's census) does not
@@ -1503,7 +1518,9 @@ behind, and a rebuild would restore it only as far as its last success
    restore refuses (step 7), and a store whose node is lost meanwhile
    does not start. Runs that are cut off hour after hour without
    converging are a deadline too short for the store, which is its row's
-   in `conventions.schedule`.
+   in `conventions.schedule`. An hourly period leaves a deadline of 29
+   minutes at most, the row's slack, so a store that needs longer needs
+   a longer period.
 4. **A pod that never started.** It waits on what it mounts or reads:
    the writer key's Secret, `writer-vm-monitoring`, which a SealedSecret
    the controller cannot open never creates, and which the sealing
@@ -1668,3 +1685,107 @@ one is lost, since OCI keeps one-minute data for seven days.
    and both alerts resolve at the next evaluation after it. The history
    store answers `oci_blockstore_VolumeReadOps` for each volume up to
    the run.
+
+## 7. The etcd snapshot's playbooks
+
+What to do when the hourly etcd snapshot reports on itself. The job is
+`siderolabs/talos-backup`, declared in `components.backup.etcd` as the
+CronJob `etcd-snapshot` in the `etcd-backup` namespace, on the control
+planes ([cluster/storage.md](cluster/storage.md) §5). The commands below
+run from the root of the checkout.
+
+### 7.1 The etcd snapshot failed or is stale
+
+**Trigger**: the scheduled-job family's two alerts on the CronJob
+`etcd-snapshot`, both `actionable` (`conventions.schedule.ETCD_SNAPSHOT`,
+the rule in §4). `EtcdSnapshotFailed`: its last run, scheduled after
+its last success, has not succeeded within the 15 minutes a run is cut
+off at. `EtcdSnapshotStale`: it has not succeeded for an hour and a
+half, the one rule for stale over its hourly period
+(`conventions.backup.max_age`), or has never succeeded since it was
+created that long ago. A run that succeeded is a snapshot uploaded, so
+the newest snapshot under `etcd/` is as old as the last success, and a
+restore from the bucket loses everything since (storage.md §5). Each
+snapshot is whole on its own, so a run that succeeds again needs
+nothing from the ones that failed.
+
+**Gist**:
+
+1. **Which alert.** `EtcdSnapshotFailed` is a run that failed, and the
+   steps from step 2 on find why. `EtcdSnapshotStale` firing without it
+   is a job no run of which was scheduled after its last success: read
+   the CronJob as §6.2's first step does, in `etcd-backup` and with
+   `etcd-snapshot` for the job. A run the controller could not start
+   within ten minutes of its minute is skipped rather than run late,
+   and leaves no Job.
+2. **Read the last run.**
+   `mise x -- kubectl -n etcd-backup get jobs --sort-by=.metadata.creationTimestamp`
+   lists the runs from the oldest, each named `etcd-snapshot-<n>`, and
+   `mise x -- kubectl -n etcd-backup logs job/<run>` ends in the one
+   line a failed run writes, which names the step that failed. The steps
+   below go by that line's opening words.
+3. **A pod that never started.** It waits on what it mounts or reads:
+   the Secret `etcd-snapshot`, which Talos writes for the
+   `ServiceAccount` of that name; or the writer key's Secret,
+   `writer-etcd`, which a SealedSecret the controller cannot open never
+   creates, and which the sealing sitting of bring-up stage 6
+   (physical/bring-up.md §2) seals, and seals again after a rebuild
+   (§3.5), with `credentials derived b2-writer seal --only writer-etcd`.
+   `mise x -- kubectl -n etcd-backup describe pod` names which. Talos
+   writes the first only for the role and the namespace the control
+   planes' machine configuration grants (`conventions.ETCD_SNAPSHOT_GRANT`,
+   [declarative/physical.md](declarative/physical.md) §2), so a
+   `ServiceAccount` that stands with no Secret beside it is outside the
+   grant: a `physical` apply puts the grant back.
+4. **`failed to get talosconfig` or `failed to create talos client`.**
+   The talosconfig in the Secret `etcd-snapshot` did not open. Talos
+   writes it again when it renews the certificate, within the last hour
+   of its six; a run that fails this way hour after hour is the
+   previous step's missing grant.
+5. **`failed to take etcd snapshot`.** apid refused or could not be
+   reached. `PermissionDenied` is a certificate without the
+   `os:etcd:backup` role, the grant of step 3. A connection error is the
+   `talos` Service in `default`, through which the client reaches apid
+   on a control plane:
+   `mise x -- kubectl -n default get endpointslices -l kubernetes.io/service-name=talos`
+   lists the control planes Talos keeps behind it on port 50000, and an
+   empty list is a Talos with the grant off. An error from etcd itself
+   is the member the run reached, and the control planes' etcd is what
+   to look at (§3). A line that ends in `no space left on device` is
+   none of these, and is step 9's.
+6. **`failed to encrypt etcd snapshot`.** One that ends in `no space
+   left on device` is step 9's. Otherwise, a recipient did not parse.
+   The recipients are the committed escrowed backup generations
+   (`src/kluster/lib/state_backend/machine/backup-recipients.txt`),
+   which `k8s-base`'s plan refuses with a line that is no recipient,
+   so a run that fails this way runs a configuration no plan made.
+   Apply `k8s-base` through the merge chain.
+7. **`failed to push encrypted snapshot`.** B2 refused the upload. An
+   `InvalidAccessKeyId` or `SignatureDoesNotMatch` is a key the cluster
+   holds that is not the one `physical` holds, which a `physical` apply
+   that replaced the key leaves behind: seal it again with
+   `credentials derived b2-writer seal --only writer-etcd`, commit
+   `Pulumi.k8s-base.yaml`, and apply `k8s-base` through the merge
+   chain. An `AccessDenied` is an object name outside `etcd/`, the one
+   prefix the key writes, which is the run's `S3_PREFIX` against
+   `conventions.ETCD_SNAPSHOT_PREFIX`. An unfinished upload a failed run
+   leaves is cancelled by the bucket (storage.md §4).
+8. **A run cut off at its deadline.**
+   `mise x -- kubectl -n etcd-backup describe job <run>` reads
+   `DeadlineExceeded`. A run streams one snapshot of the database and
+   uploads it, which takes seconds at the database's size, so a run cut
+   off at 15 minutes is a step that hung, and the log's last line names
+   the step it was in.
+9. **A working directory that filled.** The log's last line is
+   `failed to take etcd snapshot: error reading: … no space left on
+   device`, or `failed to encrypt etcd snapshot: … no space left on
+   device`: the snapshot and its ciphertext outgrew the in-memory
+   directory, whose size is `components.backup.etcd.WORK_SIZE`, half
+   the memory nodes.md §1.1 keeps available on a node. The database's size
+   is what grew, and every run fails the same way until the bound
+   changes, which is a change to that budget, or the directory moves
+   onto a disk other than etcd's.
+10. **Confirm**: the next scheduled run logs
+   `Uploading <file> to bucket aetf-kluster-backup with key etcd/<file>`,
+   its Job reads `Complete`, and both alerts resolve at the next
+   evaluation after it.

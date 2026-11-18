@@ -54,7 +54,7 @@ from pulumi.runtime import rpc
 from scratch_projects import cli_directories, scrubbed
 
 from kluster import conventions
-from kluster.conventions.backup import BACKED_NAMESPACES, writer_scope
+from kluster.conventions.backup import BACKED_NAMESPACES, ETCD_SCOPE, writer_scope
 from kluster.lib import pulumi_cli
 from kluster.lib.k8s import rendered_template
 from kluster.scripts.credentials import cloudflare, derived, devices, escrow, masters, oci_iam, pulumi_config, sealing
@@ -255,11 +255,14 @@ def written(stacks: Stacks, value: conventions.sealed.SealedValue) -> dict[str, 
 # -- sealing ------------------------------------------------------------------
 
 
-#: Every value but the writer keys, which open under any name (below).
+#: Every value but the backed namespaces' writer keys, which open under any
+#: name in their namespace (below); the etcd snapshots' writer key is strict.
 STRICT = {
-    name: value for name, value in conventions.sealed.VALUES.items() if value not in conventions.sealed.WRITER_KEYS
+    name: value
+    for name, value in conventions.sealed.VALUES.items()
+    if value not in conventions.sealed.NAMESPACE_WRITER_KEYS
 }
-WRITER_KEYS = {value.name: value for value in conventions.sealed.WRITER_KEYS}
+NAMESPACE_WRITER_KEYS = {value.name: value for value in conventions.sealed.NAMESPACE_WRITER_KEYS}
 
 
 @pytest.mark.parametrize('value', STRICT.values(), ids=STRICT)
@@ -282,7 +285,7 @@ def test_a_sealed_value_opens_under_its_name_and_namespace_and_under_no_other(
         _ = unseal(kubeseal, key_pair, value, ciphertexts, namespace=f'{value.namespace}-other')
 
 
-@pytest.mark.parametrize('value', WRITER_KEYS.values(), ids=WRITER_KEYS)
+@pytest.mark.parametrize('value', NAMESPACE_WRITER_KEYS.values(), ids=NAMESPACE_WRITER_KEYS)
 def test_a_writer_key_opens_under_any_name_in_its_namespace_and_in_no_other_namespace(
     value: conventions.sealed.SealedValue, sealer: sealing.Sealer, kubeseal: str, key_pair: KeyPair
 ) -> None:
@@ -1305,21 +1308,35 @@ def test_a_seal_that_fails_after_the_import_sends_the_operator_to_seal_not_to_a_
 
 BACKUP_KEYS = conventions.PHYSICAL_OUTPUTS.backup_keys
 
-#: Every writer key the census has `physical` mint, by its scope, as the
-#: stack's state carries it: each half named after its scope and its half. In
-#: the census's order, each namespace's families sorted, as the seal walks them.
+#: Every writer key `physical` mints, by its scope, as the stack's state
+#: carries it: each half named after its scope and its half. The etcd
+#: snapshots' first, then the census's in its order, each namespace's families
+#: sorted, as the seal walks them.
 EXPORTED = {
-    writer_scope(namespace, family): {
-        'id': f'{writer_scope(namespace, family)}-id',
-        'secret': f'{writer_scope(namespace, family)}-secret',
-    }
-    for namespace, families in BACKED_NAMESPACES.items()
-    for family in sorted(families)
+    scope: {'id': f'{scope}-id', 'secret': f'{scope}-secret'}
+    for scope in (
+        ETCD_SCOPE,
+        *(
+            writer_scope(namespace, family)
+            for namespace, families in BACKED_NAMESPACES.items()
+            for family in sorted(families)
+        ),
+    )
+}
+
+#: Every writer key the seal writes, by the scope `physical` exports it under.
+WRITER_ROWS = {
+    ETCD_SCOPE: conventions.sealed.ETCD_WRITER_KEY,
+    **{
+        writer_scope(namespace, family): conventions.sealed.writer_key(namespace, family)
+        for namespace, families in BACKED_NAMESPACES.items()
+        for family in families
+    },
 }
 
 #: Every stack a writer key is sealed into: the one that declares what reads
 #: it, by its row.
-DECLARING = sorted({value.stack for value in conventions.sealed.WRITER_KEYS})
+DECLARING = sorted({value.stack for value in WRITER_ROWS.values()})
 
 
 def nothing_written(stacks: Stacks) -> bool:
@@ -1354,23 +1371,68 @@ def test_every_writer_key_is_sealed_out_of_physicals_state_in_the_clear_at_its_r
     # opens, and written as plain values, never as secrets, into the stack each
     # row names: `apps` for an application's namespace, `k8s-base` for the
     # platform's. Each half under the variable a mover reads it from: restic's
-    # S3 backend, and `vmbackup`'s, take the key's id as `AWS_ACCESS_KEY_ID`
-    # and the key itself as `AWS_SECRET_ACCESS_KEY`.
+    # S3 backend, `vmbackup`'s and `talos-backup`'s, take the key's id as
+    # `AWS_ACCESS_KEY_ID` and the key itself as `AWS_SECRET_ACCESS_KEY`.
     expected: dict[str, dict[str, str]] = {}
-    for namespace, families in BACKED_NAMESPACES.items():
-        for family in families:
-            row = conventions.sealed.writer_key(namespace, family)
-            scope = writer_scope(namespace, family)
-            held = expected.setdefault(row.stack, {})
-            held[row.path('AWS_ACCESS_KEY_ID')] = f'AgB-sealed-{scope}-id'
-            held[row.path('AWS_SECRET_ACCESS_KEY')] = f'AgB-sealed-{scope}-secret'
+    for scope, row in WRITER_ROWS.items():
+        held = expected.setdefault(row.stack, {})
+        held[row.path('AWS_ACCESS_KEY_ID')] = f'AgB-sealed-{scope}-id'
+        held[row.path('AWS_SECRET_ACCESS_KEY')] = f'AgB-sealed-{scope}-secret'
     for stack, held in expected.items():
         runner = backed.runner(stack)
         assert runner.plain == held, stack
         assert runner.config == {}, stack
         assert not [args for args in runner.invocations if '--secret' in args], stack
     assert backed.runner(PHYSICAL).plain == {}
-    assert sorted(sealed) == sorted(value.name for value in conventions.sealed.WRITER_KEYS)
+    assert sorted(sealed) == sorted(value.name for value in WRITER_ROWS.values())
+
+
+def test_the_etcd_snapshots_key_is_sealed_alone_into_k8s_base_without_any_other_key_exported(backed: Stacks) -> None:
+    """The sitting that seals the cluster's own values seals this key before any namespace backs up.
+
+    `physical` exports nothing else here, so a seal that read every key
+    would refuse; and nothing but this key's path is written.
+    """
+    backed.runner(PHYSICAL).outputs = {BACKUP_KEYS: {ETCD_SCOPE: EXPORTED[ETCD_SCOPE]}}
+    row = conventions.sealed.ETCD_WRITER_KEY
+    sealer = sealing.Sealer(certificate='', open_stack=backed.open, run=sealed_as_marked)
+
+    sealed = derived.b2_writer_seal(sealer=sealer, only=row.name)
+
+    assert sealed == [row.name]
+    assert backed.runner(row.stack).plain == {
+        row.path('AWS_ACCESS_KEY_ID'): f'AgB-sealed-{ETCD_SCOPE}-id',
+        row.path('AWS_SECRET_ACCESS_KEY'): f'AgB-sealed-{ETCD_SCOPE}-secret',
+    }
+    assert all(not backed.runner(stack).plain for stack in DECLARING if stack != row.stack)
+
+
+def test_the_etcd_snapshots_key_physical_does_not_export_refuses_its_seal_before_anything_is_written(
+    backed: Stacks,
+) -> None:
+    backed.runner(PHYSICAL).outputs = {
+        BACKUP_KEYS: {scope: key for scope, key in EXPORTED.items() if scope != ETCD_SCOPE}
+    }
+    sealer = sealing.Sealer(certificate='', open_stack=backed.open, run=sealed_as_marked)
+
+    with pytest.raises(derived.WriterKeyMissing) as refused:
+        _ = derived.b2_writer_seal(sealer=sealer, only=conventions.sealed.ETCD_WRITER_KEY.name)
+
+    assert refused.value.scope == ETCD_SCOPE
+    assert nothing_written(backed)
+
+
+def test_an_only_that_names_no_writer_key_refuses_before_physical_is_read(backed: Stacks) -> None:
+    # The alert webhook is a sealed value of `k8s-base`, and no writer key.
+    name = conventions.sealed.ALERT_WEBHOOK.name
+    sealer = sealing.Sealer(certificate='', open_stack=backed.open, run=sealed_as_marked)
+
+    with pytest.raises(derived.UnknownWriterKey) as refused:
+        _ = derived.b2_writer_seal(sealer=sealer, only=name)
+
+    assert refused.value.name == name
+    assert not [args for args in backed.runner(PHYSICAL).invocations if args[:2] == ['stack', 'output']]
+    assert nothing_written(backed)
 
 
 def test_a_writer_key_physical_does_not_export_refuses_the_seal_before_anything_is_written(backed: Stacks) -> None:

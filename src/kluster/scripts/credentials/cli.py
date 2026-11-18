@@ -206,6 +206,7 @@ _ORDER = """when to run what:
        credentials derived oci-metrics mint
        credentials derived bgp seal
        credentials derived alert-webhook record
+       credentials derived b2-writer seal --only writer-etcd
          The values the cluster consumes, once physical has brought the
          cluster up and k8s-base runs the sealed-secrets controller. Each
          is sealed with kubeseal to the cluster's certificate, fetched with
@@ -215,8 +216,10 @@ _ORDER = """when to run what:
          the zones the cluster serves; the OCI key that reads the block
          volumes' metrics in physical's compartment, minted from the OCI
          seed; the BGP session password stage 8 recorded, read back out of
-         physical's config; and alertmanager's own Home Assistant webhook,
-         made by the operator in Home Assistant. Commit the stack file;
+         physical's config; alertmanager's own Home Assistant webhook,
+         made by the operator in Home Assistant; and the backup bucket's
+         key the hourly etcd snapshot uploads with, which physical's apply
+         minted, read out of physical's state. Commit the stack file;
          the next k8s-base apply hands each to what reads it. Re-running
          either mint rotates what it minted; a `bgp record` from here on
          seals in the same run.
@@ -228,7 +231,8 @@ _ORDER = """when to run what:
          conventions.backup names; this reads them out of physical's state
          and seals each namespace-wide into the config of the stack that
          declares what reads it -- apps for an application's namespace,
-         k8s-base for monitoring's -- for every namespace at once. Commit
+         k8s-base for monitoring's -- for every namespace at once, and the
+         etcd snapshots' key of stage 11 again beside them. Commit
          Pulumi.apps.yaml and Pulumi.k8s-base.yaml. Re-run it after an
          apply of physical that mints a key for a newly backed namespace.
        kubectl --context <legacy> -n serving-system get secret authelia \\
@@ -1066,12 +1070,23 @@ def build_parser() -> argparse.ArgumentParser:
         help='seal every writer key physical holds into the config of the stack that reads it',
         description=(
             "Fetch the sealing certificate from the cluster's sealed-secrets controller, with the kubeconfig in "
-            "the physical stack's state; read each backed namespace's writer keys out of that state, under the "
-            "physical stack's own passphrase; seal each with kubeseal namespace-wide, so that every Secret of its "
-            'namespace that carries it opens it under its own name; and write the ciphertext in the clear into the '
-            'config of the stack that declares what reads it, apps or k8s-base, reading it back. A namespace whose '
-            'key physical does not hold yet refuses the run before anything is written. Then commit the config. '
-            'Every run writes fresh ciphertext.'
+            "the physical stack's state; read each writer key out of that state, under the physical stack's own "
+            "passphrase: the etcd snapshots' key, and each backed namespace's keys; seal each with kubeseal, a "
+            "backed namespace's namespace-wide, so that every Secret of its namespace that carries it opens it "
+            "under its own name, and the etcd snapshots' strict; and write the ciphertext in the clear into the "
+            'config of the stack that declares what reads it, apps or k8s-base, reading it back. A key physical '
+            'does not hold yet refuses the run before anything is written. Then commit the config. Every run '
+            'writes fresh ciphertext.'
+        ),
+    )
+    _ = writer_seal.add_argument(
+        '--only',
+        choices=[value.name for value in conventions.sealed.WRITER_KEYS_BY_SCOPE.values()],
+        default=None,
+        metavar='<value>',
+        help=(
+            f'seal this writer key alone; `--only {conventions.sealed.ETCD_WRITER_KEY.name}` is the etcd '
+            "snapshots' key, sealed at the sitting that seals the cluster's own values"
         ),
     )
     _add_bundle_dir(writer_seal)
@@ -2057,7 +2072,7 @@ def main(argv: list[str] | None = None) -> int:
             # cluster that cannot be reached refuses the run before the state
             # is read.
             case ('derived', derived.B2_WRITER_ROW, 'seal'):
-                _ = derived.b2_writer_seal(sealer=_sealer(_opener(args, store, registry)))
+                _ = derived.b2_writer_seal(sealer=_sealer(_opener(args, store, registry)), only=args.only)
             case ('derived', derived.OCI_PHYSICAL_ROW, 'mint'):
                 _ = derived.oci_physical(
                     store,

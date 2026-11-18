@@ -1337,7 +1337,8 @@ are not re-litigated from scratch. §6.5 documents the largest reversal
         design.
 -   Residual risks carried consciously: etcd (cluster secrets) lives in a
     $0-trust tenancy → etcd encryption at rest + hourly snapshots to B2
-    (the snapshot is designed and not built — nodes.md §5 Tier 0);
+    (the snapshot job is declared in `k8s-base` and takes none until
+    bring-up stage 6 seals its writer key — nodes.md §5 Tier 0);
     total-tenancy loss → the cold-standby drill runs in reverse
     (bootstrap a temporary single-node CP on the homelab host from the
     latest snapshot, ~30–60 min, nodes.md §5).

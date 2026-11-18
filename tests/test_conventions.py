@@ -3147,11 +3147,12 @@ def test_every_sealed_value_is_declared_by_a_stack_of_the_census() -> None:
     assert {value.stack for value in conventions.sealed.VALUES.values()} <= set(conventions.STACK_NAMES.names())
 
 
-def test_every_value_credentials_seals_but_a_writer_key_is_sealed_strict() -> None:
+def test_every_value_credentials_seals_but_a_backed_namespaces_writer_key_is_sealed_strict() -> None:
     # Name and namespace bound into the ciphertext: nothing about one of these
-    # will be renamed. A writer key is the exception, opened under every
-    # repository Secret's name in its namespace (`test_sealing`).
-    writer = set(conventions.sealed.WRITER_KEYS)
+    # will be renamed. A backed namespace's writer key is the exception, opened
+    # under every repository Secret's name in its namespace (`test_sealing`);
+    # the etcd snapshots' writer key, which one Secret reads, is not.
+    writer = set(conventions.sealed.NAMESPACE_WRITER_KEYS)
     others = {value.scope for value in conventions.sealed.VALUES.values() if value not in writer}
 
     assert others == {conventions.sealed.SealingScope.STRICT}
@@ -3175,8 +3176,10 @@ def test_every_backed_namespace_has_a_writer_key_row_for_each_family() -> None:
             assert conventions.sealed.VALUES.get(row.name) == row, (namespace, family)
             assert row.namespace == namespace
             assert frozenset(row.keys) == conventions.WRITER_KEY_FIELDS
-    assert len(conventions.sealed.WRITER_KEYS) == sum(len(families) for families in census.values())
-    assert len({row.name for row in conventions.sealed.WRITER_KEYS}) == len(conventions.sealed.WRITER_KEYS)
+    assert len(conventions.sealed.NAMESPACE_WRITER_KEYS) == sum(len(families) for families in census.values())
+    assert len({row.name for row in conventions.sealed.NAMESPACE_WRITER_KEYS}) == len(
+        conventions.sealed.NAMESPACE_WRITER_KEYS
+    )
     # A stack named for a namespace nothing backs up seals nothing.
     assert set(conventions.sealed.WRITER_KEY_STACKS) <= set(census)
 

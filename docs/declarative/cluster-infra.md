@@ -344,11 +344,24 @@ classes its objects fall into (§1.2):
     (kube-state-metrics, the node-exporter DaemonSet) count as part of
     the VictoriaMetrics entry. None has an ordering constraint beyond
     Cilium.
+9.  **The hourly etcd snapshot** — Sidero's `talos-backup` as the
+    CronJob `etcd-snapshot` in a namespace of its own, `etcd-backup`, at
+    `restricted`, on the control planes (`components.backup.etcd`,
+    cluster/storage.md §5). It reaches the Talos API with a certificate
+    Talos issues to its `talos.dev/v1alpha1` `ServiceAccount` for
+    `os:etcd:backup` alone, the grant `physical` states
+    (credentials.md §1, rule 3), and uploads with the `etcd` scope's
+    writer key, sealed strict as `writer-etcd` (§1.1). It is behind
+    Cilium and the sealing controller, whose chart defines the
+    SealedSecret. Until `writer-etcd` is sealed in, the namespace and
+    the `ServiceAccount` are all it declares: the CronJob waits for
+    bring-up stage 6's seal (physical/bring-up.md).
 
 Every chart this list installs is pinned in `Pulumi.yaml`'s `versions:`
 block as `versions:chart-<name>`, the Gateway API definitions as
-`versions:manifest-gateway-api`, and local-path-provisioner's two images,
-the provisioner's and its helper pod's, as `versions:image-<name>`
+`versions:manifest-gateway-api`, and the images a component runs beside
+a chart, local-path-provisioner's two among them, the provisioner's and
+its helper pod's, and the etcd snapshot's, as `versions:image-<name>`
 (framework/pulumi.md §3.2). One copy:
 the stack program installs from those pins, and `update_crds` reads the
 same file through the same parser to render the CRD bundle
@@ -979,9 +992,10 @@ All decided behavior from architecture.md §3, expressed as config:
     land with the wave that moves the dashboard's name from the legacy
     `mon` block (rfc-007 §7.4, migration.md §2).
 -   No app namespaces, quotas, or per-app policy.
--   No backup schedules — VolSync `ReplicationSource`s are declared
-    beside their claims in `apps` by `claim` and the retention classes,
-    each with its repository Secret (workloads.md §3); this stack only
-    installs the controller and the backup-freshness vmalert rule
-    family.
+-   No application's backup schedules — VolSync `ReplicationSource`s
+    are declared beside their claims in `apps` by `claim` and the
+    retention classes, each with its repository Secret (workloads.md
+    §3); this stack installs the controller and the backup-freshness
+    vmalert rule family. The platform's own backups are this stack's:
+    the metrics stores' (§1 item 6) and etcd's (§1 item 9).
 -   No DNS records (declarative/dns.md).
