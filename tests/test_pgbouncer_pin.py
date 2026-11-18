@@ -11,13 +11,19 @@ whether it serves the pinned digest.
 from __future__ import annotations
 
 import json
-import re
 from pathlib import Path
 from typing import cast
 from urllib import request as urllib_request
 
 import pytest
-from renovate_text import as_python_spells_it, effective, group, listed, package_rules, scalar
+from renovate_text import (
+    as_python_spells_it,
+    effective,
+    enabled,
+    listed,
+    reaches,
+    scalar,
+)
 
 from kluster.lib.state_backend import settings
 from kluster.scripts.state_backend import provision
@@ -36,8 +42,17 @@ IMAGE_MATCH_STRING = (
 
 
 def _appliance_rule(config: str) -> str:
-    """The rule grouping every pin of the appliance's settings: the one matching that file and setting a group."""
-    (rule,) = [rule for rule in package_rules(config) if APPLIANCE in listed(rule, 'matchFileNames') and group(rule)]
+    """The rule grouping the appliance's releases: the one a minor release of the pooler takes its branch from."""
+    release = {
+        'matchDepNames': (settings.PGBOUNCER_REPOSITORY,),
+        'matchPackageNames': (settings.PGBOUNCER_REPOSITORY,),
+        'matchManagers': ('custom.regex', 'regex'),
+        'matchFileNames': (APPLIANCE,),
+        'matchDatasources': ('docker',),
+        'matchUpdateTypes': ('minor',),
+    }
+    rule = effective(config, release, 'groupSlug')
+    assert rule is not None, 'no rule names the branch a release of the appliance travels on'
     return rule
 
 
@@ -108,13 +123,14 @@ def test_the_images_digest_moves_monthly_apart_from_the_appliances_releases() ->
 def test_a_patch_release_of_the_pooler_is_offered() -> None:
     """Renovate proposes a PgBouncer patch release, which is where PgBouncer ships its security fixes.
 
-    The top-level `patch` block disables every patch update, and what
-    renovate gives an update is the last matching rule that sets each key,
-    so a patch of the pooler is offered only where such a rule turns it back
-    on. The pooler is the box's one listener on the network, and a patch
-    left for the next minor leaves a fix of its pre-authentication code off
-    the box. Held as text, because there is no JSON5 parser here
-    (`renovate_text`).
+    The top-level `patch` block disables every patch update, and a matching
+    rule setting `enabled` overrides it (`renovate_text.enabled`), so a
+    patch of the pooler is offered only where such a rule turns it back on.
+    The pooler is the box's one listener on the network, and a patch left
+    for the next minor leaves a fix of its pre-authentication code off the
+    box. The rule is the box's: a pin of the same image in another file is
+    left to the global block. Held as text, because there is no JSON5 parser
+    here (`renovate_text`).
     """
     config = (ROOT / 'renovate.json5').read_text()
     (found,) = as_python_spells_it(IMAGE_MATCH_STRING).finditer((ROOT / APPLIANCE).read_text())
@@ -127,11 +143,13 @@ def test_a_patch_release_of_the_pooler_is_offered() -> None:
         'matchUpdateTypes': ('patch',),
     }
 
-    patches_off = re.search(r'^  patch: \{\s*(//[^\n]*\s*)*enabled: false,', config, re.MULTILINE)
+    assert enabled(config, patch), 'the global patch block drops every PgBouncer patch release, and no rule offers one'
     enabling = effective(config, patch, 'enabled')
-    assert patches_off is None or (
-        enabling is not None and re.search(r'^\s*enabled: true,$', enabling, re.MULTILINE)
-    ), 'the global patch block drops every PgBouncer patch release, and no rule offers one'
+    elsewhere = {key: value for key, value in patch.items() if key != 'matchManagers'}
+    elsewhere['matchFileNames'] = ('src/kluster/lib/state_backend/images.py',)
+    assert enabling is None or not reaches(enabling, elsewhere), (
+        "the rule offering the box's PgBouncer patches offers them to a pin of the image in any file"
+    )
 
 
 class _Answer:
