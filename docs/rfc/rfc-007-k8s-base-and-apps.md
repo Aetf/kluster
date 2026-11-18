@@ -128,6 +128,24 @@
     node's GUA past the balancer, and its connection to the IPv4 front
     answers from every node, OCI's limit on a backend acting as a client
     not binding there.
+*   **Updated:** 2026-11-17 — §3.1 and §14 slice 5's test, as
+    [Aetf/kluster-ops#790](https://github.com/Aetf/kluster-ops/issues/790)
+    built it: what `k8s-base` reads across a StackReference is the
+    outputs of the stacks below it that its components consume, not the
+    pool's alone. The pull of OCI's block-volume series is one such
+    component: OCI names a volume in those series by its OCID alone, and
+    the cloud assigns the OCID at the apply, so no convention can carry
+    it, and the pull reads each cloud node's volumes off `physical`'s
+    `volume_ids` once its key is sealed in. The reads are stated as that
+    definition, with today's instances, in declarative/cluster-infra.md
+    §0. What `apps` reads is rfc-008 §4.1's (rfc-008 §8).
+*   **Updated:** 2026-11-17 — §7.3 and §14's slices 8, 11 and 14, as
+    [Aetf/kluster-ops#842](https://github.com/Aetf/kluster-ops/issues/842)
+    built them: the sealed value is the webhook's id, not its address.
+    The SealedSecret renders the URL alertmanager reads from the id and
+    `conventions.HOME_ASSISTANT`'s address, so the address is held once
+    and a moved one needs no new seal (cluster/architecture.md §4.3,
+    operations.md §4).
 *   **Authority:** AGENTS.md,
     [framework/dispatch.md](../framework/dispatch.md),
     [framework/rfc.md](../framework/rfc.md) and the style rules
