@@ -254,6 +254,60 @@ after it, so they are written in [credentials.md](../credentials.md)
 [declarative/dns.md](../declarative/dns.md) §1.3, and its retirement
 sentence names where each went.
 
+**A command a runbook gives to be run as written, in a block, a
+helper function or inline, reaches a pinned tool through `mise x --`;
+an inline span that names a reading uses the tool's own spelling.** A runbook is
+a procedure an operator runs against the estate: its cluster, its
+hosts, its stacks and their services. The protocol an
+agent works this repository by is not one, the `jj` forms of
+[framework/dispatch.md](../framework/dispatch.md) and
+[framework/testing.md](../framework/testing.md) among it, and a
+recovery that must work without the checkout's pinned tools names its tool
+bare: the one in `escrow/README.md` needs nothing but `age`. A pinned
+tool is a command that `mise which` resolves, from the checkout, to one
+of the pins in `mise.toml`: `jq` from its own pin, `psql` and
+`pg_restore` from the `postgres` pin, `vmctl` from the VictoriaMetrics
+one. A utility POSIX specifies is not one of them: the `gawk` pin puts
+an `awk` on the path beside it, and a block that calls `awk` asks for
+the host's POSIX one. The pin is what makes a reading the same on
+every workstation: a bare name runs whichever release the host has,
+or fails where it has none, and what it reads is then that host's
+answer. A helper that wraps the tool, such as `kub` or `tal`, carries
+`mise x --` once, and what runs through it needs nothing more; a filter
+a block pipes into, such as `jq`, is a command of its own and carries
+it too. The binary `mise which` names is the same pin, and any command
+may call it; one that must not take the environment `mise.toml` sets
+has to, such as a scratch probe with a backend of its own
+([framework/testing.md](../framework/testing.md) §5.1). A command is
+run as written where a step gives it whole for the operator to run,
+placeholders and all, so an inline step carries `mise x --` as a block
+does: `mise x -- kubectl -n monitoring get pods`. A span that names a
+tool, a subcommand or a reading in prose, such as `talosctl upgrade` or
+`pulumi stack init`, gives nothing to run, and keeps the tool's own
+spelling. The rule is for commands run on
+the workstation from the root of the checkout, where `mise.toml` is in
+force, and a block or a step that reaches a pin says that it runs
+there, beside the command or once for its section. Outside
+the checkout, `mise x` runs whatever the path holds and says nothing,
+while `mise which` refuses; so a filter on a reading taken in another
+directory runs outside that directory's subshell. A command a block
+runs on another host, the gateway or the state backend's box, runs that
+host's own tool.
+
+**A runbook reading whose passing value is empty or zero reads only
+what its source returned. Its pass criterion says that a read which
+prints no count is no reading. A baseline it is compared against is
+shown when it is taken.** A filter at the end of a pipe, `grep -c` or
+`wc -l` or a `jq` selection, prints that passing value on empty input,
+and a source that failed hands it exactly that: the failure shows on
+standard error alone, and the reading passes. So the source's output
+is kept apart and filtered only when the source succeeded,
+`log=$(…) && grep -c … <<<"$log"`, and a failed source prints its
+error in place of the count. A baseline is read once and compared
+against later, so a baseline taken from a failed read agrees with a
+later reading that failed the same way; printing it where it is taken
+is what shows it whole before anything is compared with it.
+
 **Docs layer like the code.** `docs/framework/` documents mechanisms
 (how this repo does Pulumi, CI, testing, and how work is dispatched)
 and names no kluster design decision; `docs/declarative/`, `docs/physical/` and `docs/cluster/` own

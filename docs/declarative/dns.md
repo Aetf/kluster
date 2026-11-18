@@ -137,10 +137,11 @@ in the response saying so.
 certificate a public log holds for the apex or any name under it, from
 crt.sh's JSON endpoint — which caps an identity search at 10,000
 matched identities, a few thousand certificates, and says nothing in
-its JSON when it does, so a count in the thousands is itself a finding:
+its JSON when it does, so a count in the thousands is itself a finding.
+From the root of the checkout:
 
     Z=<zone>; out=$(curl -fsS "https://crt.sh/?q=$Z&match=ILIKE&output=json&deduplicate=Y") \
-      && jq -r --arg z "$Z" --arg since <previous read> '[.[]
+      && mise x -- jq -r --arg z "$Z" --arg since <previous read> '[.[]
           | select(.not_before >= $since)
           | .name_value |= (split("\n") | map(select(. == $z or endswith("." + $z))) | join(" "))
           | select(.name_value != "")]

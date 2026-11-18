@@ -77,7 +77,8 @@ rational:
     EPHEMERAL partition into the new space on its own, but only at boot:
     a volume grows on its way to being mounted, and Talos does not take
     up a mounted one again. So every growth of the file is followed by a
-    reboot of the worker, `talosctl -n <worker> reboot`, and the
+    reboot of the worker, `mise x -- talosctl -n <worker> reboot` from the
+    root of the checkout, and the
     partition has its new size once the node is back. `HOMELAB_DISK_GIB`
     is raised to the new size in the same sitting, **after** the host,
     so the declaration never states more than the file has; between the

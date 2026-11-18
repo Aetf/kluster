@@ -1321,9 +1321,12 @@ failure is cheap:
 7.  **Count the rows.** Point libpq — `psql`, which `mise.toml`'s
     `postgres` pin installs beside `pg_restore` — at the same bundle, with
     `PGSSLROOTCERT`, `PGSSLCERT` and `PGSSLKEY` naming `ca.crt`,
-    `client.crt` and `client.key` in that directory (§3), and ask:
+    `client.crt` and `client.key` in that directory (§3). It runs, from
+    the root of the checkout, the binary `mise which` names rather than
+    going through `mise x`, whose environment would name the workstation
+    slot's certificates in place of these. Then ask:
 
-        psql "$(cat <scratch>/bundle/backend-url)" -At -c "
+        "$(mise which psql)" "$(cat <scratch>/bundle/backend-url)" -At -c "
           select table_name,
                  (xpath('/row/c/text()', query_to_xml(
                      format('select count(*) as c from public.%I', table_name),
@@ -1342,10 +1345,20 @@ failure is cheap:
     A drill that only listed the object would have tested nothing about
     restoration. The counts are also what to write down: the next
     rehearsal reads them to see whether the state has quietly shrunk.
-8.  **Select a stack**: `pulumi stack select <one of the names the
-    restore printed>`, from the checkout, with `PULUMI_BACKEND_URL` set
-    to the scratch bundle's URL. The restore proved the backend answers
-    a listing; this proves an operator's own client opens a stack in it.
+8.  **Select a stack**, from the root of the checkout, with item 7's
+    `PGSSL*` still naming the scratch bundle's certificates:
+
+        PULUMI_BACKEND_URL="$(cat <scratch>/bundle/backend-url)&binary_parameters=yes" \
+            "$(mise which pulumi)" stack select <one of the names the restore printed>
+
+    It runs the binary `mise which` names for item 7's reason: under
+    `mise x`, the environment `mise.toml` sets would name the workstation
+    slot's backend URL in place of the scratch one, and the select would
+    open a stack in the live backend. The URL carries
+    `binary_parameters=yes`, as every `pulumi` run's does (§7.5,
+    "Connecting"), since the scratch box's pooler is the appliance's. The restore proved
+    the backend answers a listing; this proves an operator's own client
+    opens a stack in it.
 9.  **Record the elapsed time** — the download, the restore, and the
     wall clock across the whole sequence. That is what lets the bring-up
     runbook price the recovery path instead of assuming it.
