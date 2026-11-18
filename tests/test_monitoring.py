@@ -21,12 +21,11 @@ import json
 import re
 import subprocess
 import sys
-import tarfile
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any, cast
 
-import pinned_tools
+import image_busybox
 import process_sessions
 import pulumi
 import pytest
@@ -1529,51 +1528,83 @@ FAKE_TOKENS = ('account-token', 'upload-token')
 #: The bound on one script's run, which takes a fraction of a second.
 SHELL_TIMEOUT = 30
 
-#: The package `mise.toml` pins the busybox of the images the scripts run in
-#: from, and the binary in it.
-BUSYBOX_PACKAGE = 'busybox-static.apk'
-BUSYBOX_BINARY = 'bin/busybox.static'
+#: The shell a script container's command names, which is its image's busybox.
+SHELL = '/bin/sh'
+
+#: The pins of the images a backup or restore pod runs a script in, each
+#: script under its own image's busybox (`image_busybox`): curl's runs every
+#: script but `restore.sh`, which `vmrestore`'s runs.
+SCRIPT_IMAGES = ('metrics-bucket', 'metrics-restore')
+
+#: The pin each image reference the installation is configured with comes from,
+#: so a container's `image` names the pin whose busybox it runs its script under.
+IMAGE_PINS = {
+    value: key.removeprefix('versions:image-')
+    for key, value in VERSIONS_CONFIG.items()
+    if key.startswith('versions:image-')
+}
 
 
-@pytest.fixture(scope='module', name='busybox')
-def busybox_fixture(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    """A directory of the pinned busybox's applets, each a link to it, as the images lay them out under one `PATH`.
+@pytest.fixture(scope='module', name='shells')
+def shells_fixture(request: pytest.FixtureRequest, tmp_path_factory: pytest.TempPathFactory) -> dict[str, Path]:
+    """For each pin a script runs in, a directory of its image's busybox applets, as the image lays them out under one `PATH`."""
+    cache = image_busybox.cache_directory(request.config, tmp_path_factory)
+    return {
+        pin: image_busybox.applets(
+            image_busybox.extracted(image_busybox.pinned(pin), cache), tmp_path_factory.mktemp(pin)
+        )
+        for pin in SCRIPT_IMAGES
+    }
 
-    The package is Alpine's: three gzip members, each a tar stream, the last
-    holding the files.
+
+@pytest.mark.parametrize('kind', ['restore', 'backup'])
+def test_each_script_runs_under_the_busybox_of_its_containers_own_image(
+    sealed: Run, tmp_path: Path, shells: Mapping[str, Path], kind: str
+) -> None:
+    """The `/bin/sh` a container runs a script under is its image's `/bin/busybox` and the loader it names, byte for byte.
+
+    The files are the ones the pod launches for the container's `/bin/sh`,
+    and the sums are the ones the container's own pinned image computes
+    itself, so they are read apart from the copy the suite runs.
     """
-    package = Path(pinned_tools.located(BUSYBOX_PACKAGE))
-    applets = tmp_path_factory.mktemp('busybox')
-    with tarfile.open(package, 'r:gz', ignore_zeros=True) as archive:
-        member = archive.getmember(BUSYBOX_BINARY)
-        extracted = archive.extractfile(member)
-        assert extracted is not None
-        binary = applets / 'busybox'
-        binary.write_bytes(extracted.read())
-    binary.chmod(0o755)
-    listed = process_sessions.run([str(binary), '--list'], text=True, timeout=SHELL_TIMEOUT, check=True)
-    for applet in listed.stdout.split():
-        if applet != 'busybox':
-            (applets / applet).symlink_to(binary)
-    return applets
+    pod = (_restore_pod if kind == 'restore' else _backup_pod)(sealed, 'history', tmp_path, shells)
+    scripted = [it for it in pod.containers if SHELL in it['command']]
+    assert scripted, f'the {kind} pod runs no script'
+
+    for container in scripted:
+        image = image_busybox.pinned(IMAGE_PINS[container['image']])
+        argv = pod.argv(container)
+        *loader, binary = image_busybox.launched(Path(argv[list(container['command']).index(SHELL)]))
+        interpreter = image_busybox.interpreter(binary.read_bytes())
+        named = [image_busybox.BINARY, *([interpreter] if interpreter is not None else [])]
+
+        in_image = image_busybox.sums_in(image, *named)
+
+        assert [image_busybox.sha256(it) for it in (binary, *loader)] == [in_image[it] for it in named], (
+            f'{container["name"]} runs its script under files {image} does not carry'
+        )
 
 
 class Pod:
-    """A store's restore or backup pod, its containers run in order under the pinned busybox against the fakes.
+    """A store's restore or backup pod, its containers run in order against the fakes, each under its image's busybox.
 
     The init containers run as the kubelet runs them, one after another, the
     next only once the one before it has succeeded, and then the pod's main
     container. The kubelet starts a pod's main containers together, which a
     sequence does not model, so a pod with more than one is refused. A
     restore's pod is its store's, whose main container, the store itself,
-    is not run. `PATH` is the fakes and the busybox applets alone, as the
-    images hold no other tool.
+    is not run. A container's `/bin/sh` and its `PATH`'s applets are the
+    busybox of the pin its `image` is configured from, and `PATH` holds the
+    fakes beside them alone, as the images hold no other tool. `vmbackup`'s
+    image runs its binary and no script, so its busybox is never read, and
+    a container whose command names `/bin/sh` in an image whose busybox is
+    not read is refused, naming the image.
     """
 
     def __init__(
         self,
         tmp_path: Path,
-        busybox: Path,
+        shells: Mapping[str, Path],
         init: Sequence[Mapping[str, Any]],
         main: Sequence[Mapping[str, Any]] = (),
     ) -> None:
@@ -1586,50 +1617,67 @@ class Pod:
         self.data = tmp_path / 'data'
         self.work = tmp_path / 'work'
         self.bucket = self.state / 'bucket'
-        shell, fakes = tmp_path / 'shell', tmp_path / 'bin'
-        for directory in (self.state, self.data, self.work, self.bucket, shell, fakes):
+        shell, self.fakes = tmp_path / 'shell', tmp_path / 'bin'
+        for directory in (self.state, self.data, self.work, self.bucket, shell, self.fakes):
             directory.mkdir(parents=True, exist_ok=True)
         for name, text in stores.SHELL.items():
             (shell / name).write_text(text)
         for name, text in (('curl', FAKE_CURL), ('vmrestore', FAKE_BINARY), ('vmbackup', FAKE_BINARY)):
-            binary = fakes / name
+            binary = self.fakes / name
             binary.write_text(f'#!{sys.executable}\n{text}')
             binary.chmod(0o755)
         self.local = {
             stores.SHELL_DIR: str(shell),
             stores.DATA_DIR: str(self.data),
             stores.WORK_DIR: str(self.work),
-            '/vmrestore-prod': str(fakes / 'vmrestore'),
-            '/vmbackup-prod': str(fakes / 'vmbackup'),
-            '/bin/sh': str(busybox / 'sh'),
+            '/vmrestore-prod': str(self.fakes / 'vmrestore'),
+            '/vmbackup-prod': str(self.fakes / 'vmbackup'),
         }
-        self.path = f'{fakes}:{busybox}'
+        self.shells = shells
         self.containers = containers
         self.key = ':'.join(FAKE_KEY)
 
-    def _here(self, value: str) -> str:
+    def _shell(self, container: Mapping[str, Any]) -> Path | None:
+        """The applets of the busybox in `container`'s image, `None` for an image whose busybox is not read."""
+        image = container['image']
+        assert image in IMAGE_PINS, f'{container["name"]} runs {image}, which no `versions:image-*` pin configures'
+        shell = self.shells.get(IMAGE_PINS[image])
+        assert shell is not None or SHELL not in container['command'], (
+            f'{container["name"]} names {SHELL} in {image}, whose busybox the suite does not read'
+        )
+        return shell
+
+    def _here(self, value: str, shell: Path | None) -> str:
         for remote, path in self.local.items():
             value = value.replace(remote, path)
-        return value
+        return value.replace(SHELL, str(shell / 'sh')) if shell is not None else value
 
-    def _env(self, container: Mapping[str, Any]) -> dict[str, str]:
+    def _env(self, container: Mapping[str, Any], shell: Path | None) -> dict[str, str]:
         halves = dict(zip(sorted(conventions.WRITER_KEY_FIELDS), FAKE_KEY, strict=True))
         return {
-            'PATH': self.path,
+            'PATH': ':'.join(str(it) for it in (self.fakes, shell) if it is not None),
             'FAKE_STATE': str(self.state),
             'FAKE_KEY': self.key,
             **{
-                it['name']: self._here(it['value']) if 'value' in it else halves.get(it['name'], 'the-snapshot-key')
+                it['name']: self._here(it['value'], shell)
+                if 'value' in it
+                else halves.get(it['name'], 'the-snapshot-key')
                 for it in container.get('env', [])
             },
         }
+
+    def argv(self, container: Mapping[str, Any]) -> list[str]:
+        """`container`'s command as the pod launches it here."""
+        shell = self._shell(container)
+        return [self._here(arg, shell) for arg in container['command']]
 
     def run(self) -> list[subprocess.CompletedProcess[str]]:
         """Each container's run, up to and including the first that fails."""
         runs: list[subprocess.CompletedProcess[str]] = []
         for container in self.containers:
-            argv = [self._here(arg) for arg in container['command']]
-            completed = process_sessions.run(argv, env=self._env(container), text=True, timeout=SHELL_TIMEOUT)
+            completed = process_sessions.run(
+                self.argv(container), env=self._env(container, self._shell(container)), text=True, timeout=SHELL_TIMEOUT
+            )
             runs.append(completed)
             if completed.returncode != 0:
                 break
@@ -1650,11 +1698,11 @@ class Pod:
         return [json.loads(line) for line in found.read_text().splitlines()] if found.exists() else []
 
 
-def _restore_pod(run: Run, store: str, tmp_path: Path, busybox: Path) -> Pod:
-    return Pod(tmp_path, busybox, _restores(run)[store])
+def _restore_pod(run: Run, store: str, tmp_path: Path, shells: Mapping[str, Path]) -> Pod:
+    return Pod(tmp_path, shells, _restores(run)[store])
 
 
-def _backup_pod(run: Run, store: str, tmp_path: Path, busybox: Path) -> Pod:
+def _backup_pod(run: Run, store: str, tmp_path: Path, shells: Mapping[str, Path]) -> Pod:
     from kluster.components.monitoring import stores
 
     (job,) = [
@@ -1663,7 +1711,7 @@ def _backup_pod(run: Run, store: str, tmp_path: Path, busybox: Path) -> Pod:
         if it.inputs['metadata']['name'] == f'{stores.BACKUP_JOB_PREFIX}{store}'
     ]
     pod = job['spec']['jobTemplate']['spec']['template']['spec']
-    return Pod(tmp_path, busybox, pod.get('initContainers', []), pod['containers'])
+    return Pod(tmp_path, shells, pod.get('initContainers', []), pod['containers'])
 
 
 def _prefix(pod: Pod) -> str:
@@ -1685,9 +1733,11 @@ def _backed_up(pod: Pod, prefix: str) -> None:
 
 
 @pytest.mark.parametrize('store', ['recent', 'history'])
-def test_an_empty_store_with_a_backup_is_restored(sealed: Run, tmp_path: Path, busybox: Path, store: str) -> None:
+def test_an_empty_store_with_a_backup_is_restored(
+    sealed: Run, tmp_path: Path, shells: Mapping[str, Path], store: str
+) -> None:
     """From its own prefix, by the `vmrestore` command the container declares, into the store's data directory."""
-    pod = _restore_pod(sealed, store, tmp_path, busybox)
+    pod = _restore_pod(sealed, store, tmp_path, shells)
     _backed_up(pod, _prefix(pod))
 
     assert pod.succeeded(), pod.stderr
@@ -1698,9 +1748,9 @@ def test_an_empty_store_with_a_backup_is_restored(sealed: Run, tmp_path: Path, b
     assert (pod.data / 'restored-part').exists()
 
 
-def test_an_empty_store_with_no_backup_starts_empty(sealed: Run, tmp_path: Path, busybox: Path) -> None:
+def test_an_empty_store_with_no_backup_starts_empty(sealed: Run, tmp_path: Path, shells: Mapping[str, Path]) -> None:
     """The first install: nothing at the store's prefix, whatever another store's prefix holds."""
-    pod = _restore_pod(sealed, 'history', tmp_path, busybox)
+    pod = _restore_pod(sealed, 'history', tmp_path, shells)
     _backed_up(pod, 'vm/monitoring/recent/')
 
     assert pod.succeeded(), pod.stderr
@@ -1709,10 +1759,10 @@ def test_an_empty_store_with_no_backup_starts_empty(sealed: Run, tmp_path: Path,
 
 
 def test_a_store_holding_data_starts_on_it_without_reading_the_bucket(
-    sealed: Run, tmp_path: Path, busybox: Path
+    sealed: Run, tmp_path: Path, shells: Mapping[str, Path]
 ) -> None:
     """A restarted store keeps what it holds, with the bucket unreachable all the while."""
-    pod = _restore_pod(sealed, 'history', tmp_path, busybox)
+    pod = _restore_pod(sealed, 'history', tmp_path, shells)
     _backed_up(pod, _prefix(pod))
     (pod.data / 'flock.lock').write_text('')
     (pod.state / 'down').write_text('')
@@ -1723,7 +1773,7 @@ def test_a_store_holding_data_starts_on_it_without_reading_the_bucket(
 
 @pytest.mark.parametrize('failure', ['bucket down', 'key refused', 'listing fails', 'restore fails', 'data unreadable'])
 def test_a_backup_that_cannot_be_read_keeps_the_store_from_starting(
-    sealed: Run, tmp_path: Path, busybox: Path, failure: str
+    sealed: Run, tmp_path: Path, shells: Mapping[str, Path], failure: str
 ) -> None:
     """Whatever stops the read -- the bucket, the key, its listing, `vmrestore`, the data directory -- the store waits.
 
@@ -1731,7 +1781,7 @@ def test_a_backup_that_cannot_be_read_keeps_the_store_from_starting(
     unless its failure stops the container, and nothing listed starts the
     store empty over the backup that exists.
     """
-    pod = _restore_pod(sealed, 'history', tmp_path, busybox)
+    pod = _restore_pod(sealed, 'history', tmp_path, shells)
     _backed_up(pod, _prefix(pod))
     if failure == 'bucket down':
         (pod.state / 'down').write_text('')
@@ -1751,10 +1801,10 @@ def test_a_backup_that_cannot_be_read_keeps_the_store_from_starting(
 
 @pytest.mark.parametrize('held', [True, False])
 def test_a_restore_that_did_not_finish_is_run_again_and_never_started_on(
-    sealed: Run, tmp_path: Path, busybox: Path, held: bool
+    sealed: Run, tmp_path: Path, shells: Mapping[str, Path], held: bool
 ) -> None:
     """`vmrestore`'s lock file left in the directory: restored again, or refused where the backup is gone."""
-    pod = _restore_pod(sealed, 'history', tmp_path, busybox)
+    pod = _restore_pod(sealed, 'history', tmp_path, shells)
     if held:
         _backed_up(pod, _prefix(pod))
     (pod.data / 'restore-in-progress').write_text('')
@@ -1784,12 +1834,12 @@ def _recorded(pod: Pod, text: str) -> Path:
 
 @pytest.mark.parametrize('recorded', [None, 41_000_000_000, 42_000_000_000])
 def test_the_history_store_is_backed_up_and_its_rows_recorded_where_it_holds_no_fewer(
-    sealed: Run, tmp_path: Path, busybox: Path, recorded: int | None
+    sealed: Run, tmp_path: Path, shells: Mapping[str, Path], recorded: int | None
 ) -> None:
     """The backup runs against the store's snapshot endpoint, and the count read becomes the record."""
     from kluster.components.monitoring import stores
 
-    pod = _backup_pod(sealed, 'history', tmp_path, busybox)
+    pod = _backup_pod(sealed, 'history', tmp_path, shells)
     _metrics(pod, 42_000_000_000)
     if recorded is not None:
         _ = _recorded(pod, str(recorded))
@@ -1807,7 +1857,7 @@ def test_the_history_store_is_backed_up_and_its_rows_recorded_where_it_holds_no_
 
 @pytest.mark.parametrize('failure', ['fewer rows', 'listing fails', 'record not a number', 'record empty'])
 def test_the_history_store_is_not_backed_up_where_its_record_does_not_clear_it(
-    sealed: Run, tmp_path: Path, busybox: Path, failure: str
+    sealed: Run, tmp_path: Path, shells: Mapping[str, Path], failure: str
 ) -> None:
     """Fewer rows than the record, a record that cannot be listed, or one that is no count: no backup, the record kept.
 
@@ -1818,7 +1868,7 @@ def test_the_history_store_is_not_backed_up_where_its_record_does_not_clear_it(
     passes. A listing that fails after the key is authorized reads as no
     record unless its failure stops the container.
     """
-    pod = _backup_pod(sealed, 'history', tmp_path, busybox)
+    pod = _backup_pod(sealed, 'history', tmp_path, shells)
     _metrics(pod, 1_000)
     held = {'record not a number': 'some rows', 'record empty': ''}.get(failure, '42000000000')
     record = _recorded(pod, held)
@@ -1830,9 +1880,9 @@ def test_the_history_store_is_not_backed_up_where_its_record_does_not_clear_it(
     assert record.read_text() == held
 
 
-def test_a_failed_backup_records_nothing(sealed: Run, tmp_path: Path, busybox: Path) -> None:
+def test_a_failed_backup_records_nothing(sealed: Run, tmp_path: Path, shells: Mapping[str, Path]) -> None:
     """The record is of the last backup that completed, so a count is never recorded for a backup that is not there."""
-    pod = _backup_pod(sealed, 'history', tmp_path, busybox)
+    pod = _backup_pod(sealed, 'history', tmp_path, shells)
     _metrics(pod, 1_000)
     (pod.state / 'fails').write_text('vmbackup')
 
@@ -1840,9 +1890,11 @@ def test_a_failed_backup_records_nothing(sealed: Run, tmp_path: Path, busybox: P
     assert not _record(pod).exists()
 
 
-def test_the_recent_store_is_backed_up_whatever_it_holds(sealed: Run, tmp_path: Path, busybox: Path) -> None:
+def test_the_recent_store_is_backed_up_whatever_it_holds(
+    sealed: Run, tmp_path: Path, shells: Mapping[str, Path]
+) -> None:
     """Its rows age out with its retention, so its count falls, and its backup reads neither the store nor a record."""
-    pod = _backup_pod(sealed, 'recent', tmp_path, busybox)
+    pod = _backup_pod(sealed, 'recent', tmp_path, shells)
     (pod.state / 'down').write_text('')
 
     assert pod.succeeded(), pod.stderr
@@ -1851,7 +1903,7 @@ def test_the_recent_store_is_backed_up_whatever_it_holds(sealed: Run, tmp_path: 
 
 
 def test_no_credential_is_an_argument_of_any_process_the_scripts_start(
-    sealed: Run, tmp_path: Path, busybox: Path
+    sealed: Run, tmp_path: Path, shells: Mapping[str, Path]
 ) -> None:
     """The node exporter reads every process's arguments on the node; the key and B2's tokens reach `curl` as files.
 
@@ -1863,9 +1915,9 @@ def test_no_credential_is_an_argument_of_any_process_the_scripts_start(
     """
     basic = base64.b64encode(':'.join(FAKE_KEY).encode()).decode()
     secrets = (*FAKE_KEY, basic, *FAKE_TOKENS)
-    restore = _restore_pod(sealed, 'history', tmp_path / 'restore', busybox)
+    restore = _restore_pod(sealed, 'history', tmp_path / 'restore', shells)
     _backed_up(restore, _prefix(restore))
-    backup = _backup_pod(sealed, 'history', tmp_path / 'backup', busybox)
+    backup = _backup_pod(sealed, 'history', tmp_path / 'backup', shells)
     _metrics(backup, 1_000)
     _ = _recorded(backup, '1')
 

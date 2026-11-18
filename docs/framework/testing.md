@@ -45,7 +45,11 @@ on a workstation, because `checks` pulls that image before the tests
 ([ci.md](ci.md) §3), apart from the tripwire on each of its workarounds,
 whose verdict is the runner's: where the podman or pasta it runs on no
 longer has the defect a workaround answers, that tripwire fails on CI and
-skips anywhere else.
+skips anywhere else. The cases of `tests/test_monitoring.py` that run the
+backup and restore scripts skip where podman is not on `PATH`, as in a
+cloud session, because the `/bin/busybox` each script runs under is read
+out of its pinned image with podman (`tests/image_busybox.py`); on CI's
+runner, which has podman, they fail instead.
 
 A coroutine that never resolves its futures hangs forever instead of failing,
 and the run is bounded twice against that, at two scales:
@@ -1223,8 +1227,10 @@ fix, and the diff is the only artifact that disagrees.
     place: it is what ends a coroutine that never resolves its futures, by
     name.
 4.  **Keep it Fast**: Unit tests make no network calls and create no real
-    resources. The fetches §8 names are the exceptions, each with its
-    reason there.
+    resources. The exceptions are the fetches §8 names, each with its
+    reason there, and the pulls of the pinned images whose `/bin/busybox`
+    the monitoring tests run the backup and restore scripts under, with
+    their reason in `tests/image_busybox.py`.
 5.  **No Wall-Clock Budgets**: A unit case's outcome never depends on how
     much real time passes. A budget measured against the real clock is also
     a budget on the *process*: a machine stalled past it -- swap, a

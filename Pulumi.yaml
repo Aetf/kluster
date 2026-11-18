@@ -65,8 +65,7 @@ config:
   versions:image-metrics-backup: docker.io/victoriametrics/vmbackup:v1.150.0@sha256:43dc2cb6e36e265ac5f5197c831cf29eed3078f1610f3b04961361a1bc4159db
   versions:image-metrics-restore: docker.io/victoriametrics/vmrestore:v1.150.0@sha256:7d684cfce7c6ab904611582ce6a4ae3929efee5a268bef495771b71f31aac8e0
   # The client the stores' backups and restores reach B2's native API with,
-  # which reads the headers carrying the writer key from a file. Its shell is
-  # the busybox `mise.toml` pins for the suite to run the scripts under.
+  # which reads the headers carrying the writer key from a file.
   versions:image-metrics-bucket: docker.io/curlimages/curl:8.23.0@sha256:3fb7e13e5d179a845c97d78204f3f1064d1907037f26a3ebf91710571151fd93
 
   # The images the applications' components run, `apps` and the shapes it

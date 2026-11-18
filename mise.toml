@@ -112,28 +112,6 @@ jq = "1.8.2"
 "http:dash".platforms.linux-x64.url = "https://archive.archlinux.org/packages/d/dash/dash-{{ version }}-1-x86_64.pkg.tar.zst"
 "http:dash".platforms.linux-x64.checksum = "sha256:d34b294eee83a21aa2241003bec50d9c4e21eb54232c9578a56e1bcf4eb3aabc"
 
-# The busybox the monitoring stack's backup and restore scripts run under in
-# their images -- curl's, `vmbackup`'s and `vmrestore`'s, whose `/bin/sh` and
-# every tool the scripts call are Alpine's busybox at this release -- so the
-# suite runs them under that shell and those applets rather than the host's
-# (tests/test_monitoring.py). It is Alpine's static build of the same package
-# revision, the release the images' Alpine base carries. A bump of one of
-# those images onto a base with another busybox moves this pin by hand, to
-# that base's revision. Alpine publishes it as a package, three gzip members
-# each holding a tar stream, which mise does not unpack, so it installs the
-# package file as it is and the suite reads the binary out of it. The sum is
-# the package's whose signature, its first member, verifies against Alpine's
-# key in the images' `/etc/apk/keys`, and whose third member is the data hash
-# its second names. Alpine's mirror keeps a branch's current revision only, so
-# a revision superseded there fails the install by name until the pin moves.
-# Its lasting source, a copy the project keeps, is Aetf/kluster-ops#802.
-"http:busybox".version = "1.37.0-r31"
-"http:busybox".bin_path = "bin"
-"http:busybox".format = "raw"
-"http:busybox".bin = "busybox-static.apk"
-"http:busybox".platforms.linux-x64.url = "https://dl-cdn.alpinelinux.org/alpine/v3.24/main/x86_64/busybox-static-{{ version }}.apk"
-"http:busybox".platforms.linux-x64.checksum = "sha256:b0d6cfc585d7fdd12df359cc5d38d5e45894e9e9e78c4059eb41577d022ec734"
-
 # jj is the version control a workstation runs, and the operator-stack driver
 # reads a jj checkout's working copy through it, so the cases that hold that
 # reading run the pinned release here and in CI alike. Its releases are
