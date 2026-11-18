@@ -43,6 +43,7 @@ from cryptography import x509
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from fake_gh import RecordedGh
+from fake_kubeseal import sealed_as_marked
 from fake_pulumi import RecordedPulumi
 from memory_kit import MemoryKit
 from oci_clock import SimulatedClock
@@ -1852,12 +1853,6 @@ def test_a_recipients_file_that_refuses_stops_generate_before_anything_is_drawn(
 # seed at all.
 
 
-def _sealed_as_marked(args: Sequence[str], *, stdin: str | None) -> str:
-    """Seals nothing: a ciphertext stand-in that names what it was given, so a seal reaches the write it feeds."""
-    del args
-    return f'AgB-sealed-{stdin}\n'
-
-
 @dataclass(frozen=True)
 class SealerWritingNothing(sealing.Sealer):
     """A sealer that seals with the stand-in it runs, and whose write goes no further than its argument.
@@ -1877,7 +1872,7 @@ class SealerWritingNothing(sealing.Sealer):
 def _sealer_writing_nothing() -> SealerWritingNothing:
     """Such a sealer over stacks that all exist, as they do by the time anything is sealed."""
     open_stack, _ = _stacks_on(pulumi_config.BackendEnvironment(passphrase=lambda: 'the-stack-passphrase'))
-    return SealerWritingNothing(certificate='', open_stack=open_stack, run=_sealed_as_marked)
+    return SealerWritingNothing(certificate='', open_stack=open_stack, run=sealed_as_marked)
 
 
 # Each mint below takes the fake of its own platform from the row's own

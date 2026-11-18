@@ -44,6 +44,7 @@ from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import NameOID
+from fake_kubeseal import sealed_as_marked
 from fake_pulumi import RecordedPulumi, Unanswering
 from k8s_base_installation import SEALED, applied
 from memory_kit import MemoryKit
@@ -307,15 +308,9 @@ def test_a_seal_refuses_data_whose_keys_are_not_the_rows(sealer: sealing.Sealer)
 # -- writing ------------------------------------------------------------------
 
 
-def fake_kubeseal(args: Sequence[str], *, stdin: str | None) -> str:
-    """Seals nothing: a ciphertext stand-in that names what it was given, for the cases about where it lands."""
-    _ = args
-    return f'AgB-sealed-{stdin}\n'
-
-
 def test_the_ciphertext_is_written_in_the_clear_at_its_rows_path_in_its_rows_stack(stacks: Stacks) -> None:
     value = conventions.sealed.BGP_PASSWORD
-    sealer = sealing.Sealer(certificate='', open_stack=stacks.open, run=fake_kubeseal)
+    sealer = sealing.Sealer(certificate='', open_stack=stacks.open, run=sealed_as_marked)
 
     sealer.deliver(value, {'password': 'a-password'})
 
@@ -341,7 +336,7 @@ def test_a_write_that_does_not_read_back_as_written_and_as_plain_is_refused(
     # stored as a secret is in the wrong channel even though it reads back
     # equal, and one that reads back as anything else was not delivered.
     stacks.runner(K8S_BASE).misreports = misreports
-    sealer = sealing.Sealer(certificate='', open_stack=stacks.open, run=fake_kubeseal)
+    sealer = sealing.Sealer(certificate='', open_stack=stacks.open, run=sealed_as_marked)
 
     with pytest.raises(pulumi_config.ReadBackRefused) as refused:
         sealer.deliver(conventions.sealed.BGP_PASSWORD, {'password': 'a-password'})
@@ -354,7 +349,7 @@ def test_a_seal_into_a_stack_that_does_not_exist_is_refused_before_anything_is_s
 
     def recording(args: Sequence[str], *, stdin: str | None) -> str:
         sealed.append(' '.join(args))
-        return fake_kubeseal(args, stdin=stdin)
+        return sealed_as_marked(args, stdin=stdin)
 
     stacks.runner(K8S_BASE).stacks.clear()
     sealer = sealing.Sealer(certificate='', open_stack=stacks.open, run=recording)
@@ -666,7 +661,7 @@ def test_the_metrics_reader_mint_refuses_a_missing_declaring_stack_before_anythi
 def test_a_metrics_reader_seal_that_fails_leaves_the_key_already_sealed_live(
     tenancy: Tenancy, oci_kit: KdbxStore, stacks: Stacks
 ) -> None:
-    sealer = sealing.Sealer(certificate='', open_stack=stacks.open, run=fake_kubeseal)
+    sealer = sealing.Sealer(certificate='', open_stack=stacks.open, run=sealed_as_marked)
     _ = derived.oci_metrics(oci_kit, sealer=sealer, connect=tenancy)
     (live,) = _reader_keys(tenancy)
     stacks.runner(K8S_BASE).misreports = 'value'
@@ -684,7 +679,7 @@ def test_a_metrics_reader_seal_that_fails_leaves_the_key_already_sealed_live(
 def test_rotating_the_metrics_reader_retires_the_key_it_replaces(
     tenancy: Tenancy, oci_kit: KdbxStore, stacks: Stacks
 ) -> None:
-    sealer = sealing.Sealer(certificate='', open_stack=stacks.open, run=fake_kubeseal)
+    sealer = sealing.Sealer(certificate='', open_stack=stacks.open, run=sealed_as_marked)
     _ = derived.oci_metrics(oci_kit, sealer=sealer, connect=tenancy)
     (first,) = _reader_keys(tenancy)
 
@@ -768,7 +763,7 @@ def test_a_password_recorded_before_physical_exists_creates_it_and_writes_the_se
     secret = tmp_path / 'password'
     _ = secret.write_text('a-drawn-password\n')
     stacks.runner(PHYSICAL).stacks.clear()
-    sealer = sealing.Sealer(certificate='', open_stack=stacks.open, run=fake_kubeseal)
+    sealer = sealing.Sealer(certificate='', open_stack=stacks.open, run=sealed_as_marked)
 
     _ = devices.deliver(BGP, stack=stacks.open(BGP.stack), given={'password': str(secret)}, sealer=sealer)
 
@@ -802,7 +797,7 @@ def test_seal_before_the_password_is_recorded_names_the_command_that_records_it(
 def test_seal_before_the_declaring_stack_exists_is_refused_and_writes_nothing(stacks: Stacks) -> None:
     stacks.runner(PHYSICAL).config[physical.GATEWAY_BGP_PASSWORD] = 'the-recorded-password'
     stacks.runner(K8S_BASE).stacks.clear()
-    sealer = sealing.Sealer(certificate='', open_stack=stacks.open, run=fake_kubeseal)
+    sealer = sealing.Sealer(certificate='', open_stack=stacks.open, run=sealed_as_marked)
 
     with pytest.raises(pulumi_config.StackMissing) as refused:
         devices.seal(BGP, stack=stacks.open(BGP.stack), sealer=sealer)
@@ -1351,7 +1346,7 @@ def backed(stacks: Stacks) -> Stacks:
 
 
 def test_every_writer_key_is_sealed_out_of_physicals_state_in_the_clear_at_its_rows_path(backed: Stacks) -> None:
-    sealer = sealing.Sealer(certificate='', open_stack=backed.open, run=fake_kubeseal)
+    sealer = sealing.Sealer(certificate='', open_stack=backed.open, run=sealed_as_marked)
 
     sealed = derived.b2_writer_seal(sealer=sealer)
 
@@ -1383,7 +1378,7 @@ def test_a_writer_key_physical_does_not_export_refuses_the_seal_before_anything_
     # would have written every other one first.
     missing = list(EXPORTED)[-1]
     backed.runner(PHYSICAL).outputs = {BACKUP_KEYS: {scope: key for scope, key in EXPORTED.items() if scope != missing}}
-    sealer = sealing.Sealer(certificate='', open_stack=backed.open, run=fake_kubeseal)
+    sealer = sealing.Sealer(certificate='', open_stack=backed.open, run=sealed_as_marked)
 
     with pytest.raises(derived.WriterKeyMissing) as refused:
         _ = derived.b2_writer_seal(sealer=sealer)
@@ -1404,7 +1399,7 @@ def test_a_writer_key_half_that_is_not_a_key_half_refuses_the_seal_before_anythi
     # nothing, in a repository Secret, which the first backup finds.
     scope = list(EXPORTED)[-1]
     backed.runner(PHYSICAL).outputs = {BACKUP_KEYS: EXPORTED | {scope: exported}}
-    sealer = sealing.Sealer(certificate='', open_stack=backed.open, run=fake_kubeseal)
+    sealer = sealing.Sealer(certificate='', open_stack=backed.open, run=sealed_as_marked)
 
     with pytest.raises(derived.WriterKeyMissing) as refused:
         _ = derived.b2_writer_seal(sealer=sealer)
@@ -1416,7 +1411,7 @@ def test_a_writer_key_half_that_is_not_a_key_half_refuses_the_seal_before_anythi
 def test_a_writer_key_left_as_the_unknown_sentinel_is_refused_by_name(backed: Stacks) -> None:
     scope = next(iter(EXPORTED))
     backed.runner(PHYSICAL).outputs = {BACKUP_KEYS: EXPORTED | {scope: {'id': rpc.UNKNOWN, 'secret': rpc.UNKNOWN}}}
-    sealer = sealing.Sealer(certificate='', open_stack=backed.open, run=fake_kubeseal)
+    sealer = sealing.Sealer(certificate='', open_stack=backed.open, run=sealed_as_marked)
 
     with pytest.raises(pulumi_config.UnknownOutput) as refused:
         _ = derived.b2_writer_seal(sealer=sealer)
@@ -1430,7 +1425,7 @@ def test_a_writer_key_seal_into_a_stack_that_does_not_exist_reads_nothing_of_phy
     backed: Stacks, stack: str
 ) -> None:
     backed.runner(stack).stacks.clear()
-    sealer = sealing.Sealer(certificate='', open_stack=backed.open, run=fake_kubeseal)
+    sealer = sealing.Sealer(certificate='', open_stack=backed.open, run=sealed_as_marked)
 
     with pytest.raises(pulumi_config.StackMissing) as refused:
         _ = derived.b2_writer_seal(sealer=sealer)
