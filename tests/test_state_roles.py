@@ -21,9 +21,11 @@ Nothing here mounts a host path. A remote `podman` -- one whose service runs
 in another mount namespace than this process -- sees none of this process's
 temporary files, and `podman cp` is the channel that reaches it either way.
 
-Every container here ends by itself (`_bounded`), and every command a case
+Every container here ends by itself once it has started (`_bounded`); one
+left `Created` goes only when something removes it. Every command a case
 starts -- `podman`, the client tools, the log follower -- runs through
-`process_sessions` under a bound below the case's (framework/testing.md §1.2).
+`process_sessions` under a bound below the case's. Both are
+framework/testing.md §1.2.
 
 The properties held here are the ones the box's roles and its pooler exist
 for: the bootstrap superuser answers on the container's local socket and to
