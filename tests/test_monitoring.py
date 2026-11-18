@@ -44,7 +44,7 @@ from k8s_base_installation import (
     release_assets,
 )
 from mock_monitor import Recorder, declaring, run_under_backstop
-from renovate_text import listed, package_rules, scalar
+from renovate_text import effective, package_rules, scalar
 from section_numbers import sections
 
 from kluster import conventions
@@ -1455,8 +1455,13 @@ def test_grafana_reads_the_history_store(absent: tuple[Run, list[str]]) -> None:
 #: stack chart's `appVersion` beside the bundle.
 APP_VERSIONS = ROOT / 'packages' / 'crds' / 'app-versions.json'
 
+#: The image pins the monitoring component runs at the stack chart's release,
+#: its `appVersion` (`Pulumi.yaml`): the test below holds each to it, and the
+#: grouping test holds each to the chart's group.
+AT_THE_CHARTS_RELEASE = ('metrics-history', 'metrics-backup', 'metrics-restore')
 
-@pytest.mark.parametrize('pin', ['metrics-history', 'metrics-backup', 'metrics-restore'])
+
+@pytest.mark.parametrize('pin', AT_THE_CHARTS_RELEASE)
 def test_the_stores_images_are_the_release_the_chart_runs_the_recent_store_at(pin: str) -> None:
     """`vmbackup` and `vmrestore` read the parts the store writes, and the two stores are one release.
 
@@ -1474,42 +1479,78 @@ def test_the_stores_images_are_the_release_the_chart_runs_the_recent_store_at(pi
     assert pinned.tag == recorded
 
 
-def test_renovate_moves_the_stores_images_with_the_chart_in_a_group_of_their_own() -> None:
-    """The three images and the chart are one group, apart from the in-cluster one, so a lagging chart holds back four pins.
+def test_renovate_moves_every_pin_held_to_the_charts_release_with_the_chart_in_a_group_of_its_own() -> None:
+    """The chart and every pin held to its release are one group, apart from every other, so a lagging chart holds back those pins alone.
 
-    The test above is red between an images' release and the chart's taking
-    it, which in the in-cluster group would hold back every chart and image
-    there. The rule sits after the in-cluster rule, which matches the same
-    pins by file and data source: the last matching rule wins a field. No
-    later rule that sets a group names any of them. Renovate reads its
-    configuration from the default branch, so nothing goes red there when
-    this breaks.
+    The pins are the image pins `AT_THE_CHARTS_RELEASE` names and the
+    `vmutils` archive that puts `vmalert-tool` on the suite's path, which
+    `tests/test_alert_evaluation.py` holds to the chart's release. Apart,
+    each is red on its own and the chart red without them, so neither pull
+    request could pass. For each, presented as its manager extracts it, the
+    rule renovate takes its group from -- the last rule that sets one and can
+    match the update -- is the chart's, and no other rule names that group's
+    slug. Renovate reads its configuration from the default branch, so
+    nothing goes red there when this breaks.
     """
-    from kluster.lib.versions import ProjectFile, Versions
+    import tomllib
+
+    from kluster.lib.versions import OCI_SCHEME, ProjectFile, Versions
     from kluster.scripts.update_crds import sources
 
     pinned = Versions(ProjectFile(sources.read_config(ROOT / 'Pulumi.yaml')))
-    moved = {
-        pinned.chart['victoria-metrics-k8s-stack'].name,
-        *(pinned.image[pin].repository for pin in ('metrics-history', 'metrics-backup', 'metrics-restore')),
-    }
-    rules = package_rules((ROOT / 'renovate.json5').read_text())
-    (own,) = [index for index, rule in enumerate(rules) if set(listed(rule, 'matchDepNames')) & moved]
-    (in_cluster,) = [
-        index
-        for index, rule in enumerate(rules)
-        if scalar(rule, 'groupSlug') == 'in-cluster' and listed(rule, 'matchFileNames') == ['Pulumi.yaml']
+    images = sorted(pinned.image[name].repository for name in AT_THE_CHARTS_RELEASE)
+    tools: dict[str, Any] = tomllib.loads((ROOT / 'mise.toml').read_text())['tools']
+    # The pin that puts `vmalert-tool` on the path: the subject of the test
+    # holding it to the chart's release.
+    (vmutils,) = [
+        key
+        for key, tool in tools.items()
+        if isinstance(tool, dict)
+        and 'vmalert-tool' in str(cast('dict[str, Any]', tool).get('filter_bins', '')).split(',')
     ]
-    slug = scalar(rules[own], 'groupSlug')
 
-    assert set(listed(rules[own], 'matchDepNames')) == moved
-    assert listed(rules[own], 'matchFileNames') == ['Pulumi.yaml']
-    assert slug is not None
-    assert slug not in {scalar(rule, 'groupSlug') for index, rule in enumerate(rules) if index != own}
-    assert in_cluster < own
-    for later in rules[own + 1 :]:
-        if scalar(later, 'groupSlug') is not None:
-            assert not set(listed(later, 'matchDepNames')) & moved, f'a later rule regroups them:\n{later}'
+    def update(
+        name: str, file: str, managers: tuple[str, ...], datasource: str, package: str | None = None
+    ) -> dict[str, tuple[str, ...]]:
+        return {
+            'matchDepNames': (name,),
+            'matchPackageNames': (package or name,),
+            'matchManagers': managers,
+            'matchFileNames': (file,),
+            'matchDatasources': (datasource,),
+            'matchUpdateTypes': ('minor',),
+        }
+
+    pulumi_yaml = ('custom.regex', 'regex')
+    # A chart served from an OCI registry is read as an image: its package is
+    # the registry path with the chart's name appended. The mise manager names
+    # a GitHub backend's tool by its key and its package by the repository.
+    chart_pin = pinned.chart['victoria-metrics-k8s-stack']
+    chart_update = (
+        update(
+            chart_pin.name,
+            'Pulumi.yaml',
+            pulumi_yaml,
+            'docker',
+            f'{chart_pin.repository.removeprefix(OCI_SCHEME)}/{chart_pin.name}',
+        )
+        if chart_pin.oci
+        else update(chart_pin.name, 'Pulumi.yaml', pulumi_yaml, 'helm')
+    )
+    updates = {
+        'the chart': chart_update,
+        **{image: update(image, 'Pulumi.yaml', pulumi_yaml, 'docker') for image in images},
+        vmutils: update(vmutils, 'mise.toml', ('mise',), 'github-releases', vmutils.partition(':')[2]),
+    }
+    config = (ROOT / 'renovate.json5').read_text()
+    grouping = {name: effective(config, presented, 'groupSlug') for name, presented in updates.items()}
+    slugs = {name: None if rule is None else scalar(rule, 'groupSlug') for name, rule in grouping.items()}
+    assert len(set(grouping.values())) == 1, f'the chart and the pins at its release are grouped apart: {slugs}'
+    (chart,) = set(grouping.values())
+    assert chart is not None
+    slug = scalar(chart, 'groupSlug')
+
+    assert [rule for rule in package_rules(config) if scalar(rule, 'groupSlug') == slug] == [chart]
 
 
 # -- Backups and restores ------------------------------------------------------------
