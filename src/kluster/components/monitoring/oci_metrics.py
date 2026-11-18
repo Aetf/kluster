@@ -25,17 +25,19 @@ leaves a volume uncreated writes no OCID for it, and a pull built from the map
 alone would then have no target for that volume and say nothing. A volume the
 map holds and the census does not declare is not pulled.
 
-**Its freshness is the rule for stale**: a run that fails, a mapped volume OCI
-returned nothing of among them, leaves the CronJob's last success where it
-was, and `rules.OCI_METRICS_PULL_STALE` reports it once it is older than the
-hourly period allows. A run reads up to `oci_pull.BACKFILL` back, so a gap
-shorter than that, a rotated key the cluster does not hold yet among its
-causes, is filled by the first run that succeeds after it.
+**It is a row of the scheduled-job family**
+(`conventions.schedule.OCI_METRICS_PULL`), which gives the CronJob its name,
+its period and the deadline a run is cut off at. A run that fails, a mapped volume OCI returned nothing of among them,
+leaves the CronJob's last success where it was: the family's rules report the
+failed run within its deadline, and the pull as stale once its last success is
+older than the hourly period allows (`rules`). A run reads up to
+`oci_pull.BACKFILL` back, so a gap shorter than that, a rotated key the cluster
+does not hold yet among its causes, is filled by the first run that succeeds
+after it.
 """
 
 from __future__ import annotations
 
-import datetime as dt
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -46,6 +48,7 @@ from kluster import conventions
 from kluster.components.monitoring import memory
 from kluster.conventions.cloud import NodeVolumeEntry
 from kluster.conventions.providers import OCI_BLOCKSTORE_METRICS
+from kluster.conventions.schedule import OCI_METRICS_PULL
 from kluster.lib import templates
 from kluster.lib.versions import ImagePin
 
@@ -55,9 +58,6 @@ __all__ = (
     'PROGRAM_DIR',
     'PROGRAM_FILE',
     'PULL_CONFIGMAP',
-    'PULL_DEADLINE',
-    'PULL_JOB',
-    'PULL_PERIOD',
     'PULL_USER',
     'SETTINGS_FILE',
     'Target',
@@ -67,18 +67,8 @@ __all__ = (
     'targets',
 )
 
-#: The CronJob's name, which the freshness rule selects it by.
-PULL_JOB = 'oci-metrics-pull'
-
-#: How often the pull runs, the period its freshness is held to.
-PULL_PERIOD = dt.timedelta(hours=1)
-
 #: The minute of each hour it runs at: apart from the stores' backups.
 _PULL_MINUTE = 30
-
-#: How long a run may take before it is cut off: inside the hour, so a hung
-#: run does not hold the next one back.
-PULL_DEADLINE = dt.timedelta(minutes=55)
 
 #: The ConfigMap carrying the program and its settings, where the pod mounts
 #: it, and the two files in it.
@@ -163,7 +153,7 @@ def settings(found: Mapping[str, Target], *, compartment: str, history: str, imp
 
 
 def cronjob_spec(*, image: ImagePin, affinity: k8s.core.v1.AffinityArgs) -> k8s.batch.v1.CronJobSpecArgs:
-    """The pull every `PULL_PERIOD` at its minute, one run at a time, cut off before the next is due.
+    """The pull every hour, its row's period, at its minute, one run at a time, cut off at its row's deadline.
 
     A failed run is left to the next hour's, which reads from the newest
     sample the stores hold and so fills what the failed one missed. The pod
@@ -176,7 +166,7 @@ def cronjob_spec(*, image: ImagePin, affinity: k8s.core.v1.AffinityArgs) -> k8s.
         job_template=k8s.batch.v1.JobTemplateSpecArgs(
             spec=k8s.batch.v1.JobSpecArgs(
                 backoff_limit=0,
-                active_deadline_seconds=int(PULL_DEADLINE.total_seconds()),
+                active_deadline_seconds=int(OCI_METRICS_PULL.deadline.total_seconds()),
                 template=k8s.core.v1.PodTemplateSpecArgs(spec=_pod(image, affinity)),
             ),
         ),

@@ -14,8 +14,9 @@ instant snapshot of hard links to the store's immutable parts, under
 different minutes, mounting the store's claim read-only, so the job's pod
 lands on the store's node with it. A copy taken file by file while the store
 merges and deletes its parts is not consistent, which is why it is not
-VolSync's. A run is cut off well inside the hour, so a hung one does not hold
-the next back. The history store's job also refuses a store holding fewer
+VolSync's. Each job is a row of the scheduled-job family
+(`conventions.schedule.METRICS_BACKUPS`, `Store.backup`), which gives its name,
+its period and the deadline a run is cut off at. The history store's job also refuses a store holding fewer
 rows than its last backup recorded beside the backup (`Store.record`):
 `shell/backup-check.sh` ahead of `vmbackup`, and `shell/backup-record.sh`
 after it.
@@ -51,11 +52,10 @@ import pulumi_kubernetes as k8s
 from kluster import conventions
 from kluster.conventions.backup import metrics_repo_path
 from kluster.conventions.providers import OCI_BLOCKSTORE_METRICS
+from kluster.conventions.schedule import METRICS_BACKUPS, ScheduledJob
 from kluster.lib import templates
 
 __all__ = (
-    'BACKUP_JOB_PREFIX',
-    'BACKUP_PERIOD',
     'DATA_DIR',
     'DATA_VOLUME',
     'HISTORY_CLASS',
@@ -96,15 +96,8 @@ RECENT_RETENTION = dt.timedelta(days=31)
 #: for good, so that every period compares with every other.
 HISTORY_RETENTION = '100y'
 
-#: How often each store is backed up, the period its freshness is held to.
-BACKUP_PERIOD = dt.timedelta(hours=1)
-
 #: The name of the history store's vmsingle object.
 HISTORY_STORE = 'history'
-
-#: The prefix every backup CronJob's name starts with, which the freshness
-#: rule selects the jobs by.
-BACKUP_JOB_PREFIX = 'vmbackup-'
 
 #: Where the operator mounts a vmsingle's data volume, and that volume's name
 #: in its pod (`internal/controller/operator/factory/vmsingle/vmsingle.go` L37-38
@@ -170,7 +163,7 @@ class Store:
     """One VictoriaMetrics store: its object, its place in the bucket, and its backup's minute."""
 
     name: str
-    """Its name in the bucket and in its backup's CronJob."""
+    """Its name in the bucket, and its backup's in `conventions.schedule.METRICS_BACKUPS`."""
     vmsingle: str
     """The name of its vmsingle object."""
     minute: int
@@ -204,12 +197,13 @@ class Store:
         return f'{self.repository}.rows' if self.keeps_every_row else None
 
     @property
-    def backup_job(self) -> str:
-        return f'{BACKUP_JOB_PREFIX}{self.name}'
+    def backup(self) -> ScheduledJob:
+        """Its backup's row of the scheduled-job family."""
+        return METRICS_BACKUPS[self.name]
 
     @property
     def schedule(self) -> str:
-        """The backup's cron line: every `BACKUP_PERIOD`, at `minute`."""
+        """The backup's cron line: every hour, its row's period, at `minute`."""
         return f'{self.minute} * * * *'
 
 

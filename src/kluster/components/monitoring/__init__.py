@@ -26,8 +26,11 @@ backed up hourly to the backup bucket and restores itself before it starts**
 (`conventions.sealed.writer_key`), which `k8s-base` holds sealed. While the
 stack's configuration holds no ciphertext for it, no SealedSecret is declared
 for it, and neither the backup jobs nor the restore are declared: the stores
-then start empty and are copied nowhere (physical/bring-up.md §1). A backup
-older than its period allows raises `MetricsBackupStale` (`rules`).
+then start empty and are copied nowhere (physical/bring-up.md §1). Each
+backup is a row of the scheduled-job family
+(`conventions.schedule.METRICS_BACKUPS`): one older than its period allows
+raises `MetricsBackupStale`, and one whose last run failed
+`MetricsBackupFailed` (`rules`).
 
 **OCI's block-volume series are pulled into the stores every hour**
 (`oci_metrics`): a CronJob runs `oci_pull`, a program of this repository
@@ -35,8 +38,10 @@ rendered into a ConfigMap, in the `oci-sdk` image, under the metrics reader's
 key, which `k8s-base` holds sealed (`conventions.sealed.OCI_METRICS`). Its
 targets are the volumes the census declares, by the OCIDs `physical`
 publishes for them. While the stack's configuration holds no ciphertext for
-the key, neither the SealedSecret nor the pull is declared. A pull older than
-its period allows raises `OciMetricsPullStale` (`rules`).
+the key, neither the SealedSecret nor the pull is declared. The pull is a row
+of the scheduled-job family (`conventions.schedule.OCI_METRICS_PULL`): one older
+than its period allows raises `OciMetricsPullStale`, and one whose last run
+failed `OciMetricsPullFailed` (`rules`).
 
 **What the chart would install that this cluster does not** is switched off
 (`stack_values`): the sync job, a Helm hook that fetches rules and dashboards
@@ -152,7 +157,7 @@ from kluster.components.monitoring import memory, oci_metrics, rules, stores
 from kluster.components.monitoring.operator_objects import operator_object
 from kluster.components.monitoring.stores import Store, stack_fullname
 from kluster.components.talos import ETCD_METRICS_PORT
-from kluster.conventions import backup
+from kluster.conventions import backup, schedule
 from kluster.conventions.alert import Tier
 from kluster.conventions.backup import BackupFamily
 from kluster.conventions.outputs import BOOT_VOLUME
@@ -164,11 +169,11 @@ __all__ = (
     'APISERVER_DROPPED_HISTOGRAMS',
     'AUTH_KEYS',
     'AUTH_KEYS_SECRET',
-    'BACKUP_DEADLINE',
     'CILIUM_SCRAPES',
     'DATASOURCES_DIGEST_ENV',
     'ETCD_DROPPED',
     'ETCD_JOB',
+    'EVALUATION_INTERVAL',
     'GRAFANA_ADMIN_SECRET',
     'GRAFANA_PASSWORD_KEY',
     'GRAFANA_USER_KEY',
@@ -246,6 +251,12 @@ HEARTBEAT_GROUP_INTERVAL = dt.timedelta(minutes=1)
 #: number of samples whichever source it is computed from.
 SCRAPE_INTERVAL = dt.timedelta(seconds=30)
 
+#: How often vmalert evaluates every rule. Stated rather than left to the
+#: chart: with `SCRAPE_INTERVAL`, it is how long a CronJob's status takes to
+#: reach the scheduled-job family's rules, which `conventions.schedule.REPORT_LAG`
+#: leaves room for.
+EVALUATION_INTERVAL = dt.timedelta(seconds=20)
+
 #: The relabeling of the chart's kubelet scrapes, which the chart builds from
 #: one spec (`kubelet.vmScrape.spec`): the kubelet's own metrics, cAdvisor's,
 #: the probes' and the resource metrics. In place of the chart's, which maps
@@ -319,10 +330,6 @@ DATASOURCES_DIGEST_ENV = 'KLUSTER_DATASOURCES_DIGEST'
 #: a limit, which `local-path` does not enforce: the class grows by 3 to 6 GB a
 #: year (Aetf/kluster-ops#790), and this is about two years of it.
 HISTORY_SIZE = '10Gi'
-
-#: How long a backup run may take before it is cut off: inside the hour, so a
-#: hung run does not hold the next one back.
-BACKUP_DEADLINE = dt.timedelta(minutes=55)
 
 #: How long a store keeps a snapshot before deleting it: well past any backup
 #: run's deadline, so no run loses the snapshot it is copying.
@@ -456,7 +463,10 @@ def _stack_values(release: str, chart: ChartPin, restore: Sequence[Mapping[str, 
         },
         # The recording rules reach the stores through vmagent, so the history
         # keeps those of its class as it keeps scraped series.
-        'vmalert': {'spec': {'affinity': WORKER_AFFINITY}, 'remoteWriteVMAgent': True},
+        'vmalert': {
+            'spec': {'affinity': WORKER_AFFINITY, 'evaluationInterval': backup.duration(EVALUATION_INTERVAL)},
+            'remoteWriteVMAgent': True,
+        },
         'defaultDatasources': {
             'extra': [
                 {
@@ -752,8 +762,10 @@ class Monitoring(Component, pulumi_type='kluster:monitoring:Monitoring'):
         self.backups = (
             [
                 k8s.batch.v1.CronJob(
-                    f'{name}-{store.backup_job}',
-                    metadata=k8s.meta.v1.ObjectMetaArgs(name=store.backup_job, namespace=self.namespace.metadata.name),
+                    f'{name}-{store.backup.cronjob}',
+                    metadata=k8s.meta.v1.ObjectMetaArgs(
+                        name=store.backup.cronjob, namespace=self.namespace.metadata.name
+                    ),
                     spec=backups.cronjob(store),
                     opts=self.child_opts(depends_on=[self.chart, self.history, *restored]),
                 )
@@ -799,8 +811,10 @@ class Monitoring(Component, pulumi_type='kluster:monitoring:Monitoring'):
             )
             # Behind the stores it writes to, and what its pod mounts.
             self.oci_pull = k8s.batch.v1.CronJob(
-                f'{name}-{oci_metrics.PULL_JOB}',
-                metadata=k8s.meta.v1.ObjectMetaArgs(name=oci_metrics.PULL_JOB, namespace=self.namespace.metadata.name),
+                f'{name}-{schedule.OCI_METRICS_PULL.cronjob}',
+                metadata=k8s.meta.v1.ObjectMetaArgs(
+                    name=schedule.OCI_METRICS_PULL.cronjob, namespace=self.namespace.metadata.name
+                ),
                 spec=oci_metrics.cronjob_spec(image=oci_sdk_image, affinity=_WORKER_AFFINITY_ARGS),
                 opts=self.child_opts(
                     depends_on=[self.chart, self.history, self.oci_pull_program, self.metrics_reader_key]
@@ -824,8 +838,8 @@ class _Backups:
         """The store's backup every hour at its minute, one run at a time, cut off before the next is due.
 
         A failed run is left to the next hour's. A run that hangs is cut off
-        at `BACKUP_DEADLINE`, which `Forbid` would otherwise let hold every
-        later run back until `MetricsBackupStale` fires.
+        at its row's deadline (`Store.backup`), which `Forbid` would otherwise
+        let hold every later run back.
         """
         return k8s.batch.v1.CronJobSpecArgs(
             schedule=store.schedule,
@@ -833,7 +847,7 @@ class _Backups:
             job_template=k8s.batch.v1.JobTemplateSpecArgs(
                 spec=k8s.batch.v1.JobSpecArgs(
                     backoff_limit=0,
-                    active_deadline_seconds=int(BACKUP_DEADLINE.total_seconds()),
+                    active_deadline_seconds=int(store.backup.deadline.total_seconds()),
                     template=k8s.core.v1.PodTemplateSpecArgs(
                         spec=stores.backup_pod(
                             store,

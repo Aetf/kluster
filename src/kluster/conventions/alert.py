@@ -9,12 +9,18 @@ the ops repository, that repository's own workflows. The receiving side is the
 ops repository's dispatch handler. Neither ops-repository side is built;
 operations.md §4 says what of the contract is.
 
-No program in this tree imports it: both sides are workflows, which no import
-reaches. It lives here for the reason `conventions.forge`'s logins do -- a
-workflow spells it as literals, and a test holding those literals to one
+Both sides of the dispatch are workflows, which no import reaches, so for the
+dispatch the module lives here for the reason `conventions.forge`'s logins do
+-- a workflow spells it as literals, and a test holding those literals to one
 spelling is the only thing that keeps them from drifting. This repository's
 side is held in `tests/test_conventions.py`; the handler's is the ops
 repository's to hold, since nothing here can read it.
+
+**The cluster's alerts read `Tier` and `Playbook` as definitions**, so that an
+alert alertmanager posts carries the fields a dispatch does, spelled the same
+way (cluster/architecture.md §4.3): `components.monitoring.rules` labels and
+annotates every rule it declares with them, and each row of the scheduled-job
+family in `conventions.schedule` names its playbook by one.
 
 Read qualified -- `conventions.alert.EVENT`, `conventions.alert.Tier` --
 because the names are common nouns that mean this one thing only while the
@@ -23,6 +29,7 @@ alert stands beside them.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from enum import StrEnum
 from typing import final
 
@@ -52,6 +59,18 @@ class Tier(StrEnum):
     #: timer on the Home Assistant side, which is how a scheduled workflow
     #: that stops running is noticed (operations.md §4).
     HEARTBEAT = 'heartbeat'
+
+
+@dataclass(frozen=True)
+class Playbook:
+    """Where an alert's response procedure is written: a document, from the repository's root, and a section."""
+
+    document: str
+    section: str
+
+    def __str__(self) -> str:
+        """The form the payload's `playbook` field takes (`FIELDS`)."""
+        return f'{self.document} §{self.section}'
 
 
 #: The keys of the client payload, every one of them sent on every alert.
