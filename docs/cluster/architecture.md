@@ -792,8 +792,10 @@ paths, matched to the producers' shapes:
     the playbook off each alert and pushes under the same title
     convention (operations.md §4). Both end at the same phone
     notification, which is what makes the two intakes one channel. The
-    webhook's address is a sealed value the receiver reads from a
-    Secret, so no rendered configuration carries it. And the
+    webhook's id is the sealed value; the SealedSecret renders the URL
+    from `conventions.HOME_ASSISTANT`'s address and the id, and the
+    receiver reads that URL from the Secret, so no rendered
+    configuration carries the id. And the
     issue leg is pulled: the ops repo's **poller** workflow
     reads alertmanager's API on a schedule (the read-only
     header-match route at the internet gateway —

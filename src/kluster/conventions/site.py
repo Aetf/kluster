@@ -266,3 +266,13 @@ HOME_ASSISTANT = SiteHost(
     v4=IPv4Address('192.168.90.243'),
     mac='52:54:00:8c:5d:10',
 )
+
+#: The port Home Assistant serves its HTTP API on, plain HTTP: its own
+#: default, which the instance keeps.
+HOME_ASSISTANT_PORT = 8123
+
+#: Where on that port Home Assistant takes a webhook trigger's `POST`: this
+#: path, then the trigger's webhook id as the one segment after it
+#: (`URL_WEBHOOK_PATH` of Home Assistant's `webhook` component). The id is the
+#: secret part; the rest is this.
+HOME_ASSISTANT_WEBHOOK_PATH = '/api/webhook/'

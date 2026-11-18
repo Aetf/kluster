@@ -45,6 +45,7 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import NameOID
 from fake_pulumi import RecordedPulumi, Unanswering
+from k8s_base_installation import SEALED, applied
 from memory_kit import MemoryKit
 from oci_conventions import with_recorded_compartment, with_tenancy_ocid
 from oci_tenancy import ROOT_USER, TENANCY, Tenancy
@@ -54,6 +55,7 @@ from scratch_projects import cli_directories, scrubbed
 from kluster import conventions
 from kluster.conventions.backup import BACKED_NAMESPACES, writer_scope
 from kluster.lib import pulumi_cli
+from kluster.lib.k8s import rendered_template
 from kluster.scripts.credentials import cloudflare, derived, devices, escrow, masters, oci_iam, pulumi_config, sealing
 from kluster.scripts.credentials.kdbx import KdbxStore
 from kluster.scripts.credentials.pulumi_config import SlotRefused
@@ -61,6 +63,9 @@ from kluster.stacks import physical
 
 #: Bounds one `kubeseal` call: every call here is local.
 TIMEOUT = 30
+
+#: The type token the CRD SDK declares a SealedSecret under.
+SEALED_SECRET = 'crds:bitnami.com/v1alpha1:SealedSecret'
 
 K8S_BASE = conventions.STACK_NAMES.k8s_base
 PHYSICAL = conventions.STACK_NAMES.physical
@@ -118,21 +123,41 @@ def unseal(
     *,
     name: str | None = None,
     namespace: str | None = None,
+    rendered: Mapping[str, str] | None = None,
 ) -> dict[str, str]:
     """Open `ciphertexts` as the controller would, as the SealedSecret `value` declares, or under another identity.
 
     The manifest carries the scope annotation `sealed_secret` writes for the
-    row's scope, so what is opened is the object the stack will declare.
+    row's scope, so what is opened is the object the stack will declare, and
+    `rendered` as `sealed_value` turns it into the template's data.
     """
     name = name or value.name
     namespace = namespace or value.namespace
     annotations = {f'sealedsecrets.bitnami.com/{value.scope.value}': 'true'}
     metadata = {'name': name, 'namespace': namespace, 'annotations': annotations}
+    template: dict[str, object] = {'metadata': metadata}
+    if rendered is not None:
+        template['data'] = rendered_template(value, rendered)
+    return opened(
+        kubeseal,
+        key_pair,
+        {'metadata': metadata, 'spec': {'encryptedData': dict(ciphertexts), 'template': template}},
+    )
+
+
+def opened(kubeseal: str, key_pair: KeyPair, declared: Mapping[str, object]) -> dict[str, str]:
+    """The data of the Secret the controller makes of a SealedSecret whose `metadata` and `spec` are `declared`'s.
+
+    `kubeseal --recovery-unseal` runs the controller's own `Unseal`, which
+    decrypts each key and renders `spec.template.data` around the decrypted
+    values, so the pinned tool -- the controller's own release
+    (`sealing.KUBESEAL`) -- says what the cluster's Secret holds.
+    """
     manifest = {
         'apiVersion': 'bitnami.com/v1alpha1',
         'kind': 'SealedSecret',
-        'metadata': metadata,
-        'spec': {'encryptedData': dict(ciphertexts), 'template': {'metadata': metadata}},
+        'metadata': declared['metadata'],
+        'spec': declared['spec'],
     }
     proc = process_sessions.run(
         [kubeseal, '--recovery-unseal', '--recovery-private-key', str(key_pair.private_key), '-o', 'json'],
@@ -834,20 +859,138 @@ def test_seal_of_a_password_the_stack_holds_but_cannot_be_read_is_not_told_it_is
     assert written(stacks, conventions.sealed.BGP_PASSWORD) == {}
 
 
-def test_alertmanagers_webhook_is_sealed_and_written_nowhere_else(
+(WEBHOOK,) = [row for row in devices.SEALED_RECORDS.values() if row.sealed == conventions.sealed.ALERT_WEBHOOK]
+
+#: A webhook id the shape Home Assistant's automation editor draws one in: the
+#: automation's slug, a hyphen, and 24 characters of URL-safe base64.
+WEBHOOK_ID = 'alertmanager-intake-q2_Zx-9VbN4kLmP0aRtYw7Hs'
+
+#: Where Home Assistant takes a webhook's `POST`, before the id
+#: (`URL_WEBHOOK_PATH` in its `webhook` component).
+WEBHOOK_PATH = '/api/webhook/'
+
+
+def _webhook_id_file(tmp_path: Path, content: str) -> Path:
+    path = tmp_path / 'webhook-id'
+    _ = path.write_text(f'{content}\n')
+    return path
+
+
+def test_alertmanagers_webhook_id_is_sealed_and_written_nowhere_else(
     stacks: Stacks, sealer: sealing.Sealer, kubeseal: str, key_pair: KeyPair, tmp_path: Path
 ) -> None:
-    (record,) = [row for row in devices.SEALED_RECORDS.values() if row.sealed == conventions.sealed.ALERT_WEBHOOK]
-    url = tmp_path / 'url'
-    _ = url.write_text('https://home.example/api/webhook/an-id\n')
-
-    devices.record_sealed(record, sealer=sealer, given={'url': str(url)})
+    devices.record_sealed(WEBHOOK, sealer=sealer, given={'webhook-id': str(_webhook_id_file(tmp_path, WEBHOOK_ID))})
 
     value = conventions.sealed.ALERT_WEBHOOK
-    assert unseal(kubeseal, key_pair, value, written(stacks, value)) == {
-        'url': 'https://home.example/api/webhook/an-id'
-    }
+    assert unseal(kubeseal, key_pair, value, written(stacks, value)) == {'id': WEBHOOK_ID}
     assert all(not runner.config for runner in stacks.runners.values())
+
+
+@pytest.mark.parametrize(
+    ('pasted', 'url'),
+    [
+        (f'http://{conventions.HOME_ASSISTANT.v4}:{conventions.HOME_ASSISTANT_PORT}{WEBHOOK_PATH}{WEBHOOK_ID}', True),
+        (f'{WEBHOOK_PATH}{WEBHOOK_ID}', True),
+        (f'{WEBHOOK_ID} {WEBHOOK_ID}', False),
+    ],
+    ids=['whole-url', 'path-and-id', 'two-words'],
+)
+def test_a_value_that_is_not_a_webhook_id_is_refused_before_anything_is_sealed(
+    pasted: str,
+    url: bool,
+    stacks: Stacks,
+    recorded: tuple[sealing.Sealer, RecordedKubeseal],
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A URL pasted where the id belongs is refused and named as one, and the refusal never prints what was pasted.
+
+    Sealed, the URL would land in the path of the URL the cluster composes
+    around it, and every alert would post to a webhook that does not exist.
+    """
+    sealer, run = recorded
+
+    with (
+        caplog.at_level(logging.DEBUG),
+        pytest.raises(devices.NotAWebhookId) as refused,
+    ):
+        devices.record_sealed(WEBHOOK, sealer=sealer, given={'webhook-id': str(_webhook_id_file(tmp_path, pasted))})
+
+    assert refused.value.url is url
+    assert not run.seals()
+    assert written(stacks, conventions.sealed.ALERT_WEBHOOK) == {}
+    assert WEBHOOK_ID not in str(refused.value)
+    assert WEBHOOK_ID not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_the_recorded_webhook_id_opens_as_the_url_at_home_assistants_address_wherever_that_is(
+    stacks: Stacks,
+    sealer: sealing.Sealer,
+    kubeseal: str,
+    key_pair: KeyPair,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Recorded once, the id opens in the cluster as the URL at the address `HOME_ASSISTANT` holds, whatever it holds.
+
+    The SealedSecret the `k8s-base` program declares from the recorded
+    ciphertext is opened as the controller opens it. Moving Home Assistant
+    moves the URL the Secret holds and leaves the ciphertext as it was: the
+    address is the program's, and only the id is sealed.
+    """
+    devices.record_sealed(WEBHOOK, sealer=sealer, given={'webhook-id': str(_webhook_id_file(tmp_path, WEBHOOK_ID))})
+    value = conventions.sealed.ALERT_WEBHOOK
+    ciphertexts = written(stacks, value)
+    here = conventions.HOME_ASSISTANT
+    moved = dataclasses.replace(here, v4=next(host for host in here.network.v4.hosts() if host != here.v4))
+
+    for host in (here, moved):
+        monkeypatch.setattr(conventions, 'HOME_ASSISTANT', host)
+        run = await applied(sealed={**SEALED, value.name: ciphertexts})
+        (declared,) = [
+            it.inputs for it in run.monitor.of_type(SEALED_SECRET) if it.inputs['metadata']['name'] == value.name
+        ]
+
+        assert declared['spec']['encryptedData'] == ciphertexts
+        assert opened(kubeseal, key_pair, declared) == {
+            'id': WEBHOOK_ID,
+            'url': f'http://{host.v4}:{conventions.HOME_ASSISTANT_PORT}{WEBHOOK_PATH}{WEBHOOK_ID}',
+        }
+
+
+#: Forms whose literal text holds braces beside the field, as a configuration
+#: file would: a lone `{` and a `{{` before it, a shell-style `${...}`, a JSON
+#: object, a quote and a backslash, and a character outside the Basic
+#: Multilingual Plane, which the literal's escaping has to carry too: JSON's
+#: ASCII escape would write it as a surrogate pair, which Go refuses.
+BRACED_FORMS = {
+    'brace-before': 'x{{{id}',
+    'double-brace-before': 'a{{{{b/{id}',
+    'shell': '${{{id}}}',
+    'json': '{{"token": "{id}"}}',
+    'non-bmp': '😀 {{{id}',
+    'quote-and-backslash': 'say "\\{{" {id}',
+}
+
+
+@pytest.mark.parametrize('form', BRACED_FORMS.values(), ids=BRACED_FORMS)
+def test_a_rendered_form_opens_with_its_literal_braces_as_written(
+    form: str, sealer: sealing.Sealer, kubeseal: str, key_pair: KeyPair
+) -> None:
+    """The controller renders the literal text of a form as written, beside the decrypted value, whatever braces it holds.
+
+    Opened through the pinned controller's own `Unseal`: copied into the Go
+    template unquoted, a brace beside the field's action would be parsed as
+    part of it, and the controller would refuse the whole SealedSecret.
+    """
+    value = conventions.sealed.ALERT_WEBHOOK
+    ciphertexts = sealer.seal(value, {'id': WEBHOOK_ID})
+
+    assert unseal(kubeseal, key_pair, value, ciphertexts, rendered={'conf': form}) == {
+        'id': WEBHOOK_ID,
+        'conf': form.format(id=WEBHOOK_ID),
+    }
 
 
 # -- the mail relay's DKIM key --------------------------------------------------

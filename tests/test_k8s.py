@@ -1176,6 +1176,47 @@ async def test_an_absent_sealed_value_declares_nothing_and_warns_naming_it(monke
     assert [message for message in warned if repr(value.name) in message and conventions.sealed.CONFIG_KEY in message]
 
 
+#: A row of one sealed key, for the forms a rendered key may and may not take.
+_RENDERED_ROW = conventions.sealed.SealedValue(name='a-value', namespace='apps', keys=('password',), stack='k8s-base')
+
+
+def test_a_rendered_key_that_is_also_a_sealed_key_is_refused_by_name() -> None:
+    """The controller would keep the decrypted value in it, and the form would render nothing."""
+    from kluster.lib.k8s import rendered_template
+
+    with pytest.raises(ValueError, match='password'):
+        _ = rendered_template(_RENDERED_ROW, {'password': 'postgres://user:{password}@db'})
+
+
+@pytest.mark.parametrize(
+    'form',
+    [
+        'postgres://user:{secret}@db',
+        'postgres://user:{}@db',
+        'postgres://user:{password[0]}@db',
+        'postgres://user:{password.upper}@db',
+        'postgres://user:{password.x}@db',
+        'postgres://user:{password!r}@db',
+        'postgres://user:{password:>30}@db',
+        'postgres://user:{password@db',
+        'postgres://user:password}@db',
+    ],
+    ids=['other-key', 'positional', 'index', 'method', 'attribute', 'conversion', 'format-spec', 'unclosed', 'stray'],
+)
+def test_a_form_whose_field_is_not_exactly_a_sealed_key_is_refused_naming_the_rendered_key(form: str) -> None:
+    """Only a bare sealed key means something to the controller, so every other field is refused where it is declared.
+
+    A field naming a key the row does not seal would not fail in the cluster:
+    `index` over the controller's map of decrypted values renders a missing
+    key as an empty string, silently. An index, an attribute, a conversion or
+    a format spec would be applied here rather than there, or not at all.
+    """
+    from kluster.lib.k8s import rendered_template
+
+    with pytest.raises(ValueError, match='dsn'):
+        _ = rendered_template(_RENDERED_ROW, {'dsn': form})
+
+
 # -- every chart of the installation ---------------------------------------------------
 
 

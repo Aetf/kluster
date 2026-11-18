@@ -1301,13 +1301,18 @@ contract the Home Assistant side is built against:
     calls the producer.
 -   **alertmanager's post to Home Assistant.** alertmanager's body is
     fixed, so the cluster posts to a second intake automation, a
-    webhook trigger whose id is in the sealed value
-    `conventions.sealed.ALERT_WEBHOOK` and which accepts `POST` from
-    the home site alone, where the post comes from. The post stays direct, at Home
+    webhook trigger that accepts `POST` from the home site alone, where
+    the post comes from. Only its id is sealed, the value
+    `conventions.sealed.ALERT_WEBHOOK`; the URL is assembled around it
+    from `conventions.HOME_ASSISTANT`'s address and Home Assistant's
+    port and webhook path, which the SealedSecret renders into the
+    Secret alertmanager reads, so the address is held once and a moved
+    one needs no new seal. The post stays direct, at Home
     Assistant's own address, which only the homelab worker reaches and
     where monitoring therefore runs
-    ([rfc-008](rfc/rfc-008-workload-migration.md) §4.1); it never rides
-    the cluster's relay or the overlay. Every alert in the body
+    ([rfc-008](rfc/rfc-008-workload-migration.md) §4.1); it never
+    addresses Home Assistant by its name, and never rides the cluster's
+    relay or the overlay. Every alert in the body
     carries a `tier` label from the census and `summary` and
     `playbook` annotations (`kluster.components.monitoring.rules`),
     and only firing alerts are sent. Per alert, the automation
