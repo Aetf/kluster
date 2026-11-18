@@ -113,7 +113,8 @@ disabling `deploy.yml`, which is why that step's reading comes first.
 **Stage 6's certificate is read, not re-minted.** A DNS-01 token that
 does not work fails at the challenge, before anything reaches the
 certificate authority, and the controller goes on retrying by itself:
-`kubectl describe challenge` says why.
+`mise x -- kubectl describe challenge`, from the root of the checkout,
+says why.
 
 **Stage 9's key is additive.** A controller keeps every key it holds, so
 a carried key that went wrong is deleted, the controller restarted, and

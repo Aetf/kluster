@@ -77,9 +77,12 @@ postgres = { version = "17.11", channel = "conda-forge" }
 # source alone, so it comes from the `conda-forge` channel like the Postgres
 # client and gawk.
 "conda:libxslt" = { version = "1.1.45", channel = "conda-forge" }
-# jq is what the scripts under test run beside that awk: the dump script on
-# the box, and the workflow steps the suite runs as they are written. Its
-# releases are static binaries.
+# jq is what the scripts under test run beside that awk -- the dump script on
+# the box, and the workflow steps the suite runs as they are written -- and
+# what the runbooks filter a JSON reading with, reaching it through mise as
+# the style rule has them reach a pinned tool (docs/style/README.md,
+# "Comments and docs").
+# Its releases are static binaries.
 jq = "1.8.2"
 # The shell the gateway runs its `#!/bin/sh` scripts under, so the suite runs
 # every such device template under the interpreter the device runs it with
@@ -141,9 +144,13 @@ jj = "0.47.1"
 # provider builds, and `validate --strict` is the release's own validation of
 # the document, with its warnings made errors. A node applying the document
 # also checks it against its own running state, which no document alone can
-# answer and this does not reach. This version is the fleet's release, `versions:talos` in Pulumi.yaml, so the
-# verdict is the pinned release's own -- a test holds the two equal, and one
-# renovate rule moves both.
+# answer and this does not reach. The suite also reads, from `images default`,
+# the Kubernetes release the pinned Talos defaults to, whose minor the kubectl
+# pin below is held to. It is also the client the runbooks read and steer the
+# nodes with, through `mise x`. This version is the fleet's release,
+# `versions:talos` in Pulumi.yaml, so the verdict is the pinned release's own,
+# and a runbook's client speaks the nodes' release -- a test holds the two
+# equal, and one renovate rule moves both.
 talosctl = "1.13.9"
 # kubeseal is what `credentials` seals the cluster's sealed values with
 # (docs/credentials.md §1 rule 6): the format is a hybrid encryption of the
@@ -165,9 +172,11 @@ doggo = "1.4.2"
 # the Kubernetes version row): v1.36 under Talos v1.13. A test holds the two
 # minors equal, and an `allowedVersions` bound in `renovate.json5` keeps
 # renovate on that line, so a Talos release that defaults to another minor
-# moves this pin and the bound in its own pull request. Its releases are
-# static binaries, from the Kubernetes project's own download host rather
-# than from GitHub.
+# moves this pin and the bound in its own pull request. The runbooks' reads of
+# the legacy cluster run this client too, outside that window by the
+# operator's ruling, until the legacy cluster retires (kluster-ops#79). Its
+# releases are static binaries, from the Kubernetes project's own download
+# host rather than from GitHub.
 kubectl = "1.36.6"
 # cmctl is cert-manager's client, which asks the cluster's cert-manager what
 # a certificate's state is and renews one on demand (`cmctl renew`). It is

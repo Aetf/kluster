@@ -1925,11 +1925,18 @@ and adopting a new generation of one is a re-encryption rather than a
 restart. `credentials derived operator-passphrase generate` files the next
 generation and keeps it where `recover` would; what it does *not* do is rewrite
 `Pulumi.github.yaml`, which is still encrypted under the predecessor and
-whose `encryptionsalt` still verifies that one. The adoption is
-`pulumi stack change-secrets-provider passphrase -s github`, run with the
-predecessor in `PULUMI_CONFIG_PASSPHRASE` and the successor typed at its
-prompt: it decrypts every secret the stack holds and writes them back
-under a fresh salt, in place, and the file is then committed. Until it
+whose `encryptionsalt` still verifies that one. The adoption runs from
+the root of the checkout, with the successor typed at its prompt:
+
+    mise x -- env -u PULUMI_CONFIG_PASSPHRASE \
+        PULUMI_CONFIG_PASSPHRASE_FILE=<a file holding the predecessor> \
+        pulumi stack change-secrets-provider passphrase -s github
+
+It takes the stack passphrase out of the environment `mise.toml` sets
+and keeps the rest, the backend and its bundle among it, the way a run
+against `physical` does (§4.4). A rotation asks for the successor at
+the prompt whatever the environment holds. The command decrypts every secret the stack holds and
+writes them back under a fresh salt, in place, and the file is then committed. Until it
 runs, the stack file disagrees with the passphrase the chain finds, and
 every command against that stack answers `error: incorrect passphrase` — loud, and repaired by
 finishing the adoption or by putting the predecessor back.

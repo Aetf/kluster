@@ -162,7 +162,7 @@ from an HTTP repository, which offers nothing to check a download against
     configuration stores itself as one YAML string, so no `jsonpath`
     reaches the field, and the YAML is parsed.
 
-    After the worker's upgrade, `talosctl -n <node> get extensions`
+    After the worker's upgrade, `mise x -- talosctl -n <node> get extensions`
     still lists both extensions.
 -   **§2.2 Cilium upgrade.** Trigger: chart PR. Gist: the riskiest
     bump in the system — before merge, re-run the affected subset of
@@ -262,7 +262,7 @@ from an HTTP repository, which offers nothing to check a download against
     `<node>` the lost node's name (`cp2`):
 
         kub() { mise x -- kubectl --kubeconfig ~/.kube/kluster "$@"; }
-        ocid() { physical stack export | jq -r --arg t "$1" --arg n "$2" '.deployment.resources[] | select(.type == $t and .outputs.displayName == $n) | .id'; }
+        ocid() { physical stack export | mise x -- jq -r --arg t "$1" --arg n "$2" '.deployment.resources[] | select(.type == $t and .outputs.displayName == $n) | .id'; }
         credentials derived oci-physical read "$(ocid oci:Core/instance:Instance kluster-<node>)"
         kub delete node <node>
         urns() { physical stack --show-urns | sed -n 's|.*URN: \(urn:.*\)$|\1|p' | grep -E "$1"; }
@@ -367,7 +367,7 @@ from an HTTP repository, which offers nothing to check a download against
         class and the claim of every volume whose node affinity names
         `<node>`:
 
-            pv=$(kub get pv -o json) && jq -r --arg n <node> '[.items[] | select(any(.spec.nodeAffinity.required.nodeSelectorTerms[]?.matchExpressions[]? | select(.key == "kubernetes.io/hostname") | .values[]; . == $n))] | (.[] | "\(.spec.storageClassName) \(.spec.claimRef.namespace)/\(.spec.claimRef.name)"), "\(length) volumes"' <<<"$pv"
+            pv=$(kub get pv -o json) && mise x -- jq -r --arg n <node> '[.items[] | select(any(.spec.nodeAffinity.required.nodeSelectorTerms[]?.matchExpressions[]? | select(.key == "kubernetes.io/hostname") | .values[]; . == $n))] | (.[] | "\(.spec.storageClassName) \(.spec.claimRef.namespace)/\(.spec.claimRef.name)"), "\(length) volumes"' <<<"$pv"
 
         Its last line counts the volumes listed, `0 volumes` on a node
         that holds none. A read that does not end on that line is no
@@ -432,8 +432,8 @@ from an HTTP repository, which offers nothing to check a download against
     `up-apps`, and the `internet` pool holds the new node's two
     addresses, which this prints, one line each:
 
-        G=$(physical stack output node_guas --json | jq -r --arg n <node> '.[$n]')
-        kub get ciliumloadbalancerippool internet -o json | jq -r '.spec.blocks[].cidr' | grep -xF -e "$(ip_of <node>)/32" -e "$G/128"
+        G=$(physical stack output node_guas --json | mise x -- jq -r --arg n <node> '.[$n]')
+        kub get ciliumloadbalancerippool internet -o json | mise x -- jq -r '.spec.blocks[].cidr' | grep -xF -e "$(ip_of <node>)/32" -e "$G/128"
 
     On the dedicated VIP's node, two more: the `read` above shows an
     assigned reserved address and an attached volume, and the items of
@@ -736,8 +736,8 @@ from an HTTP repository, which offers nothing to check a download against
 
         D=.claude/drill; mkdir -p "$D"
         SCOPE='::kluster:cloud:CloudNodes(\$|::)|::kluster:cloud:NodeVolume(::|\$oci:Core/volumeAttachment:)|::kluster:talos:TalosDay1(\$|::)|::kluster:homelab:HomelabHost(::|\$libvirt:index/(domain|volume):)|FactoryImage::kluster-worker-nocloud$|pulumi:pulumi:Stack::'
-        protected() { physical stack export | jq -r '.deployment.resources[] | select(.protect) | .urn' | sort; }
-        outside() { local e d; e=$(physical stack export --show-secrets) && d=$(jq -c --arg s "$SCOPE" '[.deployment.resources[] | select((.urn | test($s)) or (.urn | endswith("::pulumi:providers:pulumi-python::default")) | not) | {urn, inputs, outputs, protect}] | sort_by(.urn)' <<<"$e") && sha256sum <<<"$d"; }
+        protected() { physical stack export | mise x -- jq -r '.deployment.resources[] | select(.protect) | .urn' | sort; }
+        outside() { local e d; e=$(physical stack export --show-secrets) && d=$(mise x -- jq -c --arg s "$SCOPE" '[.deployment.resources[] | select((.urn | test($s)) or (.urn | endswith("::pulumi:providers:pulumi-python::default")) | not) | {urn, inputs, outputs, protect}] | sort_by(.urn)' <<<"$e") && sha256sum <<<"$d"; }
         anchors() { for n in kluster.hosts vip1.hosts; do for t in A AAAA; do if a=$(mise x -- doggo --short "$n.unlimited-code.works" "$t" @1.1.1.1); then echo "$n $t $(printf '%s' "$a" | sort | tr '\n' ' ')"; else echo "$n $t no reading"; fi; done; done; }
         sealing() { mise x -- kubeseal --kubeconfig ~/.kube/kluster --fetch-cert \
             $(mise x uv -- uv run python -c 'from kluster import conventions as c; print("--controller-namespace", c.SEALING_NAMESPACE, "--controller-name", c.SEALING_CONTROLLER)'); }
@@ -904,7 +904,7 @@ from an HTTP repository, which offers nothing to check a download against
 
         W=($(urns '::kluster-worker-nocloud$|::kluster-worker-disk$')); printf '%s\n' "${W[@]}"
         [ ${#W[@]} -eq 2 ] && physical preview --diff "${W[@]/#/--replace=}"
-        p=$(physical preview --json "${W[@]/#/--replace=}") && jq -r --arg s "$SCOPE" '[.steps[] | select(.op != "same") | .urn | select(test($s) | not)] | length, .[]' <<<"$p"
+        p=$(physical preview --json "${W[@]/#/--replace=}") && mise x -- jq -r --arg s "$SCOPE" '[.steps[] | select(.op != "same") | .urn | select(test($s) | not)] | length, .[]' <<<"$p"
         physical up "${W[@]/#/--replace=}"
 
     `W` holds the worker's `FactoryImage` and its disk. The scope check,
@@ -1259,11 +1259,12 @@ contract the Home Assistant side is built against:
     `conventions.backup.max_age` of the repeat, fifteen minutes, and
     which survives a restart. Its expiry pushes "no check-in from the
     cluster": the cluster stopped evaluating rules or stopped
-    delivering them, which no in-cluster alert can say. Its playbook:
+    delivering them, which no in-cluster alert can say. Its playbook, from the root of the
+    checkout:
     whether the worker is up and `Ready` (§3); whether vmalert and
     alertmanager run in the `monitoring` namespace
-    (`kubectl -n monitoring get pods`); whether the receiver's
-    configuration is in use (`kubectl -n monitoring get
+    (`mise x -- kubectl -n monitoring get pods`); whether the receiver's
+    configuration is in use (`mise x -- kubectl -n monitoring get
     vmalertmanagerconfig`, whose status names a missing Secret); and,
     with all of that in order, alertmanager's own playbook for failing
     notifications (architecture.md §4.3).
@@ -1306,7 +1307,7 @@ census and a summary (architecture.md §4.3).
 What to do when the monitoring stack reports on itself. The stack and
 its scrapes are declared in `components.monitoring`
 ([declarative/cluster-infra.md](declarative/cluster-infra.md) §1,
-item 6).
+item 6). The commands below run from the root of the checkout.
 
 ### 6.1 A row the metrics store ignores
 
@@ -1327,7 +1328,7 @@ than sparse, and every reading over it reads nothing.
    which is a source's clock and not its labels.
 2. **Find the series.** vmsingle logs at most one ignored series every
    5 seconds, whole:
-   `kubectl -n monitoring logs -l app.kubernetes.io/name=vmsingle | grep 'ignoring series'`.
+   `mise x -- kubectl -n monitoring logs -l app.kubernetes.io/name=vmsingle | grep 'ignoring series'`.
    Its `job` and its name say which scrape produced it.
 3. **Repair the scrape that adds the labels**, in the component that
    declares it: the chart's scrapes and etcd's in
@@ -1353,15 +1354,15 @@ behind, and a rebuild would restore it only as far as its last success
 **Gist**:
 
 1. **Read the last run.**
-   `kubectl -n monitoring get jobs -l batch.kubernetes.io/cronjob=<job>`
-   lists the runs; the newest's pod log, `kubectl -n monitoring logs
+   `mise x -- kubectl -n monitoring get jobs -l batch.kubernetes.io/cronjob=<job>`
+   lists the runs; the newest's pod log, `mise x -- kubectl -n monitoring logs
    <pod> --all-containers`, says where it stopped. Each line before the
    failure names the step it starts.
 2. **A pod that never started.** It waits on what it mounts or reads:
    the writer key's Secret, `writer-vm-monitoring`, which a SealedSecret
    the controller cannot open never creates, and which the sealing
    sitting of bring-up stage 9 (physical/bring-up.md §2) seals again
-   after a rebuild (§3.5); or the scripts' `ConfigMap`, `metrics-backup-shell`. `kubectl -n
+   after a rebuild (§3.5); or the scripts' `ConfigMap`, `metrics-backup-shell`. `mise x -- kubectl -n
    monitoring describe pod` names which.
 3. **The store did not answer.** The snapshot is taken through the
    store's Service, so a store that is down fails every backup. A store
@@ -1371,7 +1372,7 @@ behind, and a rebuild would restore it only as far as its last success
    vm/monitoring/history.rows`. Its retention keeps every row, so a
    store holding fewer started without its history, and its backup
    would overwrite the history in the bucket. Restore it: delete its
-   claim, `kubectl -n monitoring delete pvc vmsingle-history`, and its
+   claim, `mise x -- kubectl -n monitoring delete pvc vmsingle-history`, and its
    pod; the operator makes the claim again, empty, when it next
    reconciles the store, and the restore
    brings the store back from its last backup, losing only what it took
@@ -1379,7 +1380,7 @@ behind, and a rebuild would restore it only as far as its last success
    deleted through the store's keyed delete endpoint, the record is
    hidden instead, in the B2 console, and the next run records afresh.
 5. **A store that does not restore** sits in `Init`, one of its two
-   restore containers failing: `kubectl -n monitoring logs <pod> -c
+   restore containers failing: `mise x -- kubectl -n monitoring logs <pod> -c
    restore-check`, then `-c restore`. The first fails where the bucket
    or the key does not answer; the second where `vmrestore` refuses the
    backup, which it does for one whose last run was cut off part way.
@@ -1426,7 +1427,7 @@ behind, and a rebuild would restore it only as far as its last success
    cut-off run, or the history it hid is gone. For the recent store,
    whose loss costs a month of detail, the store may start empty
    instead: hide everything under its prefix, then delete its claim,
-   `kubectl -n monitoring delete pvc
+   `mise x -- kubectl -n monitoring delete pvc
    vmsingle-monitoring-victoria-metrics-k8s-stack`, and its pod, since
    the claim holds the lock file, and the restore refuses a lock with
    no backup behind it.

@@ -2706,7 +2706,7 @@ gateway's member and nothing else; step 3 converges the network; step
         curl -sS -X POST -H @- -H 'Content-Type: application/json' \
             -d '{"config":{"routes":[{"target":"10.144.0.0/16"}]}}' \
             https://api.zerotier.com/api/v1/network/83048a0632b6ba9b |
-        jq -c .config.routes                 # [{"target":"10.144.0.0/16","via":null}]
+        mise x -- jq -c .config.routes                 # [{"target":"10.144.0.0/16","via":null}]
     ```
 
     The same request is the way back for the default route

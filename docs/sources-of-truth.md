@@ -228,11 +228,11 @@ falsifier for "nothing is decrypted": a decryption fails with
 
 ```sh
 # B1 every stack in the backend, its resource count, its last write
-pq stack ls --all --json | jq -r '.[] | [.name, "resources=\(.resourceCount // 0)", "written=\(.lastUpdate // "-")", (if .updateInProgress then "UPDATE IN PROGRESS" else "" end)] | @tsv'
+pq stack ls --all --json | mise x -- jq -r '.[] | [.name, "resources=\(.resourceCount // 0)", "written=\(.lastUpdate // "-")", (if .updateInProgress then "UPDATE IN PROGRESS" else "" end)] | @tsv'
 
 # B2 the whole history of each stack, classified
 for s in dns github physical k8s-base apps; do
-  pq stack history --stack "$s" --json --page-size 1000 | jq -r --arg s "$s" '
+  pq stack history --stack "$s" --json --page-size 1000 | mise x -- jq -r --arg s "$s" '
     def actor: .environment as $e
       | (if ($e["ci.system"] // "") == "" then "local"
          else "ci " + ($e["ci.build.url"] // $e["ci.system"]) end)
@@ -250,11 +250,11 @@ for s in dns github physical k8s-base apps; do
 done
 
 # B3 the dns resources by type
-pq stack export --stack dns | jq -r '.deployment.resources[].type' | sort | uniq -c | sort -rn
+pq stack export --stack dns | mise x -- jq -r '.deployment.resources[].type' | sort | uniq -c | sort -rn
 
 # B4 the committed state-backend checkpoint, which no backend holds
 F=checkpoints/.pulumi/stacks/kluster-py/state-backend.json
-git show main:"$F" | jq -r '.checkpoint.latest | "resources=\(.resources // [] | length) pending=\(.pending_operations // [] | length) written=\(.manifest.time) cli=\(.manifest.version)"'
+git show main:"$F" | mise x -- jq -r '.checkpoint.latest | "resources=\(.resources // [] | length) pending=\(.pending_operations // [] | length) written=\(.manifest.time) cli=\(.manifest.version)"'
 git log main --format='%h %ad %an  %s' --date=short -- "$F"
 cmp -s <(git show main:"$F") "$F" && echo "the working copy holds main's checkpoint" || echo "the working copy holds a run main lacks"
 
@@ -403,8 +403,8 @@ done
 #### X — the DKIM key, in all three places
 
 ```sh
-kubectl config current-context
-kubectl get secret -A --field-selector metadata.name=cert-dkim-exim -o jsonpath='{.items[0].data.tls\.key}' | base64 -d | openssl pkey -pubout -outform DER | sha256sum
+mise x -- kubectl config current-context
+mise x -- kubectl get secret -A --field-selector metadata.name=cert-dkim-exim -o jsonpath='{.items[0].data.tls\.key}' | base64 -d | openssl pkey -pubout -outform DER | sha256sum
 for z in $(mise x uv -- uv run python -c 'from kluster.components.dns.base import MAIL_ZONES; print(*MAIL_ZONES)'); do
   ns="$(drill NS "$z" | awk '/^;/ {next} $4 == "NS" {print $5; exit}')"
   drill TXT "k8s._domainkey.$z" @"$ns" | awk '/^;/ {next} $4 == "TXT" {$1 = $2 = $3 = $4 = ""; print}' | tr -d '" \n' | sed 's/.*p=//' | base64 -d | sha256sum
@@ -424,7 +424,7 @@ exim's wave (cluster/migration.md §2), with the new cluster's context,
 its line gives the same digest as the legacy Secret's:
 
 ```sh
-kubectl get secret -A --field-selector metadata.name=dkim-exim -o jsonpath='{.items[0].data.tls\.key}' | base64 -d | openssl pkey -pubout -outform DER | sha256sum
+mise x -- kubectl get secret -A --field-selector metadata.name=dkim-exim -o jsonpath='{.items[0].data.tls\.key}' | base64 -d | openssl pkey -pubout -outform DER | sha256sum
 ```
 
 #### U — the gateway and gw-config
@@ -455,11 +455,11 @@ ssh gw 'grep -c -E "mirrorakam|layer4" /data/caddy/config/caddy/Caddyfile'
 
 ```sh
 # K1
-(cd ~/kluster-code && mise x -- env PULUMI_CONFIG_PASSPHRASE=not-the-passphrase pulumi stack history --stack dev --json --page-size 5 | jq -r '.[] | "\(.startTime)  \(.kind)  \(.result)  \(.environment["ci.build.url"] // "local")  @\((.environment["git.head"] // "?")[0:12])"')
+(cd ~/kluster-code && mise x -- env PULUMI_CONFIG_PASSPHRASE=not-the-passphrase pulumi stack history --stack dev --json --page-size 5) | mise x -- jq -r '.[] | "\(.startTime)  \(.kind)  \(.result)  \(.environment["ci.build.url"] // "local")  @\((.environment["git.head"] // "?")[0:12])"'
 # K2
 gh api repos/Aetf/kluster-code/commits/main --jq '.sha[0:12]'
 # K3
-kubectl get nodes -o wide
+mise x -- kubectl get nodes -o wide
 ```
 
 -   **K1** reads the legacy backend that kluster-code's `mise.toml`
@@ -530,14 +530,14 @@ ip -6 -brief address show | awk '$1 ~ /^zt/'
 
 ```sh
 # Z1
-sudo zerotier-cli -j listnetworks | jq '.[] | {nwid, name, assignedAddresses, routes, dns}'
+sudo zerotier-cli -j listnetworks | mise x -- jq '.[] | {nwid, name, assignedAddresses, routes, dns}'
 physical() { (cd ~/kluster && mise x -- env -u PULUMI_CONFIG_PASSPHRASE PULUMI_CONFIG_PASSPHRASE_FILE=.credentials/physical.passphrase pulumi "$@" --stack physical); }
 h="$(sha256sum Pulumi.physical.yaml)"; ZT="$(physical config get zerotierApiToken)"; [ "$h" = "$(sha256sum Pulumi.physical.yaml)" ] && echo "stack file unchanged"
 N="$(mise x uv -- uv run python -c 'from kluster.conventions import overlay; print(overlay.NETWORK_ID)')"
 # Z2
-printf 'Authorization: token %s\n' "$ZT" | curl -sS -H @- "https://api.zerotier.com/api/v1/network/$N" | jq '{name: .config.name, rulesSource, routes: .config.routes, dns: .config.dns, pools: .config.ipAssignmentPools, v6: .config.v6AssignMode}'
+printf 'Authorization: token %s\n' "$ZT" | curl -sS -H @- "https://api.zerotier.com/api/v1/network/$N" | mise x -- jq '{name: .config.name, rulesSource, routes: .config.routes, dns: .config.dns, pools: .config.ipAssignmentPools, v6: .config.v6AssignMode}'
 # Z3
-printf 'Authorization: token %s\n' "$ZT" | curl -sS -H @- "https://api.zerotier.com/api/v1/network/$N/member" | jq -r '.[] | [.name, .nodeId, .config.authorized, (.config.ipAssignments // [] | join(","))] | @tsv' | sort
+printf 'Authorization: token %s\n' "$ZT" | curl -sS -H @- "https://api.zerotier.com/api/v1/network/$N/member" | mise x -- jq -r '.[] | [.name, .nodeId, .config.authorized, (.config.ipAssignments // [] | join(","))] | @tsv' | sort
 # Z4
 mise x uv -- uv run python -c 'from kluster.conventions import overlay; [print(m.name, getattr(m, "node_id", None) or "-", m.address, sep="\t") for m in overlay.ROSTER]' | sort
 ```

@@ -931,7 +931,8 @@ declarative/dns.md.)
 Order within the first `pulumi up`: OCI network → instances (user_data
 configs) ∥ libvirt VM → bootstrap (first CP) → health → outputs; the
 NLB and the site's BGP configuration settle in parallel once IPs exist, and the `dns`
-stack's anchors follow from the IP outputs.
+stack's anchors follow from the IP outputs. The commands this section
+gives run from the root of the checkout.
 Manual preconditions: OCI tenancy on PAYG and the homelab host-prep
 change-set (§3); beside them, the `state-backend` stack applied
 (physical/state-backend.md). ZeroTier
@@ -964,10 +965,10 @@ and a boot: a control plane still in its window joins as soon as it
 finds the first member, and one that is `Failed` joins after its next
 boot, with nobody acting. The run that made the late bootstrap fails at
 its health gate, and the repair is the same run again once the control
-planes have booted again. The reading is `talosctl -n <node> service
+planes have booted again. The reading is `mise x -- talosctl -n <node> service
 etcd`: state `Failed`, its events naming `failed to build initial etcd
-cluster`. Where a talosconfig is at hand, `talosctl -n <node> reboot`
-cuts the wait short, and `talosctl -n <node> etcd status` then lists
+cluster`. Where a talosconfig is at hand, `mise x -- talosctl -n <node> reboot`
+cuts the wait short, and `mise x -- talosctl -n <node> etcd status` then lists
 the member; a first run that failed has exported none, and waiting is
 the whole repair. **Nothing sets the kernel argument `panic=0`**,
 neither the image schematic nor a machine configuration: under it
@@ -1047,7 +1048,7 @@ it has been read.
 from the same checkout and with the same `physical` function:
 
 ```sh
-VID=$(physical stack export | jq -r --arg n "kluster-$V" '.deployment.resources[] | select(.type == "oci:Core/volume:Volume" and .outputs.displayName == $n) | .id')
+VID=$(physical stack export | mise x -- jq -r --arg n "kluster-$V" '.deployment.resources[] | select(.type == "oci:Core/volume:Volume" and .outputs.displayName == $n) | .id')
 credentials derived oci-physical detach "$VID"
 ```
 
@@ -1131,7 +1132,7 @@ mise x -- talosctl -n <node> etcd status      # every member listed, none report
 
 The local-path volume (§2) is first exercised there as well:
 
--   `talosctl get volumestatus u-storage` reports it ready on every
+-   `mise x -- talosctl get volumestatus u-storage` reports it ready on every
     node.
 -   Once `k8s-base` runs the provisioner, a `local-path` claim binds
     and a pod writes through it.
@@ -1357,7 +1358,7 @@ primary IP, **and** a declared raw TCP/UDP LoadBalancer service port
 serves with no firewall entry (the BPF-precedence check — failure
 flips the recorded raw-port fallback, §2); the kubelet
 answers the cluster and nothing else — once `k8s-base` is up,
-`kubectl top nodes` lists every node, while 10250 at a node's public
+`mise x -- kubectl top nodes` lists every node, while 10250 at a node's public
 address gets no answer from outside the VCN; and no `NodePort` is allocated — once `k8s-base` is up,
-`kubectl get svc -A -o jsonpath='{..nodePort}'` prints nothing
+`mise x -- kubectl get svc -A -o jsonpath='{..nodePort}'` prints nothing
 (cluster-infra.md §2).

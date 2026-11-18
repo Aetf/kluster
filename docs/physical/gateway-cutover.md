@@ -19,7 +19,7 @@ which is why the ceremony's first three steps dial the LAN.
 The steps that run `pulumi` against `physical` run on the operator's
 workstation instead, through one shell function. Define it once, from
 the root of the checkout that holds `.credentials/`, in the shell those
-steps use:
+steps use, and run them from there:
 
 ```sh
 CHECKOUT=$PWD
@@ -1499,7 +1499,7 @@ the run, the backends' replaced originals included, and those then
 stay in the state as pending deletes that no later preview shows.
 
 ```sh
-ocid() { physical stack export | jq -r --arg t "$1" --arg n "$2" '.deployment.resources[] | select(.type == $t and .outputs.displayName == $n) | .id'; }
+ocid() { physical stack export | mise x -- jq -r --arg t "$1" --arg n "$2" '.deployment.resources[] | select(.type == $t and .outputs.displayName == $n) | .id'; }
 urns() { physical stack --show-urns | sed -n 's|.*URN: \(urn:.*\)$|\1|p' | grep -E "$1"; }
 S=$(urns '\$oci:NetworkLoadBalancer/backendSet:BackendSet::' | wc -l); echo "$S"    # the number of backend sets
 T=($(urns '::kluster:cloud:CloudNodes\$oci:(Core/instance:Instance::kluster-cp3|NetworkLoadBalancer/backend:Backend::kluster-nlb-.*-cp3)$'))
@@ -1672,7 +1672,7 @@ reaches `curl` on its standard input rather than on its command line:
     curl -sS -X POST -H @- -H 'Content-Type: application/json' \
         -d '{"config":{"routes":[{"target":"10.144.0.0/16"}]}}' \
         https://api.zerotier.com/api/v1/network/83048a0632b6ba9b |
-    jq -c .config.routes                     # [{"target":"10.144.0.0/16","via":null}]
+    mise x -- jq -c .config.routes                     # [{"target":"10.144.0.0/16","via":null}]
 ```
 
 Each member drops the route at its next configuration refresh.
@@ -1908,11 +1908,14 @@ cmp /mnt/.rofs/etc/frr/daemons /etc/frr/daemons      # silent
 ```
 
 Before the apply, on the device, record its policy rules, which the
-apply must leave as they are:
+apply must leave as they are, and read them as they are recorded:
 
 ```sh
-ip -4 rule show > ~/rules.before
+ip -4 rule show | tee ~/rules.before
 ```
+
+The kernel always holds policy rules, so a recording that shows none
+failed and is taken again.
 
 **The apply** is one targeted run from the operator's workstation, with
 `physical()` as in the header: the create of the configuration, the
@@ -1982,7 +1985,7 @@ no command line:
 ```sh
 physical config get unifiApiKey | sed 's/^/X-API-KEY: /' |
     curl --noproxy '*' -sk -H @- "https://$ADDR/proxy/network/v2/api/site/default/bgp/config" |
-    jq '[.[] | {_id, enabled, uploaded_file_name, length: (.frr_bgpd_config | length)}]'
+    mise x -- jq '[.[] | {_id, enabled, uploaded_file_name, length: (.frr_bgpd_config | length)}]'
 # one object, enabled true, kluster-frr.conf
 ```
 
@@ -2113,9 +2116,9 @@ addresses, since the API server is on the host network. They share one setup:
 ```sh
 TC=~/.talos/kluster          # the talosconfig the ceremony's step 3 wrote
 WORKER=192.168.70.10
-ip_of() { physical stack output node_private_ips --json | jq -r --arg n "$1" '.[$n]'; }
-CP=($(physical stack output node_private_ips --json | jq -r '.[]'))
-CPS=$(physical stack output node_private_ips --json | jq -r '[.[]] | join(",")')
+ip_of() { physical stack output node_private_ips --json | mise x -- jq -r --arg n "$1" '.[$n]'; }
+CP=($(physical stack output node_private_ips --json | mise x -- jq -r '.[]'))
+CPS=$(physical stack output node_private_ips --json | mise x -- jq -r '[.[]] | join(",")')
 tal() { mise x -- talosctl --talosconfig "$TC" "$@"; }
 mkdir -p ~/.kube
 (umask 077; physical stack output kubeconfig --show-secrets > ~/.kube/kluster)
@@ -2148,7 +2151,7 @@ the path over KubeSpan.
 
 ```sh
 tal -n "$WORKER" get addresses -o json \
-  | jq -r 'select(.spec.family == "inet6" and .spec.scope == "link") | "\(.spec.linkName) \(.spec.address)"'
+  | mise x -- jq -r 'select(.spec.family == "inet6" and .spec.scope == "link") | "\(.spec.linkName) \(.spec.address)"'
 mise x uv -- uv run python -c 'from kluster import conventions as c; print(c.HOMELAB_NODE_LINK_LOCAL)'
 ```
 
@@ -2184,9 +2187,9 @@ carries a `phase` of its own):
 ```sh
 V=hath-cache; N=$(ip_of cp1)       # one line of the listing above
 H=$(for c in "${CP[@]}"; do [ "$c" != "$N" ] && echo "$c" && break; done)   # a control plane that is not N
-vol()  { tal -n "$N" get volumestatus "u-$V" -o json | jq -r '.spec.phase'; }
-ids()  { local d; d=$(tal -n "$N" get discoveredvolumes -o json) && jq -rs --arg l "u-$V" 'map(select(.spec.partition_label == $l) | .spec) | "\(length) found", (.[] | "\(.name) uuid=\(.uuid) partition_uuid=\(.partition_uuid)")' <<<"$d"; }
-mnt()  { tal -n "$N" get mountstatus -o json | jq -r --arg t "/var/mnt/$V" 'select(.spec.target == $t) | .spec | "\(.source) \(.target) \(.filesystem)"'; }
+vol()  { tal -n "$N" get volumestatus "u-$V" -o json | mise x -- jq -r '.spec.phase'; }
+ids()  { local d; d=$(tal -n "$N" get discoveredvolumes -o json) && mise x -- jq -rs --arg l "u-$V" 'map(select(.spec.partition_label == $l) | .spec) | "\(length) found", (.[] | "\(.name) uuid=\(.uuid) partition_uuid=\(.partition_uuid)")' <<<"$d"; }
+mnt()  { tal -n "$N" get mountstatus -o json | mise x -- jq -r --arg t "/var/mnt/$V" 'select(.spec.target == $t) | .spec | "\(.source) \(.target) \(.filesystem)"'; }
 boot() { tal -n "$N" read /proc/sys/kernel/random/boot_id; }
 vol; ids; mnt; boot
 ```
@@ -2201,7 +2204,7 @@ vol; ids; mnt; boot
     `physical()` function of this runbook's header:
 
     ```sh
-    VID=$(physical stack export | jq -r --arg n "kluster-$V" '.deployment.resources[] | select(.type == "oci:Core/volume:Volume" and .outputs.displayName == $n) | .id')
+    VID=$(physical stack export | mise x -- jq -r --arg n "kluster-$V" '.deployment.resources[] | select(.type == "oci:Core/volume:Volume" and .outputs.displayName == $n) | .id')
     credentials derived oci-physical detach "$VID"
     ```
 
@@ -2249,7 +2252,7 @@ vol; ids; mnt; boot
 **The local-path volume.**
 
 ```sh
-for n in "${CP[@]}" "$WORKER"; do tal -n "$n" get volumestatus u-storage -o json | jq -r '.spec.phase'; done
+for n in "${CP[@]}" "$WORKER"; do tal -n "$n" get volumestatus u-storage -o json | mise x -- jq -r '.spec.phase'; done
 ```
 
 It passes on `ready` from every node.
@@ -2568,7 +2571,7 @@ Who puts the DS at the parent is the zone's registrar
 z=<the zone>
 ns="$(drill NS "$z" | awk '/^;/ {next} $4 == "NS" {print $5; exit}')"
 drill -s DNSKEY "$z" @"$ns"
-mise x -- pulumi stack export --stack dns | jq -r --arg z "$z" '.deployment.resources[] | select(.urn | endswith("::" + $z + "-dnssec")) | .outputs.ds'
+mise x -- pulumi stack export --stack dns | mise x -- jq -r --arg z "$z" '.deployment.resources[] | select(.urn | endswith("::" + $z + "-dnssec")) | .outputs.ds'
 ```
 
 `drill -s` prints, after the answer, the DS records equivalent to each
