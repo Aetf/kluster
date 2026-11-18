@@ -22,6 +22,7 @@ import pulumi
 import pytest
 import pytest_asyncio
 import yaml
+from client_kubeconfig import KUBECONFIG
 from k8s_base_installation import PUBLISHED, VERSIONS_CONFIG, Physical, release_assets, sealed_values
 from mock_monitor import declaring, run_under_backstop
 from pulumi.output import UNKNOWN
@@ -33,11 +34,8 @@ from kluster.lib.k8s import KUBECONFIG_KEY, UnusableKubeconfig
 from kluster.lib.stack_addresses import Held, UnusableAddressOutput
 from kluster.stacks import apps
 
-#: A stand-in for the cluster-admin kubeconfig, which says what it is if it ever
-#: reaches a diff.
-KUBECONFIG = 'a-fake-kubeconfig-that-reaches-no-cluster'
-
-#: A stand-in for the zones token, likewise.
+#: A stand-in for the zones token, which says what it is if it ever reaches a
+#: diff.
 ZONES_TOKEN = 'a-fake-zones-token-that-opens-nothing'
 
 KUBERNETES_PROVIDER = 'pulumi:providers:kubernetes'

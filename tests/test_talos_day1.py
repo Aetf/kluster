@@ -13,9 +13,11 @@ boots with, and what is only applied to it afterwards.
 from __future__ import annotations
 
 import asyncio
+import datetime as dt
 import itertools
 import json
 import logging
+import re
 import typing
 from collections.abc import Callable
 from ipaddress import IPv4Interface
@@ -31,6 +33,7 @@ from talos_secrets import declared_input_type, field_hint, generated_secrets, na
 
 from kluster import conventions
 from kluster.components.talos import Refusal, RollRefused, TalosCluster, TalosDay1
+from kluster.conventions.cluster import KUBECONFIG_RENEWAL
 
 #: The balancer in front of the control planes, in the two spellings the two
 #: ports are named with: a URL for the Kubernetes endpoint, a bare address for
@@ -384,6 +387,42 @@ async def test_the_kubeconfig_is_gated_on_the_health_check(fake: Talos) -> None:
     # that finished registering.
     assert await urns_of(day1.health) <= await urns_of(day1.kubeconfig)
     assert await day1.bootstrap.urn.future() in await urns_of(day1.kubeconfig)
+
+
+#: A Go duration's units the provider's window is written in, as
+#: `time.ParseDuration` reads them.
+GO_UNITS = {'h': dt.timedelta(hours=1), 'm': dt.timedelta(minutes=1), 's': dt.timedelta(seconds=1)}
+
+
+def go_duration(text: str) -> dt.timedelta:
+    """A Go duration of whole hours, minutes and seconds, refused unless every character of it is read."""
+    parts = re.findall(r'(\d+)([hms])', text)
+    assert ''.join(count + unit for count, unit in parts) == text, text
+    return sum((int(count) * GO_UNITS[unit] for count, unit in parts), dt.timedelta(0))
+
+
+@pytest.mark.asyncio
+async def test_the_kubeconfig_takes_the_renewal_window_the_alert_on_its_copies_is_held_against(fake: Talos) -> None:
+    """The window in which an apply issues the client certificate again is the one the alert's margin lies inside.
+
+    `KubeconfigCopyExpiring`'s playbook asks for a `physical` apply, which
+    issues a new certificate only within this window of the old one's expiry.
+    """
+    async with declaring():
+        _ = build()
+    (declaration,) = fake.of_type('talos:cluster/kubeconfig:Kubeconfig')
+
+    assert go_duration(declaration.inputs['certificateRenewalDuration']) == KUBECONFIG_RENEWAL
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures('fake')
+async def test_a_renewal_window_of_no_whole_hours_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The window is written in hours, the unit of the provider's default, so a remainder is refused, not dropped."""
+    monkeypatch.setattr('kluster.components.talos.KUBECONFIG_RENEWAL', dt.timedelta(hours=720, minutes=30))
+
+    with pytest.raises(ValueError, match='whole number of hours'):
+        _ = build()
 
 
 @pytest.mark.asyncio

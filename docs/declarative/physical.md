@@ -643,6 +643,17 @@ machine_secrets
     the program: a lost node is refreshed out of state and created again,
     and a deliberate replacement terminates the node outside the program
     and takes the same path (operations.md §3.1).
+-   **The kubeconfig is issued again within its renewal window.** Its
+    client certificate lives a year, and the `Kubeconfig` resource
+    plans a new one in whichever apply runs within
+    `certificate_renewal_duration` of its expiry, which the component
+    sets from `conventions.cluster.KUBECONFIG_RENEWAL`, the provider's
+    own default of 720 hours, stated so that the alert on the copies of
+    the kubeconfig is held against the window the resource takes. A
+    refresh issues nothing. From the moment the window opens, every
+    plan of this stack shows the `Kubeconfig`'s update, which is the
+    renewal and not drift; `KubeconfigCopyExpiring` asks for the apply
+    and the copy that follow it (operations.md §2.5).
 -   **Secrets in state, accepted**: the TF provider's ephemeral
     resources don't bridge to Pulumi, so `machine_secrets` (cluster PKI)
     lives in Pulumi state — passphrase-encrypted, in the TLS-guarded

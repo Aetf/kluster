@@ -230,29 +230,58 @@ preview with `denydefaultprovider not registered`.
     physical/state-backend.md §7 (pointer, not a copy).
 -   **§2.4 CNPG major upgrade** — owned by workloads.md §4
     (pointer).
--   **§2.5 The cluster credential's copies.** Trigger: a `physical`
-    apply that changes its `kubeconfig` output, which no operator sees
-    happen. The Talos provider's `Kubeconfig` resource issues the
-    cluster-admin client certificate again by itself in whichever
-    `physical` apply runs within its renewal window of the certificate's
-    expiry — 720 hours by default, and `physical` sets none — so a CI
-    `up-physical` re-issues it; replacing the cluster's PKI changes it
-    too. Cadence: after every `physical` `up`, and at least monthly,
-    which no 30-day window can slip past. In a bring-up the first copy
-    waits for stage 4 of physical/bring-up.md §2 rather than following
-    `physical`'s first `up`: the commit of both stack files is an `up`
-    of `k8s-base` and `apps`, whose Environments take no reviewer, and
-    the bring-up's checks that need no network plugin run before Cilium
-    exists (physical/gateway-cutover.md §8.1). Gist: `credentials
-    derived sync --only kubeconfig` from the checkout that holds the kit, then commit
-    `Pulumi.k8s-base.yaml` and `Pulumi.apps.yaml`, whose copies the two
-    stacks open their Kubernetes provider with (credentials.md §3). A
-    stack already holding the current value as a secret is left alone,
+-   **§2.5 The cluster credential's copies.** Trigger:
+    `KubeconfigCopyExpiring`, an `actionable` alert that fires
+    `conventions.cluster.KUBECONFIG_ALERT_MARGIN`, fourteen days, before
+    the client certificate in `k8s-base`'s copy of the cluster-admin
+    kubeconfig expires (`components.monitoring.rules.kubeconfig_copy`).
+    The certificate lives a year. The Talos provider's `Kubeconfig`
+    resource issues it again by itself in whichever `physical` apply
+    runs within its renewal window of that expiry,
+    `conventions.cluster.KUBECONFIG_RENEWAL`, 720 hours, which `physical`
+    sets on the resource; a refresh never does. So the copies in
+    `k8s-base`'s and `apps`'s configuration go stale about once a year,
+    and the alert fires inside the window, where the apply below issues
+    a new certificate.
+
+    Earlier signs: from the moment the window opens, every
+    `plan-physical` plans an update of `<cluster>-kubeconfig`, so a chain
+    run waits on it at `up-physical`'s reviewer gate, and the weekly
+    drift run's `physical` entry fails on it. Both are the renewal
+    window, not drift.
+
+    Act, from the checkout that holds the kit: `credentials derived sync
+    --only kubeconfig`. If it writes `Pulumi.k8s-base.yaml` and
+    `Pulumi.apps.yaml`, merge a pull request that commits both. The merge
+    is the `up` of both stacks, whose Environments take no reviewer, and
+    `up-k8s-base` moves the rule's threshold a year on, which resolves
+    the alert. If it writes neither, `physical` has not issued a new
+    certificate: approve the `up-physical` a chain run is waiting on, or
+    start one with `gh workflow run deploy.yml --repo Aetf/kluster` and
+    approve it, then run the sync. The sync may follow any approval of
+    that step at once; the alert is for the time it did not.
+
+    A stack already holding the current value as a secret is left alone,
     so a run writes only what changed. A stale copy keeps opening the
     cluster only while the certificate it carries is valid and its
     authority still trusted. Past that, both stacks fail to authenticate
-    to the API server — a provider error, not `UnusableKubeconfig`,
-    which only an absent or blank copy raises — until the copy is made.
+    to the API server until the copy is made. That is a provider error,
+    not `UnusableKubeconfig`, which refuses a copy by its form and never
+    by its certificate's date: one that is absent, blank or the unknown
+    sentinel, and, in `k8s-base`, one that is no YAML or carries no
+    embedded client certificate.
+    The copy in `apps`'s configuration is not watched apart from
+    `k8s-base`'s: the same run writes both, into files one pull request
+    commits, and a file left out of it shows at `apps`'s first apply
+    after the old expiry, as a failed chain run. Replacing the cluster's
+    PKI breaks both copies at once, which no expiry rule sees, so a PKI
+    replacement runs the sync as a step of its own, as step 8 of the
+    whole-cluster rebuild (§3.5) does for the `Kubeconfig` it issues
+    again. In a bring-up the first copy waits for stage 4 of
+    physical/bring-up.md §2 rather than following `physical`'s first
+    `up`: the commit of both stack files is an `up` of `k8s-base` and
+    `apps`, and the bring-up's checks that need no network plugin run
+    before Cilium exists (physical/gateway-cutover.md §8.1).
 
 ## 3. Node replacement and resize runbooks (census)
 
@@ -374,8 +403,7 @@ preview with `denydefaultprovider not registered`.
     resources that name the node's address. Any other plan, the volume
     itself above all, is a diff nobody expected, and nothing is applied
     until it has been read. The `up` ends on the Talos health gate,
-    every node named, and §2.5's sync follows it, as it follows every
-    `physical` `up`. **The deploy chain follows it, dispatched as at
+    every node named. **The deploy chain follows it, dispatched as at
     the end of §3.4**: `plan-physical` finds no diff, `up-physical` is
     skipped, and `up-k8s-base` and `up-apps` run. OCI picks a
     re-created instance's addresses again, so the node's entries in the
@@ -1267,15 +1295,13 @@ value stops the run by name (physical/bring-up.md). The timers
 do not exist yet, and until they do, an ops-repository workflow that
 stops running reports nothing. A device's own jobs are
 watched as the census below says, and the gateway's daily check by
-nothing but its own findings. Two calendar acts are left to the
-operator. The yearly offline day is one, because its steps need the
-offline kit and physical custody, which no job holds (the table
-above). The other is `credentials derived sync --only kubeconfig`, at
-least monthly: the Talos provider issues the kubeconfig's client
-certificate again by itself in whichever `physical` apply falls within
-720 hours of its expiry, and the copies in `k8s-base`'s and `apps`'s
-configuration go stale with it unless the sync carries the new one
-over (credentials.md §3).
+nothing but its own findings. One calendar act is left to the
+operator, the yearly offline day, because its steps need the offline
+kit and physical custody, which no job holds (the table above). The
+copy of the kubeconfig into `k8s-base`'s and `apps`'s configuration is
+an operator act too, since it opens the kit, but it is no calendar
+act: `KubeconfigCopyExpiring` asks for it, ahead of the expiry of the
+client certificate the copy carries (§2.5, credentials.md §3).
 
 **What runs on a clock, and where.** Every job the installation
 schedules, in the cluster, on a device or on GitHub, with the reason
@@ -1292,7 +1318,8 @@ for its place. The last column says which run, as of 2026-11-17:
 | The authentication canary, every few minutes | The cluster: a CronJob in Authelia's namespace that requests a protected path with no credential (declarative/cluster-infra.md §2) | None: it presents none | Its own rule, which fires on anything but a refusal; the family's rules for the job; then the cluster's check-in | No: it ships with Authelia (rfc-008 §5.2) |
 | State-backend dump age | The cluster: a CronJob in `monitoring`, hourly, listing `pulumi-state/` (state-backend.md §6) | The list-only `B2 freshness key (state dumps)`, sealed | The family's rules, then the cluster's check-in | No; `probes.yml` reads it today |
 | State-backend server certificate's expiry | The cluster: `blackbox_exporter` probing the appliance's Postgres STARTTLS, with vmalert rules over its metrics (state-backend.md §6) | None: the CA's certificate, which is public | Its rules, then the cluster's check-in | No; `probes.yml` reads it today |
-| The other credential expiry tripwires | Each placed by the same rule. The certificate above is the only one with a probe: the client bundles report their expiry at their first `pulumi` command (state-backend.md §6), and the destroy dates stay with the offline day | — | — | — |
+| The kubeconfig copies' expiry, `KubeconfigCopyExpiring` | The cluster: a rule vmalert evaluates against the expiry `k8s-base` reads off its own copy, `conventions.cluster.KUBECONFIG_ALERT_MARGIN` ahead of it. It holds no credential, and it watches a date in `k8s-base`'s configuration rather than the cluster it runs on (§2.5) | None: the date is the certificate's public half | The cluster's check-in | No: it runs from the first `k8s-base` apply that declares monitoring |
+| The other credential expiry tripwires | Each placed by the same rule. Two are checked in the cluster: the state backend's server certificate, by the probe above, and the kubeconfig copies' client certificate, by the rule above. The client bundles report their expiry at their first `pulumi` command (state-backend.md §6), and the destroy dates stay with the offline day | — | — | — |
 | etcd restore-verify, monthly | The cluster: a CronJob in `etcd-backup` | The `etcd` writer key, which lists and reads, and an age identity of its own, sealed | The family's rules, then the cluster's check-in | No (`kluster-ops#57`) |
 | CNPG restore, VolSync spot-restore, orphan-volume audit | The cluster (the drills above) | The writer keys of the backups they read, sealed; the audit needs none | The family's rules, then the cluster's check-in | No |
 | The state-backend appliance's dump, nightly (`state-dump.timer`) | The appliance itself: the job dumps the box's own database (state-backend.md §5) | The dump key, `writeFiles` alone, in the box's Ignition | The dump-age check above; the box's own failed-run notice reaches only a shell on it (state-backend.md §6) | Yes |
@@ -1448,7 +1475,7 @@ Owning docs keep the content — the index only locates it.
 | State backend (cert/CA, PG major, rebuild, age rotation) | physical/state-backend.md §7 |
 | Gateway (ZeroTier container down, firmware-wiped device, UDM replacement; and every finding of the daily gateway check: a machine, the boot chain, a delivered unit, the routing daemon or the offline package cache, a check that did not run, a certificate not renewing, an autobackup not copied off) | physical/gateway.md §3 |
 | Node replacement (CP node, worker VM, block volume and VIP extras; the whole cluster with the account intact) | §3 here |
-| Upgrades (Talos serial, Cilium canary) | §2 here |
+| Upgrades (Talos serial, Cilium canary); the cluster credential's copies near their expiry (`KubeconfigCopyExpiring`) | §2 here |
 | Backup restores (CNPG, VolSync, etcd) | storage.md §5; the drills are §4 here |
 | Alert-channel failure (HA push down → meta-alert; GitHub leg down; a scheduled ops-repo workflow that stopped checking in) | architecture.md §4.3; the contract and the dead-man are §4 here |
 | CI alerts (a red `checks` or `images` run; a drift diff) | framework/ci.md §3.1 and §3.2 |

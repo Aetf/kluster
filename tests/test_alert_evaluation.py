@@ -23,6 +23,12 @@ backup source for each retention class, and a target for each job the
 scrape-target family watches, read off its declared rules. Times inside a case
 are the row's own: its period, its deadline and its `max_age`.
 
+The kubeconfig copy's rule is built from the date the program reads off the
+copy in its configuration, so the program is declared here with a copy whose
+client certificate expires `KUBECONFIG_ALERT_MARGIN` and a few minutes after
+`T0` (`COPY_NOT_AFTER`), which puts the rule's threshold inside a case of
+minutes at the intervals every other family runs at.
+
 Series are written in vmalert-tool's notation, one value per step of the case's
 interval: `_` is a step with no sample, `_xN` is N of them, `stale` is a
 staleness marker, and `a+0xN` is `a` held for N steps after the first. A value
@@ -39,12 +45,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
+import k8s_base_installation
 import pinned_tools
 import process_sessions
 import promql_parser
 import pytest
 import pytest_asyncio
 import yaml
+from client_kubeconfig import certificate_user, kubeconfig
 from k8s_base_installation import Run, applied
 
 from kluster.components.monitoring import EVALUATION_INTERVAL, KUBE_STATE_METRICS_JOB, SCRAPE_INTERVAL
@@ -54,6 +62,7 @@ from kluster.components.monitoring.rules import (
     CLASS_LABEL,
     HEARTBEAT,
     JOB_LABEL,
+    KUBECONFIG_COPY,
     SCRAPER_DOWN,
     TARGET_DOWN_PENDING,
     TIER_LABEL,
@@ -61,6 +70,7 @@ from kluster.components.monitoring.rules import (
 )
 from kluster.conventions import backup, schedule
 from kluster.conventions.alert import Tier
+from kluster.conventions.cluster import KUBECONFIG_ALERT_MARGIN
 from kluster.conventions.schedule import ScheduledJob
 from kluster.lib.versions import CHART
 from kluster.scripts.update_crds import record, sources
@@ -101,6 +111,11 @@ BACKUP_CLOCK = dt.timedelta(minutes=5)
 #: The time vmalert-tool's clock starts at, 2000-01-01T00:00:00Z: `time()` at a
 #: case's start, and the offset of every sample value that names a time.
 T0 = 946684800
+
+#: When the client certificate in the copy the program is declared with
+#: expires: the alert's margin and ten minutes after `T0`, so the kubeconfig
+#: copy's threshold lies ten minutes into its cases.
+COPY_NOT_AFTER = dt.datetime.fromtimestamp(T0, dt.UTC) + KUBECONFIG_ALERT_MARGIN + dt.timedelta(minutes=10)
 
 #: A staleness marker: the sample a scraper writes when a target leaves
 #: service discovery, after which the series has no sample.
@@ -682,6 +697,33 @@ def scrape_targets(group: Group) -> Iterator[Case]:
     )
 
 
+# -- kubeconfig-copy ----------------------------------------------------------------
+
+
+def kubeconfig_copy(group: Group) -> Iterator[Case]:
+    """The copy's certificate before the margin ahead of its expiry, and from it on.
+
+    The time the alert fires from is the copy's `NotAfter` less the margin,
+    read off the copy the program was declared with rather than off the
+    expression. The rule reads no series, so no case writes one.
+    """
+    rule = group.rule(KUBECONFIG_COPY)
+    fires = COPY_NOT_AFTER - KUBECONFIG_ALERT_MARGIN - dt.datetime.fromtimestamp(T0, dt.UTC)
+    yield Case(
+        'the copy is short of the margin ahead of its expiry',
+        [],
+        [Check(dt.timedelta(0), rule['alert']), Check(fires - MARGIN, rule['alert'])],
+    )
+    yield Case(
+        'the copy is inside the margin ahead of its expiry',
+        [],
+        [
+            Check(fires + MARGIN, rule['alert'], [Alert(rule)]),
+            Check(fires + _minutes(20), rule['alert'], [Alert(rule)]),
+        ],
+    )
+
+
 @dataclass(frozen=True)
 class Family:
     """How a declared group is evaluated: its cases, and how often vmalert-tool evaluates its rules."""
@@ -698,13 +740,21 @@ FAMILIES: Mapping[str, Family] = {
     'metrics-store': Family(metrics_store),
     'scheduled-jobs': Family(scheduled_jobs),
     'scrape-targets': Family(scrape_targets),
+    'kubeconfig-copy': Family(kubeconfig_copy),
 }
 
 
 @pytest_asyncio.fixture(scope='module', loop_scope='module', name='groups')
 async def groups_fixture() -> dict[str, Group]:
-    """Every rule group the program declares, by name, as its `VMRule` spells it."""
-    run: Run = await applied()
+    """Every rule group the program declares, by name, as its `VMRule` spells it.
+
+    The program is configured with a copy of the kubeconfig whose certificate
+    expires at `COPY_NOT_AFTER`, in place of the one `k8s_base_installation`
+    configures; nothing else of the run differs.
+    """
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(k8s_base_installation, 'KUBECONFIG', kubeconfig(certificate_user(COPY_NOT_AFTER)))
+        run: Run = await applied()
     groups: dict[str, Group] = {}
     for rule in run.monitor.of_type(VM_RULE):
         for declared in rule.inputs['spec']['groups']:

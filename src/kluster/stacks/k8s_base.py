@@ -27,7 +27,11 @@ a passphrase of its own (rfc-005 §5.1), and a StackReference elides the secrets
 the reading stack cannot decrypt. So `credentials derived sync --only
 kubeconfig` copies it out of `physical`'s state into this stack's
 configuration, and it is read so that anything but a kubeconfig stops the run
-(`kluster.lib.k8s.kubeconfig_from`). Beside it is the random provider, which
+(`kluster.lib.k8s.kubeconfig_from`). The expiry of the client certificate it
+carries is read off it too, and a kubeconfig that authenticates any other
+way is refused (`kluster.lib.k8s.client_certificate_expiry`): monitoring
+alerts ahead of that date, after which the copy no longer opens the cluster
+(operations.md §2.5). Beside it is the random provider, which
 reads nothing and generates what a component keeps in state, such as Grafana's
 admin password. The addresses the pools are made of are
 plain machine facts, and they do cross by StackReference: for the `internet`
@@ -85,7 +89,7 @@ from kluster.components.reloader import Reloader
 from kluster.components.sealing import SealedSecretsController
 from kluster.conventions.backup import BackupFamily
 from kluster.lib import stack_addresses, stack_volumes
-from kluster.lib.k8s import KUBECONFIG_KEY, kubeconfig_from, sealed_ciphertext
+from kluster.lib.k8s import KUBECONFIG_KEY, client_certificate_expiry, kubeconfig_from, sealed_ciphertext
 from kluster.lib.release_assets import fetch_manifest
 from kluster.lib.source_files import fetch_source_files
 from kluster.lib.state_backend import committed
@@ -107,10 +111,13 @@ async def main() -> None:
     # each as an unreachable cluster -- plain resources previewing green by
     # echoing their inputs -- or, handed nothing, fall back to the shell's
     # `$KUBECONFIG`.
-    provider = k8s.Provider(
-        f'{conventions.CLUSTER_NAME}-kubernetes',
-        kubeconfig=kubeconfig_from(config.get_secret(KUBECONFIG_KEY)),
-    )
+    kubeconfig = kubeconfig_from(config.get_secret(KUBECONFIG_KEY))
+    provider = k8s.Provider(f'{conventions.CLUSTER_NAME}-kubernetes', kubeconfig=kubeconfig)
+    # When the copy's client certificate expires, which `KubeconfigCopyExpiring`
+    # is built from. Declassified: a certificate's `NotAfter` is in its public
+    # half, and the date in the rule is the one trace of the copy a preview can
+    # show, moving a year on when a sync's pull request carries a new one.
+    kubeconfig_expiry = pulumi.Output.unsecret(kubeconfig.apply(client_certificate_expiry))
     physical = pulumi.StackReference(
         f'{pulumi.get_organization()}/{pulumi.get_project()}/{conventions.STACK_NAMES.physical}'
     )
@@ -177,6 +184,7 @@ async def main() -> None:
         metrics_server_chart=versions.chart['metrics-server'],
         after=[cilium, sealing],
         alert_webhook=sealed_ciphertext(conventions.sealed.ALERT_WEBHOOK, sealed),
+        kubeconfig_expiry=kubeconfig_expiry,
         writer_key=sealed_ciphertext(
             conventions.sealed.writer_key(conventions.MONITORING_NAMESPACE, BackupFamily.VM), sealed
         ),

@@ -124,7 +124,9 @@ the value is sealed in (`kluster.lib.k8s.sealed_value`,
 physical/bring-up.md §1). The rules are `rules.rule_groups`, among them the
 cluster's check-in, which the receiver repeats on a short interval, and the
 scrape-target family over every job the other rules read, which reads each
-job by the `job` label `scrape_jobs` gives it.
+job by the `job` label `scrape_jobs` gives it. Beside them, in a rule object
+of its own, is `rules.kubeconfig_copy`, built from the expiry the stack hands
+in: the one rule whose expression is not a constant.
 
 **Scrape objects for Cilium** are declared here rather than in Cilium's
 component: they are instances of definitions this chart installs, and Cilium
@@ -652,6 +654,10 @@ class Monitoring(Component, pulumi_type='kluster:monitoring:Monitoring'):
     `conventions.sealed.ALERT_WEBHOOK`, `None` while it holds none; the `None`
     is the bring-up's tolerance, and goes with it (physical/bring-up.md §1).
 
+    `kubeconfig_expiry` is the `NotAfter` of the client certificate in the
+    stack's copy of the cluster-admin kubeconfig, declassified, from which
+    `KubeconfigCopyExpiring` is built (`rules.kubeconfig_copy`).
+
     `oci_pull` is what the pull of OCI's block-volume series is declared
     from, `None` while the configuration holds no ciphertext for the metrics
     reader's key; until it holds one, the pull is not declared. The `None` is
@@ -667,6 +673,7 @@ class Monitoring(Component, pulumi_type='kluster:monitoring:Monitoring'):
         metrics_server_chart: ChartPin,
         after: Sequence[pulumi.Resource],
         alert_webhook: Mapping[str, str] | None,
+        kubeconfig_expiry: pulumi.Output[dt.datetime],
         writer_key: Mapping[str, str] | None,
         history_image: ImagePin,
         backup_image: ImagePin,
@@ -796,6 +803,13 @@ class Monitoring(Component, pulumi_type='kluster:monitoring:Monitoring'):
             kind='VMRule',
             metadata=k8s.meta.v1.ObjectMetaArgs(namespace=self.namespace.metadata.name),
             spec={'groups': [_rule_group(group) for group in rules.rule_groups(scrape_jobs(name, stack_chart.name))]},
+            opts=after_the_chart,
+        )
+        self.kubeconfig_rules = operator_object(
+            f'{name}-kubeconfig-rules',
+            kind='VMRule',
+            metadata=k8s.meta.v1.ObjectMetaArgs(namespace=self.namespace.metadata.name),
+            spec={'groups': kubeconfig_expiry.apply(lambda expiry: [_rule_group(rules.kubeconfig_copy(expiry))])},
             opts=after_the_chart,
         )
         self.cilium_scrapes = [

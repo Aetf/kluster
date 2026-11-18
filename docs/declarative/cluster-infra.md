@@ -308,7 +308,15 @@ classes its objects fall into (§1.2):
     each expression selects, each read from the job its selector names
     or from every scrape job that exports it, and a name no scrape job
     exports is refused. A test holds every job a declared rule reads to
-    one alert, and every alert to a job some rule reads.
+    one alert, and every alert to a job some rule reads. **The
+    kubeconfig's copies are watched by their expiry** (operations.md
+    §2.5): `k8s-base` reads when the client certificate in its own copy
+    of the cluster-admin kubeconfig expires, and
+    `KubeconfigCopyExpiring`, in a rule object of its own, fires from
+    `conventions.cluster.KUBECONFIG_ALERT_MARGIN` before that date,
+    inside the renewal window in which a `physical` apply issues a new
+    certificate. It compares the evaluation's time with the date and
+    reads no series, so no scrape job stands behind it.
     Alertmanager's one receiver
     is a Home Assistant webhook of its own, an automation apart from
     the one the operations repository posts to, because alertmanager's

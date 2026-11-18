@@ -55,6 +55,7 @@ the configuration carries no `machine.kubelet.extraMounts`.
 
 from __future__ import annotations
 
+import datetime as dt
 import enum
 import json
 import math
@@ -75,6 +76,7 @@ from pulumiverse_talos.cluster import (
 from pulumiverse_talos.machine.outputs import CertificateResult, ClientConfiguration, MachineSecretsResult
 
 from kluster import conventions
+from kluster.conventions.cluster import KUBECONFIG_RENEWAL
 from putils import Component, async_output, resolve
 
 #: What a node is to Kubernetes. The cloud fleet is control planes that also
@@ -1245,11 +1247,16 @@ class TalosDay1(Component, pulumi_type='kluster:talos:TalosDay1'):
             opts=self.child_opts(depends_on=[*forward, self.applies[first]]),
         )
 
+        # The client certificate is issued again by whichever apply runs
+        # within the renewal window of its expiry. The window is stated, so
+        # the alert on the copies' expiry is held against the one this
+        # resource takes (`conventions.cluster.KUBECONFIG_ALERT_MARGIN`).
         self.kubeconfig_source = Kubeconfig(
             f'{name}-kubeconfig',
             node=self._addresses[first],
             endpoint=endpoint,
             client_configuration=_client_configuration_input(generated, KubeconfigClientConfigurationArgs),
+            certificate_renewal_duration=_go_duration(KUBECONFIG_RENEWAL),
             opts=self.child_opts(depends_on=[*forward, self.bootstrap]),
         )
 
@@ -1301,6 +1308,14 @@ class TalosDay1(Component, pulumi_type='kluster:talos:TalosDay1'):
     def talosconfig(self) -> pulumi.Output[str]:
         """The talosctl client configuration: the same PKI, for the machine API."""
         return pulumi.Output.secret(self._client_configuration.apply(lambda config: config.talos_config))
+
+
+def _go_duration(delta: dt.timedelta) -> str:
+    """A length of time as Go's `time.ParseDuration` reads it, in whole hours, the unit the provider's default is in."""
+    hours, rest = divmod(delta, dt.timedelta(hours=1))
+    if rest:
+        raise ValueError(f'{delta} is not a whole number of hours')
+    return f'{hours}h'
 
 
 def _volumes_by_node(volumes: Mapping[str, conventions.NodeVolumeEntry], nodes: Mapping[str, Role]) -> dict[str, str]:

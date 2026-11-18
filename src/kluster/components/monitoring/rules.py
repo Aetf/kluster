@@ -39,6 +39,16 @@ exports is refused, so a rule cannot read a series whose job goes unwatched.
 `ScraperDown` is the one alert for every job at once, when no target reports
 at all, and while it holds the per-job alerts hold back
 (operations.md §6.4).
+
+**The kubeconfig copy's expiry is the one rule built from a value the
+program reads** (`kubeconfig_copy`): `KubeconfigCopyExpiring` fires from
+`conventions.cluster.KUBECONFIG_ALERT_MARGIN` before the client certificate
+in `k8s-base`'s copy of the cluster-admin kubeconfig expires, the date the
+program reads off that copy. It compares the evaluation's time with that
+date and reads no series, so it has no scrape job to be watched by, and it
+sits outside `ALERT_GROUPS`, whose rules are constants: the component
+declares it in a rule object of its own. A cluster that stops evaluating it
+is what the check-in reports (operations.md §4).
 """
 
 from __future__ import annotations
@@ -53,6 +63,7 @@ import promql_parser
 
 from kluster.conventions import backup, schedule
 from kluster.conventions.alert import Playbook, Tier
+from kluster.conventions.cluster import KUBECONFIG_ALERT_MARGIN
 from kluster.conventions.schedule import ScheduledJob
 
 __all__ = (
@@ -63,6 +74,7 @@ __all__ = (
     'HEARTBEAT_REPEAT',
     'HEARTBEAT_TIMER',
     'JOB_LABEL',
+    'KUBECONFIG_COPY',
     'SCRAPER_DOWN',
     'TARGET_DOWN_PENDING',
     'TIER_LABEL',
@@ -72,6 +84,7 @@ __all__ = (
     'Selector',
     'failed',
     'inputs',
+    'kubeconfig_copy',
     'rule_groups',
     'scrape_targets',
     'selectors',
@@ -216,9 +229,10 @@ def failed(job: ScheduledJob) -> AlertRule:
     )
 
 
-#: Every rule the component declares but the scrape-target family, by group
-#: (rfc-007 §7.2): the rules whose inputs that family is derived from, so a
-#: new group of rules joins this tuple (`rule_groups`).
+#: Every rule the component declares but the scrape-target family and the
+#: kubeconfig copy's, by group (rfc-007 §7.2): the rules whose inputs that
+#: family is derived from, so a new group of rules joins this tuple
+#: (`rule_groups`).
 ALERT_GROUPS: Sequence[RuleGroup] = (
     RuleGroup(
         'alert-channel',
@@ -271,6 +285,38 @@ ALERT_GROUPS: Sequence[RuleGroup] = (
     ),
     RuleGroup('scheduled-jobs', tuple(rule for job in schedule.SCHEDULED_JOBS for rule in (stale(job), failed(job)))),
 )
+
+
+# -- The kubeconfig copy ---------------------------------------------------------
+
+#: The name of the kubeconfig copy's alert.
+KUBECONFIG_COPY = 'KubeconfigCopyExpiring'
+
+
+def kubeconfig_copy(expiry: dt.datetime) -> RuleGroup:
+    """`KubeconfigCopyExpiring`, firing from `KUBECONFIG_ALERT_MARGIN` before `expiry` on, until a later one moves it.
+
+    `expiry` is the `NotAfter` of the client certificate in `k8s-base`'s copy
+    of the cluster-admin kubeconfig (`kluster.lib.k8s.client_certificate_expiry`).
+    The threshold is a number of seconds since the epoch, compared with the
+    evaluation's own time: `vector(time())`, since PromQL compares no two bare
+    scalars without `bool`, which would yield a series at every evaluation.
+    """
+    if expiry.tzinfo is None:
+        raise ValueError(f'{expiry} names no time zone, so it is no instant')
+    threshold = expiry - KUBECONFIG_ALERT_MARGIN
+    return RuleGroup(
+        'kubeconfig-copy',
+        (
+            AlertRule(
+                alert=KUBECONFIG_COPY,
+                expr=f'vector(time()) > {int(threshold.timestamp())}',
+                tier=Tier.ACTIONABLE,
+                summary="The cluster-admin kubeconfig's copies are near their client certificate's expiry",
+                playbook=Playbook('docs/operations.md', '2.5'),
+            ),
+        ),
+    )
 
 
 # -- The scrape-target family ------------------------------------------------------
@@ -432,9 +478,10 @@ def scrape_targets(groups: Sequence[RuleGroup], jobs: Sequence[ScrapeJob]) -> Ru
 
 
 def rule_groups(jobs: Sequence[ScrapeJob]) -> tuple[RuleGroup, ...]:
-    """Every rule the component declares, by group: `ALERT_GROUPS`, and the scrape-target family over them.
+    """The component's rules but the kubeconfig copy's, by group: `ALERT_GROUPS`, and the scrape-target family over them.
 
     The family is derived from `ALERT_GROUPS` alone, so a group of rules joins
     `ALERT_GROUPS` rather than this tuple, or the jobs it reads go unwatched.
+    The kubeconfig copy's rule reads no series, so it has no job to add.
     """
     return (*ALERT_GROUPS, scrape_targets(ALERT_GROUPS, jobs))
