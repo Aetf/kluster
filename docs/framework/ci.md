@@ -141,10 +141,17 @@ joins with is whatever its Environment's `ZEROTIER_IDENTITY` holds, so
 the Environment is the identity's carrier, but carrying one is no
 reason to join. Whether a run dials is a property of the stack's
 providers and of the command. The runs that dial today are an `up` of
-`physical` or `dns`; any `physical` preview, because every device-files
-resource diffs against the device and `pd_lease` reads the lease in
-`check` ([physical/gateway.md](../physical/gateway.md) §3, §4.2); a
-`--refresh` of either stack; and the join proof below. A `dns` preview
+`physical` or `dns`; any `physical` preview; a `--refresh` of either
+stack; and the join proof below. A `physical` preview dials because the
+`physical` program's providers read the devices they manage while the
+engine plans, in `configure`, `check` or `diff`, and not only when they
+write. Today those reads reach the gateway's shell, over which every
+device-files resource's `diff` reads the device and `pd_lease`'s
+`check` reads the lease ([physical/gateway.md](../physical/gateway.md)
+§3, §4.2); the UniFi controller, which `unifi_bgp`'s `diff` reads; and
+the homelab host, whose libvirt session the provider opens as soon as
+the engine configures it
+([physical/homelab-host.md](../physical/homelab-host.md) §6). A `dns` preview
 without `--refresh` calls only `configure`, `check` and `diff` on its
 dynamic providers, none of which opens a connection, so it dials
 nothing over the overlay, and `k8s-base` and `apps` reach nothing on
