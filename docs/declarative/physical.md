@@ -255,7 +255,9 @@ machine_secrets
     architecture.md §6.5); on the control planes, **one image pull at a
     time**, because the images unpack onto the disk etcd syncs to and a
     burst of unpacks stretches its syncs into seconds
-    (cluster/nodes.md §1.2, which sizes the bound); the **Talos ingress firewall** (the next
+    (cluster/nodes.md §1.2, which sizes the bound); on the control
+    planes, **Talos API access from Kubernetes** for the etcd snapshot's
+    role alone (an item below); the **Talos ingress firewall** (the next
     item); kube-apiserver `anonymous-auth=false` pinned and audit
     logging on (a public 6443 warrants both, defaults notwithstanding);
     the dedicated-VIP node's secondary private IP on its physical link;
@@ -306,6 +308,30 @@ machine_secrets
     the tag moves in the active configuration at the next reboot; until
     then it is the node's `persistent` configuration that names it,
     which is where the runbook reads it first.
+-   **The control planes grant one Talos role to one namespace.**
+    `machine.features.kubernetesTalosAPIAccess` is on, with
+    `allowedRoles` holding `os:etcd:backup` alone and
+    `allowedKubernetesNamespaces` holding `etcd-backup` alone: one grant,
+    `conventions.ETCD_SNAPSHOT_GRANT`. The namespace holds the etcd
+    backup's own workloads and nothing else.
+    A pod in that namespace asks for a Talos client certificate through a
+    `talos.dev/v1alpha1` `ServiceAccount`, and Talos writes the
+    certificate into a Secret beside it, renews it, and refuses a role or
+    a namespace the field does not list. It is how the etcd snapshot is
+    to reach apid from inside the cluster (cluster/storage.md §5, which
+    says what of that job is declared), and it is a credential the
+    register records by its grant rather than by a row (credentials.md
+    §1, rule 3). The field is the control planes'
+    alone, because Talos refuses it on a worker and runs its controller
+    on a control plane only. It applies without a reboot, being among the
+    fields Talos applies immediately (`CanApplyImmediate`). Once it is on,
+    Talos applies the `serviceaccounts.talos.dev` CRD as a bootstrap
+    manifest, keeps the `talos` Service in `default` pointing at the
+    control planes' apid, and adds `talos` and `talos.default` to apid's
+    certificate. So `k8s-base` can declare such a `ServiceAccount` only
+    once `physical` has applied the field. v1.14 moves the field into a
+    document of its own, `KubeTalosAPIAccessConfig`, with the rest of
+    the configuration contract (Aetf/kluster-ops#475).
 -   **The Talos ingress firewall is the only filter on ports.** It is a
     `NetworkDefaultActionConfig` of `block` plus a `NetworkRuleConfig`
     per opening, and the subnet in front of it narrows no port (§1;
@@ -622,9 +648,11 @@ machine_secrets
     lives in Pulumi state — passphrase-encrypted, in the TLS-guarded
     Postgres backend (ci.md §1).
 
-**Day-2 is talosctl, deliberately.** OS upgrades (`talosctl upgrade`),
-`upgrade-k8s`, and etcd snapshots are imperative operations — not
-wrapped in fake-declarative command resources. mise only *provides* the
+**Day-2 is talosctl, deliberately.** OS upgrades (`talosctl upgrade`)
+and `upgrade-k8s` are imperative operations — not wrapped in
+fake-declarative command resources. The scheduled etcd snapshot is not
+one of them: it is the cluster's to take, under the Talos grant above
+(cluster/storage.md §5, which says what of it is declared). mise only *provides* the
 tools; the procedures themselves are `just` recipes or, where real
 logic is involved, Python console scripts in this repo (the
 `update_crds` pattern). The

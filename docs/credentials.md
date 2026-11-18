@@ -18,7 +18,9 @@ facts about them.
     from a seed, or generated at random and escrowed, and either way
     delivered straight into its consumer's slot by a script. There is
     no third category and no middle ground: a credential that is
-    neither is a bug.
+    neither is a bug. A credential the platform issues and renews
+    itself is not a third tier, because it is not a row at all
+    (rule 3).
 2.  **The offline store is not a staging area.** Derived credentials
     never land in it, not even temporarily during bring-up. A minted
     value goes from the API response into its slot inside one script
@@ -30,6 +32,38 @@ facts about them.
 3.  **One credential, one row — same change.** Introducing a
     credential and adding its register row is a single change (the
     alert/playbook rule's sibling).
+
+    **A credential the platform issues and renews itself gets no
+    register row; the register records its grant.** Such a credential
+    is one that no script mints, escrows or delivers: the platform
+    writes it where its consumer reads it and replaces it before it
+    expires, so there is no value for a tier to hold, no channel for
+    rule 6 to name, and no rotation to script. A Talos-issued
+    certificate and a Kubernetes `ServiceAccount` token are the kind.
+    What remains to be decided is what the platform may issue. The
+    register records that grant when it reaches across systems, that
+    is, when a platform issues a credential for its own API to a
+    workload of another system, as Talos does to a Kubernetes
+    namespace. It records the role, where the credential may be asked
+    for, and where the configuration states it. A `ServiceAccount`'s
+    role bindings within the cluster that issues its token are declared
+    beside its workload by the program, and, like rule 8's per-app
+    secrets, they are out of the register's scope. Rule 4 holds of the
+    grant: the narrowest role its reader uses, issued to the narrowest
+    place the platform grants to. For Talos, that is a namespace which
+    no workload outside its reader's purpose shares.
+
+    Today's instance is the **`os:etcd:backup` grant**. Talos issues a
+    client certificate for its API with that role, and no other, to a
+    pod in `etcd-backup` and nowhere else, and renews it itself
+    (`conventions.ETCD_SNAPSHOT_GRANT`). The namespace holds the etcd
+    backup's own workloads and nothing else. The control planes'
+    machine configuration states it, as
+    `machine.features.kubernetesTalosAPIAccess`
+    ([declarative/physical.md](declarative/physical.md) §2). The
+    reader it is for is the etcd snapshot, which
+    [cluster/storage.md](cluster/storage.md) §5 describes and which is
+    not declared yet.
 4.  **Fine-grained scope, stated per row.** Every credential is
     scoped to the minimum its consumer needs; when the platform
     cannot scope that far, the row records the excess it carries.
@@ -56,7 +90,9 @@ facts about them.
     (delivered onto a box, e.g. Butane-embedded) · device secret
     (pushed to the gateway as a file beside its nspawn units,
     physical/gateway.md §1). A row names its channel(s); a
-    credential living anywhere else is misplaced.
+    credential living anywhere else is misplaced. A credential the
+    platform issues and renews itself has no row, and lives where the
+    platform writes it (rule 3).
 
     A **workstation slot** is the local half of a credential: a file
     under the checkout's git-ignored `.credentials/` (§4.4), written by

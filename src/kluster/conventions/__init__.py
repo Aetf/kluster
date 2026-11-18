@@ -141,10 +141,13 @@ assignment pool
     `site.LAN_POOL`).
 
 register
-    The credential register, credentials.md: the inventory of every
-    credential, one row each, which the `credentials` command is the
-    executable form of (`scripts/credentials`). This package names it once,
-    where `conventions.forge` says whose rows push into the Environments.
+    The credential register, credentials.md: one row for each
+    infrastructure or cross-system credential (§1, where rule 8 draws the
+    boundary), and the grant under which a platform issues such a
+    credential itself (rule 3). The `credentials` command is the
+    executable form of its rows (`scripts/credentials`). This package
+    names it once, where `conventions.forge` says whose rows push into
+    the Environments.
 
 initial state
     The configuration installed into a state directory that has never held
@@ -234,6 +237,8 @@ from kluster.conventions.cluster import (
     BGP_SECRETS_NAMESPACE,
     CERT_MANAGER_NAMESPACE,
     CLUSTER_ASN,
+    ETCD_BACKUP_NAMESPACE,
+    ETCD_SNAPSHOT_GRANT,
     GATEWAY_INTERNET,
     GATEWAY_LAN,
     GATEWAY_MEDIA,
@@ -260,6 +265,7 @@ from kluster.conventions.cluster import (
     WRITER_KEY_FIELDS,
     GatewayPorts,
     ManagementPorts,
+    TalosGrant,
     Transports,
     node_volume_class,
 )
@@ -357,6 +363,8 @@ __all__ = (
     'DEDICATED_VIP_NODE',
     'DKIM_K8S',
     'DRILL',
+    'ETCD_BACKUP_NAMESPACE',
+    'ETCD_SNAPSHOT_GRANT',
     'ETCD_SNAPSHOT_PREFIX',
     'FOLLOWS_DEDICATED_VIP',
     'GATEWAY_INTERNET',
@@ -444,6 +452,7 @@ __all__ = (
     'SiteHost',
     'SiteNetwork',
     'StackNames',
+    'TalosGrant',
     'Transports',
     'Vip',
     'alert',

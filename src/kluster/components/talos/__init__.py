@@ -25,9 +25,12 @@ gateway's BGP neighbor statement names that address as a constant — so the
 worker states its own address, and states it in the configuration it boots
 with.
 
-Day-2 is deliberately `talosctl` — upgrades, `upgrade-k8s` and etcd snapshots
-are imperative operations, and wrapping them in fake-declarative command
-resources would buy drift detection that isn't real.
+Day-2 is deliberately `talosctl` — upgrades and `upgrade-k8s` are imperative
+operations, and wrapping them in fake-declarative command resources would buy
+drift detection that isn't real. The scheduled etcd snapshot is no `talosctl`
+call: it is the cluster's to take, with a certificate Talos issues for that one
+role to one namespace (`control_plane_patch`; storage.md §5, which says what of
+it is declared).
 
 Machine configuration is composed from typed Python dicts and handed to the
 provider as patches. JSON is emitted rather than YAML because it *is* YAML,
@@ -454,7 +457,7 @@ def hostname_document(hostname: str) -> dict[str, Any]:
 
 
 def control_plane_patch(*, cert_sans: Sequence[str], secretbox_secret: str | None = None) -> dict[str, Any]:
-    """What only a control plane has: the apiserver, etcd and its disk, the CNI, the service proxy, apid's SANs.
+    """What only a control plane has: the apiserver, etcd and its disk, the CNI, the service proxy, apid's SANs, the Talos grant.
 
     A worker's configuration has no apiserver to harden and no etcd to
     encrypt or read, and the CNI and kube-proxy are installed by the control
@@ -490,10 +493,34 @@ def control_plane_patch(*, cert_sans: Sequence[str], secretbox_secret: str | Non
     missing and never deletes one, so the DaemonSet stays until a `talosctl
     upgrade-k8s` prunes it, and the rules kube-proxy programmed stay on each
     node until it reboots.
+
+    The Talos grant is Talos API access from Kubernetes
+    (`machine.features.kubernetesTalosAPIAccess`): a pod in an allowed
+    namespace asks for a certificate through a `talos.dev/v1alpha1`
+    `ServiceAccount`, and Talos issues it, renews it, and refuses a role or a
+    namespace the field does not allow. It allows one grant,
+    `conventions.ETCD_SNAPSHOT_GRANT`: one role, which the etcd snapshot reads
+    with, in one namespace, `conventions.ETCD_BACKUP_NAMESPACE`, which no
+    workload outside the etcd backup shares (storage.md §5; credentials.md
+    §1, rule 3). Talos refuses the feature on a worker and
+    runs its controller on a control plane alone, so a worker states none of
+    it. The field is among those Talos applies immediately
+    (`CanApplyImmediate`), so turning it on reboots no node. With it on,
+    Talos applies the `serviceaccounts.talos.dev` CRD as a bootstrap
+    manifest and keeps the `talos` Service in `default` pointing at the
+    control planes, which is why a stack that declares such a
+    `ServiceAccount` previews only once `physical` has applied this.
     """
     config: dict[str, Any] = {
         'machine': {
             'certSANs': list(cert_sans),
+            'features': {
+                'kubernetesTalosAPIAccess': {
+                    'enabled': True,
+                    'allowedRoles': [conventions.ETCD_SNAPSHOT_GRANT.role],
+                    'allowedKubernetesNamespaces': [conventions.ETCD_SNAPSHOT_GRANT.namespace],
+                },
+            },
             'kubelet': {
                 'extraConfig': {
                     'maxParallelImagePulls': image_pull_bound(BOOT_VOLUME_SAFE_WRITE_MBPS, BOOT_VOLUME_ONE_WRITER_MBPS),
