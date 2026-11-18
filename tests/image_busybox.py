@@ -23,7 +23,8 @@ binary's paths ahead of the applet's.
 
 Each file is read by a container of the image that writes it to its standard
 output and ends, started with `--rm`, a `--timeout` and the module's label as
-every container a case starts is (framework/testing.md §1.2).
+every container a case starts is, and named for the teardown that removes it,
+armed before the `podman run` (framework/testing.md §1.2).
 
 The reading runs where podman is on `PATH`. Anywhere else a case that needs
 it is skipped, naming why, except on CI's runner, which has podman and where
@@ -149,7 +150,7 @@ def in_image(image: ImagePin, *argv: str) -> bytes:
     """What `argv`, an applet of the image's own busybox, writes to its standard output in a container of `image`."""
     require_podman()
     name = f'kluster-test-busybox-{uuid.uuid4().hex[:12]}'
-    try:
+    with process_sessions.removing(name, timeout=COMMAND_TIMEOUT):
         return _podman(
             'run',
             '--rm',
@@ -166,8 +167,6 @@ def in_image(image: ImagePin, *argv: str) -> bytes:
             _pulled(image),
             *argv,
         )
-    finally:
-        _ = process_sessions.run(['podman', 'rm', '--force', '--volumes', name], timeout=COMMAND_TIMEOUT)
 
 
 def _read_out(image: ImagePin, into: Path) -> None:

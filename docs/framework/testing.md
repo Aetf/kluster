@@ -340,17 +340,25 @@ so neither reaches a container left in the `Created` state: a
 between creating the container and starting it, such as at the bound on that
 command. What removes one is the teardown of the case that created it, which
 removes by the name the case gave it every container it named, whatever
-state each is in, with `--force` passing over one already gone: `_remove` in
-`tests/test_state_roles.py`, whose `_bounded` states the same window, and
-the `finally` that removes the container in `tests/image_busybox.py` and in
-`tests/test_release_lock.py`. Nothing in the suite removes a `Created`
-container that no teardown names -- one run without a name, or one created
-ahead of the block whose teardown removes it -- nor any `Created` container
-once the test process can no longer run a `finally`. The label census lists
-each of them, in the `Created` state. `tests/test_state_roles.py` names
-every container it creates for a teardown armed before the create, and
-refuses, before podman runs, a `podman run` or `podman create` that names
-none, or names one no armed teardown removes (`_refuse_unarmed`).
+state each is in, with `--force` passing over one already gone. That
+teardown is `removing` in `tests/process_sessions.py`, a block entered with
+the names before the command that creates them, which on every way out
+attempts the removal of each name, whatever the removal of an earlier one
+raised. **A container is created only under such a block**: `started`, and
+`run` through it, refuse before anything starts a `podman run` or
+`podman create` that names no container, or names one no `removing` block is
+armed to remove (`_refuse_unarmed`). They also refuse an option between
+`podman` and its verb, whatever the verb, since past one the verb's place is
+not read: a global option goes after the verb, and `podman version` stands
+in for `--version`. A command is read from its first word named `podman`,
+behind a wrapper such as `timeout` or `env` as well as bare; a podman inside
+a shell's command string, `sh -c '…'`, is not read. The refusal sits in the
+helper rather than in a module's fixture, so it holds every module that
+creates a container through the helper, in a fixture of any scope as in a
+case, and the census below holds every start outside the helper to a reason
+at the call. Nothing in the suite removes a `Created`
+container once the test process can no longer run a `finally`; the label
+census lists each one, in the `Created` state.
 
 **A container a case starts mounts no named volume.** A named volume outlives every container
 that mounts it and holds one of the host's podman locks until something
