@@ -407,8 +407,7 @@ class CloudNodes(Component, pulumi_type='kluster:cloud:CloudNodes'):
                 # `--target-replace` asks for it, before it creates anything,
                 # and the instance leaves the state only through a refresh
                 # that reads it gone (declarative/physical.md §1). An update
-                # in place, a resize, passes. `test_node_loss_engine` holds
-                # both against the pinned CLI.
+                # in place, a resize, passes.
                 opts=self.child_opts(protect=True, ignore_changes=['metadata.user_data', 'sourceDetails.sourceId']),
             )
 

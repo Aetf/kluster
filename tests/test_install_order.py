@@ -6,9 +6,7 @@
 the objects of a kind the render defines (products), naming every runtime
 object (declarative/cluster-infra.md §1.2). These cases hand it renders of
 their own and read the annotation back as the provider's dependency graph
-reads it, a reference at a time in cli-utils' format; whether the provider
-takes the references, and turns them into the engine's dependencies, is
-`tests/test_install_order_engine.py`'s.
+reads it, a reference at a time in cli-utils' format.
 """
 
 from __future__ import annotations

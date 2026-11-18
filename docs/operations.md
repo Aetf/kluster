@@ -115,6 +115,41 @@ at those maps, the bump's review reads the chart's changelog between the
 two versions for each key the program sets, and says on the pull
 request what it found for each.
 
+**A `pulumi` bump's review reads the changelog for every resource option
+and hook a declaration under `src/` sets**, beyond `parent`, `provider`
+and `providers`, a regression in which every preview shows: a URN that
+moves, or a resource sent to a disabled default provider. What the
+engine does with such an option is held by no test of its own: each
+option carries its reason at its declaration, and the release that
+changes what the engine does with it passes every check. Today those are
+`protect`, `ignore_changes` (a nested path included),
+`replace_on_changes`, `replace_with`, `delete_before_replace`,
+`depends_on` (one naming a component, a chart included, orders after
+that component's children: `after_the_chart` in
+`components/certificates`, `components/cilium` and
+`components/monitoring`), `additional_secret_outputs`, `aliases`,
+`import_`, `transforms` and the resource hooks (`before_create`, `after_create`, `before_delete`), a
+delete running the binding the state recorded, by name. For each, the
+review reads what the engine does under a targeted run (`--replace`,
+`--target-replace`), a refresh (`pulumi refresh`, `--refresh`) and a
+`destroy`. The review of the CLI's pin, which travels in the `toolchain`
+group and waits for a person, reads the changelog between the two
+versions for each of them and says on the pull request what it found
+for each; so does the review of an SDK bump that waits for a person. An
+SDK relock inside its bounds merges through noop-automerge, read by no
+one. The SDK carries the options to the engine, which decides what to do
+with them. A hook is the one the SDK runs itself: it calls the function
+with the arguments it builds from the engine's request. On a relock,
+`tests/test_homelab_engine.py`'s rebuild cases run a `before_delete`
+hook through the locked SDK in `checks`. No check runs a `before_create`
+or an `after_create` hook, so a relock that breaks one surfaces at the
+next replacement of the `state-backend` box, whose `permit` and
+`restore` they are. Which provider the SDK sends a `crds:` resource to
+is the SDK's own, and the zero-diff rule's preview of `k8s-base` is what
+answers for it on that route: the stack turns the default `kubernetes`
+provider off, so a resource sent to the default provider fails that
+preview with `denydefaultprovider not registered`.
+
 | Surface | PR opened by | Applied by | Policy |
 | --- | --- | --- | --- |
 | Talos version (machine-config pin + Image Factory schematic + `mise.toml`'s `talosctl`) | renovate (GitHub-releases datasource) | `physical` stack for the pin and the schematic; `talosctl upgrade` by hand, one node at a time in §2.1's order (declarative/physical.md §2) | Reviewed; one pull request moves `versions:talos` and the `talosctl` pin together, because `tests/test_talos_validate.py` holds the two equal; §2.1 runbook |

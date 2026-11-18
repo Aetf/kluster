@@ -7,8 +7,7 @@ at its declaration (`components/homelab`) rather than a case here restating it.
 The cases hold what the declarations produce: the disk and the seed the
 worker boots, the session the provider dials, what the stylesheets make of
 the definitions the provider generates, and the warning a disk that reads back
-another capacity than the declared one raises. What the engine does with the
-disk's and the seed's options is `tests/test_homelab_engine.py`'s.
+another capacity than the declared one raises.
 
 The home-automation domain on the same host is declared nowhere, so nothing
 here asserts about it (rfc-002 §13).

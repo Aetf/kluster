@@ -1,26 +1,29 @@
-"""What the site's BGP configuration rests on in the engine, held by the pinned `pulumi` itself.
+"""The routing session's password stays out of the backend and out of a preview, held by the pinned `pulumi` itself.
 
 `BgpConfiguration` carries the routing session's password inside its text, and
-it marks the text secret itself. Whether that keeps the text out of the state
-file, and out of what a preview prints, is the engine's to answer, and so is
-whether a `diff` that reads the controller plans an update for a console edit
-in a plain preview, with no refresh. No mock plans a step, so each case runs
-the CLI `mise.toml` pins over a `file://` backend and a `PULUMI_HOME` of the
-case's own, against a program holding the real resource, dialing the
-controller stand-in (`unifi_bgp_controller.BgpConfigs`) on `127.0.0.1`.
+it marks the text secret itself, as a secret input and through
+`additionalSecretOutputs`. Which of the two keeps the text out of the state
+file and out of what a preview prints is not documented engine behavior: the
+engine leaves an `additionalSecretOutputs` input in the clear
+(`test_operator_stack.py`). So the case runs the CLI `mise.toml` pins over a
+`file://` backend and a `PULUMI_HOME` of the case's own, against a program
+holding the real resource, dialing the controller stand-in
+(`unifi_bgp_controller.BgpConfigs`) on `127.0.0.1`, and looks for the text in
+both places.
 """
 
 from __future__ import annotations
 
 import http.server as http_server
 import json
+import re
 import shutil
 import subprocess as sp
 import threading
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, cast, override
+from typing import Any, override
 
 import process_sessions
 import pytest
@@ -28,6 +31,7 @@ from scratch_projects import scratch_project
 from unifi_bgp_controller import BgpConfigs, BgpSession
 
 import kluster
+from kluster.lib import state_only
 from kluster.providers.unifi_bgp import API_KEY_CONFIG
 
 #: How long one case may take: its project's set-up and every command it runs
@@ -123,13 +127,6 @@ class Engine:
         """A preview with no refresh, which reads nothing of the controller unless `diff` does."""
         return self.pulumi('preview', '--expect-no-changes', '--diff')
 
-    def urn(self) -> str:
-        exported = self.pulumi('stack', 'export')
-        assert exported.returncode == 0, exported.stderr
-        resources = cast('list[dict[str, Any]]', json.loads(exported.stdout)['deployment']['resources'])
-        (urn,) = [str(resource['urn']) for resource in resources if str(resource['urn']).endswith('::bgp')]
-        return urn
-
     def stored(self) -> str:
         """Every file the backend holds, as one text: the state, its history and its backups."""
         return '\n'.join(path.read_text(errors='replace') for path in sorted(self.state.rglob('*')) if path.is_file())
@@ -185,12 +182,18 @@ def launched(tmp_path: Path, controller: tuple[BgpConfigs, str]) -> Engine:
 
 
 def test_the_text_is_in_no_state_file_and_no_output(launched: Engine) -> None:
-    """The text was handed over in plain, and the backend holds it only as ciphertext.
+    """The text was handed over in plain, and neither the backend nor a preview shows it.
 
-    The positive controls are the stand-in, which holds the password, and the
+    The backend holds the text only as ciphertext. A plain preview of a
+    console edit plans an update and prints the resource's inputs, the text
+    among them as `[secret]`; the edited text stays inside the provider's
+    `diff`.
+
+    The positive controls are the stand-in, which holds the password, the
     file name stored beside the text in the clear, which the same search finds
-    in the backend: a search that cannot find the password is one that could
-    have.
+    in the backend, and the preview's refusal of the plan with the CLI's
+    `--expect-no-changes` code, with `[secret]` printed where the text would
+    be: a search that cannot find the password is one that could have.
     """
     assert PASSWORD in str(launched.controller.held)
     assert 'probe-frr.conf' in launched.stored()
@@ -201,48 +204,11 @@ def test_the_text_is_in_no_state_file_and_no_output(launched: Engine) -> None:
     assert 'remote-as' not in launched.stored()
     assert PASSWORD not in _ran(shown)
 
-
-def test_a_console_edit_is_planned_by_a_preview_with_no_refresh_and_written_back(launched: Engine) -> None:
-    """The plain preview plans an update, prints nothing of either text, and the next `up` restores the declared one."""
     assert launched.controller.held is not None
     launched.controller.held['frr_bgpd_config'] = CONFIG.replace('65001', '65002')
-
     previewed = launched.plain_preview()
 
-    assert previewed.returncode != 0, _ran(previewed)
+    assert previewed.returncode == state_only.REFUSED, _ran(previewed)
+    assert re.search(r'^\s+config\s+: \[secret\]$', previewed.stdout, re.M), _ran(previewed)
     assert PASSWORD not in _ran(previewed)
     assert 'remote-as' not in _ran(previewed)
-    restored = launched.up()
-    assert restored.returncode == 0, _ran(restored)
-    assert launched.controller.held['frr_bgpd_config'] == CONFIG
-    clean = launched.plain_preview()
-    assert clean.returncode == 0, _ran(clean)
-
-
-def test_a_clean_site_previews_clean(launched: Engine) -> None:
-    clean = launched.plain_preview()
-
-    assert clean.returncode == 0, _ran(clean)
-
-
-def test_a_replacement_leaves_the_site_holding_the_declared_configuration(launched: Engine) -> None:
-    """A replacement the engine decides on its own, as `--replace` is, is delete-first.
-
-    Created first, the replacement would find the identical configuration on
-    the site and take it as created, and the closing delete would then take
-    it away, in a run that reports success.
-    """
-    replaced = launched.up('--replace', launched.urn())
-
-    assert replaced.returncode == 0, _ran(replaced)
-    assert launched.controller.held is not None
-    assert launched.controller.held['frr_bgpd_config'] == CONFIG
-    clean = launched.plain_preview()
-    assert clean.returncode == 0, _ran(clean)
-
-
-def test_destroy_takes_the_configuration_away(launched: Engine) -> None:
-    destroyed = launched.pulumi('destroy', '--yes', '--skip-preview')
-
-    assert destroyed.returncode == 0, _ran(destroyed)
-    assert launched.controller.held is None

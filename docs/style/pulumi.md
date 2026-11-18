@@ -453,14 +453,14 @@ only when it is created, is never left to be updated in place** — boot
 configuration, a boot image. It is declared `replace_on_changes` where a
 change must rebuild the target, or `ignore_changes` where another owner
 keeps the running target current, and the option carries its reason
-beside it at the declaration. What the option makes the engine do is
-held by an engine case (`tests/test_state_backend_engine.py`), not by a
-test that restates the option. The `state-backend` instance carries both: its `metadata`,
-the Ignition, replaces the box, which the provider also plans for a
-changed `user_data` and the option states for every key; and its image is
-ignored once launched, since Zincati keeps the running box current, where
-an update in place would replace the running box's boot volume without
-the dump hook that a replacement runs.
+beside it at the declaration. What the engine does with such an option
+is read in the changelog at each `pulumi` bump
+([operations.md](../operations.md) §1). The `state-backend` instance
+carries both: its `metadata`, the Ignition, replaces the box, which the
+provider also plans for a changed `user_data` and the option states for
+every key; and its image is ignored once launched, since Zincati keeps
+the running box current, where an update in place would replace the
+running box's boot volume without the dump hook that a replacement runs.
 
 **First-boot input that is a resource of its own is replaced with the
 resource whose replacement makes the next boot a first boot**
@@ -471,8 +471,7 @@ alone it would leave a rebuilt target booting the launch value, because
 the replacement that carries an ignored input current is the resource's
 own. An input of the target itself, as the control planes'
 `metadata.user_data` is, needs nothing more. The seed carries both
-options, and `tests/test_homelab_engine.py` holds what the engine does
-with them.
+options, each with its reason beside it.
 
 **A resource with a stated physical name, on a target that refuses a
 second object under one name or adopts the existing one, is replaced
@@ -536,10 +535,8 @@ creates it again, protected as the program declares it. The refusal
 needs the state's protection as well as the program's, and a change to
 `protect` alone
 plans nothing: a preview reads the resource as unchanged, and the next
-`up` that runs writes the flag into the state. What the option makes
-the engine do is held by an engine case
-(`tests/test_node_loss_engine.py`), not by a test that restates the
-option. Today: a cloud node's instance, whose replacement replaces an
+`up` that runs writes the flag into the state. The option carries its
+reason beside it at the declaration. Today: a cloud node's instance, whose replacement replaces an
 etcd member ([declarative/physical.md](../declarative/physical.md) §1).
 
 **An object a resource stands for on the machine running the program is

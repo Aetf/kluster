@@ -12,9 +12,13 @@ The suite has these tiers, and each one is bounded by what it can know:
     the tests of the code that drives it. A fake carries the service's
     authorization and failure semantics, not only its happy path, and the set
     of behaviors it carries only grows.
--   **Engine tests** (§8) run the pinned `pulumi` against a program of
-    stand-ins, for what the engine itself does that a design depends on —
-    around a hook, a replacement, an ignored input — which no mock can show.
+-   **Engine tests** (§8) run the pinned `pulumi` against a program, for
+    what the program composes, reads or parses from the engine — a hook
+    that decides, a runbook's target set, a provider's logic reading what
+    the engine hands it or written against what the engine does with what
+    it returns, a secrecy posture the program builds from markings the
+    engine does not document as sufficient, the preview a script parses —
+    which no mock can show.
 -   **Live drills** (§5) run against a real account. They exist for the class
     of defect the other tiers structurally cannot reach: our assumptions
     about the provider being wrong.
@@ -1294,38 +1298,37 @@ fix, and the diff is the only artifact that disagrees.
 
 ## 8. Engine Tests
 
-**An engine semantic a design depends on and no mock can show is pinned by an
-engine test.** The mock monitor answers a registration and records its
-options; it never plans a step, runs a hook or orders a replacement, so a
-design resting on what the engine does with those options is resting on
-something only the engine can answer. `tests/test_state_backend_engine.py`
-holds what the `state-backend` stack's hooks rest on (rfc-006 §4.3): a raising
-`before_delete` hook leaves its resource and fails the run, and a raising
-`before_create` hook leaves it uncreated; a passing `before_delete` hook runs
-before the delete; a preview runs no hook; a raising `after_create` hook
-leaves its resource recorded and fails the run; a replacement, targeted or
-not, is created from the program's value of an `ignore_changes` input; and a
-dependent declaring `replace_on_changes` on the replaced resource's id is
-replaced with it and runs its `after_create`, where one that does not is
-updated and runs nothing. `tests/test_homelab_engine.py` holds, the same
-way, what the homelab worker's seed rests on: a changed input that a
-resource declared `replace_with` another ignores runs nothing, and a
-`--replace` of that other, protected resource runs once its state's
-protection is lifted, deleting it, the seed and their dependent before
-creating all three again, the seed from the program's current value; and
-a stand-in replaced alone, whose name is stated, is deleted before it is
-created again. It holds what the worker's rebuild rests on as well, with the
-real `FactoryImage` and the worker's disk's guard, `SourceGuard`, beside
-stand-ins for the disk, the seed and the domain: replaced alone with no file
-at its source, the disk is kept by the guard's refusal once the seed and the
-domain are deleted, and a plain `up` creates those two again on it; replaced
-with the image whose `path` it is created from, it is deleted only after the
-image's replacement has put the file in place, fetched where it was gone and
-reused where it was not, and the file outlives the image's original; after
-the image's path has moved, the guard reads the path the run declares rather
-than the one the disk's state recorded, so the disk replaced alone is created
-from the new file; and a disk whose state records no guard is guarded once a plain `up` has recorded
-it.
+**An engine test holds what the program composes, reads or parses from
+the engine, not what the engine does with an option the program sets.**
+The mock monitor answers a registration and records its options; it never
+plans a step, runs a hook or orders a replacement. So where the program's
+own code is written against what the engine does — a hook that decides, a
+runbook's target set, a provider's logic reading what the engine hands it
+or written against what the engine does with what it returns, a secrecy
+posture the program builds from markings the engine does not document
+as sufficient, the preview output a script parses — only a run against
+the engine shows whether that code is right, and an engine test is the
+run. What the engine does with an option the program sets — `protect`,
+`ignore_changes`, `replace_on_changes`, `replace_with`,
+`delete_before_replace`, a hook's binding — is the engine's: a test
+holding it could turn red only at a release that moves it or on the
+option's own line in the diff under review. The option carries its
+reason at its declaration instead, and a `pulumi` bump's review reads the
+changelog for each such option ([operations.md](../operations.md) §1).
+
+What the homelab worker's rebuild rests on is held by
+`tests/test_homelab_engine.py`, with the real `FactoryImage` and the
+worker's disk's guard, `SourceGuard`, beside stand-ins for the disk, the
+seed and the domain: replaced alone with no file at its source, the disk
+is kept by the guard's refusal once the seed and the domain are deleted,
+and a plain `up` creates those two again on it; replaced with the image
+whose `path` it is created from, it is deleted only after the image's
+replacement has put the file in place, fetched where it was gone and
+reused where it was not, and the file outlives the image's original;
+after the image's path has moved, the guard reads the path the run
+declares rather than the one the disk's state recorded, so the disk
+replaced alone is created from the new file; and the guard refuses the
+delete of a disk created before it once a plain `up` has run with it.
 
 It runs in the suite, under the bounds every real-engine case carries
 (below):
@@ -1362,34 +1365,21 @@ It runs in the suite, under the bounds every real-engine case carries
     fixes the defect is its purpose ([style/README.md](../style/README.md),
     "A workaround for an upstream defect is a layer of its own").
 
-`tests/test_extension_provider.py` holds what the CRD extension rests on
-(kluster-ops#160): a resource of an extension package -- a `crds:` resource
-of the Kubernetes provider's -- lands on the explicit `kubernetes` provider
-it is handed, whether through the option, the `providers` map or list, or a
-parent that carries it, with the default provider turned off as every stack
-here turns it off. The SDK settles that only once the extension's package
-registration resolves, and the mock monitor answers that registration
-without any provider seeing the extension, so only a `preview` against the
-engine shows it. A release before 3.266.0 sends the resource to the default
-provider instead, which is what the `pulumi` floor in `pyproject.toml`
-says; what the case holds is something the design relies on, which the
-rule above leaves in.
-
-It runs as the case above does, except where these say otherwise:
+`tests/test_extension_provider.py` holds how the CRD extension is
+generated (kluster-ops#160): `pulumi package gen-sdk` generates it with the
+Kubernetes provider plugin at the version the locked `pulumi-kubernetes`
+registers, which is the only plugin in the home it fetches into and the one
+the generated SDK registers, and what `gen-sdk` leaves behind lands in the
+module's own temporary directory. Its CLI, its backend and its home are as
+the case above has them; it runs no program, and:
 
 -   **It fetches the Kubernetes provider plugin**, an exception to
-    fetching nothing that `tests/test_admission_wait_engine.py` and
-    `tests/test_install_order_engine.py` (below) share. The extension is
-    that provider's, so generating it and previewing it both need the
-    plugin, at the version the locked `pulumi-kubernetes` registers, and
-    no stand-in would exercise the provider's own handling of its
-    extension.
+    fetching nothing that `tests/test_admission_wait_engine.py` (below)
+    shares. The extension is that provider's, so generating it needs the
+    plugin.
 -   **The plugin is downloaded once per worker that runs the module's
     cases**, into a `PULUMI_HOME` of the module's own that the module
-    removes when it finishes, rather than into one per case; each case
-    still has a backend of its own.
--   **The provider the engine planned is read from `pulumi preview --json`**,
-    the step for the resource naming it, rather than from a log.
+    removes when it finishes, rather than into one per case.
 
 `tests/test_admission_wait_engine.py` holds what a chart's readiness rests
 on ([declarative/cluster-infra.md](../declarative/cluster-infra.md) §1.2):
@@ -1406,18 +1396,6 @@ than sending it to a cluster, so the case runs an `up` with no cluster, and
 its plugin is downloaded into the case's own `PULUMI_HOME`, which the case
 removes when it finishes.
 
-`tests/test_install_order_engine.py` holds what a chart's internal order
-rests on (the same section of cluster-infra.md), on the harness it shares
-with that module, `tests/chart_engine.py`: the post-renderer `helm_chart`
-gives every chart runs under the provider from a project that is no checkout
-of this repository, and the references it writes reach the engine as
-dependencies, so in the stack's state each runtime object of the case's chart
-depends on every prerequisite, a Role rendered with no namespace among them,
-and each product on every runtime object. It also holds that the Chart
-records no inputs, so the interpreter's path in its post-renderer is never a
-diff between two checkouts. Dropping the post-renderer from the helper fails
-it.
-
 `tests/test_update_crds.py` holds the Helm `mise.toml` pins, which
 `update_crds` renders the chart set with, to the Helm SDK the cluster's
 charts are rendered with, and starts no `pulumi` program. **It fetches
@@ -1430,9 +1408,9 @@ A run with no `pulumi` on `PATH` skips the case, saying so. The module's
 cases that run the pinned Helm and `talosctl` fetch nothing: their chart
 is the case's own, served from `127.0.0.1`.
 
-`tests/test_targeted_import_engine.py` holds the engine semantics that
-every targeted `up` of the bring-up rests on, wherever its runbook
-writes it ([physical/gateway-cutover.md](../physical/gateway-cutover.md),
+`tests/test_targeted_import_engine.py` holds every targeted `up` of the
+bring-up as its runbook writes it, wherever that is
+([physical/gateway-cutover.md](../physical/gateway-cutover.md),
 [physical/gateway.md](../physical/gateway.md) §2.5). Each such run is
 made with its targets read from the runbook, over the state the runbook
 makes it on, and it has to pass, leave a checkpoint the next command
@@ -1481,19 +1459,21 @@ edit here. The census is a run with a `pulumi` first on `PATH` that logs
 the case it was started from and hands over to the pinned one. Today's
 are:
 
--   the engine modules above, `tests/test_state_backend_engine.py`,
-    `tests/test_homelab_engine.py`, `tests/test_extension_provider.py`,
+-   the engine modules above, `tests/test_homelab_engine.py`,
     `tests/test_admission_wait_engine.py`,
-    `tests/test_install_order_engine.py`,
     `tests/test_targeted_import_engine.py` and
     `tests/test_stack_plan_engine.py`;
--   `tests/test_device_directory_engine.py`, which holds what a device
-    directory's `delete_before_replace` rests on;
+-   `tests/test_extension_provider.py`, which runs `gen-sdk` and no
+    program;
 -   the `real` cases of `tests/test_operator_stack.py`, which run the
     operator driver against a scratch stack;
 -   the cases of `tests/test_pulumi_config.py` that take a real-CLI
     project, and its failing-invocation case;
 -   `tests/test_derived.py`'s `test_the_token_lands_where_the_program_reads_it`;
+-   `tests/test_update_crds.py`'s
+    `test_the_helm_pin_is_the_release_the_kubernetes_provider_renders_with`,
+    whose `pulumi plugin install` runs under the module's
+    `PLUGIN_TIMEOUT` and the case under that bound and 30 s more;
 -   `tests/test_process_sessions.py`'s
     `test_the_pulumi_clis_plugins_stay_in_its_session_and_go_with_it`, the
     premise `tests/process_sessions.py` rests on (§1.2);

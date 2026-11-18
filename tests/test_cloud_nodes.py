@@ -333,8 +333,8 @@ async def test_a_launch_input_change_after_launch_reaches_no_input_of_the_instan
     nowhere fails rather than passing over nothing.
 
     A replacement is created from the program's values of ignored inputs,
-    a targeted one included, which `test_state_backend_engine` holds against
-    the pinned CLI -- a rebuilt node boots the current image and config.
+    a targeted one included, so a rebuilt node boots the current image and
+    config.
     """
     for instance in nodes.instances.values():
         _ = await instance.urn.future()

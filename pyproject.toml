@@ -23,8 +23,7 @@ requires-python = ">= 3.12"
 dependencies = [
     # The first release whose SDK gives a resource of an extension package --
     # a `crds:` resource of the kubernetes provider's CRD extension -- the
-    # explicit provider it is handed (pulumi/pulumi#24702, in 3.266.0);
-    # `tests/test_extension_provider.py` holds it against the engine.
+    # explicit provider it is handed (pulumi/pulumi#24702, in 3.266.0).
     "pulumi>=3.266.0,<4",
     # Exact, unlike every other range here: `sdks/crds` is generated against
     # one provider version and registers each of its resources at that version,

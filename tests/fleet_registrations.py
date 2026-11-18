@@ -8,9 +8,9 @@ case's author wrote rather than what the program declares. So they are read
 here, off the registrations the real `NodeLoadBalancer`, `CloudNodes` and
 `NodeVolume` make under the mock monitor, declared as the `physical` stack
 declares them, and a stand-in takes the ones its own type and logical name
-were registered with. A declaration that stops refusing turns the engine case
-red, and a stand-in named for a resource the fleet does not register fails the
-program that declares it.
+were registered with. So a runbook's commands run against the options the
+program declares, and a stand-in named for a resource the fleet does not
+register fails the program that declares it.
 """
 
 from __future__ import annotations
