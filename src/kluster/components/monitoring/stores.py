@@ -233,8 +233,9 @@ class Kept:
 #: container consumes -- CPU, memory, disk, network, pressure -- and how long an
 #: operation of etcd or of the API server takes, beside every series made for
 #: comparison: the recording rules under `kluster:`, and OCI's block-volume
-#: series. A reading is a query over these, so a reading defined later is
-#: computed over every period on record.
+#: series -- and what a reading attributes them by: a pod's node, its requests
+#: and limits, and its phase. A reading is a query over these, so a reading
+#: defined later is computed over every period on record.
 HISTORY_CLASS: tuple[Kept, ...] = (
     Kept(
         'node_cpu_seconds_total|node_pressure_.*|node_memory_(MemAvailable|MemTotal|Dirty|Writeback)_bytes'
@@ -248,7 +249,9 @@ HISTORY_CLASS: tuple[Kept, ...] = (
         '|container_memory_working_set_bytes|container_pressure_.*|container_fs_(reads|writes)_bytes_total'
         '|container_blkio_device_usage_total|container_network_(receive|transmit)_bytes_total'
     ),
-    Kept('kube_pod_container_resource_(requests|limits)|kube_node_status_allocatable|kube_pod_info'),
+    Kept(
+        'kube_pod_container_resource_(requests|limits)|kube_pod_status_phase|kube_node_status_allocatable|kube_pod_info'
+    ),
     Kept('apiserver_request_total|apiserver_current_inflight_requests'),
     Kept(f'kluster:.*|{OCI_BLOCKSTORE_METRICS}_.*'),
 )

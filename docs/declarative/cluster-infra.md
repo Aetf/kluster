@@ -227,6 +227,58 @@ classes its objects fall into (§1.2):
     `OciMetricsPullStale` (operations.md §6.3). Until
     the key is sealed in, neither the key's SealedSecret nor the pull
     is declared, and `volume_ids` is not read.
+    **The control planes are read by readings defined once**
+    (`components/monitoring/readings.py`): each a name, a window, a
+    PromQL expression over the history's series, a unit, and the budget
+    nodes.md §1.1–1.2 and migration.md §0 rule 6 give it, with the
+    canon's phrase and the section it stands in, which a test reads
+    there. Every selector names its scrape job and `cluster=""`: the
+    history holds the legacy cluster's series too, under
+    `cluster="legacy"`, which a sum by node, pod or namespace would
+    otherwise add to this cluster's. From that one table come a
+    recording rule per reading, `kluster:<name>:<window>`, which the
+    history keeps by its prefix; the SLO alerts, each comparing a
+    reading's record with its budget, so its threshold is the budget,
+    in a rule group per resource beside the records it reads, each with
+    a tier and a playbook ([operations.md](../operations.md) §8); and
+    the `Control planes` dashboard, a `ConfigMap` the chart's dashboard
+    sidecar hands to Grafana, with a row per resource and a panel per
+    reading. A panel computes its reading's expression over the history
+    store, so it draws every period the history holds, series imported
+    after their minute included, under one definition; beside it, the
+    same query as of an earlier time the dashboard's variable sets. The
+    two readings whose inputs the history does not keep are drawn from
+    their records: the API server's request latency, whose histogram is
+    the largest family the store holds, and the worker's scrapes of the
+    control planes, which read `up`. The load classes are nodes.md
+    §1.1's, read where its table reads them: the control-plane slice is
+    etcd's own series and the API server's, the controller manager's
+    and the scheduler's pods; the front and the workloads are Envoy's
+    pods and every pod outside the namespaces `k8s-base` places objects
+    in, which a test holds to the program; and the platform is the node
+    less the two. A pod is read by its own control group, apart from
+    its sandbox's, and a pod's limits count while it is pending or
+    running. etcd's I/O is its WAL's bytes alone, since nothing counts
+    its backend's, so the slice's I/O is a lower bound; the same
+    sources bound the boot volume's writes other than etcd's from above,
+    which nodes.md §1.2 rule 2 budgets. KubeSpan exports no peer's
+    state, so its paths are read through what crosses them: each etcd
+    member's connected peers between control planes, and the worker's
+    scrapes of each control plane. The node exporter's series carry
+    `node` from this change's apply on, so the per-node readings start
+    there.
+    **The stack relies on VictoriaMetrics' open-source release
+    alone**: the single-node store, vmagent, vmalert, `vmbackup`,
+    `vmrestore` and `vmctl`, and the operator and its chart. A need
+    the enterprise release meets with a feature is met here by design:
+    a history kept for good is a store of its own rather than a
+    retention filter or downsampling, and the backups are `vmbackup`
+    run by a CronJob rather than `vmbackupmanager`. **The way out**
+    keeps every series: `vmctl`, which `mise.toml` pins, exports them;
+    the operator's scrape objects are rewritten as the Prometheus
+    operator's `ServiceMonitor`s, which they mirror; the rules are
+    PromQL already; and vmagent's remote writes point at the new
+    store.
     Grafana is reached by a port-forward until its name moves (§3). The namespace is `privileged`, for the node
     exporter (§0). **What the chart would add is off**: the sync job,
     which fetches rules and dashboards off upstream default branches at
@@ -245,7 +297,10 @@ classes its objects fall into (§1.2):
     label a series with its node's name and none of the node's labels:
     a node carries tens of labels, node-feature-discovery's most of
     them, and vmsingle ignores the whole row of a series past 40
-    labels, so a series carrying them all is never stored. The API server's scrape drops
+    labels, so a series carrying them all is never stored. The node
+    exporter's scrape labels each series with its node's name too,
+    which the operator gives a pod's target no other way, since a
+    reading of a node groups by it. The API server's scrape drops
     the buckets of its largest histogram families, which no reading
     uses, and keeps their `_count` and `_sum`. **etcd is scraped** on
     its metrics listener (`ETCD_METRICS_PORT`) on every control plane,
@@ -298,17 +353,19 @@ classes its objects fall into (§1.2):
     the evaluation interval below), so a run that succeeds is never
     reported stale. A test holds every CronJob `k8s-base` and `apps`
     declare to a row, and every row to a CronJob one of them declares.
-    **Every scrape job a rule reads is watched by the scrape-target
+    **Every scrape job an alert reads is watched by the scrape-target
     family** (operations.md §6.4): a job that reports nothing leaves
-    each rule that reads it evaluating over no series, silent rather
+    each alert that reads it evaluating over no series, silent rather
     than firing. `ScrapeTargetDown` fires for the job when a target of
     it fails its scrape or no target of it is listed, and `ScraperDown`
     when no target of any job reports, which holds the per-job alerts
-    back. The set of jobs is derived from the rules: the metric names
-    each expression selects, each read from the job its selector names
-    or from every scrape job that exports it, and a name no scrape job
-    exports is refused. A test holds every job a declared rule reads to
-    one alert, and every alert to a job some rule reads. **The
+    back. The set of jobs is derived from the alerts: the metric names
+    each expression selects, a recorded series read through the
+    recording rule that writes it, each read from the job its selector
+    names or from every scrape job that exports it, and a name no
+    scrape job exports is refused, apart from OCI's imported names,
+    which the pull's own rows watch. A test holds every job an alert
+    reads to one alert, and every alert to a job some alert reads. **The
     kubeconfig's copies are watched by their expiry** (operations.md
     §2.5): `k8s-base` reads when the client certificate in its own copy
     of the cluster-admin kubeconfig expires, and

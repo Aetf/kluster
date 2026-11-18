@@ -66,6 +66,15 @@ each control plane by a node scrape of the component's own
 (`etcd_scrape_spec`), from the worker, over KubeSpan. A row a store
 ignores for any reason raises `MetricsDropped` (`rules`).
 
+**The control planes are read by `readings`**, each reading defined once:
+its recording rule and the SLO alerts over it are rule groups of their own
+(`rules.READING_GROUPS`), and the `Control planes` dashboard draws every
+reading from the history store beside any earlier period (`dashboard`), a
+`ConfigMap` the stack's dashboard sidecar hands to Grafana. The node
+exporter's scrape labels each series with its node (`NODE_EXPORTER_ENDPOINT`),
+as the operator's node scrapes do the kubelet's and etcd's, since a reading of
+a node groups by it.
+
 **Each store's mutating endpoints take keys** (`AUTH_KEYS`): deleting series,
 taking snapshots and forcing merges are otherwise open to any pod that
 reaches the store's Service. Each key is generated into the stack's state
@@ -123,7 +132,7 @@ configuration, and every alert ends at the chart's `blackhole` receiver until
 the value is sealed in (`kluster.lib.k8s.sealed_value`,
 physical/bring-up.md §1). The rules are `rules.rule_groups`, among them the
 cluster's check-in, which the receiver repeats on a short interval, and the
-scrape-target family over every job the other rules read, which reads each
+scrape-target family over every job the other alerts read, which reads each
 job by the `job` label `scrape_jobs` gives it. Beside them, in a rule object
 of its own, is `rules.kubeconfig_copy`, built from the expiry the stack hands
 in: the one rule whose expression is not a constant.
@@ -157,7 +166,8 @@ from kluster import conventions
 from kluster.components import cilium
 from kluster.components.backup import s3_endpoint
 from kluster.components.cilium.bgp import CONTROL_PLANE_LABEL
-from kluster.components.monitoring import memory, oci_metrics, rules, stores
+from kluster.components.monitoring import dashboard, memory, oci_metrics, rules, stores
+from kluster.components.monitoring.jobs import ETCD_JOB, KUBE_STATE_METRICS_JOB, KUBELET_JOB
 from kluster.components.monitoring.operator_objects import operator_object
 from kluster.components.monitoring.stores import Store, stack_fullname
 from kluster.components.talos import ETCD_METRICS_PORT
@@ -187,6 +197,7 @@ __all__ = (
     'KUBELET_RELABELING',
     'KUBE_STATE_METRICS_ENDPOINT',
     'KUBE_STATE_METRICS_JOB',
+    'NODE_EXPORTER_ENDPOINT',
     'RECEIVER',
     'SCRAPE_INTERVAL',
     'SNAPSHOTS_MAX_AGE',
@@ -292,8 +303,27 @@ KUBE_STATE_METRICS_ENDPOINT: Mapping[str, Any] = {
 #: `node` already. The other two entries are the chart's, kept.
 KUBELET_RELABELING: tuple[Mapping[str, Any], ...] = (
     {'sourceLabels': ['__metrics_path__'], 'targetLabel': 'metrics_path'},
-    {'targetLabel': 'job', 'replacement': 'kubelet'},
+    {'targetLabel': 'job', 'replacement': KUBELET_JOB},
 )
+
+#: The node exporter's one scrape endpoint: the chart's, with the name of the
+#: node each series is read on written onto it as `node`. The chart scrapes
+#: the exporter's pods behind its Service, and the operator labels such a
+#: target with its pod and none of its node (`servicescrape.go` L120-175 at
+#: operator v0.74.0), while a reading of a node groups by `node`, as it does
+#: the kubelet's series and etcd's, which the operator's node scrapes label
+#: so. The legacy cluster's node exporter labels its series the same way
+#: (cluster/migration.md §2.1), so a reading of a node reads both clusters
+#: alike. Stated whole, since Helm replaces a list: the chart's drop of the
+#: kubelet's pod mounts is kept (`values.yaml` L2205-2210 at stack chart
+#: 0.91.2).
+NODE_EXPORTER_ENDPOINT: Mapping[str, Any] = {
+    'port': 'metrics',
+    'relabelConfigs': [{'sourceLabels': ['__meta_kubernetes_pod_node_name'], 'targetLabel': 'node'}],
+    'metricRelabelConfigs': [
+        {'action': 'drop', 'sourceLabels': ['mountpoint'], 'regex': '/var/lib/kubelet/pods.+'},
+    ],
+}
 
 #: The API server's histogram families whose buckets are dropped at scrape:
 #: the largest of its series, read by no reading the cluster keeps. Their
@@ -318,26 +348,11 @@ _APISERVER_ENDPOINT: Mapping[str, Any] = {
     'tlsConfig': {'caFile': '/var/run/secrets/kubernetes.io/serviceaccount/ca.crt', 'serverName': 'kubernetes'},
 }
 
-#: The `job` etcd's series carry. Stated, because the operator's default is the
-#: scrape object's namespace and name, and the object's name is autonamed.
-ETCD_JOB = 'etcd'
-
 #: The families of etcd's metrics listener dropped at scrape, as regular
 #: expressions over the metric's name: the gRPC server's per-method series,
 #: and etcd's debugging series, which etcd itself names unstable. Together
 #: they are most of a member's series.
 ETCD_DROPPED: tuple[str, ...] = ('grpc_server_.*', 'etcd_debugging_.*')
-
-#: The `job` kube-state-metrics' series carry: the chart's scrape of it takes
-#: the job from its Service's `app.kubernetes.io/name` (`jobLabel`,
-#: `values.yaml` L2228 at stack chart 0.91.2), which the kube-state-metrics
-#: chart sets to its own name (`kube-state-metrics.selectorLabels` at 7.5.3).
-#: `KUBE_STATE_METRICS_ENDPOINT` replaces the scrape's endpoints, relabels no
-#: `job`, and leaves the `jobLabel` in place. Its `honorLabels` bears on the
-#: series kube-state-metrics publishes, not on `up`, which vmagent writes with
-#: the target's own labels (`docs/victoriametrics/vmagent.md`, "Automatically
-#: generated metrics", at VictoriaMetrics v1.150.0).
-KUBE_STATE_METRICS_JOB = 'kube-state-metrics'
 
 
 def scrape_jobs(release: str, chart: str) -> tuple[rules.ScrapeJob, ...]:
@@ -486,6 +501,7 @@ def _stack_values(release: str, chart: ChartPin, restore: Sequence[Mapping[str, 
         'kubeEtcd': {'enabled': False},
         # Read by every scrape the chart builds from this spec, cAdvisor's among them.
         'kubelet': {'vmScrape': {'spec': {'relabelConfigs': [dict(entry) for entry in KUBELET_RELABELING]}}},
+        'prometheus-node-exporter': {'vmScrape': {'spec': {'endpoints': [dict(NODE_EXPORTER_ENDPOINT)]}}},
         'kubeApiServer': {
             'vmScrape': {
                 'spec': {
@@ -833,6 +849,16 @@ class Monitoring(Component, pulumi_type='kluster:monitoring:Monitoring'):
             spec=etcd_scrape_spec(),
             opts=after_the_chart,
         )
+        self.dashboard = k8s.core.v1.ConfigMap(
+            f'{name}-dashboard',
+            metadata=k8s.meta.v1.ObjectMetaArgs(
+                name=dashboard.CONFIGMAP,
+                namespace=self.namespace.metadata.name,
+                labels=dict([dashboard.SIDECAR_LABEL]),
+            ),
+            data={dashboard.FILE: json.dumps(dashboard.model(stores.HISTORY_STORE), indent=1)},
+            opts=self.child_opts(depends_on=[self.namespace]),
+        )
         self.history = operator_object(
             f'{name}-history',
             kind='VMSingle',
@@ -1054,17 +1080,17 @@ def receiver_spec() -> dict[str, object]:
 
 
 def _rule_group(group: rules.RuleGroup) -> dict[str, object]:
-    """One rule group as the definition spells it, every rule labeled with its tier and annotated with the rest."""
+    """One rule group as the definition spells it, every alert labeled with its tier and annotated with the rest."""
+    return {'name': group.name, 'rules': [_rule(rule) for rule in group.rules]}
+
+
+def _rule(rule: rules.AlertRule | rules.RecordingRule) -> dict[str, object]:
+    if isinstance(rule, rules.RecordingRule):
+        return {'record': rule.record, 'expr': rule.expr}
     return {
-        'name': group.name,
-        'rules': [
-            {
-                'alert': rule.alert,
-                'expr': rule.expr,
-                **({'for': backup.duration(rule.pending)} if rule.pending is not None else {}),
-                'labels': {**rule.labels, rules.TIER_LABEL: rule.tier.value},
-                'annotations': {'summary': rule.summary, 'playbook': str(rule.playbook)},
-            }
-            for rule in group.rules
-        ],
+        'alert': rule.alert,
+        'expr': rule.expr,
+        **({'for': backup.duration(rule.pending)} if rule.pending is not None else {}),
+        'labels': {**rule.labels, rules.TIER_LABEL: rule.tier.value},
+        'annotations': {'summary': rule.summary, 'playbook': str(rule.playbook)},
     }

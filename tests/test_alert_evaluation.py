@@ -55,7 +55,9 @@ import yaml
 from client_kubeconfig import certificate_user, kubeconfig
 from k8s_base_installation import Run, applied
 
-from kluster.components.monitoring import EVALUATION_INTERVAL, KUBE_STATE_METRICS_JOB, SCRAPE_INTERVAL
+from kluster import conventions
+from kluster.components.monitoring import EVALUATION_INTERVAL, KUBE_STATE_METRICS_JOB, SCRAPE_INTERVAL, readings
+from kluster.components.monitoring.jobs import APISERVER_JOB, ETCD_JOB, KUBELET_JOB, NODE_EXPORTER_JOB
 from kluster.components.monitoring.operator_objects import type_token
 from kluster.components.monitoring.rules import (
     BACKUP_SYNC_TIME,
@@ -71,6 +73,8 @@ from kluster.components.monitoring.rules import (
 from kluster.conventions import backup, schedule
 from kluster.conventions.alert import Tier
 from kluster.conventions.cluster import KUBECONFIG_ALERT_MARGIN
+from kluster.conventions.outputs import BOOT_VOLUME
+from kluster.conventions.providers import OCI_BLOCKSTORE_METRICS
 from kluster.conventions.schedule import ScheduledJob
 from kluster.lib.versions import CHART
 from kluster.scripts.update_crds import record, sources
@@ -180,19 +184,29 @@ class Group:
     rules: Sequence[Rule]
 
     def rule(self, alert: str, **selected: str) -> Rule:
-        """The one declared rule named `alert` that carries or selects each label of `selected` at its value."""
+        """The one declared alert named `alert` that carries or selects each label of `selected` at its value."""
         found = [
             rule
             for rule in self.rules
-            if rule['alert'] == alert
+            if rule.get('alert') == alert
             and set(selected.items()) <= set(rule['labels'].items()) | _equalities(rule['expr'])
         ]
         assert len(found) == 1, f'{self.name} declares {len(found)} rules named {alert} with {selected}'
         return found[0]
 
+    def record(self, name: str) -> str:
+        """The series the one declared recording rule whose record is named `name` writes, under any window."""
+        found = [rule['record'] for rule in self.rules if 'record' in rule and rule['record'].split(':')[1] == name]
+        assert len(found) == 1, f'{self.name} declares {len(found)} records named {name}'
+        return found[0]
+
     @property
     def alerts(self) -> frozenset[str]:
-        return frozenset(rule['alert'] for rule in self.rules)
+        return frozenset(rule['alert'] for rule in self.rules if 'alert' in rule)
+
+    @property
+    def records(self) -> frozenset[str]:
+        return frozenset(rule['record'] for rule in self.rules if 'record' in rule)
 
 
 @dataclass(frozen=True)
@@ -213,6 +227,15 @@ class Check:
 
 
 @dataclass(frozen=True)
+class Sample:
+    """The series a recording rule writes, at `at`: one value per label set, and none at all where `values` is empty."""
+
+    at: dt.timedelta
+    record: str
+    values: Sequence[tuple[Labels, float]] = ()
+
+
+@dataclass(frozen=True)
 class Series:
     """One input series: its metric, its labels and its values in vmalert-tool's notation."""
 
@@ -227,8 +250,9 @@ class Case:
 
     name: str
     series: Sequence[Series]
-    checks: Sequence[Check]
+    checks: Sequence[Check] = ()
     interval: dt.timedelta = SCRAPE_INTERVAL
+    samples: Sequence[Sample] = ()
 
 
 def _number(value: float) -> str:
@@ -266,6 +290,34 @@ def values(points: Mapping[dt.timedelta, Point], until: dt.timedelta, interval: 
     return ' '.join(words)
 
 
+def counter(
+    metric: str,
+    labels: Labels,
+    slopes: Mapping[dt.timedelta, float],
+    until: dt.timedelta,
+    interval: dt.timedelta = SCRAPE_INTERVAL,
+) -> Series:
+    """A counter that starts at 0 with the case and grows by each slope a step from its time on, 0 before the first."""
+    words: list[str] = []
+    value = 0.0
+    slope = 0.0
+    run: tuple[float, float, int] | None = None
+    for step in range(until // interval + 1):
+        at = interval * step
+        slope = slopes.get(at, slope)
+        if step:
+            value += slope
+        if run is not None and run[1] == slope:
+            run = (run[0], slope, run[2] + 1)
+            continue
+        if run is not None:
+            words.append(f'{_number(run[0])}+{_number(run[1])}x{run[2] - 1}')
+        run = (value, slope, 1)
+    assert run is not None
+    words.append(f'{_number(run[0])}+{_number(run[1])}x{run[2] - 1}')
+    return Series(metric, labels, ' '.join(words))
+
+
 def series(
     metric: str,
     labels: Labels,
@@ -294,10 +346,22 @@ def _test(case: Case, group: str) -> dict[str, object]:
             'exp_annotations': dict(alert.rule['annotations']),
         }
 
+    def sample(record: str, at: Labels, value: float) -> dict[str, object]:
+        spelled = ', '.join(f'{name}="{label}"' for name, label in at.items())
+        return {'labels': f'{record}{{{spelled}}}', 'value': value}
+
     return {
         'name': case.name,
         'interval': backup.duration(case.interval),
         'input_series': [{'series': f'{one.metric}{{{labels(one)}}}', 'values': one.values} for one in case.series],
+        'metricsql_expr_test': [
+            {
+                'expr': one.record,
+                'eval_time': backup.duration(one.at),
+                'exp_samples': [sample(one.record, at, value) for at, value in one.values],
+            }
+            for one in case.samples
+        ],
         'alert_rule_test': [
             {
                 'eval_time': backup.duration(check.at),
@@ -724,6 +788,810 @@ def kubeconfig_copy(group: Group) -> Iterator[Case]:
     )
 
 
+# -- The readings ------------------------------------------------------------------
+
+#: The labels the legacy cluster's series carry in the history beside their own.
+LEGACY = {readings.CLUSTER_LABEL: 'legacy'}
+
+#: How many operations an etcd member observes a step in these cases: two a second.
+OPERATIONS = 60.0
+
+#: The bucket edges the cases' histograms are written with, `+Inf` last. etcd's
+#: WAL fsync edge nearest a second is among them (`readings.WAL_FSYNC_SECOND`).
+EDGES = ('0.008', '0.016', '0.032', '0.064', '0.128', '0.256', readings.WAL_FSYNC_SECOND, '+Inf')
+
+
+def _legacy(inputs: Sequence[Series]) -> list[Series]:
+    """The same series, as the history holds the legacy cluster's."""
+    return [Series(one.metric, {**one.labels, **LEGACY}, one.values) for one in inputs]
+
+
+def _empty(group: Group, at: dt.timedelta) -> list[Sample]:
+    """Every record of the group, reading nothing at `at`."""
+    return [Sample(at, record) for record in sorted(group.records)]
+
+
+def _quiet(group: Group, *at: dt.timedelta) -> list[Check]:
+    """No alert of the group firing at any of `at`."""
+    return [Check(time, alert) for time in at for alert in sorted(group.alerts)]
+
+
+def _p99(lower: float, upper: float) -> float:
+    """The 99th percentile of observations that all fall in one bucket, as `histogram_quantile` places it."""
+    return lower + (upper - lower) * 0.99
+
+
+def _bucketed(edge: str) -> dict[str, float]:
+    """Each bucket's share of a step's observations where every observation falls in the bucket ending at `edge`."""
+    reached = False
+    shares: dict[str, float] = {}
+    for one in EDGES:
+        reached = reached or one == edge
+        shares[one] = OPERATIONS if reached else 0.0
+    return shares
+
+
+def _histogram(
+    metric: str, labels: Labels, phases: Mapping[dt.timedelta, Mapping[str, float]], until: dt.timedelta
+) -> list[Series]:
+    """A histogram's buckets and count, each phase giving each bucket's growth a step from its time on."""
+    out = [
+        counter(f'{metric}_bucket', {**labels, 'le': edge}, {at: phase[edge] for at, phase in phases.items()}, until)
+        for edge in EDGES
+    ]
+    out.append(counter(f'{metric}_count', labels, {at: phase['+Inf'] for at, phase in phases.items()}, until))
+    return out
+
+
+def _member(
+    node: str, index: int, slow: dt.timedelta | None, until: dt.timedelta, recovered: dt.timedelta | None = None
+) -> list[Series]:
+    """An etcd member, healthy, and from `slow` on, where given, outside every budget etcd's readings carry.
+
+    Healthy, every fsync, commit and peer round trip takes under 8 ms, and
+    every apply between 32 and 64 ms, 50 ms on average. Slow, every fsync
+    takes over 8 ms, half over 16 ms and one in sixty over
+    `readings.WAL_FSYNC_SECOND`, every
+    commit 32 to 64 ms, every apply 128 to 256 ms, 200 ms on average, every
+    round trip 64 to 128 ms; one heartbeat and one proposal fail a step, the
+    leader changes once at `slow`, and the member has no leader from then on.
+    From `recovered` on, where given, it is healthy again.
+    """
+    labels = {JOB_LABEL: ETCD_JOB, 'node': node, 'instance': f'10.0.1.{index}:2381'}
+    start = dt.timedelta(0)
+
+    def turns[T](healthy: T, degraded: T) -> dict[dt.timedelta, T]:
+        changes = {start: healthy}
+        if slow is not None:
+            changes[slow] = degraded
+        if recovered is not None:
+            changes[recovered] = healthy
+        return changes
+
+    def phases(healthy: Mapping[str, float], degraded: Mapping[str, float]) -> dict[dt.timedelta, Mapping[str, float]]:
+        return turns(healthy, degraded)
+
+    def slopes(healthy: float, degraded: float) -> dict[dt.timedelta, float]:
+        return turns(healthy, degraded)
+
+    # Every fsync over 8 ms, half of them over 16 ms, and one a step past the
+    # edge nearest a second.
+    stalled = dict.fromkeys(EDGES, OPERATIONS - 1) | {'0.008': 0.0, '0.016': OPERATIONS / 2, '+Inf': OPERATIONS}
+    leader = {start: 0.0} if slow is None else {start: 0.0, slow: 1.0, slow + SCRAPE_INTERVAL: 0.0}
+    has_leader: dict[dt.timedelta, Point] = dict(turns(1, 0))
+    return [
+        *_histogram('etcd_disk_wal_fsync_duration_seconds', labels, phases(_bucketed('0.008'), stalled), until),
+        *_histogram(
+            'etcd_disk_backend_commit_duration_seconds', labels, phases(_bucketed('0.008'), _bucketed('0.064')), until
+        ),
+        *_histogram(
+            'etcd_server_apply_duration_seconds', labels, phases(_bucketed('0.064'), _bucketed('0.256')), until
+        ),
+        counter('etcd_server_apply_duration_seconds_sum', labels, slopes(3, 12), until),
+        *_histogram(
+            'etcd_network_peer_round_trip_time_seconds',
+            {**labels, 'To': 'peer'},
+            phases(_bucketed('0.008'), _bucketed('0.128')),
+            until,
+        ),
+        counter('etcd_server_leader_changes_seen_total', labels, leader, until),
+        counter('etcd_server_heartbeat_send_failures_total', labels, slopes(0, 1), until),
+        counter('etcd_server_proposals_failed_total', labels, slopes(0, 1), until),
+        series('etcd_server_has_leader', labels, has_leader, until),
+    ]
+
+
+def etcd(group: Group) -> Iterator[Case]:
+    """Two members healthy; one turning slow beside a healthy one; and the legacy cluster's series alone.
+
+    Each budget alert is silent before the member turns, and fires on that
+    member once its reading has crossed and its pending has passed, which a
+    check inside the pending holds back.
+    """
+    until = _minutes(40)
+    at = _minutes(20)
+    healthy = {
+        'etcd_wal_fsync_p99': _p99(0, 0.008),
+        'etcd_wal_fsyncs_over_1s': 0,
+        'etcd_backend_commit_p99': _p99(0, 0.008),
+        'etcd_apply_mean': 0.05,
+        'etcd_apply_p99': _p99(0.032, 0.064),
+        'etcd_leader_changes': 0,
+        'etcd_heartbeat_send_failures': 0,
+        'etcd_proposals_failed': 0,
+    }
+
+    def node(name: str) -> dict[str, str]:
+        return {'node': name}
+
+    yield Case(
+        'every member healthy',
+        [*_member('cp1', 11, None, until), *_member('cp2', 12, None, until)],
+        _quiet(group, at),
+        samples=[
+            *(
+                Sample(at, group.record(name), [(node('cp1'), value), (node('cp2'), value)])
+                for name, value in healthy.items()
+            ),
+            Sample(
+                at,
+                group.record('etcd_peer_round_trip_p99'),
+                [({'node': 'cp1', 'To': 'peer'}, _p99(0, 0.008)), ({'node': 'cp2', 'To': 'peer'}, _p99(0, 0.008))],
+            ),
+        ],
+    )
+    slow = _minutes(10)
+    inputs = [*_member('cp1', 11, slow, until), *_member('cp2', 12, None, until)]
+    late = slow + _minutes(10)
+    sustained = {'EtcdWalFsyncSlow', 'EtcdBackendCommitSlow'}
+
+    def fire(alert: str) -> Check:
+        rule = group.rule(alert)
+        kept = (
+            {JOB_LABEL: ETCD_JOB, 'node': 'cp1', 'instance': '10.0.1.11:2381'}
+            if alert == 'EtcdNoLeader'
+            else node('cp1')
+        )
+        pending = _pending(rule)
+        return Check(slow + max(pending, _minutes(5)) + 2 * MARGIN, alert, [Alert(rule, kept)])
+
+    yield Case(
+        'one member turns slow',
+        inputs,
+        [
+            *_quiet(group, slow - MARGIN),
+            *(Check(slow + _pending(group.rule(alert)) - MARGIN, alert) for alert in sorted(sustained)),
+            *(fire(alert) for alert in sorted(group.alerts)),
+        ],
+        samples=[
+            Sample(late, group.record('etcd_wal_fsyncs_over_1s'), [(node('cp1'), 10), (node('cp2'), 0)]),
+            Sample(
+                late,
+                group.record('etcd_backend_commit_p99'),
+                [(node('cp1'), _p99(0.032, 0.064)), (node('cp2'), _p99(0, 0.008))],
+            ),
+            Sample(late, group.record('etcd_apply_mean'), [(node('cp1'), 0.2), (node('cp2'), 0.05)]),
+            Sample(late, group.record('etcd_leader_changes'), [(node('cp1'), 1), (node('cp2'), 0)]),
+            Sample(late, group.record('etcd_heartbeat_send_failures'), [(node('cp1'), 10), (node('cp2'), 0)]),
+        ],
+    )
+    # Elevated for the spell and a window after it: less than the pending a
+    # latency's p99 is held for.
+    spell = _minutes(2)
+    yield Case(
+        'one member slow for two minutes',
+        [*_member('cp1', 11, slow, until, slow + spell), *_member('cp2', 12, None, until)],
+        [Check(slow + _minutes(m), alert) for m in (3, 6, 9, 12, 15) for alert in sorted(sustained)],
+    )
+    yield Case(
+        "the legacy cluster's members alone",
+        _legacy(inputs),
+        _quiet(group, late),
+        samples=_empty(group, late),
+    )
+    yield from _etcd_gap(group)
+
+
+def _etcd_gap(group: Group) -> Iterator[Case]:
+    """A member's slow counters, standing above 0, read again after a scrape gap longer than their windows.
+
+    No counter moves, so no record rises above 0, and the leader-change alert
+    stays silent: a window that starts in the gap is not read at all until
+    the counter has been read at its start again.
+    """
+    read, gap, after = 60, 40, 100
+    resumed = SCRAPE_INTERVAL * (read + gap + 1)
+    labels = {JOB_LABEL: ETCD_JOB, 'node': 'cp1', 'instance': '10.0.1.11:2381'}
+
+    def standing(metric: str, value: int) -> Series:
+        return Series(metric, labels, f'{value}+0x{read} _x{gap} {value}+0x{after - 1}')
+
+    counters = {
+        'etcd_leader_changes': standing('etcd_server_leader_changes_seen_total', 2),
+        'etcd_heartbeat_send_failures': standing('etcd_server_heartbeat_send_failures_total', 5),
+        'etcd_proposals_failed': standing('etcd_server_proposals_failed_total', 2),
+    }
+    leader = group.rule('EtcdLeaderChanged')
+    yield Case(
+        "a member's counters read again after a scrape gap",
+        [*counters.values(), standing('etcd_server_has_leader', 1)],
+        [Check(resumed + _minutes(m), leader['alert']) for m in (1, 3, 5, 10, 14, 16, 20)],
+        samples=[
+            *(Sample(resumed + _minutes(3), group.record(name)) for name in counters),
+            *(Sample(resumed + _minutes(20), group.record(name), [({'node': 'cp1'}, 0)]) for name in counters),
+        ],
+    )
+
+
+def _exporter(node: str) -> dict[str, str]:
+    """The labels the node exporter's series carry on `node`."""
+    return {JOB_LABEL: NODE_EXPORTER_JOB, 'node': node, 'instance': f'{node}.internal:9100'}
+
+
+#: The nodes of the node exporter's cases: a control plane, and the worker,
+#: which no budget binds.
+CONTROL = conventions.CLOUD_NODES[0]
+WORKER = conventions.HOMELAB_NODE
+
+
+def _cpu_inputs(pressured: dt.timedelta | None, until: dt.timedelta) -> list[Series]:
+    """A control plane using a core and its CPU pressure at 10 %, 30 % from `pressured` on; the worker pressured at 50 %."""
+    start = dt.timedelta(0)
+    modes = {'user': 15.0, 'system': 15.0, 'idle': 15.0, 'iowait': 15.0}
+    pressure = {start: 3.0} if pressured is None else {start: 3.0, pressured: 9.0}
+    return [
+        *(
+            counter('node_cpu_seconds_total', {**_exporter(CONTROL), 'cpu': '0', 'mode': mode}, {start: slope}, until)
+            for mode, slope in modes.items()
+        ),
+        counter('node_cpu_seconds_total', {**_exporter(WORKER), 'cpu': '0', 'mode': 'user'}, {start: 6.0}, until),
+        counter('node_pressure_cpu_waiting_seconds_total', _exporter(CONTROL), pressure, until),
+        counter('node_pressure_cpu_waiting_seconds_total', _exporter(WORKER), {start: 15.0}, until),
+    ]
+
+
+def cpu(group: Group) -> Iterator[Case]:
+    """A control plane's CPU pressure rising past its budget over ten minutes, beside a worker past it throughout."""
+    rule = group.rule('ControlPlaneCpuPressure')
+    until = _minutes(40)
+    at = _minutes(20)
+    yield Case(
+        'steady',
+        _cpu_inputs(None, until),
+        [Check(at, rule['alert'])],
+        samples=[
+            Sample(at, group.record('node_cpu_used'), [({'node': CONTROL}, 1.0), ({'node': WORKER}, 0.2)]),
+            *(
+                Sample(at, record, [({'node': CONTROL}, 0.1), ({'node': WORKER}, 0.5)])
+                for record in sorted(group.records)
+                if 'pressure' in record
+            ),
+        ],
+    )
+    pressured = _minutes(15)
+    inputs = _cpu_inputs(pressured, until)
+    # Ten minutes' mean: 10 % before, 30 % after, so 20 % five minutes in.
+    yield Case(
+        'a control plane pressured',
+        inputs,
+        [
+            Check(pressured - MARGIN, rule['alert']),
+            Check(pressured + _minutes(4), rule['alert']),
+            Check(pressured + _minutes(7), rule['alert'], [Alert(rule, {'node': CONTROL})]),
+        ],
+    )
+    yield Case("the legacy cluster's nodes alone", _legacy(inputs), _quiet(group, at), samples=_empty(group, at))
+
+
+def memory(group: Group) -> Iterator[Case]:
+    """A control plane's available memory dipping for one scrape, and its memory pressure; and the legacy cluster's alone."""
+    until = _minutes(30)
+    start = dt.timedelta(0)
+    dip = _minutes(10)
+    gib = 2**30
+    inputs = [
+        series(
+            'node_memory_MemAvailable_bytes',
+            _exporter(CONTROL),
+            {start: 2 * gib, dip: gib / 2, dip + SCRAPE_INTERVAL: 2 * gib},
+            until,
+        ),
+        series('node_memory_MemAvailable_bytes', _exporter(WORKER), {start: 4 * gib}, until),
+        counter('node_pressure_memory_stalled_seconds_total', _exporter(CONTROL), {start: 3.0}, until),
+        counter('node_pressure_memory_stalled_seconds_total', _exporter(WORKER), {start: 0.0}, until),
+    ]
+    yield Case(
+        'a dip in available memory',
+        inputs,
+        samples=[
+            Sample(
+                dip - MARGIN,
+                group.record('node_memory_available'),
+                [({'node': CONTROL}, 2 * gib), ({'node': WORKER}, 4 * gib)],
+            ),
+            Sample(
+                dip + 2 * MARGIN,
+                group.record('node_memory_available'),
+                [({'node': CONTROL}, gib / 2), ({'node': WORKER}, 4 * gib)],
+            ),
+            Sample(
+                dip + 2 * MARGIN,
+                group.record('node_memory_pressure_full'),
+                [({'node': CONTROL}, 0.1), ({'node': WORKER}, 0)],
+            ),
+        ],
+    )
+    yield Case("the legacy cluster's nodes alone", _legacy(inputs), samples=_empty(group, dip))
+
+
+def _disk_inputs(pressured: dt.timedelta | None, until: dt.timedelta) -> list[Series]:
+    """A control plane's boot volume and its second volume written, and its I/O pressure at 5 %, 20 % from `pressured` on.
+
+    The worker's pressure is 20 % throughout.
+    """
+    start = dt.timedelta(0)
+    boot, other = {**_exporter(CONTROL), 'device': 'sda'}, {**_exporter(CONTROL), 'device': 'sdb'}
+    pressure = {start: 1.5} if pressured is None else {start: 1.5, pressured: 6.0}
+    return [
+        counter('node_disk_writes_completed_total', boot, {start: 1500.0}, until),
+        counter('node_disk_writes_completed_total', other, {start: 3000.0}, until),
+        counter('node_disk_written_bytes_total', boot, {start: 30e6}, until),
+        counter('node_disk_written_bytes_total', other, {start: 90e6}, until),
+        counter('node_disk_write_time_seconds_total', boot, {start: 7.5}, until),
+        counter('node_disk_write_time_seconds_total', other, {start: 30.0}, until),
+        counter('node_disk_io_time_weighted_seconds_total', boot, {start: 15.0}, until),
+        counter('node_disk_io_time_weighted_seconds_total', other, {start: 30.0}, until),
+        counter('node_pressure_io_waiting_seconds_total', _exporter(CONTROL), pressure, until),
+        counter('node_pressure_io_waiting_seconds_total', _exporter(WORKER), {start: 6.0}, until),
+        counter('node_pressure_io_stalled_seconds_total', _exporter(CONTROL), {start: 0.75}, until),
+        # etcd's own: ten WAL fsyncs and five commits a second, and 0.2 MB/s
+        # of WAL.
+        *(
+            counter(metric, {JOB_LABEL: ETCD_JOB, 'node': CONTROL}, {start: slope}, until)
+            for metric, slope in (
+                ('etcd_disk_wal_fsync_duration_seconds_count', 300.0),
+                ('etcd_disk_backend_commit_duration_seconds_count', 150.0),
+                ('etcd_disk_wal_write_bytes_total', 6e6),
+            )
+        ),
+    ]
+
+
+#: OCI's series step: a sample a minute.
+OCI_STEP = dt.timedelta(minutes=1)
+
+
+def _oci_inputs(throttled: dt.timedelta, until: dt.timedelta) -> list[Series]:
+    """A control plane's boot volume throttled for one minute at `throttled`, and its node volume throttled throughout."""
+    start = dt.timedelta(0)
+
+    def volume(name: str) -> dict[str, str]:
+        return {'node': CONTROL, 'volume': name}
+
+    def oci(metric: str, labels: Labels, points: Mapping[dt.timedelta, Point]) -> Series:
+        return series(f'{OCI_BLOCKSTORE_METRICS}_{metric}', labels, points, until, OCI_STEP)
+
+    return [
+        oci('VolumeThrottledIOs', volume(BOOT_VOLUME), {start: 0, throttled: 5, throttled + OCI_STEP: 0}),
+        oci('VolumeThrottledIOs', volume('hath-cache'), {start: 7}),
+        oci('VolumeGuaranteedIOPS', volume(BOOT_VOLUME), {start: 3000}),
+        oci('VolumeGuaranteedThroughput', volume(BOOT_VOLUME), {start: 24}),
+    ]
+
+
+def disk(group: Group) -> Iterator[Case]:
+    """The boot volume read apart from the node's other volumes; I/O pressure rising past its budget; OCI's throttling.
+
+    The throttled minute raises the alert for as long as the window holds it,
+    and a volume other than a boot volume raises nothing.
+    """
+    pressure = group.rule('ControlPlaneIoPressure')
+    throttle = group.rule('BootVolumeThrottled')
+    until = _minutes(40)
+    at = _minutes(20)
+    node = {'node': CONTROL}
+    yield Case(
+        'steady',
+        _disk_inputs(None, until),
+        [Check(at, pressure['alert'])],
+        samples=[
+            Sample(at, group.record('boot_volume_write_iops'), [(node, 50)]),
+            Sample(at, group.record('boot_volume_write_bytes'), [(node, 1e6)]),
+            Sample(at, group.record('boot_volume_write_latency'), [(node, 0.005)]),
+            Sample(at, group.record('boot_volume_io_in_flight'), [(node, 0.5)]),
+            Sample(at, group.record('node_io_pressure_some'), [(node, 0.05), ({'node': WORKER}, 0.2)]),
+            Sample(at, group.record('node_io_pressure_full'), [(node, 0.025)]),
+            Sample(at, group.record('boot_volume_other_write_iops'), [(node, 35)]),
+            Sample(at, group.record('boot_volume_other_write_bytes'), [(node, 0.8e6)]),
+        ],
+    )
+    pressured = _minutes(15)
+    # Ten minutes' mean: 5 % before, 20 % after, so 10 % three minutes and
+    # twenty seconds in.
+    yield Case(
+        'a control plane pressured',
+        _disk_inputs(pressured, until),
+        [
+            Check(pressured - MARGIN, pressure['alert']),
+            Check(pressured + _minutes(2), pressure['alert']),
+            Check(pressured + _minutes(6), pressure['alert'], [Alert(pressure, node)]),
+        ],
+    )
+    window = readings.OCI_WINDOW
+    throttled = window + _minutes(10)
+    oci_until = throttled + window + _minutes(10)
+    boot = {'node': CONTROL, 'volume': BOOT_VOLUME}
+    yield Case(
+        'a boot volume throttled for a minute',
+        _oci_inputs(throttled, oci_until),
+        [
+            Check(throttled - MARGIN, throttle['alert']),
+            Check(throttled + MARGIN, throttle['alert'], [Alert(throttle, boot)]),
+            Check(throttled + window - MARGIN, throttle['alert'], [Alert(throttle, boot)]),
+            Check(throttled + window + 2 * MARGIN, throttle['alert']),
+        ],
+        OCI_STEP,
+        samples=[
+            Sample(
+                throttled + _minutes(10),
+                group.record('volume_throttled_ios'),
+                [(boot, 5), ({'node': CONTROL, 'volume': 'hath-cache'}, 7 * (window // OCI_STEP))],
+            ),
+            Sample(throttled, group.record('volume_guaranteed_iops'), [(boot, 3000)]),
+            Sample(throttled, group.record('volume_guaranteed_throughput'), [(boot, 24)]),
+        ],
+    )
+    yield Case(
+        "the legacy cluster's nodes and volumes alone",
+        _legacy([*_disk_inputs(pressured, until), *_oci_inputs(_minutes(30), until)]),
+        _quiet(group, at, _minutes(31)),
+        samples=_empty(group, _minutes(31)),
+    )
+
+
+def network(group: Group) -> Iterator[Case]:
+    """A control plane's bond and its member link, KubeSpan, a dummy and a pod's link; another's bond; the worker's link.
+
+    The bond carries what its member does, so the uplink is read by the bond.
+    etcd's peers and the worker's scrapes stand for KubeSpan's paths. And the
+    legacy cluster's series alone.
+    """
+    until = _minutes(30)
+    at = _minutes(20)
+    start = dt.timedelta(0)
+
+    # The second control plane's bond has a member the Ethernet names do not
+    # cover, so only the bond reads its traffic.
+    peers = conventions.CLOUD_NODES[1]
+
+    def link(device: str, node: str = CONTROL) -> dict[str, str]:
+        return {**_exporter(node), 'device': device}
+
+    slopes = [
+        (link('bond0'), 'receive', 30e6),
+        (link('bond0'), 'transmit', 15e6),
+        (link('enp0s6'), 'receive', 30e6),
+        (link('enp0s6'), 'transmit', 15e6),
+        (link(readings.KUBESPAN), 'receive', 6e6),
+        (link(readings.KUBESPAN), 'transmit', 3e6),
+        (link('dummy0'), 'receive', 3e6),
+        (link('dummy0'), 'transmit', 3e6),
+        (link('lxc0a1b2c'), 'receive', 3e6),
+        (link('lxc0a1b2c'), 'transmit', 3e6),
+        (link('ens18', WORKER), 'receive', 3e6),
+        (link('ens18', WORKER), 'transmit', 3e6),
+        (link('bond0', peers), 'receive', 6e6),
+        (link('bond0', peers), 'transmit', 6e6),
+    ]
+    drops = [(link('bond0'), 1.0), (link('enp0s6'), 0.0), (link(readings.KUBESPAN), 0.0), (link('dummy0'), 5.0)]
+    peer = {JOB_LABEL: ETCD_JOB, 'node': CONTROL, 'Local': 'a'}
+    blip = at - _minutes(2)
+
+    def up(job: str, node: str, value: float, down: dt.timedelta | None = None) -> Series:
+        points: dict[dt.timedelta, Point] = {start: value}
+        if down is not None:
+            points |= {down: 0, down + SCRAPE_INTERVAL: value}
+        return series('up', {JOB_LABEL: job, 'node': node, 'instance': f'{node}.internal'}, points, until)
+
+    inputs = [
+        *(
+            counter(f'node_network_{direction}_bytes_total', labels, {start: slope}, until)
+            for labels, direction, slope in slopes
+        ),
+        *(
+            counter(f'node_network_{direction}_drop_total', labels, {start: slope}, until)
+            for labels, slope in drops
+            for direction in ('receive', 'transmit')
+        ),
+        series('etcd_network_active_peers', {**peer, 'Remote': 'b'}, {start: 1}, until),
+        series(
+            'etcd_network_active_peers', {**peer, 'Remote': 'c'}, {start: 1, blip: 0, blip + SCRAPE_INTERVAL: 1}, until
+        ),
+        *(_server_id(member, until) for member in ('a', 'b', 'c')),
+        up(ETCD_JOB, CONTROL, 1),
+        up(NODE_EXPORTER_JOB, CONTROL, 1),
+        up(ETCD_JOB, peers, 1, down=blip),
+        up(NODE_EXPORTER_JOB, peers, 1),
+        up(NODE_EXPORTER_JOB, WORKER, 0),
+    ]
+    node = {'node': CONTROL}
+    worker = {'node': WORKER}
+    yield Case(
+        'nodes moving traffic',
+        inputs,
+        samples=[
+            Sample(at, group.record('node_network_bytes'), [(node, 1.5e6), ({'node': peers}, 0.4e6), (worker, 0.2e6)]),
+            Sample(
+                at,
+                group.record('node_link_bytes'),
+                [
+                    ({**node, 'device': 'bond0'}, 1.5e6),
+                    ({**node, 'device': 'enp0s6'}, 1.5e6),
+                    ({**node, 'device': readings.KUBESPAN}, 0.3e6),
+                    ({**worker, 'device': 'ens18'}, 0.2e6),
+                    ({'node': peers, 'device': 'bond0'}, 0.4e6),
+                ],
+            ),
+            Sample(
+                at,
+                group.record('node_link_drops'),
+                [
+                    ({**node, 'device': 'bond0'}, 20),
+                    ({**node, 'device': 'enp0s6'}, 0),
+                    ({**node, 'device': readings.KUBESPAN}, 0),
+                ],
+            ),
+            Sample(at, group.record('etcd_active_peers'), [({**node, 'Remote': 'b'}, 1), ({**node, 'Remote': 'c'}, 0)]),
+            Sample(at, group.record('control_plane_scrapes_up'), [(node, 1), ({'node': peers}, 0)]),
+        ],
+    )
+    yield Case("the legacy cluster's nodes alone", _legacy(inputs), samples=_empty(group, at))
+    yield _replaced_member(group)
+
+
+def _server_id(member: str, until: dt.timedelta, points: Mapping[dt.timedelta, Point] | None = None) -> Series:
+    """A member's own report of its ID, `member`, on its listener."""
+    labels = {JOB_LABEL: ETCD_JOB, 'node': f'node-{member}', 'server_id': member}
+    return series('etcd_server_id', labels, points or {dt.timedelta(0): 1}, until)
+
+
+def _replaced_member(group: Group) -> Case:
+    """A peer replaced: the old member's series stays on the survivor at 0, and only members that report count.
+
+    etcd deletes no peer's series when the peer is removed, so the old
+    member's lingers for as long as the survivor's process runs.
+    """
+    until = _minutes(40)
+    start = dt.timedelta(0)
+    down, replaced = _minutes(8), _minutes(11)
+    peer = {JOB_LABEL: ETCD_JOB, 'node': CONTROL, 'Local': 'a'}
+    inputs = [
+        series('etcd_network_active_peers', {**peer, 'Remote': 'b'}, {start: 1}, until),
+        series('etcd_network_active_peers', {**peer, 'Remote': 'c0'}, {start: 1, down: 0}, until),
+        series('etcd_network_active_peers', {**peer, 'Remote': 'c1'}, {replaced: 1}, until),
+        _server_id('a', until),
+        _server_id('b', until),
+        _server_id('c0', until, {start: 1, down: STALE}),
+        _server_id('c1', until, {replaced: 1}),
+    ]
+    node = {'node': CONTROL}
+
+    def peers(*members: str) -> list[tuple[Labels, float]]:
+        return [({**node, 'Remote': member}, 1) for member in members]
+
+    return Case(
+        'a peer replaced',
+        inputs,
+        samples=[
+            Sample(down - MARGIN, group.record('etcd_active_peers'), peers('b', 'c0')),
+            Sample(_minutes(35), group.record('etcd_active_peers'), peers('b', 'c1')),
+        ],
+    )
+
+
+#: The image of a pod's sandbox, which `cAdvisor` reports under the pod with no
+#: container, beside the pod's own control group.
+PAUSE = 'registry.k8s.io/pause:3.10.1'
+
+
+def _pod(
+    node: str, namespace: str, name: str, container: str | None = None, image: str | None = None
+) -> dict[str, str]:
+    """The labels of a `cAdvisor` series of a pod: its own control group, or one of its containers', or its sandbox's."""
+    labels = {JOB_LABEL: KUBELET_JOB, 'node': node, 'namespace': namespace, 'pod': name}
+    return labels | ({'container': container} if container else {}) | ({'image': image} if image else {})
+
+
+def _limits(
+    name: str, resource: str, points: Mapping[dt.timedelta, Point], until: dt.timedelta, namespace: str = 'blog'
+) -> Series:
+    """kube-state-metrics' limit of a pod's one container on the control plane."""
+    labels = {
+        JOB_LABEL: KUBE_STATE_METRICS_JOB,
+        'node': CONTROL,
+        'namespace': namespace,
+        'pod': name,
+        'container': 'app',
+        'resource': resource,
+    }
+    return series('kube_pod_container_resource_limits', labels, points, until)
+
+
+def _phase(
+    name: str, phase: str, points: Mapping[dt.timedelta, Point], until: dt.timedelta, namespace: str = 'blog'
+) -> Series:
+    """kube-state-metrics' series of a pod's phase: 1 where the pod is in it."""
+    labels = {JOB_LABEL: KUBE_STATE_METRICS_JOB, 'namespace': namespace, 'pod': name, 'phase': phase}
+    return series('kube_pod_status_phase', labels, points, until)
+
+
+def load_classes(group: Group) -> Iterator[Case]:
+    """Two control planes, one running a workload and Envoy beside the platform, one running neither; a rollout; and the legacy cluster's.
+
+    Each pod is reported by its own control group, which the readings read,
+    and by its containers' and its sandbox's, which they do not.
+    """
+    until = _minutes(30)
+    at = _minutes(20)
+    start = dt.timedelta(0)
+    mib = 2**20
+    other = conventions.CLOUD_NODES[1]
+    slice_pods = ('kube-apiserver', 'kube-controller-manager', 'kube-scheduler')
+    apiserver, manager, scheduler = (_pod(CONTROL, 'kube-system', f'{name}-{CONTROL}') for name in slice_pods)
+    envoy = _pod(CONTROL, 'kube-system', 'cilium-envoy-x')
+    blog = _pod(CONTROL, 'blog', 'blog-0')
+    other_apiserver = _pod(other, 'kube-system', f'kube-apiserver-{other}')
+    # Cores used, as a step's CPU seconds: a core is 30.
+    cpu = [
+        (apiserver, 7.5),
+        (manager, 3.75),
+        (scheduler, 3.75),
+        (_pod(CONTROL, 'kube-system', 'cilium-agent-x'), 15.0),
+        (envoy, 3.75),
+        (blog, 3.75),
+        (_pod(CONTROL, 'blog', 'blog-0', container='app'), 3.75),
+        (_pod(CONTROL, 'blog', 'blog-0', image=PAUSE), 3.75),
+        (_pod(CONTROL, conventions.MONITORING_NAMESPACE, 'node-exporter-x'), 1.5),
+        (other_apiserver, 3.75),
+    ]
+    memory = [
+        (apiserver, 1024 * mib),
+        (manager, 64 * mib),
+        (scheduler, 64 * mib),
+        (envoy, 128 * mib),
+        (blog, 256 * mib),
+        (_pod(CONTROL, 'blog', 'blog-0', container='app'), 256 * mib),
+        (_pod(CONTROL, 'blog', 'blog-0', image=PAUSE), 1 * mib),
+        (other_apiserver, 512 * mib),
+    ]
+    # Bytes written, a step's: 3 MB is 0.1 MB/s.
+    writes = [
+        (apiserver, 3e6),
+        (envoy, 0.0),
+        (blog, 3e6),
+        (_pod(CONTROL, 'blog', 'blog-0', container='app'), 3e6),
+        (_pod(CONTROL, 'blog', 'blog-0', image=PAUSE), 3e6),
+        (other_apiserver, 0.0),
+    ]
+    etcd = {node: {JOB_LABEL: ETCD_JOB, 'node': node} for node in (CONTROL, other)}
+    inputs = [
+        counter('node_cpu_seconds_total', {**_exporter(CONTROL), 'cpu': '0', 'mode': 'user'}, {start: 30.0}, until),
+        counter('node_cpu_seconds_total', {**_exporter(CONTROL), 'cpu': '0', 'mode': 'system'}, {start: 15.0}, until),
+        counter('node_cpu_seconds_total', {**_exporter(CONTROL), 'cpu': '0', 'mode': 'idle'}, {start: 15.0}, until),
+        counter('node_cpu_seconds_total', {**_exporter(other), 'cpu': '0', 'mode': 'user'}, {start: 15.0}, until),
+        *(counter('process_cpu_seconds_total', labels, {start: 7.5}, until) for labels in etcd.values()),
+        *(counter('container_cpu_usage_seconds_total', labels, {start: slope}, until) for labels, slope in cpu),
+        series('node_memory_MemTotal_bytes', _exporter(CONTROL), {start: 8192 * mib}, until),
+        series('node_memory_MemAvailable_bytes', _exporter(CONTROL), {start: 5120 * mib}, until),
+        series('node_memory_MemTotal_bytes', _exporter(other), {start: 8192 * mib}, until),
+        series('node_memory_MemAvailable_bytes', _exporter(other), {start: 6144 * mib}, until),
+        *(series('process_resident_memory_bytes', labels, {start: 128 * mib}, until) for labels in etcd.values()),
+        *(series('container_memory_working_set_bytes', labels, {start: value}, until) for labels, value in memory),
+        counter('node_disk_written_bytes_total', {**_exporter(CONTROL), 'device': 'sda'}, {start: 30e6}, until),
+        counter('node_disk_written_bytes_total', {**_exporter(other), 'device': 'sda'}, {start: 3e6}, until),
+        counter('etcd_disk_wal_write_bytes_total', etcd[CONTROL], {start: 6e6}, until),
+        counter('etcd_disk_wal_write_bytes_total', etcd[other], {start: 1.5e6}, until),
+        *(counter('container_fs_writes_bytes_total', labels, {start: slope}, until) for labels, slope in writes),
+        _limits('blog-0', 'cpu', {start: 0.25}, until),
+        _limits('blog-1', 'cpu', {start: 0.25}, until),
+        _limits('blog-0', 'memory', {start: 256 * mib}, until),
+        _limits('blog-1', 'memory', {start: 256 * mib}, until),
+        _limits('cilium-agent-x', 'cpu', {start: 1.0}, until, 'kube-system'),
+        _phase('blog-0', 'Running', {start: 1}, until),
+        _phase('blog-1', 'Running', {start: 1}, until),
+        _phase('cilium-agent-x', 'Running', {start: 1}, until, 'kube-system'),
+    ]
+
+    def by_class(node: str, **values: float) -> list[tuple[Labels, float]]:
+        return [({'node': node, readings.CLASS_LABEL: name.replace('_', '-')}, value) for name, value in values.items()]
+
+    yield Case(
+        'a control plane with a workload beside one with none',
+        inputs,
+        samples=[
+            Sample(
+                at,
+                group.record('load_class_cpu'),
+                [
+                    *by_class(CONTROL, control_plane=0.75, workloads=0.25, platform=0.5),
+                    *by_class(other, control_plane=0.375, workloads=0, platform=0.125),
+                ],
+            ),
+            Sample(
+                at,
+                group.record('load_class_memory'),
+                [
+                    *by_class(CONTROL, control_plane=1280 * mib, workloads=384 * mib, platform=1408 * mib),
+                    *by_class(other, control_plane=640 * mib, workloads=0, platform=1408 * mib),
+                ],
+            ),
+            Sample(
+                at,
+                group.record('load_class_io'),
+                [
+                    *by_class(CONTROL, control_plane=0.3e6, workloads=0.1e6, platform=0.6e6),
+                    *by_class(other, control_plane=0.05e6, workloads=0, platform=0.05e6),
+                ],
+            ),
+            Sample(at, group.record('workloads_cpu_limits'), [({'node': CONTROL}, 0.5)]),
+            Sample(at, group.record('workloads_memory_limits'), [({'node': CONTROL}, 512 * mib)]),
+        ],
+    )
+    # One pod replaced by another at `replaced`, its limit then lowered in
+    # place at `resized`, and a Job's pod finished: only the pod that runs
+    # holds its limits, at the limit it has now.
+    replaced = _minutes(5)
+    resized = _minutes(10)
+    gone: dict[dt.timedelta, Point] = {start: 1, replaced: STALE}
+    rollout = [
+        _limits('blog-old', 'cpu', {start: 0.25, replaced: STALE}, until),
+        _limits('blog-old', 'memory', {start: 256 * mib, replaced: STALE}, until),
+        _phase('blog-old', 'Running', gone, until),
+        _limits('blog-new', 'cpu', {replaced: 0.25, resized: 0.125}, until),
+        _limits('blog-new', 'memory', {replaced: 256 * mib}, until),
+        _phase('blog-new', 'Running', {replaced: 1}, until),
+        _limits('backup-x', 'cpu', {start: 0.3}, until),
+        _limits('backup-x', 'memory', {start: 128 * mib}, until),
+        _phase('backup-x', 'Succeeded', {start: 1}, until),
+        _phase('backup-x', 'Running', {start: 0}, until),
+    ]
+    yield Case(
+        'a rollout beside a finished Job',
+        rollout,
+        samples=[
+            *(
+                Sample(time, group.record('workloads_cpu_limits'), [({'node': CONTROL}, 0.25)])
+                for time in (replaced - MARGIN, replaced + 2 * MARGIN)
+            ),
+            Sample(resized + 2 * MARGIN, group.record('workloads_cpu_limits'), [({'node': CONTROL}, 0.125)]),
+            Sample(replaced + 2 * MARGIN, group.record('workloads_memory_limits'), [({'node': CONTROL}, 256 * mib)]),
+        ],
+    )
+    yield Case("the legacy cluster's nodes alone", _legacy([*inputs, *rollout]), samples=_empty(group, at))
+
+
+def api_server(group: Group) -> Iterator[Case]:
+    """Requests read by verb, a watch apart; and the legacy cluster's alone."""
+    until = _minutes(30)
+    at = _minutes(20)
+    start = dt.timedelta(0)
+    labels = {JOB_LABEL: APISERVER_JOB, 'instance': '10.0.1.11:6443'}
+    inputs = [
+        *_histogram(
+            'apiserver_request_duration_seconds', {**labels, 'verb': 'GET'}, {start: _bucketed('0.128')}, until
+        ),
+        *_histogram(
+            'apiserver_request_duration_seconds', {**labels, 'verb': 'WATCH'}, {start: _bucketed('+Inf')}, until
+        ),
+    ]
+    yield Case(
+        'reads and a watch',
+        inputs,
+        samples=[Sample(at, group.record('apiserver_request_p99'), [({'verb': 'GET'}, _p99(0.064, 0.128))])],
+    )
+    yield Case("the legacy cluster's API server alone", _legacy(inputs), samples=_empty(group, at))
+
+
 @dataclass(frozen=True)
 class Family:
     """How a declared group is evaluated: its cases, and how often vmalert-tool evaluates its rules."""
@@ -741,6 +1609,13 @@ FAMILIES: Mapping[str, Family] = {
     'scheduled-jobs': Family(scheduled_jobs),
     'scrape-targets': Family(scrape_targets),
     'kubeconfig-copy': Family(kubeconfig_copy),
+    'etcd': Family(etcd),
+    'cpu': Family(cpu),
+    'memory': Family(memory),
+    'disk': Family(disk),
+    'network': Family(network),
+    'load-classes': Family(load_classes),
+    'apiserver': Family(api_server),
 }
 
 
@@ -771,19 +1646,27 @@ def test_every_declared_group_has_cases(groups: dict[str, Group]) -> None:
 def test_every_rule_of_the_group_fires_in_a_check_and_every_alert_is_silent_in_one(
     groups: dict[str, Group], name: str
 ) -> None:
-    """Each declared rule, by identity, fires in some check; each alert name is silent in some check.
+    """Each declared alert, by identity, fires in some check; each alert name is silent in some check.
 
     The check-in is the exception to silence: its tier is the one whose rule
-    fires always.
+    fires always. Each record is read with a value in some case, and with
+    none in another.
     """
     group = groups[name]
-    checks = [check for case in FAMILIES[name].cases(group) for check in case.checks]
+    cases = list(FAMILIES[name].cases(group))
+    checks = [check for case in cases for check in case.checks]
     fired = [alert.rule for check in checks for alert in check.firing]
-    unfired = [rule['alert'] for rule in group.rules if not any(rule is one for one in fired)]
+    alerts = [rule for rule in group.rules if 'alert' in rule]
+    unfired = [rule['alert'] for rule in alerts if not any(rule is one for one in fired)]
     assert not unfired, f'{name}: no check fires {unfired}'
     silent = {check.alert for check in checks if not check.firing}
-    always = {rule['alert'] for rule in group.rules if rule['labels'][TIER_LABEL] == Tier.HEARTBEAT.value}
+    always = {rule['alert'] for rule in alerts if rule['labels'][TIER_LABEL] == Tier.HEARTBEAT.value}
     assert group.alerts - always <= silent
+    samples = [sample for case in cases for sample in case.samples]
+    assert group.records <= {sample.record for sample in samples if sample.values}, f'{name}: a record is never read'
+    assert group.records <= {sample.record for sample in samples if not sample.values}, (
+        f'{name}: a record is never empty'
+    )
 
 
 @pytest.mark.timeout(CASE_TIMEOUT)
