@@ -8,6 +8,8 @@ takes an `applied` fixture for what the other components install. `applied`
 is that run, and `Run` reads what it registered. `applied(sealed=SEALED)` is
 the same run with every sealed value the stack declares sealed in, which the
 stack holds only once the bring-up has sealed them (physical/bring-up.md §1).
+`sealed_values` builds those values for any stack, and `test_stack_programs.py`
+seals in each of its programs' values through it.
 
 Every value is invented. The addresses are documentation and private ranges
 of the families each output carries, and each output holds addresses no other
@@ -310,14 +312,21 @@ class Run:
         ]
 
 
-#: A ciphertext for every key of every sealed value the census has `k8s-base`
-#: declare, as the stack's configuration holds them once each is sealed in.
-#: Built from the census, so a row added to it is sealed in here too.
-SEALED: dict[str, object] = {
-    value.name: {key: f'AgB-sealed-{value.name}-{key}' for key in value.keys}
-    for value in conventions.sealed.VALUES.values()
-    if value.stack == conventions.STACK_NAMES.k8s_base
-}
+def sealed_values(stack: str) -> dict[str, object]:
+    """A ciphertext for every key of every sealed value the census has `stack` declare.
+
+    That is what the stack's configuration holds once each is sealed in. It is
+    built from the census, so a row added to it is sealed in here too.
+    """
+    return {
+        value.name: {key: f'AgB-sealed-{value.name}-{key}' for key in value.keys}
+        for value in conventions.sealed.VALUES.values()
+        if value.stack == stack
+    }
+
+
+#: Every sealed value `k8s-base` declares, sealed in (`sealed_values`).
+SEALED: dict[str, object] = sealed_values(conventions.STACK_NAMES.k8s_base)
 
 
 async def declare(physical: Physical, *, preview: bool = False, sealed: dict[str, object] | None = None) -> Run:

@@ -28,7 +28,7 @@ from collections.abc import Callable, Generator, Mapping
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 import pytest
 import requests
@@ -150,11 +150,14 @@ class History:
     #: series → (labels, newest sample's time in seconds), the labels as the
     #: store keeps them: a series imported from another cluster carries `cluster`.
     newest: dict[str, list[tuple[dict[str, str], float]]] = field(default_factory=dict)
+    #: The answer's `resultType`: `vector`, an instant query's, each row
+    #: carrying one `value`; or `matrix`, a range query's, each carrying `values`.
+    shape: Literal['vector', 'matrix'] = 'vector'
     queries: list[str] = field(default_factory=list)
     imported: list[dict[str, Any]] = field(default_factory=list)
 
     def answer(self, query: str) -> list[dict[str, Any]]:
-        """The instant query's answer: the newest time per node and volume of the series the selector names.
+        """The instant query's answer, in `shape`: the newest time per node and volume of the series the selector names.
 
         `cluster=""` matches a series without the label, as in Prometheus and
         VictoriaMetrics; a selector without it matches every series of the name.
@@ -169,10 +172,13 @@ class History:
                 continue
             key = (labels['node'], labels['volume'])
             best[key] = max(best.get(key, 0.0), seconds)
-        return [
-            {'metric': {'node': node, 'volume': volume}, 'value': [NOW.timestamp(), str(seconds)]}
+        rows = [
+            ({'node': node, 'volume': volume}, [NOW.timestamp(), str(seconds)])
             for (node, volume), seconds in best.items()
         ]
+        if self.shape == 'matrix':
+            return [{'metric': labels, 'values': [sample]} for labels, sample in rows]
+        return [{'metric': labels, 'value': sample} for labels, sample in rows]
 
     def written(self, series: str) -> dict[Target, dict[int, float]]:
         """The samples imported of `series`, per target, by time in milliseconds."""
@@ -196,7 +202,7 @@ def history() -> Generator[tuple[History, str]]:
             assert url.path == '/api/v1/query', url.path
             (query,) = urllib.parse.parse_qs(url.query)['query']
             held.queries.append(query)
-            self._reply({'status': 'success', 'data': {'resultType': 'vector', 'result': held.answer(query)}})
+            self._reply({'status': 'success', 'data': {'resultType': held.shape, 'result': held.answer(query)}})
 
         def do_POST(self) -> None:
             assert self.path == '/api/v1/import', self.path
@@ -573,3 +579,28 @@ def test_a_series_that_names_no_volume_is_an_error_of_its_own(
     assert [message for message in named if shapeless in message and 'attachmentId' in message]
     undeclared = [record.getMessage() for record in caplog.records if 'census does not declare' in record.getMessage()]
     assert all(RETIRED in message for message in undeclared), undeclared
+
+
+def test_an_answer_of_a_shape_the_program_does_not_read_ends_the_run_with_its_traceback(
+    tmp_path: Path, key: tuple[str, str], history: tuple[History, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A defect every metric would meet alike is no error of reaching the stores, and does not stop one metric alone.
+
+    The history store answers the newest-sample query as a range query does, a
+    matrix whose rows carry `values` where the program reads an instant query's
+    `value`. The run ends there, on the first metric, rather than going on to
+    the next and exiting 1.
+    """
+    held, address = history
+    held.shape = 'matrix'
+    stored = dt.datetime(2026, 11, 17, 9, 1, tzinfo=dt.UTC)
+    for metric in oci_pull.METRICS:
+        held.newest[f'{NAMESPACE}_{metric}'] = [
+            ({'node': it.node, 'volume': it.volume}, stored.timestamp()) for it in TARGETS.values()
+        ]
+
+    with pytest.raises(Exception):  # noqa: B017 -- the program promises a traceback, not which exception carries it
+        _ = _run(tmp_path, key, address, monkeypatch)
+
+    assert len(held.queries) == 1
+    assert held.imported == []
