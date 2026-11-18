@@ -60,8 +60,11 @@ the cluster's controller runs, reading the value back out of the stack that
 holds it rather than asking for it again.
 
 Two rows are sealed and nothing else (`SEALED_RECORDS`): alertmanager's
-webhook and the mail relay's DKIM key, whose only consumers are in the
-cluster, so the seal is the whole of their delivery. The DKIM key is not made
+webhook id and the mail relay's DKIM key, whose only consumers are in the
+cluster, so the seal is the whole of their delivery. The webhook's row takes
+the id alone, and refuses one outside the alphabet Home Assistant draws ids
+from (`WEBHOOK_ID`), a whole URL among them: the cluster composes the URL
+around the id. The DKIM key is not made
 here at all: it is carried from the legacy cluster, and its row refuses a key
 whose public half is not the one the `dns` stack publishes.
 
@@ -85,6 +88,7 @@ import enum
 import getpass
 import hashlib
 import logging
+import re
 import sys
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -166,6 +170,19 @@ class RecordMissing(pulumi_config.SlotRefused):
         self.key: str = key
         self.missing: Missing = missing
         self.record: tuple[str, str, str] = record
+
+
+class NotAWebhookId(pulumi_config.SlotRefused):
+    """A value refused as the webhook id `record` takes, before it is sealed: `key` is its data key.
+
+    `url` is whether it holds a URL or a path, the mistake the refusal names.
+    Nothing of the value is a field: the id is the webhook's whole credential.
+    """
+
+    def __init__(self, message: str, *, key: str, url: bool) -> None:
+        super().__init__(message)
+        self.key: str = key
+        self.url: bool = url
 
 
 class KeyNotPublished(pulumi_config.SlotRefused):
@@ -605,6 +622,41 @@ class SealedRecord:
     verify: Callable[[Mapping[str, str]], None] | None = None
 
 
+#: The ids this command takes: the URL-safe alphabet Home Assistant draws a
+#: webhook id from -- the automation editor's default, the automation's slug,
+#: a hyphen and 24 characters of URL-safe base64, and the hex of core's
+#: `async_generate_id` -- which needs no escaping as the last segment of the
+#: URL the cluster composes. Home Assistant itself accepts any id without a
+#: `/`; one outside this set is drawn again in the trigger.
+WEBHOOK_ID = re.compile(r'[A-Za-z0-9_-]+')
+
+
+def is_a_webhook_id(key: str) -> Callable[[Mapping[str, str]], None]:
+    """A `SealedRecord.verify` refusing the value at `key` unless it is drawn from `WEBHOOK_ID`'s alphabet.
+
+    A whole URL pasted where the id belongs is the likely mistake, since Home
+    Assistant shows the id beside a button that copies the URL: the refusal
+    says so, and says which part is the id. It never prints the value.
+    """
+
+    def verify(values: Mapping[str, str]) -> None:
+        if WEBHOOK_ID.fullmatch(values[key]):
+            return
+        url = '/' in values[key]
+        raise NotAWebhookId(
+            f'{key} holds a URL or a path; record takes the webhook id alone, the part after '
+            f'{conventions.HOME_ASSISTANT_WEBHOOK_PATH}, so it was not sealed'
+            if url
+            else f'{key} holds characters outside A-Z, a-z, 0-9, "_" and "-", the alphabet Home Assistant draws a '
+            'webhook id from and the one the cluster composes into its URL unescaped; draw a new id in the trigger, '
+            'so it was not sealed',
+            key=key,
+            url=url,
+        )
+
+    return verify
+
+
 def matches_published_dkim(published: str, *, key: str) -> Callable[[Mapping[str, str]], None]:
     """A `SealedRecord.verify` refusing a private key at `key` unless its public half is the one `published` carries.
 
@@ -657,21 +709,24 @@ SEALED_RECORDS: dict[str, SealedRecord] = {
     for record in (
         SealedRecord(
             member='alert-webhook',
-            register='Alertmanager webhook URL',
-            title="alertmanager's Home Assistant webhook URL",
+            register='Alertmanager webhook ID',
+            title="alertmanager's Home Assistant webhook id",
             console=(
                 'Home Assistant → Settings → Automations → the alertmanager intake\n'
                 '  automation, created by the operator against the contract\n'
                 '  rfc-007 §7.3 gives: it reads the tier, the summary and the playbook\n'
                 "  off each alert's labels and annotations and pushes under the same\n"
                 "  title convention as the ops repository's handler → its webhook\n"
-                '  trigger, which shows the full URL. A second automation rather than\n'
-                "  the ops repository's own, whose body is that repository's payload.\n"
-                '  Nothing mints this and nothing derives it: rotating it is a new\n'
-                '  webhook id there and one more run of this command.'
+                "  trigger's Webhook ID: the id alone, not the URL beside it. The\n"
+                "  cluster composes the URL around it, at Home Assistant's own address.\n"
+                "  A second automation rather than the ops repository's own, whose body\n"
+                "  is that repository's payload. Nothing mints this and nothing derives\n"
+                '  it: rotating it is a new webhook id there and one more run of this\n'
+                '  command.'
             ),
-            fields=(Field('url', 'url', 'the webhook URL'),),
+            fields=(Field('webhook-id', 'id', 'the webhook id'),),
             sealed=conventions.sealed.ALERT_WEBHOOK,
+            verify=is_a_webhook_id('id'),
         ),
         SealedRecord(
             member='dkim-exim',
@@ -831,6 +886,7 @@ __all__ = (
     'GITHUB_ADMIN',
     'SEALED_RECORDS',
     'STDIN',
+    'WEBHOOK_ID',
     'Answer',
     'Device',
     'Field',
@@ -838,12 +894,14 @@ __all__ = (
     'KeyNotPublished',
     'Missing',
     'NoSingleSecret',
+    'NotAWebhookId',
     'RecordMissing',
     'SealedRecord',
     'UnknownFields',
     'announce',
     'borrow',
     'deliver',
+    'is_a_webhook_id',
     'matches_published_dkim',
     'record_sealed',
     'seal',

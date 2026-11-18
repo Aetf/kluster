@@ -275,11 +275,13 @@ classes its objects fall into (§1.2):
     is a Home Assistant webhook of its own, an automation apart from
     the one the operations repository posts to, because alertmanager's
     body is fixed: it reads the tier, the summary and the playbook off
-    each alert and pushes under the same title convention. The
-    webhook's address is a sealed value (`conventions.sealed`'s
-    alert-webhook row, §1.1), read through the operator's `url_secret`,
-    so it appears in no rendered configuration (rfc-007 §7.3); until it
-    is sealed in, the receiver is skipped and alerts end at the chart's
+    each alert and pushes under the same title convention. Only the
+    webhook's id is a sealed value (`conventions.sealed`'s
+    alert-webhook row, §1.1); the SealedSecret renders the URL in the
+    cluster from `conventions.HOME_ASSISTANT`'s address and the id, and
+    the receiver reads it through the operator's `url_secret`, so the
+    whole URL appears in no rendered configuration (rfc-007 §7.3); until
+    the id is sealed in, the receiver is skipped and alerts end at the chart's
     `blackhole` receiver (physical/bring-up.md §1). **The cluster
     checks in**: a rule that always fires, in the `heartbeat` tier,
     which the receiver repeats to Home Assistant, whose timer for it is

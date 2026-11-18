@@ -24,6 +24,7 @@ import sys
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any, cast
+from urllib.parse import urlsplit
 
 import image_busybox
 import process_sessions
@@ -913,8 +914,8 @@ def test_the_rules_are_declared_behind_the_chart_that_defines_them(absent: tuple
 # -- alertmanager's receiver ----------------------------------------------------------
 
 
-def test_the_receiver_reads_the_webhooks_address_from_its_sealed_secret(absent: tuple[Run, list[str]]) -> None:
-    """The address is in no rendered configuration: every webhook names the sealed value's Secret, in its namespace.
+def test_the_receiver_reads_the_webhooks_url_from_its_sealed_secret(absent: tuple[Run, list[str]]) -> None:
+    """The URL is in no rendered configuration: every webhook names the sealed value's Secret, in its namespace.
 
     The operator reads `url_secret` from the receiver object's own namespace
     (`vmalertmanagerconfig_types.go` L533-563 at operator v0.74.0), which is
@@ -929,7 +930,6 @@ def test_the_receiver_reads_the_webhooks_address_from_its_sealed_secret(absent: 
     for webhook in webhooks:
         assert 'url' not in webhook
         assert webhook['url_secret']['name'] == WEBHOOK.name
-        assert webhook['url_secret']['key'] in WEBHOOK.keys
 
 
 def test_the_receiver_sends_firing_alerts_alone(absent: tuple[Run, list[str]]) -> None:
@@ -948,15 +948,31 @@ def test_the_receiver_sends_firing_alerts_alone(absent: tuple[Run, list[str]]) -
 
 
 def test_the_sealed_webhook_is_declared_where_the_receiver_reads_it(sealed: Run) -> None:
-    """Sealed in, the value becomes the Secret the receiver names, at the scope the census row seals it."""
+    """Sealed in, the value becomes the Secret the receiver names, at the scope the census row seals it.
+
+    The key the receiver reads is one the SealedSecret renders rather than
+    the sealed id, and it renders a URL at Home Assistant's own address
+    around the id; `test_sealing` opens it as the controller does.
+    """
     receiver = _receiver(sealed)
     (secret,) = [
         it.inputs for it in sealed.monitor.of_type(SEALED_SECRET) if it.inputs['metadata']['name'] == WEBHOOK.name
     ]
+    keys = {config['url_secret']['key'] for spec in receiver['spec']['receivers'] for config in spec['webhook_configs']}
+    rendered = secret['spec']['template']['data']
 
     assert secret['metadata']['namespace'] == receiver['metadata']['namespace']
     assert secret['spec']['encryptedData'] == SEALED[WEBHOOK.name]
     assert secret['metadata']['annotations'] == {f'sealedsecrets.bitnami.com/{WEBHOOK.scope.value}': 'true'}
+    assert keys
+    assert keys <= set(rendered) - set(WEBHOOK.keys)
+    for key in keys:
+        url = urlsplit(cast('str', rendered[key]))
+        assert (url.scheme, url.hostname, url.port) == (
+            'http',
+            str(conventions.HOME_ASSISTANT.v4),
+            conventions.HOME_ASSISTANT_PORT,
+        )
 
 
 def test_an_absent_webhook_declares_no_sealed_secret_and_warns_naming_it(absent: tuple[Run, list[str]]) -> None:

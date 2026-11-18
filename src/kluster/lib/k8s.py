@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import fnmatch
 import json
+import string
 import sys
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -84,6 +85,7 @@ __all__ = (
     'namespace',
     'pick_resource',
     'refuse_passthrough',
+    'rendered_template',
     'route',
     'row_gateways',
     'sealed_ciphertext',
@@ -982,6 +984,7 @@ def sealed_value(
     value: SealedValue,
     *,
     ciphertext: Mapping[str, pulumi.Input[str]] | None,
+    rendered: Mapping[str, str] | None = None,
     opts: pulumi.ResourceOptions | None = None,
 ) -> crds.bitnami.v1alpha1.SealedSecret | None:
     """The SealedSecret of a census row, named, placed and scoped as the row says; none while its ciphertext is absent.
@@ -993,6 +996,14 @@ def sealed_value(
     object and not the resource: `resource_name`, the logical name, is the
     caller's, and carries the declaring component's name as every child's
     does (style/pulumi.md), whichever row the component declares.
+
+    **`rendered` composes further keys of the Secret around the sealed ones**,
+    each a `str.format` string whose fields are the row's data keys: the
+    controller renders it into the Secret with each decrypted value in its
+    field's place (`rendered_template`). So the part of a value that is not
+    secret is the program's, held where it is declared, and only the secret
+    part is sealed; what is rendered changes with the program, under the same
+    ciphertext.
 
     **Absent, it declares nothing and warns, naming the value.** A sealed
     value can be made only once the controller that opens it runs, which is
@@ -1017,9 +1028,64 @@ def sealed_value(
         name=value.name,
         namespace=value.namespace,
         encrypted_data=ciphertext,
+        template=SecretTemplate(data=rendered_template(value, rendered)) if rendered else None,
         scope=value.scope,
         opts=opts,
     )
+
+
+def rendered_template(value: SealedValue, rendered: Mapping[str, str]) -> dict[str, str]:
+    """`rendered` as the controller's `spec.template.data`: each field of a sealed key, its decrypted value.
+
+    The controller renders every `template.data` entry as a Go template, and
+    `index . "<key>"` is a decrypted key's value (`Unseal` in
+    `sealedsecret_expansion.go` of sealed-secrets, which renders templates
+    from v0.16.0). From v0.37.0 the context it renders over also holds the
+    raw, unrendered text of every `template.data` key that is not a sealed
+    one (#1940), so a field that is not exactly a sealed key could read
+    another rendered key's template text: the field check below is what
+    keeps it to the decrypted values.
+
+    A form is read with `string.Formatter().parse`. A field is exactly one of
+    the row's data keys, with no format spec and no conversion; anything else
+    is refused by name -- an index, an attribute, a positional `{}`, `!r`,
+    `:>30` -- since none of them means anything to the controller. So is a
+    field naming a key the row does not seal, which `index` would render as
+    an empty string, silently, and a rendered key that is also a sealed one,
+    where the controller would keep the decrypted value. A literal chunk
+    that holds a `{` is emitted as a Go string constant, the chunk quoted as
+    JSON, whose escapes Go reads: unquoted, a brace beside a field's action
+    would be parsed as part of it, and the controller would refuse the whole
+    SealedSecret.
+    """
+    clashing = sorted(set(rendered) & set(value.keys))
+    if clashing:
+        raise ValueError(f'{value.name} seals {", ".join(clashing)}, so it cannot render it too')
+    template: dict[str, str] = {}
+    for key, form in rendered.items():
+        try:
+            parsed = list(string.Formatter().parse(form))
+        except ValueError as malformed:
+            raise ValueError(f'{value.name} renders {key} from a malformed form: {malformed}') from None
+        chunks: list[str] = []
+        for literal, field_name, spec, conversion in parsed:
+            if literal:
+                chunks.append(f'{{{{ {json.dumps(literal, ensure_ascii=False)} }}}}' if '{' in literal else literal)
+            if field_name is None:
+                continue
+            if field_name not in value.keys:
+                raise ValueError(
+                    f'{value.name} renders {key} from {{{field_name}}}, which is not one of the keys it seals: '
+                    f'{", ".join(value.keys)}'
+                )
+            if spec or conversion:
+                raise ValueError(
+                    f'{value.name} renders {key} with a format spec or a conversion on {field_name}, '
+                    'which the controller does not apply'
+                )
+            chunks.append(f'{{{{ index . "{field_name}" }}}}')
+        template[key] = ''.join(chunks)
+    return template
 
 
 def lb_pool_labels(pool: str) -> dict[str, str]:

@@ -107,10 +107,12 @@ started, and none of them reads a datasource this cluster has.
 
 **The alert leg** is alertmanager's one receiver, Home Assistant's webhook for
 alertmanager, an automation apart from the one the operations repository posts
-to, because alertmanager's body is fixed (rfc-007 §7.3). The webhook's address
-is the sealed value `conventions.sealed.ALERT_WEBHOOK`, which the receiver
-reads through the operator's `url_secret`, so it is in no rendered
-configuration. While it is absent from the stack's configuration, no
+to, because alertmanager's body is fixed (rfc-007 §7.3). Only the webhook's id
+is sealed, `conventions.sealed.ALERT_WEBHOOK`; its SealedSecret renders the URL
+around it, Home Assistant's own address from `conventions.HOME_ASSISTANT` with
+its port and webhook path (`webhook_url`), and the receiver reads that URL
+through the operator's `url_secret`, so the id is in no rendered
+configuration. While the id is absent from the stack's configuration, no
 SealedSecret is declared for it; the operator then skips the receiver's
 configuration, and every alert ends at the chart's `blackhole` receiver until
 the value is sealed in (`kluster.lib.k8s.sealed_value`,
@@ -177,6 +179,7 @@ __all__ = (
     'RECEIVER',
     'SCRAPE_INTERVAL',
     'SNAPSHOTS_MAX_AGE',
+    'WEBHOOK_URL_KEY',
     'WORKER_AFFINITY',
     'CiliumScrape',
     'Monitoring',
@@ -188,6 +191,7 @@ __all__ = (
     'receiver_spec',
     'stack_fullname',
     'stack_values',
+    'webhook_url',
 )
 
 #: What places a pod on the homelab worker: every node that is not a control
@@ -684,12 +688,14 @@ class Monitoring(Component, pulumi_type='kluster:monitoring:Monitoring'):
         )
 
         webhook = conventions.sealed.ALERT_WEBHOOK
+        (webhook_id,) = webhook.keys
         # Behind the sealing controller, whose chart defines the kind, and
         # the namespace the value is sealed to.
         self.alert_webhook = sealed_value(
             f'{name}-webhook',
             webhook,
             ciphertext=alert_webhook,
+            rendered={WEBHOOK_URL_KEY: webhook_url(f'{{{webhook_id}}}')},
             opts=self.child_opts(depends_on=[*after, self.namespace]),
         )
 
@@ -887,24 +893,48 @@ def etcd_scrape_spec() -> dict[str, object]:
     }
 
 
+#: The key of the webhook's Secret that holds the URL alertmanager posts to,
+#: which the SealedSecret renders around the sealed id.
+WEBHOOK_URL_KEY = 'url'
+
+
+def webhook_url(webhook_id: str) -> str:
+    """The URL of Home Assistant's webhook `webhook_id`, at Home Assistant's own address.
+
+    Its one caller passes the format field `'{id}'`, so what it returns there
+    is the form `sealed_value` renders: the convention's values spliced
+    around that field, which the controller fills with the decrypted id.
+
+    A direct post, at the IPv4 address `conventions.HOME_ASSISTANT` holds --
+    the one the gateway's rules for Home Assistant follow too -- rather than at
+    its name, which answers with the cluster's media gateway, and over neither
+    the cluster's relay nor the overlay (operations.md §4). Only the homelab
+    worker reaches it, which is where monitoring runs.
+    """
+    return (
+        f'http://{conventions.HOME_ASSISTANT.v4}:{conventions.HOME_ASSISTANT_PORT}'
+        f'{conventions.HOME_ASSISTANT_WEBHOOK_PATH}{webhook_id}'
+    )
+
+
 def receiver_spec() -> dict[str, object]:
     """alertmanager's receiver and route: every alert to Home Assistant's webhook, the check-in on a short repeat.
 
-    The webhook's address is read from `conventions.sealed.ALERT_WEBHOOK`'s
-    Secret (`url_secret`), so it is in no rendered configuration. Resolved
+    The webhook's URL is read from `conventions.sealed.ALERT_WEBHOOK`'s
+    Secret (`url_secret`), where its SealedSecret renders it around the
+    sealed id, so the id is in no rendered configuration. Resolved
     alerts are not sent: Home Assistant pushes what fires, and a resolution
     closes nothing on the phone. The check-in is repeated well inside the
     timer it restarts: alertmanager sends a repeat on the first group interval
     after the repeat interval has passed.
     """
     webhook = conventions.sealed.ALERT_WEBHOOK
-    (webhook_key,) = webhook.keys
     return {
         'receivers': [
             {
                 'name': RECEIVER,
                 'webhook_configs': [
-                    {'url_secret': {'name': webhook.name, 'key': webhook_key}, 'send_resolved': False},
+                    {'url_secret': {'name': webhook.name, 'key': WEBHOOK_URL_KEY}, 'send_resolved': False},
                 ],
             }
         ],

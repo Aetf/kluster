@@ -146,13 +146,15 @@ BGP_PASSWORD = SealedValue(
     stack=STACK_NAMES.k8s_base,
 )
 
-#: The address of the Home Assistant webhook alertmanager posts to, which the
-#: receiver reads through the VictoriaMetrics operator's `url_secret`, so it
-#: appears in no rendered configuration (rfc-007 §7.3).
+#: The id of the Home Assistant webhook alertmanager posts to, the one secret
+#: part of its URL (rfc-007 §7.3). The rest of the URL is Home Assistant's
+#: address, port and path, which the monitoring component composes around the
+#: id from `conventions` (`components.monitoring.webhook_url`), so the address
+#: is held once, in `HOME_ASSISTANT`, and a moved address needs no new seal.
 ALERT_WEBHOOK = SealedValue(
     name='alert-webhook',
     namespace=MONITORING_NAMESPACE,
-    keys=('url',),
+    keys=('id',),
     stack=STACK_NAMES.k8s_base,
 )
 
