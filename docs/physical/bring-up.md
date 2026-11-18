@@ -169,6 +169,14 @@ These run alongside and gate no stage:
     again, and the declared rule list merged. The echo row is public, so
     no stage here needs it, and the first wave with a row on a home
     Gateway waits on it.
+*   **The peak recorder**, operations.md §8.5: `perf record` from the
+    end of stage 2, once `physical` holds the control planes'
+    addresses, through stage 5's gate; then the recorder is stopped, and
+    `perf import` writes the recording, the history store running since
+    stage 5's apply. Stage 5a records its own run by operations.md
+    §3.5. The monitoring arrives partway through stage
+    5, so the recording is all the history holds of the bring-up's
+    peak.
 *   **The worker's GPU and growth windows**, which belong to the waves
     and not to this pass.
 

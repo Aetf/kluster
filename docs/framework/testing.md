@@ -1261,9 +1261,11 @@ fix, and the diff is the only artifact that disagrees.
     name.
 4.  **Keep it Fast**: Unit tests make no network calls and create no real
     resources. The exceptions are the fetches §8 names, each with its
-    reason there, and the pulls of the pinned images whose `/bin/busybox`
-    the monitoring tests run the backup and restore scripts under, with
-    their reason in `tests/image_busybox.py`.
+    reason there, and the pulls of pinned images whose files a case runs:
+    the `/bin/busybox` the monitoring tests run the backup and restore
+    scripts under, and the history store's own binary, which
+    `tests/test_perf.py` runs on the host as the store a recording is
+    imported into, each with its reason in `tests/image_busybox.py`.
 5.  **No Wall-Clock Budgets**: A unit case's outcome never depends on how
     much real time passes. A budget measured against the real clock is also
     a budget on the *process*: a machine stalled past it -- swap, a

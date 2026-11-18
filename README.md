@@ -116,9 +116,9 @@ publishes no API that creates a personal access token -- so it is made on the
 account's settings page and `credentials derived github-admin record` takes it
 from there into `Pulumi.github.yaml` (docs/credentials.md §3).
 
-The console scripts — `credentials`, `state-backend`, `update_crds` — are the
-operator-side half of the installation; each one's `--help` is written to say
-when it is run, not only what it does.
+The console scripts, each a `[project.scripts]` entry of `pyproject.toml`, are
+the operator-side half of the installation; each one's `--help` is written to
+say when it is run, not only what it does.
 
 ## Docs
 

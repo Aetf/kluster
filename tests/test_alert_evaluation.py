@@ -56,13 +56,12 @@ from client_kubeconfig import certificate_user, kubeconfig
 from k8s_base_installation import Run, applied
 
 from kluster import conventions
-from kluster.components.monitoring import EVALUATION_INTERVAL, SCRAPE_INTERVAL
+from kluster.components.monitoring import EVALUATION_INTERVAL
 from kluster.components.monitoring.operator_objects import type_token
 from kluster.components.monitoring.rules import (
     BACKUP_SYNC_TIME,
     CLASS_LABEL,
     HEARTBEAT,
-    JOB_LABEL,
     KUBECONFIG_COPY,
     SCRAPER_DOWN,
     TARGET_DOWN_PENDING,
@@ -82,7 +81,9 @@ from kluster.lib.monitoring.jobs import (
     KUBE_STATE_METRICS_JOB,
     KUBELET_JOB,
     NODE_EXPORTER_JOB,
+    SCRAPE_INTERVAL,
 )
+from kluster.lib.monitoring.selectors import JOB_LABEL
 from kluster.lib.versions import CHART
 from kluster.scripts.update_crds import record, sources
 

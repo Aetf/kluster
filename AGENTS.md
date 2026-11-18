@@ -95,7 +95,7 @@ documentation the change makes true ships with it rather than after it.
   handful of lines with no logic, or a context with no interpreter). They
   live under `src/kluster/scripts/` and are exposed as console scripts in
   `pyproject.toml` (`update_crds`, `credentials`, `state-backend`,
-  `operator-stack`, `stack-plan`, `typecheck`), the same way for every
+  `operator-stack`, `stack-plan`, `typecheck`, `perf`), the same way for every
   script; `just` recipes or symlinks are for convenience on top, never the
   home of the logic.
 * How code and prose are written — naming, comments, component and

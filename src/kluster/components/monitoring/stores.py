@@ -54,6 +54,7 @@ from kluster.conventions.backup import metrics_repo_path
 from kluster.conventions.providers import OCI_BLOCKSTORE_METRICS
 from kluster.conventions.schedule import METRICS_BACKUPS, ScheduledJob
 from kluster.lib import templates
+from kluster.lib.monitoring.jobs import ETCD_JOB
 from kluster.lib.monitoring.vmsingle import VMSINGLE_PORT, vmsingle_workload
 
 __all__ = (
@@ -240,7 +241,7 @@ HISTORY_CLASS: tuple[Kept, ...] = (
         '|node_network_(receive|transmit)_(bytes|packets|drop|errs)_total|node_load.*'
         '|node_vmstat_(pgmajfault|oom_kill)'
     ),
-    Kept('etcd_.*|process_cpu_seconds_total|process_resident_memory_bytes', job='etcd'),
+    Kept('etcd_.*|process_cpu_seconds_total|process_resident_memory_bytes', job=ETCD_JOB),
     Kept(
         'container_cpu_usage_seconds_total|container_cpu_cfs_(periods|throttled_periods)_total'
         '|container_memory_working_set_bytes|container_pressure_.*|container_fs_(reads|writes)_bytes_total'
