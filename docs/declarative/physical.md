@@ -1105,7 +1105,7 @@ cluster's kubeconfig. From the root of the checkout, with that
 kubeconfig at `~/.kube/kluster`:
 
 ```sh
-P=$(mise x uv -- uv run python -c 'from kluster.components.talos import ETCD_METRICS_PORT; print(ETCD_METRICS_PORT)')
+P=$(mise x uv -- uv run python -c 'from kluster import conventions as c; print(c.ETCD_METRICS_PORT)')
 E=$(mise x uv -- uv run python -c 'from kluster import conventions as c; print(len(c.CLOUD_NODES))')
 CPN=$(mise x -- kubectl --kubeconfig ~/.kube/kluster get nodes -l node-role.kubernetes.io/control-plane -o jsonpath='{.items[*].metadata.name}')
 N=$(echo "$CPN" | wc -w)

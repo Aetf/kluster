@@ -1949,7 +1949,7 @@ nothing from the ones that failed.
 What to do when a reading of the control planes leaves the budget
 [cluster/nodes.md](cluster/nodes.md) §1.1–1.2 gives it. The readings,
 the rules that record them and the alerts over them are
-`kluster.components.monitoring.readings` and `rules`
+`kluster.lib.monitoring.readings` and `kluster.components.monitoring.rules`
 ([declarative/cluster-infra.md](declarative/cluster-infra.md) §1,
 item 6). The `Control planes` dashboard in Grafana draws every reading
 from the history store, each beside the same reading an earlier period

@@ -31,8 +31,8 @@ from collections.abc import Sequence
 from typing import Any
 
 from kluster import conventions
-from kluster.components.monitoring.readings import READINGS, Bound, Reading, Resource
 from kluster.conventions.backup import duration
+from kluster.lib.monitoring.readings import READINGS, Bound, Reading, Resource
 
 __all__ = (
     'CONFIGMAP',

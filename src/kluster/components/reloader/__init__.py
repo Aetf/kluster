@@ -16,15 +16,12 @@ from collections.abc import Sequence
 
 import pulumi
 
+from kluster import conventions
 from kluster.lib.k8s import helm_chart, namespace
 from kluster.lib.versions import ChartPin
 from putils import Component
 
-__all__ = ('NAMESPACE', 'Reloader', 'chart_values')
-
-#: The namespace the controller runs in. It watches every namespace, so
-#: nothing else names this one.
-NAMESPACE = 'reloader'
+__all__ = ('Reloader', 'chart_values')
 
 
 def chart_values() -> dict[str, object]:
@@ -65,7 +62,7 @@ class Reloader(Component, pulumi_type='kluster:reloader:Reloader'):
         super().__init__(name, opts=opts)
         behind = self.child_opts(depends_on=list(after))
 
-        self.namespace = namespace(f'{name}-namespace', name=NAMESPACE, opts=behind)
+        self.namespace = namespace(f'{name}-namespace', name=conventions.RELOADER_NAMESPACE, opts=behind)
         self.chart = helm_chart(
             name,
             pin=chart,

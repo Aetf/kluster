@@ -54,7 +54,6 @@ from putils import Component
 
 __all__ = (
     'DEFAULT_CLASS_ANNOTATION',
-    'NAMESPACE',
     'NODE_VOLUME_PATH_PATTERN',
     'PROVISIONER',
     'PROVISIONER_NAME',
@@ -62,9 +61,6 @@ __all__ = (
     'LocalPathProvisioner',
     'pools',
 )
-
-#: The namespace the provisioner and its helper pods run in.
-NAMESPACE = 'local-path-storage'
 
 #: The name of the provisioner's Deployment, its account and its permissions.
 PROVISIONER_NAME = 'local-path-provisioner'
@@ -135,7 +131,7 @@ class LocalPathProvisioner(Component, pulumi_type='kluster:local_path:LocalPathP
 
         self.namespace = namespace(
             f'{name}-namespace',
-            name=NAMESPACE,
+            name=conventions.LOCAL_PATH_NAMESPACE,
             looser=LooserLevel(
                 level=PodSecurity.PRIVILEGED,
                 reason='the helper pods mount the host path they provision, which `baseline` refuses',

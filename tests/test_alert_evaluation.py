@@ -56,8 +56,7 @@ from client_kubeconfig import certificate_user, kubeconfig
 from k8s_base_installation import Run, applied
 
 from kluster import conventions
-from kluster.components.monitoring import EVALUATION_INTERVAL, KUBE_STATE_METRICS_JOB, SCRAPE_INTERVAL, readings
-from kluster.components.monitoring.jobs import APISERVER_JOB, ETCD_JOB, KUBELET_JOB, NODE_EXPORTER_JOB
+from kluster.components.monitoring import EVALUATION_INTERVAL, SCRAPE_INTERVAL
 from kluster.components.monitoring.operator_objects import type_token
 from kluster.components.monitoring.rules import (
     BACKUP_SYNC_TIME,
@@ -76,6 +75,14 @@ from kluster.conventions.cluster import KUBECONFIG_ALERT_MARGIN
 from kluster.conventions.outputs import BOOT_VOLUME
 from kluster.conventions.providers import OCI_BLOCKSTORE_METRICS
 from kluster.conventions.schedule import ScheduledJob
+from kluster.lib.monitoring import readings
+from kluster.lib.monitoring.jobs import (
+    APISERVER_JOB,
+    ETCD_JOB,
+    KUBE_STATE_METRICS_JOB,
+    KUBELET_JOB,
+    NODE_EXPORTER_JOB,
+)
 from kluster.lib.versions import CHART
 from kluster.scripts.update_crds import record, sources
 

@@ -1,23 +1,25 @@
 """The readings: what the control planes are measured by, each defined once, as data (Aetf/kluster-ops#790 §5).
 
 **A reading is a name, a window, an expression, a unit and its budget.** The
-expression is PromQL over the history store's series (`stores.HISTORY_CLASS`):
-the history keeps a reading's inputs rather than its result, so a reading
-whose definition changes is computed again, the same way, over every period
-on record, and two periods always compare under one definition. The budget
-is the one the canon gives the reading (cluster/nodes.md §1.1 and §1.2, and
-the per-wave gate of cluster/migration.md §0 rule 6), with the phrase that
-states it and where. Everything else reads this table:
+expression is PromQL over the history store's series
+(`components.monitoring.stores.HISTORY_CLASS`): the history keeps a reading's
+inputs rather than its result, so a reading whose definition changes is
+computed again, the same way, over every period on record, and two periods
+always compare under one definition. The budget is the one the canon gives the
+reading (cluster/nodes.md §1.1 and §1.2, and the per-wave gate of
+cluster/migration.md §0 rule 6), with the phrase that states it and where.
+Everything else reads this table:
 
-- **the recording rules** (`rules`): one per reading, under `record`,
-  `kluster:<name>:<window>`, which vmalert writes through vmagent to both
-  stores, and which the history keeps by its prefix;
-- **the SLO alerts** (`rules`): each compares a reading's recorded series with
-  the reading's budget, so an alert's threshold is its budget by construction;
-- **the dashboard** (`dashboard`): a row per `Resource`, a panel per reading,
-  each computed from the reading's expression over the history, so it draws
-  every period the history holds, imported ones among them, under one
-  definition;
+- **the recording rules** (`components.monitoring.rules`): one per reading,
+  under `record`, `kluster:<name>:<window>`, which vmalert writes through
+  vmagent to both stores, and which the history keeps by its prefix;
+- **the SLO alerts** (`components.monitoring.rules`): each compares a
+  reading's recorded series with the reading's budget, so an alert's
+  threshold is its budget by construction;
+- **the dashboard** (`components.monitoring.dashboard`): a row per
+  `Resource`, a panel per reading, each computed from the reading's
+  expression over the history, so it draws every period the history holds,
+  imported ones among them, under one definition;
 - **the per-wave gate**, which evaluates the expressions over a window of the
   history (Aetf/kluster-ops#785, slice C2).
 
@@ -30,8 +32,8 @@ otherwise add to this cluster's.
 
 **A reading of a node groups by `node`**, which every source here labels its
 series with: the operator's node scrapes, the kubelet's and etcd's, and the
-node exporter's scrape (`NODE_EXPORTER_ENDPOINT`). An etcd member is its
-node. A reading is recorded for every node its series come from; a budget
+node exporter's scrape (`components.monitoring.NODE_EXPORTER_ENDPOINT`). An
+etcd member is its node. A reading is recorded for every node its series come from; a budget
 binds the control planes alone (`CONTROL_PLANE`), and the dashboard shows
 them.
 
@@ -72,18 +74,16 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 from kluster import conventions
-from kluster.components import cilium, gpu, local_path, postgres, reloader
-from kluster.components.backup import volsync
-from kluster.components.monitoring.jobs import (
+from kluster.conventions.backup import duration, max_age
+from kluster.conventions.providers import OCI_BLOCKSTORE_METRICS
+from kluster.conventions.schedule import OCI_METRICS_PULL
+from kluster.lib.monitoring.jobs import (
     APISERVER_JOB,
     ETCD_JOB,
     KUBE_STATE_METRICS_JOB,
     KUBELET_JOB,
     NODE_EXPORTER_JOB,
 )
-from kluster.conventions.backup import duration, max_age
-from kluster.conventions.providers import OCI_BLOCKSTORE_METRICS
-from kluster.conventions.schedule import OCI_METRICS_PULL
 
 __all__ = (
     'BOND',
@@ -136,17 +136,17 @@ ENVOY_PODS = 'cilium-envoy-.+'
 #: holds the set to the namespaces the `k8s-base` program declares objects in,
 #: so a namespace it adds is never read as a workload's.
 PLATFORM_NAMESPACES: tuple[str, ...] = (
-    cilium.NAMESPACE,
+    conventions.CILIUM_NAMESPACE,
     conventions.CERT_MANAGER_NAMESPACE,
     conventions.ETCD_BACKUP_NAMESPACE,
     conventions.GATEWAY_NAMESPACE,
     conventions.MONITORING_NAMESPACE,
-    gpu.INTEL_NAMESPACE,
-    gpu.NFD_NAMESPACE,
-    local_path.NAMESPACE,
-    postgres.NAMESPACE,
-    reloader.NAMESPACE,
-    volsync.NAMESPACE,
+    conventions.INTEL_DEVICE_PLUGINS_NAMESPACE,
+    conventions.NFD_NAMESPACE,
+    conventions.LOCAL_PATH_NAMESPACE,
+    conventions.CNPG_NAMESPACE,
+    conventions.RELOADER_NAMESPACE,
+    conventions.VOLSYNC_NAMESPACE,
 )
 
 #: The label a reading by load class carries its class under.
@@ -790,7 +790,7 @@ def _by_class(metric: str, function: str, etcd: str, node: str) -> str:
     )
     workloads = (
         f'(sum by (node) ({_pods(metric, function, f'namespace!~"{platform}"')}'
-        f' or {_pods(metric, function, f'namespace="{cilium.NAMESPACE}"', f'pod=~"{ENVOY_PODS}"')})'
+        f' or {_pods(metric, function, f'namespace="{conventions.CILIUM_NAMESPACE}"', f'pod=~"{ENVOY_PODS}"')})'
         f' or 0 * {node})'
     )
     classes = {

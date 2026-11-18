@@ -66,11 +66,12 @@ each control plane by a node scrape of the component's own
 (`etcd_scrape_spec`), from the worker, over KubeSpan. A row a store
 ignores for any reason raises `MetricsDropped` (`rules`).
 
-**The control planes are read by `readings`**, each reading defined once:
-its recording rule and the SLO alerts over it are rule groups of their own
-(`rules.READING_GROUPS`), and the `Control planes` dashboard draws every
-reading from the history store beside any earlier period (`dashboard`), a
-`ConfigMap` the stack's dashboard sidecar hands to Grafana. The node
+**The control planes are read by `kluster.lib.monitoring.readings`**, each
+reading defined once: its recording rule and the SLO alerts over it are rule
+groups of their own (`rules.READING_GROUPS`), and the `Control planes`
+dashboard draws every reading from the history store beside any earlier
+period (`dashboard`), a `ConfigMap` the stack's dashboard sidecar hands to
+Grafana. The node
 exporter's scrape labels each series with its node (`NODE_EXPORTER_ENDPOINT`),
 as the operator's node scrapes do the kubelet's and etcd's, since a reading of
 a node groups by it.
@@ -163,19 +164,17 @@ import pulumi_kubernetes as k8s
 import pulumi_random as random
 
 from kluster import conventions
-from kluster.components import cilium
 from kluster.components.backup import s3_endpoint
 from kluster.components.cilium.bgp import CONTROL_PLANE_LABEL
 from kluster.components.monitoring import dashboard, memory, oci_metrics, rules, stores
-from kluster.components.monitoring.jobs import ETCD_JOB, KUBE_STATE_METRICS_JOB, KUBELET_JOB
 from kluster.components.monitoring.operator_objects import operator_object
 from kluster.components.monitoring.stores import Store, stack_fullname
-from kluster.components.talos import ETCD_METRICS_PORT
 from kluster.conventions import backup, schedule
 from kluster.conventions.alert import Tier
 from kluster.conventions.backup import BackupFamily
 from kluster.conventions.outputs import BOOT_VOLUME
 from kluster.lib.k8s import LooserLevel, PodSecurity, helm_chart, namespace, sealed_value
+from kluster.lib.monitoring.jobs import ETCD_JOB, KUBE_STATE_METRICS_JOB, KUBELET_JOB
 from kluster.lib.versions import ChartPin, ImagePin
 from putils import Component
 
@@ -186,7 +185,6 @@ __all__ = (
     'CILIUM_SCRAPES',
     'DATASOURCES_DIGEST_ENV',
     'ETCD_DROPPED',
-    'ETCD_JOB',
     'EVALUATION_INTERVAL',
     'GRAFANA_ADMIN_SECRET',
     'GRAFANA_PASSWORD_KEY',
@@ -196,7 +194,6 @@ __all__ = (
     'HISTORY_SIZE',
     'KUBELET_RELABELING',
     'KUBE_STATE_METRICS_ENDPOINT',
-    'KUBE_STATE_METRICS_JOB',
     'NODE_EXPORTER_ENDPOINT',
     'RECEIVER',
     'SCRAPE_INTERVAL',
@@ -557,7 +554,7 @@ def _stack_values(release: str, chart: ChartPin, restore: Sequence[Mapping[str, 
             'extra': [
                 {
                     'name': HISTORY_DATASOURCE,
-                    'uid': stores.HISTORY_STORE,
+                    'uid': conventions.HISTORY_STORE,
                     'type': 'prometheus',
                     'access': 'proxy',
                     'url': history.url,
@@ -835,7 +832,7 @@ class Monitoring(Component, pulumi_type='kluster:monitoring:Monitoring'):
                 metadata=k8s.meta.v1.ObjectMetaArgs(namespace=self.namespace.metadata.name),
                 spec={
                     'selector': {'matchLabels': dict(scrape.selector)},
-                    'namespaceSelector': {'matchNames': [cilium.NAMESPACE]},
+                    'namespaceSelector': {'matchNames': [conventions.CILIUM_NAMESPACE]},
                     'podMetricsEndpoints': [{'port': port} for port in scrape.ports],
                 },
                 opts=after_the_chart,
@@ -856,7 +853,7 @@ class Monitoring(Component, pulumi_type='kluster:monitoring:Monitoring'):
                 namespace=self.namespace.metadata.name,
                 labels=dict([dashboard.SIDECAR_LABEL]),
             ),
-            data={dashboard.FILE: json.dumps(dashboard.model(stores.HISTORY_STORE), indent=1)},
+            data={dashboard.FILE: json.dumps(dashboard.model(conventions.HISTORY_STORE), indent=1)},
             opts=self.child_opts(depends_on=[self.namespace]),
         )
         self.history = operator_object(
@@ -998,7 +995,7 @@ def history_store_spec(*, image: ImagePin, restore: Sequence[Mapping[str, Any]] 
 
 
 def etcd_scrape_spec() -> dict[str, object]:
-    """The node scrape of etcd's metrics listener: each control plane, on `ETCD_METRICS_PORT`, over plain HTTP.
+    """The node scrape of etcd's metrics listener: each control plane, on `conventions.ETCD_METRICS_PORT`, over plain HTTP.
 
     The control planes are the nodes carrying `CONTROL_PLANE_LABEL`, selected
     by its presence: Talos gives it an empty value, and the operator turns a
@@ -1010,7 +1007,7 @@ def etcd_scrape_spec() -> dict[str, object]:
     """
     return {
         'selector': {'matchExpressions': [{'key': CONTROL_PLANE_LABEL, 'operator': 'Exists'}]},
-        'port': str(ETCD_METRICS_PORT),
+        'port': str(conventions.ETCD_METRICS_PORT),
         'path': '/metrics',
         'scheme': 'http',
         'relabelConfigs': [{'targetLabel': 'job', 'replacement': ETCD_JOB}],
