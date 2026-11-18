@@ -27,11 +27,17 @@ And every refresh of `physical` that a workflow or a composite action runs
 puts the program first (physical/homelab-host.md §6), read off the `pulumi`
 commands the steps run in each matrix combination rather than off one step.
 
-And the preview behind `physical`'s approval gate is read as three outcomes,
-held by running the plan step against a stand-in preview: no changes, changes,
-and a preview that failed, which fails the job rather than reading as a diff.
-Every job that runs the program installs its plugins first, authenticated with
-the job's token, and that token reaches no step that runs the program.
+And the plan behind `physical`'s approval gate is read as three outcomes,
+held by running the plan step against a stand-in for what it runs: an `up`
+that would write nothing, one that would write, and no answer, which fails
+the job rather than reading as a diff. The step routes to the gated apply on
+what an `up` would write rather than on the steps a preview counts, held by
+running it as written against the pinned CLI over a scratch stack named
+`physical`: a `protect` set with no other change (Aetf/kluster#753) reads
+as a diff. Every job that runs the program installs its plugins first,
+authenticated with the job's token, and that token reaches no step that runs
+the program, a console script that runs a `pulumi` subcommand of the program
+read as that subcommand.
 
 And every `Up` step of the merge chain hands `release-lock` the stack it
 applied, the pid its `pulumi` ran as and a time no later than its start, once
@@ -47,10 +53,12 @@ loaders in `workflow_files`.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import shlex
 import shutil
+import sys
 import tomllib
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -63,11 +71,14 @@ from urllib.parse import parse_qs, urlsplit
 import process_sessions
 import pytest
 from renovate_text import as_python_spells_it
+from scratch_projects import scratch_project
 from workflow_files import GITHUB, github_name, mapping, read_workflow, workflow_jobs, workflows_and_actions
 
 from kluster import conventions
 from kluster.components.overlay.flow_rules import SSH_PORT
+from kluster.lib import stack_environment
 from kluster.scripts.credentials import slots
+from kluster.scripts.stack_plan import cli as stack_plan_cli
 
 ROOT = Path(__file__).parent.parent
 
@@ -807,6 +818,35 @@ class PulumiCommand:
         return '--run-program' in self.arguments or '--run-program=true' in self.arguments
 
 
+#: The console scripts `pyproject.toml` declares.
+PROJECT_SCRIPTS = frozenset(tomllib.loads((ROOT / 'pyproject.toml').read_text())['project']['scripts'])
+#: Every console script a step runs, by the `pulumi` subcommand it runs over
+#: the arguments it is given, or `None` for one that runs no `pulumi`
+#: subcommand of the program: `stack-plan` previews the stack it is given
+#: (`kluster.scripts.stack_plan.cli`), `state-backend` releases a lock or
+#: prints pins, and `typecheck` runs `basedpyright`.
+SCRIPT_SUBCOMMANDS: Mapping[str, str | None] = {'stack-plan': 'preview', 'state-backend': None, 'typecheck': None}
+
+
+def _uv_run_script(simple: list[str], where: str) -> str | None:
+    """The console script of this repository a simple command starts through `uv run`, if it starts one.
+
+    An option between `uv run` and what it runs (`--frozen`, `--`) fails
+    here rather than reading as no script, since the script behind it could
+    run the program.
+    """
+    for index, token in enumerate(simple[:-2]):
+        if token != 'uv' or simple[index + 1] != 'run':
+            continue
+        started = simple[index + 2]
+        assert not started.startswith('-'), (
+            f'{where}: `uv run` takes {started!r} ahead of what it runs, which this read does not follow'
+        )
+        if started in PROJECT_SCRIPTS:
+            return started
+    return None
+
+
 def _expanded(text: str, row: dict[str, object] | None) -> str:
     """A step's text as one matrix combination makes it, or as written when the matrix cannot be read.
 
@@ -825,9 +865,14 @@ def _pulumi_commands(text: str, where: str) -> list[PulumiCommand]:
     included, and cut at every newline and control operator, so `if mise x --
     pulumi preview …; then` reads as the preview it runs. A backslash that
     continues a line is read as the space it stands for. A step whose text
-    never names `pulumi` runs none and is not split at all.
+    never names `pulumi` or a `uv run` runs none and is not split at all.
+
+    A console script of this repository that `uv run` starts is read as the
+    `pulumi` subcommand `SCRIPT_SUBCOMMANDS` gives it, over the script's own
+    arguments, and one that table does not name fails here, since it could
+    run the program.
     """
-    if 'pulumi' not in text:
+    if 'pulumi' not in text and 'uv run' not in text:
         return []
     lexer = shlex.shlex(text.replace('\\\n', ' '), posix=True, punctuation_chars='();<>|&\n')
     lexer.whitespace = ' \t\r'
@@ -843,6 +888,13 @@ def _pulumi_commands(text: str, where: str) -> list[PulumiCommand]:
             if 'pulumi' in simple:
                 start = simple.index('pulumi') + 1
                 commands.append(PulumiCommand(where, tuple(simple[start:])))
+            elif (script := _uv_run_script(simple, where)) is not None:
+                assert script in SCRIPT_SUBCOMMANDS, (
+                    f'{where}: runs the console script {script!r}, which SCRIPT_SUBCOMMANDS does not read'
+                )
+                if (subcommand := SCRIPT_SUBCOMMANDS[script]) is not None:
+                    start = simple.index(script) + 1
+                    commands.append(PulumiCommand(where, (subcommand, *simple[start:])))
             simple = []
         else:
             simple.append(token)
@@ -898,13 +950,12 @@ def test_every_refresh_of_physical_runs_the_program_first() -> None:
     assert [command for command in physical if not command.runs_the_program] == []
 
 
-#: A stand-in for `mise x -- pulumi preview …`: it logs what it was asked to
-#: run and exits with the code the case hands it.
-PREVIEW_STAND_IN = """#!/bin/sh
-printf '%s\\n' "$*" >> "$STAND_IN_LOG"
+#: A stand-in for the whole of what the plan step runs, `mise x -- uv run
+#: stack-plan …`: it exits with the code the case hands it.
+VERDICT_STAND_IN = """#!/bin/sh
 exit "$STAND_IN_EXIT"
 """
-#: The step's bound in a case: the stand-in exits at once, so a step still
+#: The step's bound in a case whose stand-in exits at once, so a step still
 #: running at this bound is a hang.
 PLAN_STEP_TIMEOUT = 20
 
@@ -921,11 +972,13 @@ def _plan_step() -> dict[str, object]:
     return step
 
 
-def _run_plan_step(tmp_path: Path, preview_exit: int) -> tuple[int, str, dict[str, str], list[str]]:
-    """Run the plan step with a preview that exits `preview_exit`.
+def _run_plan_step(
+    tmp_path: Path, stand_ins: Mapping[str, str], env: Mapping[str, str], *, cwd: Path, timeout: float
+) -> tuple[int, str, dict[str, str]]:
+    """Run the plan step with `stand_ins` first on `PATH`, under `env`, in `cwd`.
 
-    Returns the step's exit, what it printed, the outputs it wrote, and the
-    commands the stand-in was asked to run.
+    `stand_ins` maps a command's name to the script that stands in for it.
+    Returns the step's exit, what it printed, and the outputs it wrote.
     """
     step = _plan_step()
     assert 'shell' not in step, 'the plan step names a shell, which this case does not model'
@@ -933,61 +986,174 @@ def _run_plan_step(tmp_path: Path, preview_exit: int) -> tuple[int, str, dict[st
     assert isinstance(run, str)
     bin_dir = tmp_path / 'bin'
     bin_dir.mkdir()
-    (bin_dir / 'mise').write_text(PREVIEW_STAND_IN)
-    (bin_dir / 'mise').chmod(0o755)
+    for name, text in stand_ins.items():
+        _ = (bin_dir / name).write_text(text)
+        (bin_dir / name).chmod(0o755)
     outputs = tmp_path / 'outputs'
     outputs.touch()
-    log = tmp_path / 'log'
-    log.touch()
-    env = {
-        'PATH': f'{bin_dir}:{os.environ["PATH"]}',
-        'HOME': str(tmp_path),
-        'GITHUB_OUTPUT': str(outputs),
-        'STAND_IN_EXIT': str(preview_exit),
-        'STAND_IN_LOG': str(log),
-    }
+    path = env.get('PATH', os.environ['PATH'])
+    full = {**env, 'PATH': f'{bin_dir}:{path}', 'GITHUB_OUTPUT': str(outputs)}
     # A step that names no shell runs as `bash -e {0}` on a Linux runner.
-    done = process_sessions.run(['bash', '-e', '-c', run], cwd=tmp_path, env=env, text=True, timeout=PLAN_STEP_TIMEOUT)
+    done = process_sessions.run(['bash', '-e', '-c', run], cwd=cwd, env=full, text=True, timeout=timeout)
     written = dict(line.split('=', 1) for line in outputs.read_text().splitlines())
-    return done.returncode, done.stdout + done.stderr, written, log.read_text().splitlines()
+    return done.returncode, done.stdout + done.stderr, written
 
 
-#: `--expect-no-changes`' refusal: `ExitNoChanges` in the exit-code table of
-#: the pinned CLI (`pkg/cmd/pulumi/cmd/exit_codes.go` at 3.274.1).
-CHANGES_PROPOSED = 7
+def _run_plan_step_on_a_verdict(tmp_path: Path, verdict: int) -> tuple[int, str, dict[str, str]]:
+    """Run the plan step with what it runs answering `verdict`."""
+    env = {'HOME': str(tmp_path), 'STAND_IN_EXIT': str(verdict)}
+    return _run_plan_step(tmp_path, {'mise': VERDICT_STAND_IN}, env, cwd=tmp_path, timeout=PLAN_STEP_TIMEOUT)
 
 
-def test_a_plan_with_no_changes_skips_the_gated_apply(tmp_path: Path) -> None:
-    code, output, written, ran = _run_plan_step(tmp_path, 0)
+def test_a_plan_that_would_write_nothing_skips_the_gated_apply(tmp_path: Path) -> None:
+    code, output, written = _run_plan_step_on_a_verdict(tmp_path, stack_plan_cli.NOTHING)
 
     assert code == 0, output
     assert written == {'diff': 'false'}
-    # The step is read off what it runs: a preview of physical that refuses changes.
-    (command,) = _pulumi_commands(ran[0], 'the stand-in log')
-    assert command.subcommand == 'preview'
-    assert command.stack == conventions.STACK_NAMES.physical
-    assert '--expect-no-changes' in command.arguments
 
 
-def test_a_plan_that_proposes_changes_routes_to_the_gated_apply(tmp_path: Path) -> None:
-    code, output, written, _ = _run_plan_step(tmp_path, CHANGES_PROPOSED)
+def test_a_plan_that_would_write_routes_to_the_gated_apply(tmp_path: Path) -> None:
+    code, output, written = _run_plan_step_on_a_verdict(tmp_path, stack_plan_cli.WOULD_WRITE)
 
     assert code == 0, output
     assert written == {'diff': 'true'}
 
 
-@pytest.mark.parametrize('preview_exit', [1, 2, 255])
-def test_a_plan_that_failed_fails_its_job_by_name_and_proposes_nothing(tmp_path: Path, preview_exit: int) -> None:
+@pytest.mark.parametrize('verdict', [stack_plan_cli.NO_ANSWER, 2, 255])
+def test_a_plan_with_no_answer_fails_its_job_by_name_and_proposes_nothing(tmp_path: Path, verdict: int) -> None:
     """A preview that failed -- a plugin it could not install, a provider it could not reach -- is no plan.
 
     Read as a diff, it would leave `up-physical` waiting for an approval with
     nothing to approve, holding the deploy group (kluster-ops#778).
     """
-    code, output, written, _ = _run_plan_step(tmp_path, preview_exit)
+    code, output, written = _run_plan_step_on_a_verdict(tmp_path, verdict)
 
     assert code != 0, output
     assert written == {}
-    assert f'::error::the physical preview failed (exit {preview_exit}), so it proposed no plan to approve' in output
+    assert f'::error::the physical plan has no answer (exit {verdict})' in output
+
+
+#: A program of one stand-in resource, a control plane, which it declares
+#: protected while `PROBE_PROTECT` is `true`.
+PROTECTED_PROGRAM = """\
+import os
+
+import pulumi
+from pulumi.dynamic import CreateResult, Resource, ResourceProvider
+
+
+class Provider(ResourceProvider):
+    def create(self, props):
+        return CreateResult(id_='stand-in', outs=dict(props))
+
+
+class Stand(Resource):
+    def __init__(self, name, props, opts=None):
+        super().__init__(Provider(), name, props, opts)
+
+
+Stand(
+    'control-plane',
+    {'value': 'as it was'},
+    pulumi.ResourceOptions(protect=os.environ.get('PROBE_PROTECT') == 'true'),
+)
+"""
+
+#: `uv run <script>` runs the console script of that name the test run has
+#: installed, for every script `pyproject.toml` declares; anything else is the
+#: real `uv`'s, which the program's language host also calls.
+UV_RUNS_THE_PROJECTS_SCRIPT = """#!/bin/sh
+if [ "$1" = run ]; then
+  for script in {scripts}; do
+    if [ "$2" = "$script" ]; then
+      shift 2
+      exec {installed}/"$script" "$@"
+    fi
+  done
+fi
+exec {uv} "$@"
+"""
+
+#: The bound of a case that runs the pinned CLI: its project's set-up, the
+#: stack's creation, a baseline `up` and the plan step, whose command runs two
+#: previews. On 24 cores at a load average under 10, each case took 4 s. A
+#: stop-loss, which nothing asserts on, set as `tests/test_stack_plan_engine.py`
+#: sets its own, which runs the same command against a larger program.
+ENGINE_CASE_TIMEOUT = 240
+#: The bound of one command of such a case, the plan step's included: a
+#: stop-loss below the case's, so a stalled command fails naming itself.
+ENGINE_COMMAND_TIMEOUT = 120
+
+
+@pytest.mark.skipif(
+    shutil.which('pulumi') is None or shutil.which('uv') is None, reason='the pinned pulumi CLI or uv is not on PATH'
+)
+@pytest.mark.timeout(ENGINE_CASE_TIMEOUT)
+@pytest.mark.parametrize(
+    ('protect', 'diff'), [('false', 'false'), ('true', 'true')], ids=['unchanged', 'protect set and no step']
+)
+def test_the_plan_step_routes_to_the_gated_apply_whatever_an_up_would_write(
+    tmp_path: Path, protect: str, diff: str
+) -> None:
+    """The plan step, run as written against the pinned CLI, reads `physical`'s plan as the `up` would write it.
+
+    Aetf/kluster#753's deploy: a merge that declares a resource of `physical`
+    protected, and changes nothing else, plans no step, and an `up` writes
+    the `protect` all the same. The step must route it to the gated apply,
+    or the `protect` is never written and the engine, which reads it from the
+    state, refuses no delete. An unchanged program, after the same baseline,
+    still skips it. The step's own text runs, with `mise` running its
+    command, `uv run` the console script this test run installed, and
+    `pulumi` the pinned CLI over a scratch backend (framework/testing.md §8),
+    under the switches `mise.toml` gives every CI run.
+    """
+    root = tmp_path / 'scratch'
+    root.mkdir()
+    scratch = scratch_project(root, PROTECTED_PROGRAM)
+    env = scratch.env | stack_environment.state_switches()
+    stack = conventions.STACK_NAMES.physical
+    # The backend in hand is the case's own, and holds nothing yet
+    # (framework/testing.md §5.1): the `up` below is of a stack named
+    # `physical`.
+    listed = process_sessions.run(
+        ['pulumi', '--non-interactive', 'stack', 'ls', '--all', '--json'],
+        cwd=scratch.directory,
+        env=env,
+        text=True,
+        timeout=ENGINE_COMMAND_TIMEOUT,
+    )
+    assert listed.returncode == 0, listed.stderr
+    assert json.loads(listed.stdout) == []
+    for command in (['stack', 'init', stack], ['up', '--yes', '--skip-preview', '--stack', stack]):
+        done = process_sessions.run(
+            ['pulumi', '--non-interactive', *command],
+            cwd=scratch.directory,
+            env=env,
+            text=True,
+            timeout=ENGINE_COMMAND_TIMEOUT,
+        )
+        assert done.returncode == 0, done.stdout + done.stderr
+    uv = shutil.which('uv')
+    assert uv is not None
+    stand_ins = {
+        'mise': MISE_STAND_IN,
+        'uv': UV_RUNS_THE_PROJECTS_SCRIPT.format(
+            scripts=' '.join(shlex.quote(script) for script in sorted(PROJECT_SCRIPTS)),
+            installed=shlex.quote(str(Path(sys.executable).parent)),
+            uv=shlex.quote(uv),
+        ),
+    }
+
+    code, output, written = _run_plan_step(
+        tmp_path,
+        stand_ins,
+        env | {'PROBE_PROTECT': protect},
+        cwd=scratch.directory,
+        timeout=ENGINE_COMMAND_TIMEOUT,
+    )
+
+    assert code == 0, output
+    assert written == {'diff': diff}, output
 
 
 #: Stand-ins for what a deploy's `Up` step runs. `mise x -- <command>` runs the

@@ -142,7 +142,11 @@ stands in this docstring alone, where a pin bump's reviewer reads it.
     `previewed_without_refresh`, to answer that preview by its exit alone;
     `AsTheBox.events`; the real-engine cases' section assertions, to the
     plan the CLI then prints; pulumi.md §3.3's sentences on how the second
-    preview is read; and ci.md's naming of the command;
+    preview is read; ci.md's naming of the command; and
+    `tests/test_workflow_shape.py`'s plan-step cases: the exits they take
+    from `stack-plan`'s `cli`, to the CLI's 0 and `REFUSED`; the
+    `stack-plan` row of `SCRIPT_SUBCOMMANDS`; and the `uv` stand-in of the
+    case that runs the step against the pinned CLI;
 -   **leaves untouched** `kluster.lib.dependency_sets`, which the
     checkpoint's comparison of two deployments reads as well; the driver's
     two previews, `Preview.stepped`, the calls in `Run.plan` and `Run.up`
