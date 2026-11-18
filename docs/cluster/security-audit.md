@@ -185,7 +185,9 @@ as the role the certificate names, and offers no password method at all
 has no network: it serves the pooler on a socket only the two containers
 share (state-backend.md §2). So the pre-authentication code the internet
 reaches is the pooler's TLS and startup handling, at a pinned image that
-moves monthly as Postgres's does. Through the pooler, Postgres is reached
+moves to its tag's newest build on the first of the month, as Postgres's
+does, and to a new release when one is offered (state-backend.md §2)
+(*amended 2026-11-17*, kluster-ops#820). Through the pooler, Postgres is reached
 only as a client role the pooler has authenticated; the superuser's `trust`
 line on the server's Unix sockets is reachable from the pooler's container
 too, which already holds the server key and acts as both client roles, so it

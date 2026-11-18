@@ -3,19 +3,21 @@
 The pin -- the repository, the release's tag and the digest the box runs --
 is read by one renovate manager as the settings hold it, a move of its digest
 replaces the box, so the rule for those moves gives them a window of one day
-a month, in the appliance's group, and `state-backend pins` asks the registry
-the image lives in, GitHub's, whether it serves the pinned digest.
+a month, beside the Postgres image's and apart from the appliance's releases,
+and `state-backend pins` asks the registry the image lives in, GitHub's,
+whether it serves the pinned digest.
 """
 
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import cast
 from urllib import request as urllib_request
 
 import pytest
-from renovate_text import as_python_spells_it, effective, group, listed, package_rules
+from renovate_text import as_python_spells_it, effective, group, listed, package_rules, scalar
 
 from kluster.lib.state_backend import settings
 from kluster.scripts.state_backend import provision
@@ -49,24 +51,23 @@ def test_renovate_reads_the_image_the_box_runs() -> None:
     assert f'{found["depName"]}:{found["currentValue"]}@{found["currentDigest"]}' == settings.PGBOUNCER_IMAGE
 
 
-def test_the_images_digest_moves_monthly_in_the_appliances_group() -> None:
-    """A digest move replaces the box, so renovate offers one on one day of every month, in the appliance's group.
+def test_the_images_digest_moves_monthly_apart_from_the_appliances_releases() -> None:
+    """A digest move replaces the box, so renovate offers one on one day of every month, apart from the releases.
 
     The release's tag is rebuilt on each new base, and each move of the pin
     is a dump, a new box and a restore, as a move of the Postgres image's is
     (`tests/test_postgres_pin.py`). A window on more days than one a month
     puts that replacement up for merging after each rebuild; one that skips a
     month leaves a base's security fix off the box for longer than a month.
-    Grouped elsewhere, the replacement travels in a pull request not read as
-    one.
+    In the releases' group the window would not hold: that group's branch
+    takes the window of the update it sorts first, and a release takes none
+    (`tests/test_postgres_pin.py`, every update on an appliance branch
+    carrying that branch's window).
 
     What renovate gives the update is the last matching rule that sets each
     key, so a later, broader rule setting `schedule` or a group overrides the
     narrow one; the update is resolved against every rule, the way renovate
-    merges them. The window held is the update's own: renovate opens a
-    group's branch on the schedule of the update it sorts first, so beside
-    another of the appliance's updates a digest move can travel on that one's
-    schedule. Held as text, because there is no JSON5 parser here
+    merges them. Held as text, because there is no JSON5 parser here
     (`renovate_text`).
     """
     config = (ROOT / 'renovate.json5').read_text()
@@ -97,8 +98,40 @@ def test_the_images_digest_moves_monthly_in_the_appliances_group() -> None:
         f'more than one day a month: {windows}'
     )
 
-    assert effective(config, digest, 'groupName') == _appliance_rule(config)
-    assert effective(config, digest, 'groupSlug') == _appliance_rule(config)
+    grouping = effective(config, digest, 'groupSlug')
+    assert grouping is not None, "no rule names the digest's branch"
+    assert scalar(grouping, 'groupSlug') != scalar(_appliance_rule(config), 'groupSlug'), (
+        "the digest moves on the releases' branch, on whichever update's window sorts first"
+    )
+
+
+def test_a_patch_release_of_the_pooler_is_offered() -> None:
+    """Renovate proposes a PgBouncer patch release, which is where PgBouncer ships its security fixes.
+
+    The top-level `patch` block disables every patch update, and what
+    renovate gives an update is the last matching rule that sets each key,
+    so a patch of the pooler is offered only where such a rule turns it back
+    on. The pooler is the box's one listener on the network, and a patch
+    left for the next minor leaves a fix of its pre-authentication code off
+    the box. Held as text, because there is no JSON5 parser here
+    (`renovate_text`).
+    """
+    config = (ROOT / 'renovate.json5').read_text()
+    (found,) = as_python_spells_it(IMAGE_MATCH_STRING).finditer((ROOT / APPLIANCE).read_text())
+    patch = {
+        'matchDepNames': (found['depName'],),
+        'matchPackageNames': (found['depName'],),
+        'matchManagers': ('custom.regex', 'regex'),
+        'matchFileNames': (APPLIANCE,),
+        'matchDatasources': ('docker',),
+        'matchUpdateTypes': ('patch',),
+    }
+
+    patches_off = re.search(r'^  patch: \{\s*(//[^\n]*\s*)*enabled: false,', config, re.MULTILINE)
+    enabling = effective(config, patch, 'enabled')
+    assert patches_off is None or (
+        enabling is not None and re.search(r'^\s*enabled: true,$', enabling, re.MULTILINE)
+    ), 'the global patch block drops every PgBouncer patch release, and no rule offers one'
 
 
 class _Answer:

@@ -10,7 +10,10 @@ image's tag names no minor.
 The image's own pin -- the repository, the major line's tag and the digest
 the box runs -- is read by one manager as the settings hold it, and a move of
 its digest replaces the box, so the rule for those moves gives them a window
-of one day a month, in the appliance's group.
+of one day a month, in a group of the appliance's image refreshes apart from
+its releases. Renovate opens a group's branch on the window of the update it
+sorts first, so every update on either branch carries that branch's one
+window.
 
 The client is read at all only through a rule of its own. The mise manager
 resolves the pin to the conda datasource under the bare package name, which
@@ -25,7 +28,7 @@ import tomllib
 from pathlib import Path
 from typing import cast
 
-from renovate_text import as_python_spells_it, effective, group, listed, package_rule, package_rules, scalar
+from renovate_text import as_python_spells_it, effective, group, listed, matches, package_rule, package_rules, scalar
 
 from kluster.lib.state_backend import settings
 
@@ -118,23 +121,22 @@ def test_renovate_reads_the_image_the_box_runs() -> None:
     assert f'{found["depName"]}:{found["currentValue"]}@{found["currentDigest"]}' == settings.POSTGRES_IMAGE
 
 
-def test_the_images_digest_moves_monthly_in_the_appliances_group() -> None:
-    """A digest move replaces the box, so renovate offers one on one day of every month, in the appliance's group.
+def test_the_images_digest_moves_monthly_apart_from_the_appliances_releases() -> None:
+    """A digest move replaces the box, so renovate offers one on one day of every month, apart from the releases.
 
     Docker Hub rebuilds the major line's tag for every minor release and every
     new Debian base, and each move of the pin is a dump, a new box and a
     restore. A window on more days than one a month puts that replacement up
     for merging after each rebuild; one that skips a month leaves a Postgres
-    security release off the box for longer than a month. Grouped elsewhere,
-    the replacement travels in a pull request not read as one.
+    security release off the box for longer than a month. In the releases'
+    group the window would not hold: that group's branch takes the window of
+    the update it sorts first, and a release takes none
+    (`test_every_update_on_an_appliance_branch_carries_that_branchs_window`).
 
     What renovate gives the update is the last matching rule that sets each
     key, so a later, broader rule setting `schedule` or a group overrides the
     narrow one; the update is resolved against every rule, the way renovate
-    merges them. The window held is the update's own: renovate opens a
-    group's branch on the schedule of the update it sorts first, so beside
-    another of the appliance's updates a digest move can travel on that one's
-    schedule. Held as text, because there is no JSON5 parser here
+    merges them. Held as text, because there is no JSON5 parser here
     (`renovate_text`).
     """
     config = (ROOT / 'renovate.json5').read_text()
@@ -165,5 +167,184 @@ def test_the_images_digest_moves_monthly_in_the_appliances_group() -> None:
         f'more than one day a month: {windows}'
     )
 
-    assert effective(config, digest, 'groupName') == _appliance_rule(config)
-    assert effective(config, digest, 'groupSlug') == _appliance_rule(config)
+    grouping = effective(config, digest, 'groupSlug')
+    assert grouping is not None, "no rule names the digest's branch"
+    assert scalar(grouping, 'groupSlug') != scalar(_appliance_rule(config), 'groupSlug'), (
+        "the digest moves on the releases' branch, on whichever update's window sorts first"
+    )
+
+
+#: The updates renovate can make of the appliance's pins, each as it presents
+#: itself to a rule's matchers: each pin the custom managers read off the
+#: appliance's files (`test_every_pin_of_the_appliance_is_an_update_listed`),
+#: and the two `mise.toml` pins rules take into the appliance's group. An
+#: update has one type, so each type a pin can move by is an update of its
+#: own; a type a rule disables is listed all the same, since an update listed
+#: in excess only adds to what is checked. A value an update would present
+#: that is not settled here is left out, and a matcher with nothing presented
+#: to it is taken as matching (`renovate_text.reaches`).
+_RELEASES = ('major', 'minor', 'patch')
+_IN_SETTINGS = {'matchManagers': ('custom.regex', 'regex'), 'matchFileNames': (APPLIANCE,)}
+_IN_MISE = {'matchManagers': ('mise',), 'matchFileNames': ('mise.toml',)}
+APPLIANCE_UPDATES: dict[str, dict[str, tuple[str, ...]]] = {
+    **{
+        f'{name} {kind}': {
+            'matchDepNames': (repository,),
+            'matchPackageNames': (repository,),
+            'matchDatasources': ('docker',),
+            'matchUpdateTypes': (kind,),
+            **_IN_SETTINGS,
+        }
+        for name, repository in (
+            ('Postgres image', settings.POSTGRES_REPOSITORY),
+            ('PgBouncer image', settings.PGBOUNCER_REPOSITORY),
+        )
+        for kind in ('digest', *_RELEASES)
+    },
+    **{
+        f'Fedora CoreOS {kind}': {
+            'matchDepNames': ('fedora-coreos',),
+            'matchPackageNames': ('fedora-coreos',),
+            'matchDatasources': ('custom.fedora-coreos-stable',),
+            'matchUpdateTypes': (kind,),
+            **_IN_SETTINGS,
+        }
+        for kind in ('digest', *_RELEASES)
+    },
+    **{
+        f'settings age {kind}': {
+            'matchDepNames': ('FiloSottile/age',),
+            'matchPackageNames': ('FiloSottile/age',),
+            'matchDatasources': ('github-releases',),
+            'matchUpdateTypes': (kind,),
+            **_IN_SETTINGS,
+        }
+        for kind in _RELEASES
+    },
+    **{
+        f'mise age {kind}': {
+            'matchDepNames': ('age',),
+            # The aqua backend's data source, and the one the age rule overrides it with.
+            'matchDatasources': ('github-tags', 'github-releases'),
+            'matchUpdateTypes': (kind,),
+            **_IN_MISE,
+        }
+        for kind in _RELEASES
+    },
+    'client major': {
+        'matchDepNames': (PIN,),
+        'matchDatasources': ('conda',),
+        'matchUpdateTypes': ('major',),
+        **_IN_MISE,
+    },
+}
+
+
+def _branch(config: str, update: dict[str, tuple[str, ...]]) -> str | None:
+    """The group slug that names the update's branch: the last matching rule's that sets one."""
+    rule = effective(config, update, 'groupSlug')
+    return None if rule is None else scalar(rule, 'groupSlug')
+
+
+def _window(config: str, update: dict[str, tuple[str, ...]]) -> tuple[str, ...]:
+    """The cron entries the update carries, from the last matching rule that sets them; none for no window."""
+    rule = effective(config, update, 'schedule')
+    return () if rule is None else tuple(listed(rule, 'schedule'))
+
+
+def test_every_update_on_an_appliance_branch_carries_that_branchs_window() -> None:
+    """Every update on either of the appliance's branches carries one window, and the releases' branch none.
+
+    Renovate opens a group's branch, or updates it, on the schedule of the
+    update it sorts first in the group (`generate.ts`, the branch config
+    taken from `upgrades[0]`), so a window held by some of a branch's updates
+    and not by others holds on the days the sort favors it: a rebuild of an
+    image would travel on a release's day, and a release would wait for the
+    rebuilds' window. One window per branch is what makes the sort
+    immaterial. The releases' branch takes none, so a release is offered the
+    day renovate finds it.
+
+    The two branches are the appliance rule's and the one its rebuilds take,
+    and each rule that names either is reached by some update listed here, so
+    a rule bringing a dependency onto either branch names one this check
+    does not hold until it is listed; a pin the appliance rule brings in by
+    its file is held to the list by the census below. Held as text, because
+    there is no JSON5 parser here (`renovate_text`).
+    """
+    config = (ROOT / 'renovate.json5').read_text()
+    releases = scalar(_appliance_rule(config), 'groupSlug')
+    rebuilds = _branch(config, APPLIANCE_UPDATES['Postgres image digest'])
+    assert releases is not None
+    assert rebuilds is not None
+
+    windows: dict[str, set[tuple[str, ...]]] = {releases: set(), rebuilds: set()}
+    for update in APPLIANCE_UPDATES.values():
+        branch = _branch(config, update)
+        if branch in windows:
+            windows[branch].add(_window(config, update))
+    for branch, carried in windows.items():
+        assert len(carried) == 1, f'{branch} opens on the window of whichever update sorts first: {carried}'
+    assert windows[releases] == {()}, f'a release of the appliance is held to a window: {windows[releases]}'
+
+    naming = [rule for rule in package_rules(config) if scalar(rule, 'groupSlug') in windows]
+    for rule in naming:
+        assert any(effective(config, update, 'groupSlug') == rule for update in APPLIANCE_UPDATES.values()), (
+            f'a rule brings onto an appliance branch an update this check does not hold:\n{rule}'
+        )
+
+
+def _appliance_files(config: str) -> list[str]:
+    """Every file under the appliance's package that the appliance rule's file patterns match."""
+    patterns = listed(_appliance_rule(config), 'matchFileNames')
+    package = ROOT / 'src/kluster/lib/state_backend'
+    paths = [path.relative_to(ROOT).as_posix() for path in sorted(package.rglob('*')) if path.is_file()]
+    return [path for path in paths if any(matches(pattern, path) for pattern in patterns)]
+
+
+def _custom_managers(config: str) -> list[str]:
+    """Each `customManagers` entry of `renovate.json5`, as text.
+
+    An entry is cut at the next `customType:`, since a match string may carry
+    the braces a brace scan would cut at.
+    """
+    block = config[config.index('customManagers: [') : config.index('customDatasources: {')]
+    return block.split('customType:')[1:]
+
+
+def _from_json5(written: str) -> str:
+    """A JSON5 string's value from the text between its quotes: each escaped character taken as itself."""
+    return re.sub(r'\\(.)', r'\1', written)
+
+
+def test_every_pin_of_the_appliance_is_an_update_listed() -> None:
+    """Each dependency a custom manager reads off the appliance's files is one `APPLIANCE_UPDATES` presents.
+
+    The appliance rule groups by file, so a pin added to the settings with a
+    manager of its own joins the releases' branch with no rule naming it, and
+    the check above would not see it. A manager's dependency is the name its
+    template gives, or the `depName` its match strings capture in the files it
+    reads; a manager whose dependency this census cannot read fails it.
+    """
+    config = (ROOT / 'renovate.json5').read_text()
+    files = _appliance_files(config)
+    assert APPLIANCE in files
+    listed_names = {name for update in APPLIANCE_UPDATES.values() for name in update['matchDepNames']}
+
+    for entry in _custom_managers(config):
+        read = [
+            path for path in files if any(matches(pattern, path) for pattern in listed(entry, 'managerFilePatterns'))
+        ]
+        if not read:
+            continue
+        template = scalar(entry, 'depNameTemplate')
+        if template is not None:
+            names = {_from_json5(template)}
+        else:
+            names = {
+                found['depName']
+                for written in listed(entry, 'matchStrings')
+                for path in read
+                for found in as_python_spells_it(_from_json5(written)).finditer((ROOT / path).read_text())
+            }
+        assert names, f'a manager on the appliance reads a dependency this census cannot name:\n{entry}'
+        assert names <= listed_names, f'{sorted(names - listed_names)} move on an appliance branch unlisted'
