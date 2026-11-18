@@ -1,13 +1,18 @@
 """The pins, the selection rule and the regeneration behind `packages/crds` and `sdks/crds`.
 
-Nothing here reaches the network: what is worth holding still is which CRDs
-survive the filter, that the committed bundle is the script's own output, that
-the pins the script reads are the block's and the bundle was rendered from
-them, that a chart below its floor is refused, that the operator version each chart
-declares is recorded and `kubeseal` is the sealed-secrets one, that renovate's
-managers read the block, that a tool download nothing vouches for is refused, and what the
-script leaves behind when it regenerates the SDK. The cases that download or
-run a tool at all are handed a stand-in. That the SDK was generated from the
+What is worth holding still is which CRDs survive the filter, that the
+committed bundle is the script's own output, that the pins the script reads
+are the block's and the bundle was rendered from them, that a chart below its
+floor is refused, that the operator version each chart declares is recorded
+and `kubeseal` is the sealed-secrets one, that renovate's managers read the
+block, that the Helm the script renders with is the one `mise.toml` pins and
+that pin the Helm SDK the kubernetes provider embeds, that a chart renders for
+the Kubernetes release the pinned Talos defaults to, and what the script
+leaves behind when it regenerates the SDK. Nothing here reaches the network
+but the provider plugin that one case reads the embedded release out of
+(framework/testing.md §8): the pinned Helm and `talosctl` run against a chart
+the case serves from `127.0.0.1`, and a case that would fetch anything else is
+handed a stand-in. That the SDK was generated from the
 bundle is `test_conventions`', beside the other generated SDKs.
 """
 
@@ -15,21 +20,33 @@ from __future__ import annotations
 
 import json
 import logging
+import mmap
 import os
 import re
+import shutil
 import subprocess
 import sys
-import tarfile
-from collections.abc import Callable, Iterable, Mapping
-from io import BytesIO
+from collections.abc import Callable, Generator, Iterable, Mapping
+from importlib import resources
 from pathlib import Path
 from typing import TextIO, cast
 
+import chart_engine
+import pinned_tools
 import process_sessions
 import pytest
 import requests
 import ruamel.yaml.main as ruamel_yaml_main
-from renovate_text import as_python_spells_it, as_renovate_spells_it, group, listed, package_rules, reaches, scalar
+import scratch_projects
+from renovate_text import (
+    as_python_spells_it,
+    as_renovate_spells_it,
+    group,
+    listed,
+    package_rules,
+    reaches,
+    scalar,
+)
 from tqdm import tqdm
 
 from kluster.lib import source_files
@@ -627,11 +644,15 @@ def test_a_source_pin_is_read_by_the_programs_alone(tmp_path: Path, monkeypatch:
     def value_paths(*_: object, **__: object) -> ValuePaths:
         return ValuePaths(paths=frozenset(), free_form=frozenset())
 
-    def fetch_helm(_: Path) -> Path:
+    def find_helm() -> Path:
         return tmp_path / 'helm'
 
+    def kube_version(*, talos: str) -> str:
+        return 'v1.99.0'
+
     monkeypatch.setattr(source_files.requests, 'get', get)
-    monkeypatch.setattr(sources, 'fetch_helm', fetch_helm)
+    monkeypatch.setattr(sources, 'find_helm', find_helm)
+    monkeypatch.setattr(sources, 'kube_version', kube_version)
     monkeypatch.setattr(sources, 'chart_value_paths', value_paths)
     monkeypatch.setattr(sources, 'chart_app_version', app_version)
     monkeypatch.setattr(sources, 'fetch_source_tree', nothing)
@@ -758,18 +779,25 @@ def test_a_run_reads_every_source_from_the_pins(tmp_path: Path, monkeypatch: pyt
         calls.append(f'manifest {pin}')
         return ''
 
-    def render(_: Path, pin: ChartPin, *, workdir: Path) -> str:
-        calls.append(f'render {pin.name} {pin.version}')
+    def render(_: Path, pin: ChartPin, *, workdir: Path, kube_version: str) -> str:
+        calls.append(f'render {pin.name} {pin.version} for {kube_version}')
         return ''
 
     def value_paths(_: Path, pin: ChartPin, *, workdir: Path) -> ValuePaths:
         calls.append(f'values {pin.name} {pin.version}')
         return ValuePaths(paths=frozenset({pin.name}), free_form=frozenset())
 
-    def fetch_helm(_: Path) -> Path:
+    def find_helm() -> Path:
         return helm
 
-    monkeypatch.setattr(sources, 'fetch_helm', fetch_helm)
+    asked_for: list[str] = []
+
+    def kube_version(*, talos: str) -> str:
+        asked_for.append(talos)
+        return 'v1.99.0'
+
+    monkeypatch.setattr(sources, 'find_helm', find_helm)
+    monkeypatch.setattr(sources, 'kube_version', kube_version)
     monkeypatch.setattr(sources, 'chart_value_paths', value_paths)
     monkeypatch.setattr(sources, 'chart_app_version', app_version)
     monkeypatch.setattr(sources, 'fetch_source_tree', tree)
@@ -780,6 +808,7 @@ def test_a_run_reads_every_source_from_the_pins(tmp_path: Path, monkeypatch: pyt
 
     charts = [versions.chart[name] for name in project.names(CHART)]
     read = record.read_charts(project)
+    assert asked_for == [versions.talos]
     assert calls[: len(read)] == [f'app-version {name}' for name in read]
     assert declared == {name: f'99.0.{position}' for position, name in enumerate(read, start=1)}
     assert 'tree cilium/cilium@v9.9.9' in calls
@@ -787,7 +816,7 @@ def test_a_run_reads_every_source_from_the_pins(tmp_path: Path, monkeypatch: pyt
         f'manifest {versions.manifest[name]}' for name in project.names(MANIFEST)
     ]
     assert [call for call in calls if call.startswith('render')] == [
-        f'render {chart.name} {chart.version}' for chart in charts if chart.definitions
+        f'render {chart.name} {chart.version} for v1.99.0' for chart in charts if chart.definitions
     ]
     assert [call for call in calls if call.startswith('values')] == [
         f'values {chart.name} {chart.version}' for chart in charts
@@ -998,12 +1027,6 @@ _A_PIN = ChartPin(
     digest=f'sha256:{"0" * 64}',
     definitions=False,
 )
-
-
-def test_an_archive_without_the_executable_is_refused_by_reason(tmp_path: Path) -> None:
-    with pytest.raises(sources.SourceError) as refused:
-        _ = sources._extracted_binary(tmp_path, 'helm', source='an archive')  # pyright: ignore[reportPrivateUsage]
-    assert refused.value.reason is sources.Malformed.NO_EXECUTABLE
 
 
 def test_a_chart_that_declares_no_app_version_is_refused_by_reason(
@@ -1222,68 +1245,252 @@ def test_the_in_cluster_rule_groups_what_the_block_managers_read() -> None:
     assert in_cluster < gateway
 
 
-# -- the pinned tool downloads ------------------------------------------------
+# -- the pinned Helm ----------------------------------------------------------
 
 
-#: Contents for the one file the fetch cares about. Nothing runs it.
-TOOL = b'#!/bin/sh\nexit 0\n'
+def on_path(monkeypatch: pytest.MonkeyPatch, directory: Path, *, reports: str | None) -> Path:
+    """`PATH` set to `directory` alone, holding a `helm` that reports `reports` as its version, or none when `None`."""
+    monkeypatch.setenv('PATH', str(directory))
+    helm = directory / sources.HELM
+    if reports is not None:
+        _ = helm.write_text(f'#!/bin/sh\nprintf %s {reports}\n')
+        helm.chmod(0o755)
+    return helm
 
 
-def archive(binary: str) -> bytes:
-    """A tar.gz holding one executable called `binary`, and nothing else."""
-    buffer = BytesIO()
-    with tarfile.open(fileobj=buffer, mode='w:gz') as tarobj:
-        entry = tarfile.TarInfo(binary)
-        entry.size = len(TOOL)
-        entry.mode = 0o755
-        tarobj.addfile(entry, BytesIO(TOOL))
-    return buffer.getvalue()
+def test_find_helm_takes_the_pinned_release_off_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    helm = on_path(monkeypatch, tmp_path, reports=sources.pinned_helm_version())
+
+    assert sources.find_helm() == helm
 
 
-class FakeDownload:
-    """A streamed response that hands back the bytes it was given."""
-
-    def __init__(self, payload: bytes) -> None:
-        self.headers: dict[str, str] = {'content-length': str(len(payload))}
-        self.raw: BytesIO = BytesIO(payload)
-
-    def __enter__(self) -> FakeDownload:
-        return self
-
-    def __exit__(self, *_: object) -> None:
-        return None
-
-    def raise_for_status(self) -> None:
-        return None
-
-
-def serve(monkeypatch: pytest.MonkeyPatch, payload: bytes) -> list[str]:
-    """Replace the download seam, and hand back the list of URLs it was asked for."""
-    requested: list[str] = []
-
-    def get(url: str, **_: object) -> requests.Response:
-        requested.append(url)
-        return cast('requests.Response', FakeDownload(payload))
-
-    monkeypatch.setattr(sources.requests, 'get', get)
-    return requested
-
-
-def test_fetch_helm_refuses_an_archive_that_is_not_the_pinned_one(
+def test_find_helm_refuses_another_release_by_the_version_it_reports(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A well-formed tarball that is not the pinned release is refused by digest.
+    """A host's Helm 4, found on `PATH` by a run outside `mise x`, renders nothing."""
+    _ = on_path(monkeypatch, tmp_path, reports='v4.0.0')
 
-    Refused *before* it is unpacked, which the empty directory is the claim
-    about: an archive already extracted has had its say whatever the digest
-    turns out to be.
+    with pytest.raises(sources.NotThePinnedHelm) as refused:
+        _ = sources.find_helm()
+    assert refused.value.found == 'v4.0.0'
+
+
+def test_find_helm_refuses_a_path_without_one(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _ = on_path(monkeypatch, tmp_path, reports=None)
+
+    with pytest.raises(sources.NotThePinnedHelm) as refused:
+        _ = sources.find_helm()
+    assert refused.value.found is None
+
+
+def test_the_pin_is_read_from_a_table_as_from_a_version(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`mise.toml` writes a pin as a version or as a table carrying one, and both name the same release."""
+    monkeypatch.setattr(sources.workstation, 'repo_root', lambda: tmp_path)
+    mise_toml = tmp_path / 'mise.toml'
+
+    _ = mise_toml.write_text('[tools]\nhelm = "3.1.4"\n')
+    as_version = sources.pinned_helm_version()
+    _ = mise_toml.write_text('[tools]\nhelm = { version = "3.1.4" }\n')
+
+    assert sources.pinned_helm_version() == as_version == 'v3.1.4'
+
+
+@pytest.mark.parametrize('entry', ['{ url = "https://example.invalid/helm.tar.gz" }', '3', 'false'])
+def test_a_pin_of_another_shape_is_refused_by_reason(
+    entry: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sources.workstation, 'repo_root', lambda: tmp_path)
+    _ = (tmp_path / 'mise.toml').write_text(f'[tools]\nhelm = {entry}\n')
+
+    with pytest.raises(sources.SourceError) as refused:
+        _ = sources.pinned_helm_version()
+    assert refused.value.reason is sources.Malformed.NO_HELM_VERSION
+
+
+#: How long installing the provider plugin may take before the case fails
+#: naming the command: a stop-loss, which nothing asserts on. The download and
+#: the unpacking took a couple of seconds.
+PLUGIN_TIMEOUT = 240
+
+#: The line Go's build information carries for the Helm SDK module a binary
+#: was built with: its major in the module path, and its release.
+HELM_DEPENDENCY = re.compile(rb'\ndep\thelm\.sh/helm/v(\d+)\t(v[^\t\n]+)')
+
+
+@pytest.mark.skipif(shutil.which('pulumi') is None, reason='the pinned pulumi CLI is not on PATH')
+@pytest.mark.timeout(PLUGIN_TIMEOUT + 30)
+def test_the_helm_pin_is_the_release_the_kubernetes_provider_renders_with(tmp_path: Path) -> None:
+    """The Helm `update_crds` renders with is the Helm SDK the cluster's charts are rendered with.
+
+    The cluster's charts are rendered inside the kubernetes provider, by the
+    Helm SDK its plugin was built with. The plugin is the release the locked
+    `pulumi-kubernetes` registers, installed into a `PULUMI_HOME` of the
+    case's own, and the SDK's release is read out of the plugin's Go build
+    information, which the binary carries as text: no Go toolchain reads it.
+    A `pulumi-kubernetes` bump that embeds another release is red here until
+    `mise.toml`'s `helm` and `mise.lock` have moved to it, which renovate does
+    not do (the pin's comment).
     """
-    _ = serve(monkeypatch, archive('helm'))
+    # The plugin the SDK registers, by the field the engine resolves it from.
+    registered = json.loads((resources.files('pulumi_kubernetes') / 'pulumi-plugin.json').read_text())
+    provider = str(registered['version'])
+    env = scratch_projects.scrubbed(os.environ) | scratch_projects.cli_directories(tmp_path)
+    home = Path(env['PULUMI_HOME'])
+    try:
+        installed = process_sessions.run(
+            ['pulumi', '--non-interactive', 'plugin', 'install', 'resource', 'kubernetes', provider],
+            env=env,
+            text=True,
+            timeout=PLUGIN_TIMEOUT,
+        )
+        assert installed.returncode == 0, installed.stderr
+        plugin = home / 'plugins' / f'resource-kubernetes-v{provider}' / 'pulumi-resource-kubernetes'
+        # Mapped rather than read: the binary is a couple of hundred megabytes.
+        with plugin.open('rb') as file, mmap.mmap(file.fileno(), 0, access=mmap.ACCESS_READ) as binary:
+            embedded = {match[2].decode() for match in HELM_DEPENDENCY.finditer(binary)}
+    finally:
+        # Unpacked, the plugin is hundreds of megabytes: gone with the case.
+        shutil.rmtree(home, ignore_errors=True)
 
-    with pytest.raises(ValueError, match=pins.HELM_SHA256):
-        _ = sources.fetch_helm(tmp_path)
+    assert embedded == {sources.pinned_helm_version()}, (
+        f'pulumi-kubernetes {provider} renders with Helm {", ".join(sorted(embedded)) or "(none found)"}; '
+        "move mise.toml's helm to it and run `mise lock helm`"
+    )
 
-    assert list(tmp_path.iterdir()) == []
+
+#: A chart of the case's own: one definition, templated, whose description
+#: names the Kubernetes release the chart was rendered for, and a floor on that
+#: release in its `Chart.yaml`, as five of the pinned charts carry.
+PROBE_CHART = {
+    'Chart.yaml': 'apiVersion: v2\nname: probe\nversion: 0.1.0\nappVersion: 1.2.3\nkubeVersion: ">=1.29.0-0"\n',
+    'values.yaml': 'widgets:\n  enabled: true\n',
+    'templates/crd.yaml': """\
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: widgets.example.com
+spec:
+  group: example.com
+  names:
+    kind: Widget
+    plural: widgets
+  scope: Namespaced
+  versions:
+    - name: v1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          description: rendered for {{ .Capabilities.KubeVersion.Version }}
+""",
+}
+
+
+@pytest.fixture
+def probe(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Generator[ChartPin]:
+    """`PROBE_CHART`, pinned in a Helm repository the case serves from `127.0.0.1`."""
+    # A proxy the test run's environment names would be asked for the loopback.
+    monkeypatch.setenv('no_proxy', '127.0.0.1')
+    monkeypatch.setenv('NO_PROXY', '127.0.0.1')
+    with chart_engine.served(tmp_path / 'repository', PROBE_CHART) as repository:
+        yield ChartPin(name='probe', repository=repository, version='0.1.0', digest=None, definitions=True)
+
+
+def talosctl_naming(directory: Path, monkeypatch: pytest.MonkeyPatch, *, release: str, images: str) -> None:
+    """A `talosctl` in `directory`, ahead of the rest of `PATH`, of the Talos `release`, that lists `images` by default."""
+    directory.mkdir()
+    talosctl = directory / sources.TALOSCTL
+    _ = talosctl.write_text(
+        f'#!/bin/sh\nif [ "$1" = version ]; then printf \'Client:\\nTalos %s\\n\' {release}; exit 0; fi\n'
+        f"cat <<'EOF'\n{images}EOF\n"
+    )
+    talosctl.chmod(0o755)
+    monkeypatch.setenv('PATH', f'{directory}{os.pathsep}{os.environ["PATH"]}')
+
+
+#: The Talos release the stand-in cases name as the fleet's.
+FLEET = 'v1.13.9'
+
+
+def rendered_for(helm: Path, pin: ChartPin, workdir: Path, kube_version: str) -> str:
+    """The release `PROBE_CHART`'s one definition says it was rendered for."""
+    (crd,) = sources.select_crds([sources.render_chart(helm, pin, workdir=workdir, kube_version=kube_version)])
+    return str(crd.document['spec']['versions'][0]['schema']['openAPIV3Schema']['description'])
+
+
+def test_the_pinned_helm_pulls_a_chart_and_reads_it(probe: ChartPin, tmp_path: Path) -> None:
+    """The binary on the gate's `PATH` is the pinned Helm, and pulls and reads a chart as the script asks it to."""
+    _ = pinned_tools.located(sources.HELM)
+    helm = sources.find_helm()
+
+    assert sources.chart_app_version(helm, probe, workdir=tmp_path / 'app-version') == '1.2.3'
+    assert sources.chart_value_paths(helm, probe, workdir=tmp_path / 'values').accepts(('widgets', 'enabled'))
+
+
+def test_a_chart_renders_for_the_release_talosctl_names(
+    probe: ChartPin, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The release is `talosctl`'s and nobody else's: a stand-in naming another is the one the chart sees.
+
+    Rendered with no release named, the chart sees the one the Helm binary was
+    built with, which is no cluster's.
+    """
+    _ = pinned_tools.located(sources.HELM)
+    helm = sources.find_helm()
+    talosctl_naming(
+        tmp_path / 'bin',
+        monkeypatch,
+        release=FLEET,
+        images='registry.k8s.io/etcd:v3.6.0\nregistry.k8s.io/kube-apiserver:v1.31.7\n',
+    )
+
+    kube_version = sources.kube_version(talos=FLEET)
+
+    assert kube_version == 'v1.31.7'
+    assert rendered_for(helm, probe, tmp_path / 'render', kube_version) == 'rendered for v1.31.7'
+
+
+def test_a_chart_renders_for_the_release_the_pinned_talos_defaults_to(probe: ChartPin, tmp_path: Path) -> None:
+    """The pinned `talosctl`'s listing names a release, and the pinned Helm renders a floored chart for it."""
+    _ = pinned_tools.located(sources.HELM)
+    _ = pinned_tools.located(sources.TALOSCTL)
+
+    kube_version = sources.kube_version(talos=Versions(sources.read_project(ROOT / 'Pulumi.yaml')).talos)
+
+    assert rendered_for(sources.find_helm(), probe, tmp_path / 'render', kube_version) == f'rendered for {kube_version}'
+
+
+def test_a_listing_without_the_api_server_is_refused_by_reason(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    talosctl_naming(tmp_path / 'bin', monkeypatch, release=FLEET, images='registry.k8s.io/etcd:v3.6.0\n')
+
+    with pytest.raises(sources.SourceError) as refused:
+        _ = sources.kube_version(talos=FLEET)
+    assert refused.value.reason is sources.Malformed.NO_KUBE_APISERVER
+
+
+def test_kube_version_refuses_another_talos_release_by_the_one_it_reports(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A host's own `talosctl`, found on `PATH` by a run outside `mise x`, names its own release's Kubernetes."""
+    talosctl_naming(
+        tmp_path / 'bin',
+        monkeypatch,
+        release='v1.12.0',
+        images='registry.k8s.io/kube-apiserver:v1.35.0\n',
+    )
+
+    with pytest.raises(sources.NotTheFleetsTalosctl) as refused:
+        _ = sources.kube_version(talos=FLEET)
+    assert refused.value.found == 'v1.12.0'
+
+
+def test_a_path_without_talosctl_is_refused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv('PATH', str(tmp_path))
+
+    with pytest.raises(sources.NotTheFleetsTalosctl) as refused:
+        _ = sources.kube_version(talos=FLEET)
+    assert refused.value.found is None
 
 
 def test_the_cilium_chart_travels_alone() -> None:
@@ -1319,25 +1526,6 @@ def test_the_cilium_chart_travels_alone() -> None:
         if scalar(later, 'groupName') is None and scalar(later, 'groupSlug') is None:
             continue
         assert not reaches(later, presents), f'a later rule regroups the Cilium chart:\n{later}'
-
-
-def test_no_pin_carries_an_annotation_comment() -> None:
-    """The script's own pins announce no automation they do not have.
-
-    No manager reads this module: the Helm binary moves by hand. An annotation
-    above it would therefore be inert — and inert ones are worse than none,
-    because they read as a working mechanism and stop anyone from building
-    the real one.
-
-    Anywhere on the line, not only at its start: an annotation trailing a
-    version is just as inert and reads just as much like automation.
-    """
-    module = Path(pins.__file__).read_text()
-
-    # An emptied or renamed module would satisfy a purely negative assertion.
-    assert f"HELM_VERSION = '{pins.HELM_VERSION}'" in module
-
-    assert re.findall(r'# renovate:.*', module) == []
 
 
 def test_the_mise_action_rule_outranks_the_github_actions_group() -> None:

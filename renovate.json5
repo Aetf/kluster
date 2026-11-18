@@ -211,6 +211,12 @@
       // in the python group, the bump would hold every other library bump red
       // until the SDK was regenerated.
       //
+      // A release that embeds another Helm SDK than the last one moves
+      // `mise.toml`'s `helm` too, by hand, with `mise lock helm`: that pin is
+      // the embedded release, renovate offers it nothing (the `helm` rule
+      // below), and `tests/test_update_crds.py` reads the release out of the
+      // provider's plugin and holds the bump red until the pin has moved.
+      //
       // Position is load-bearing, the way the `jdx/mise-action` rule's is:
       // the last matching rule wins a field, so this sits *after* the rule
       // matching the pep621 manager, which reads the same pin. A test holds
@@ -967,6 +973,18 @@
         'cmctl',
       ],
       allowedVersions: '/^2\\.6\\./',
+    },
+    {
+      // The local Helm, which `update_crds` renders the chart set with, is
+      // the release the kubernetes provider's plugin embeds (its comment in
+      // `mise.toml`), not Helm's newest. So renovate offers it nothing: the
+      // pin moves by hand, with `mise lock helm`, in the `kubernetes provider`
+      // pull request that moves the embedded release, and
+      // `tests/test_update_crds.py` holds that pull request red until it has.
+      matchDepNames: [
+        'helm',
+      ],
+      enabled: false,
     },
     {
       // The self-built images (ci.md §4). Each pin here is one image, so they

@@ -1,14 +1,16 @@
 """Regenerate the CRD bundle and the SDK generated from it, from the pinned chart set.
 
-`mise x -- uv run update_crds`, which puts the `pulumi` CLI `mise.toml` pins on
-`PATH`. The bundle (`packages/crds/crds.yaml`) and the SDK (`sdks/crds`) are
-generated, not written, so this is the only supported way to change anything
-under either. The pins are the `versions:` block of `Pulumi.yaml`; the run
-reads the operator version each chart it reads declares and checks the floors,
-reads the value paths every pinned chart has, renders the definitions, writes
-the bundle to the path the same file's `packages:` entry names, writes beside it
-the record of the pins it read, of the operator versions the charts declare and
-of the charts' value paths (`record`), and regenerates the SDK from that entry.
+`mise x -- uv run update_crds`, which puts the `pulumi` CLI, the Helm and the
+`talosctl` `mise.toml` pins on `PATH`. The bundle (`packages/crds/crds.yaml`)
+and the SDK (`sdks/crds`) are generated, not written, so this is the only
+supported way to change anything under either. The pins are the `versions:`
+block of `Pulumi.yaml`; the run reads the operator version each chart it reads
+declares and checks the floors, reads the value paths every pinned chart has,
+renders the definitions for the Kubernetes release the pinned Talos defaults
+to (`sources.kube_version`), writes the bundle to the path the same file's
+`packages:` entry names, writes beside it the record of the pins it read, of
+the operator versions the charts declare and of the charts' value paths
+(`record`), and regenerates the SDK from that entry.
 """
 
 # `tqdm` is only partially typed.
@@ -76,7 +78,8 @@ def collect_documents(workdir: Path, project: ProjectFile) -> tuple[list[str], d
         f'{len(manifests)} release manifests and {len(pins.SOURCE_TREES)} source trees'
     )
 
-    helm = sources.fetch_helm(workdir)
+    helm = sources.find_helm()
+    kube_version = sources.kube_version(talos=versions.talos)
     log.info(f'Reading the operator versions of {len(read)} charts and checking their floors')
     declared: dict[str, str] = {}
     for chart in read:
@@ -94,7 +97,9 @@ def collect_documents(workdir: Path, project: ProjectFile) -> tuple[list[str], d
         documents.append(fetch_manifest(manifest))
     for tree in pins.SOURCE_TREES:
         documents.extend(sources.fetch_source_tree(tree, tree.ref(versions.chart[tree.chart])))
-    documents.extend(sources.render_chart(helm, chart, workdir=workdir) for chart in rendered)
+    documents.extend(
+        sources.render_chart(helm, chart, workdir=workdir, kube_version=kube_version) for chart in rendered
+    )
     return documents, declared, value_paths
 
 

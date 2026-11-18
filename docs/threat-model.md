@@ -221,9 +221,7 @@ Today:
     `settings.POSTGRES_IMAGE` names beside its tag, which the box pulls and
     runs and nothing on the box moves;
 -   the state backend's Fedora CoreOS artifact and its `age` binary, by
-    the sha256 beside each pin in `kluster.lib.state_backend.settings`,
-    and the Helm binary `update_crds` renders with, by the sha256 beside
-    its pin.
+    the sha256 beside each pin in `kluster.lib.state_backend.settings`.
 
 **A pin that names a version alone**, and so moves under such an upload.
 Each of these carries its reason, and these are accepted residuals:

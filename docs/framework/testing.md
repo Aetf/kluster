@@ -1418,6 +1418,18 @@ records no inputs, so the interpreter's path in its post-renderer is never a
 diff between two checkouts. Dropping the post-renderer from the helper fails
 it.
 
+`tests/test_update_crds.py` holds the Helm `mise.toml` pins, which
+`update_crds` renders the chart set with, to the Helm SDK the cluster's
+charts are rendered with, and starts no `pulumi` program. **It fetches
+the Kubernetes provider plugin**, at the version the locked
+`pulumi-kubernetes` registers, into a `PULUMI_HOME` of the case's own
+that the case removes when it finishes, and reads the release of the
+SDK out of the plugin's Go build information. The release is a fact of
+that one binary, and no file of this repository's carries a copy of it.
+A run with no `pulumi` on `PATH` skips the case, saying so. The module's
+cases that run the pinned Helm and `talosctl` fetch nothing: their chart
+is the case's own, served from `127.0.0.1`.
+
 `tests/test_targeted_import_engine.py` holds the engine semantics that
 every targeted `up` of the bring-up rests on, wherever its runbook
 writes it ([physical/gateway-cutover.md](../physical/gateway-cutover.md),

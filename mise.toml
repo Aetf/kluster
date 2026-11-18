@@ -166,6 +166,22 @@ kubectl = "1.36.6"
 # minor moves this pin and the bound by hand, to the line built against it,
 # which cmctl's `go.mod` names. Its releases are static binaries.
 cmctl = "2.6.2"
+# Helm is what `update_crds` pulls the pinned chart set with and renders it
+# with, offline. It finds the binary on `PATH`, so it runs under `mise x`. The
+# release is the Helm SDK the kubernetes provider renders charts with: the one
+# its plugin embeds, at the `pulumi-kubernetes` release `uv.lock` pins, whose
+# Go build information names it in a `dep helm.sh/helm/v3` line. So the bundle
+# comes out of the template engine the cluster's charts are installed with. The
+# Kubernetes release a chart renders for is the other half of what it sees,
+# and no Helm release carries that one: `update_crds` hands `helm template`
+# the release the cluster runs, with `--kube-version`
+# (`update_crds.sources.kube_version`). A test reads the `dep` line out of the
+# plugin and holds this pin equal to it. Renovate leaves the pin alone (its rule
+# in `renovate.json5`): it moves by hand, with `mise lock helm`, in the pull
+# request that bumps `pulumi-kubernetes` to a release embedding another Helm,
+# which that test holds red until it has. Its releases are static binaries,
+# from the Helm project's own download host rather than from GitHub.
+helm = "3.20.2"
 # vmctl is VictoriaMetrics' migration client, which imports the legacy
 # Prometheus's series into the history store at Wave C's head
 # (docs/cluster/migration.md §2.1). It reaches each store only through its
