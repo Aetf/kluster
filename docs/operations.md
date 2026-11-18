@@ -1417,7 +1417,7 @@ Owning docs keep the content — the index only locates it.
 | Backup restores (CNPG, VolSync, etcd) | storage.md §5; the drills are §4 here |
 | Alert-channel failure (HA push down → meta-alert; GitHub leg down; a scheduled ops-repo workflow that stopped checking in) | architecture.md §4.3; the contract and the dead-man are §4 here |
 | CI alerts (a red `checks` or `images` run; a drift diff) | framework/ci.md §3.1 and §3.2 |
-| The metrics stores (rows a store ignores; a backup run that failed, a backup gone stale or refused, or a store that does not restore; a pull of OCI's block-volume series that failed or went stale) | §6 here |
+| The metrics stores (rows a store ignores; a backup run that failed, a backup gone stale or refused, or a store that does not restore; a pull of OCI's block-volume series that failed or went stale; a scrape job that reports nothing, or no scrape job at all) | §6 here |
 | The etcd snapshot (a run that failed, or snapshots gone stale) | §7 here |
 
 vmalert rule families adopt this index as they are ported: an alert
@@ -1437,11 +1437,12 @@ item 6). The commands below run from the root of the checkout.
 
 ### 6.1 A row the metrics store ignores
 
-**Trigger**: `MetricsDropped`, `actionable`. vmsingle's
-`vm_rows_ignored_total` grew in the last 30 minutes, under the
-`reason` the alert carries. The store received those rows and kept none
-of them. vmagent counts them as delivered, so nothing else shows the
-loss: a series that loses a row in each scrape is missing whole rather
+**Trigger**: `MetricsDropped`, `actionable`. `vm_rows_ignored_total`
+grew in the last 30 minutes, under the `reason` and the `job` the alert
+carries: a store's count of rows it received and kept none of, or
+vmagent's of rows past its own limits, which it sent to neither store.
+vmagent counts a row a store ignores as delivered, so nothing else
+shows the loss: a series that loses a row in each scrape is missing whole rather
 than sparse, and every reading over it reads nothing.
 
 **Gist**:
@@ -1452,10 +1453,11 @@ than sparse, and every reading over it reads nothing.
    label past 256 characters or a value past 4 KiB. `big_timestamp` and
    `small_timestamp` are samples stamped far from the store's clock,
    which is a source's clock and not its labels.
-2. **Find the series.** vmsingle logs at most one ignored series every
-   5 seconds, whole:
-   `mise x -- kubectl -n monitoring logs -l app.kubernetes.io/name=vmsingle | grep 'ignoring series'`.
-   Its `job` and its name say which scrape produced it.
+2. **Find the series.** The store or the vmagent the alert's `job`
+   names logs at most one ignored series every 5 seconds, whole:
+   `mise x -- kubectl -n monitoring logs -l app.kubernetes.io/name=vmsingle | grep 'ignoring series'`,
+   with `vmagent` in place of `vmsingle` for vmagent's.
+   The series' `job` and its name say which scrape produced it.
 3. **Repair the scrape that adds the labels**, in the component that
    declares it: the chart's scrapes and etcd's in
    `components.monitoring`, Cilium's there too. The usual cause is a
@@ -1685,6 +1687,91 @@ one is lost, since OCI keeps one-minute data for seven days.
    and both alerts resolve at the next evaluation after it. The history
    store answers `oci_blockstore_VolumeReadOps` for each volume up to
    the run.
+
+### 6.4 A scrape job reports nothing
+
+**Trigger**: `ScrapeTargetDown` or `ScraperDown`, both `actionable`,
+held for five minutes (the scrape-target family,
+`kluster.components.monitoring.rules`). A rule reads only what a scrape
+job reports, so a job that reports nothing leaves every rule that reads
+it evaluating over no series: silent, whatever it watches. The family
+watches every job some other rule reads, which the program derives
+from the rules' expressions. `ScrapeTargetDown` names the `job` it is
+about: a target of it whose scrape fails, or no target of it listed at
+all. `ScraperDown` is no target of any job reporting, which is vmagent
+stopped, or none of what it scrapes reaching the recent store; while it
+holds, no `ScrapeTargetDown` fires, since every job is down for the one
+reason. A recent store that is itself down stops vmalert from
+evaluating anything, which is the cluster's check-in going quiet
+instead (§4).
+
+How soon an alert fires depends on how the series ended. A failing scrape
+writes `up` as 0, and a target that leaves discovery is marked stale,
+so either alert fires five minutes after it. A series that ends with
+no stale marker is still read for one of vmalert's query steps, five
+minutes, after its last sample, so its alert fires about ten minutes
+after it. vmagent writes no marker when it stops, which is why
+`ScraperDown` fires about ten minutes after vmagent stops.
+
+**Gist**:
+
+1. **Which alert.** `ScraperDown` is step 4. For `ScrapeTargetDown`,
+   read `up{job="<job>"}` against the recent store, in Grafana's
+   Explore: a target at 0 is listed and failing, step 2; no series at
+   all is no target listed, step 3.
+2. **A target listed and failing.** Its pod runs, or ran, and its
+   metrics endpoint does not answer vmagent.
+   `mise x -- kubectl -n monitoring get pods` shows a pod restarting or
+   killed for memory, and `mise x -- kubectl -n monitoring describe pod
+   <pod>` and its log say why. vmagent's own reading of the scrape is
+   its targets page: `mise x -- kubectl -n monitoring port-forward
+   svc/vmagent-monitoring-victoria-metrics-k8s-stack 8429`, then
+   `http://localhost:8429/targets`, which names the error each target's
+   last scrape met.
+3. **No target listed.** Service discovery finds nothing for the job:
+   its workload is gone or scaled to nothing, its pod has no address
+   (`Pending`, waiting on the worker, §3), or its Service or its scrape
+   object is gone. `mise x -- kubectl -n monitoring get pods,svc` and
+   the scrape objects (`vmservicescrape`, `vmpodscrape`, `vmnodescrape`)
+   name which, and vmagent's `/service-discovery` page, beside the
+   targets page of step 2, lists the targets discovery found and
+   dropped. A job whose name changed — a scrape's relabeling, or the
+   release the stack is installed as — is watched under the old name
+   until the program derives the new one: the names come from
+   `scrape_jobs` in `kluster.components.monitoring`, which a change to
+   a scrape updates in the same pull request.
+4. **No target of any job.** vmagent:
+   `mise x -- kubectl -n monitoring get pods -l app.kubernetes.io/name=vmagent`
+   and its log, which says whether it scrapes and whether the recent
+   store accepts what it writes. What it scraped and could not write is
+   buffered on its disk and sent once the store accepts it again.
+5. **Repair** in the component that declares the scrape or the
+   workload: the chart's scrapes, etcd's and Cilium's in
+   `components.monitoring`. A previewed apply of `k8s-base` lands it.
+6. **Confirm**: `up{job="<job>"}` reads 1 for every target, and the
+   alert resolves at the next evaluation. The rules that read the job
+   read it again from then on. Those reading a state, such as a node's
+   readiness or a CronJob's last success, report what happened
+   meanwhile at once. `MetricsDropped` counts the rows a store ignored
+   meanwhile. After a gap longer than its 30 minutes it reads the
+   store's whole counter as new, so a store that has ignored any row
+   since it started raises it again for 30 minutes; the log in §6.1
+   step 2 says whether the rows are new.
+
+**The jobs the family names are checked against the recent store**
+whenever an exporter changes: a release of kube-state-metrics,
+alertmanager or VictoriaMetrics, or a change to a scrape. `scrape_jobs`
+claims which job exports each metric a rule reads by name alone, and
+nothing the program declares holds those claims. In Grafana's Explore,
+`min by (job) (up)` reads 1 for every job whose targets are all up,
+each one `scrape_jobs` names among them; and each of
+`count by (job) ({__name__=~"kube_.+", __name__!~"kube_apiserver_.+"})`,
+`count by (job) ({__name__=~"alertmanager_.+"})`,
+`count by (job) ({__name__=~"vmagent_.+"})` and
+`count by (job) (vm_rows_ignored_total)` lists the jobs `scrape_jobs`
+claims for it and no other. A job that answers and is not claimed is
+one whose stopping would silence a rule: its claim goes into
+`scrape_jobs` in the pull request that brings the change.
 
 ## 7. The etcd snapshot's playbooks
 

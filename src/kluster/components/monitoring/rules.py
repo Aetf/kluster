@@ -15,38 +15,68 @@ is not shipped (architecture.md §4.3).
 The expressions are MetricsQL, which vmalert evaluates: a duration such as
 `36h` stands for its number of seconds wherever a number does, which is how
 the freshness family compares an age with a retention class's threshold in the
-duration syntax `conventions.backup` writes it in.
+duration syntax `conventions.backup` writes it in. Each is written in the
+PromQL that `promql_parser` reads, too, since the scrape-target family reads
+every expression through it, and it refuses MetricsQL's own syntax (`WITH`,
+`default`, `if`, `limit`, `keep_metric_names`): a rule using that is refused
+rather than declared.
 
 **Every CronJob a stack program declares is watched by the scheduled-job
 family**: each row of `conventions.schedule.SCHEDULED_JOBS` gives a *stale*
 alert (`stale`) and a *failed* one (`failed`), read off kube-state-metrics'
 series for that CronJob, both `actionable` and both naming the row's playbook
 (operations.md §4).
+
+**Every scrape job some alerting rule reads is watched by the scrape-target
+family** (`rule_groups`): a rule that reads no series evaluates over none and
+is silent, so a job that stops reporting raises `ScrapeTargetDown` for that
+job instead. The set is read off the rules: the metric names each
+expression selects (`selectors`, through GreptimeDB's `promql_parser`), mapped
+to the jobs that export them
+(`inputs`). A selector that names its `job` reads that job; one that does not
+reads every `ScrapeJob` whose `exports` matches the name, and a name no job
+exports is refused, so a rule cannot read a series whose job goes unwatched.
+`ScraperDown` is the one alert for every job at once, when no target reports
+at all, and while it holds the per-job alerts hold back
+(operations.md §6.4).
 """
 
 from __future__ import annotations
 
 import datetime as dt
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from types import MappingProxyType
+
+import promql_parser
 
 from kluster.conventions import backup, schedule
 from kluster.conventions.alert import Playbook, Tier
 from kluster.conventions.schedule import ScheduledJob
 
 __all__ = (
+    'ALERT_GROUPS',
     'BACKUP_SYNC_TIME',
     'CLASS_LABEL',
     'HEARTBEAT',
     'HEARTBEAT_REPEAT',
     'HEARTBEAT_TIMER',
-    'RULE_GROUPS',
+    'JOB_LABEL',
+    'SCRAPER_DOWN',
+    'TARGET_DOWN_PENDING',
     'TIER_LABEL',
     'AlertRule',
     'RuleGroup',
+    'ScrapeJob',
+    'Selector',
     'failed',
+    'inputs',
+    'rule_groups',
+    'scrape_targets',
+    'selectors',
     'stale',
+    'target_down',
 )
 
 #: The label an alert's tier travels under, and the receiver's routing key.
@@ -186,8 +216,10 @@ def failed(job: ScheduledJob) -> AlertRule:
     )
 
 
-#: Every rule the component declares, by group (rfc-007 §7.2).
-RULE_GROUPS: Sequence[RuleGroup] = (
+#: Every rule the component declares but the scrape-target family, by group
+#: (rfc-007 §7.2): the rules whose inputs that family is derived from, so a
+#: new group of rules joins this tuple (`rule_groups`).
+ALERT_GROUPS: Sequence[RuleGroup] = (
     RuleGroup(
         'alert-channel',
         (
@@ -239,3 +271,170 @@ RULE_GROUPS: Sequence[RuleGroup] = (
     ),
     RuleGroup('scheduled-jobs', tuple(rule for job in schedule.SCHEDULED_JOBS for rule in (stale(job), failed(job)))),
 )
+
+
+# -- The scrape-target family ------------------------------------------------------
+
+#: The label vmagent gives every series of a scrape job, the job's name.
+JOB_LABEL = 'job'
+
+
+@dataclass(frozen=True)
+class ScrapeJob:
+    """A job vmagent scrapes: the `job` label its series carry, and the metric names a rule reads of it by name alone."""
+
+    job: str
+    exports: str
+    """A regular expression matching, in full, the metric names this job
+    exports that a selector naming no job reads. Every job a name matches is
+    one the selector reads, so a name two jobs export is claimed by both."""
+
+
+@dataclass(frozen=True)
+class Selector:
+    """One series selector of an expression: the metric it names, and the jobs its `job` matcher names, if it has one."""
+
+    metric: str
+    jobs: frozenset[str] | None
+
+
+#: How long a job reports nothing before its alert fires: past a single failed
+#: scrape and a restart, each a scrape interval or two. A target that leaves
+#: service discovery is marked stale, so its job is absent at the next
+#: evaluation and the alert fires this long after. A series that ends with no
+#: stale marker -- every series when vmagent stops, since it writes none on
+#: shutdown (`lib/promscrape/scrapework.go` L337-339) -- is read until its last
+#: sample is one query step old: vmalert sends each instant query with `step`
+#: set to `-datasource.queryStep`, five minutes at vmalert's default, which the
+#: stack leaves unset, and an instant query reads a bare selector over that
+#: step (`app/vmalert/datasource/init.go` L52, `app/vmselect/promql/rollup.go`
+#: L719-755, at VictoriaMetrics v1.150.0). So `ScraperDown` fires about ten
+#: minutes after vmagent stops. The jobs' last samples lie within one scrape
+#: interval of one another, so its condition holds the per-job alerts back
+#: long before any of them has waited this long. A test holds it above two
+#: scrape intervals and an evaluation.
+TARGET_DOWN_PENDING = dt.timedelta(minutes=5)
+
+#: The scrape-target family's playbook.
+_TARGETS_PLAYBOOK = Playbook('docs/operations.md', '6.4')
+
+#: No target reports at all: vmagent is down, or none of what it scrapes
+#: reaches the store. vmagent writes `up` for every target it scrapes, so a
+#: store holding no `up` series is a scraper that stopped, whichever job is
+#: watched.
+SCRAPER_DOWN = AlertRule(
+    alert='ScraperDown',
+    expr='absent(up)',
+    tier=Tier.ACTIONABLE,
+    summary='No scrape target is reporting, so every alert that reads one is silent',
+    playbook=_TARGETS_PLAYBOOK,
+    pending=TARGET_DOWN_PENDING,
+)
+
+
+def target_down(job: str) -> AlertRule:
+    """The job's targets report nothing: one whose scrape fails, or none listed at all, while some target reports.
+
+    vmagent writes `up` as 0 for a target whose scrape fails, and stops writing
+    it for a target that leaves service discovery, marking the series stale
+    at once (`lib/promscrape/scrapework.go` L333-356 at VictoriaMetrics
+    v1.150.0), so the first is `up == 0` and the second `absent`, and either
+    alone misses the other. Neither holds while `ScraperDown` does: every job
+    reports nothing then, and that one alert says so.
+    """
+    selector = f'up{{{JOB_LABEL}="{job}"}}'
+    return AlertRule(
+        alert='ScrapeTargetDown',
+        expr=f'({selector} == 0 or absent({selector})) unless on() ({SCRAPER_DOWN.expr})',
+        tier=Tier.ACTIONABLE,
+        summary=f'{job} reports nothing, so the alerts that read it are silent',
+        playbook=_TARGETS_PLAYBOOK,
+        pending=TARGET_DOWN_PENDING,
+        labels={JOB_LABEL: job},
+    )
+
+
+#: A `job` value the reader takes: a literal name, or for `=~` an alternation of
+#: them. A Service name holds none of a regular expression's other
+#: metacharacters, and the empty name selects series with no `job` at all.
+_JOB_ALTERNATION = re.compile(r'[\w:-]+(?:\|[\w:-]+)*')
+
+
+def _selector(expr: str, node: promql_parser.VectorSelector) -> Selector:
+    """One parsed selector as the reader takes it, refusing one it could read only short."""
+    if node.name is None:
+        # A `__name__` matcher is among these: the parser takes one only on a
+        # selector that names no metric otherwise.
+        raise ValueError(f'{expr!r} selects series by their labels alone, which names no metric')
+    if node.matchers.or_matchers:
+        # `{a="x" or b="y"}` leaves `matchers` empty and puts each alternative
+        # here, so reading `matchers` alone would read it as naming no job.
+        raise ValueError(f'{expr!r} selects {node.name} by alternatives of matchers, which the reader does not follow')
+    named: frozenset[str] | None = None
+    for matcher in node.matchers.matchers:
+        if matcher.name != JOB_LABEL:
+            continue
+        literal = matcher.op == promql_parser.MatchOp.Equal
+        if (
+            named is not None
+            or not (literal or matcher.op == promql_parser.MatchOp.Re)
+            or not _JOB_ALTERNATION.fullmatch(matcher.value)
+            or (literal and '|' in matcher.value)
+        ):
+            raise ValueError(f'{expr!r}: {matcher} names no definite set of jobs')
+        named = frozenset(matcher.value.split('|'))
+    return Selector(node.name, named)
+
+
+def selectors(expr: str) -> tuple[Selector, ...]:
+    """Every series selector of a PromQL expression, in order, as `promql_parser` parses it.
+
+    An expression the reader cannot follow is refused rather than read short:
+    one the parser refuses, MetricsQL's own syntax among them; a selector by
+    labels alone; a metric named by a `__name__` matcher; alternatives of
+    matchers; and a `job` matcher that names no definite set of jobs.
+    """
+    try:
+        tree = promql_parser.parse(expr)
+    except ValueError as error:
+        raise ValueError(f'{expr!r}: {error}') from error
+    found: list[Selector] = []
+
+    def visit(node: promql_parser.Expr) -> bool:
+        if isinstance(node, promql_parser.VectorSelector):
+            found.append(_selector(expr, node))
+        return True
+
+    _ = promql_parser.walk(tree, pre_visit=visit)
+    return tuple(found)
+
+
+def inputs(expr: str, jobs: Sequence[ScrapeJob]) -> frozenset[str]:
+    """The jobs whose series an expression reads, refusing a metric it reads by name alone that no job exports."""
+    read: set[str] = set()
+    for selector in selectors(expr):
+        if selector.jobs is not None:
+            read |= selector.jobs
+            continue
+        exporters = {job.job for job in jobs if re.fullmatch(job.exports, selector.metric)}
+        if not exporters:
+            raise ValueError(
+                f'{expr!r} reads {selector.metric!r}, which it selects by no {JOB_LABEL} and no scrape job exports'
+            )
+        read |= exporters
+    return frozenset(read)
+
+
+def scrape_targets(groups: Sequence[RuleGroup], jobs: Sequence[ScrapeJob]) -> RuleGroup:
+    """The scrape-target family over `groups`: `ScraperDown`, and an alert for each job some rule of them reads."""
+    read = {job for group in groups for rule in group.rules for job in inputs(rule.expr, jobs)}
+    return RuleGroup('scrape-targets', (SCRAPER_DOWN, *(target_down(job) for job in sorted(read))))
+
+
+def rule_groups(jobs: Sequence[ScrapeJob]) -> tuple[RuleGroup, ...]:
+    """Every rule the component declares, by group: `ALERT_GROUPS`, and the scrape-target family over them.
+
+    The family is derived from `ALERT_GROUPS` alone, so a group of rules joins
+    `ALERT_GROUPS` rather than this tuple, or the jobs it reads go unwatched.
+    """
+    return (*ALERT_GROUPS, scrape_targets(ALERT_GROUPS, jobs))

@@ -83,6 +83,7 @@ __all__ = (
     'shell_volume',
     'stack_fullname',
     'stores',
+    'vmagent_service',
     'vmagent_url',
     'work_volume',
 )
@@ -135,15 +136,20 @@ _VMRESTORE = '/vmrestore-prod'
 VMAGENT_PORT = 8429
 
 
-def vmagent_url(release: str, chart: str) -> str:
-    """The stack's vmagent in the cluster, which a series written to it reaches both stores through.
+def vmagent_service(release: str, chart: str) -> str:
+    """The name of the stack's vmagent Service.
 
     The stack names its VMAgent object `vm.cr.fullname`, as it names the recent
     store's vmsingle (`stack_fullname`; `templates/victoria-metrics-operator/vmagent/vmagent.yaml`
     at stack chart 0.91.2), and the operator names its Service `vmagent-<object>`
     (`PrefixedName`, `vmagent_types.go` L567-572 at operator v0.74.0).
     """
-    return f'http://vmagent-{stack_fullname(release, chart)}.{conventions.MONITORING_NAMESPACE}.svc:{VMAGENT_PORT}'
+    return f'vmagent-{stack_fullname(release, chart)}'
+
+
+def vmagent_url(release: str, chart: str) -> str:
+    """The stack's vmagent in the cluster, which a series written to it reaches both stores through."""
+    return f'http://{vmagent_service(release, chart)}.{conventions.MONITORING_NAMESPACE}.svc:{VMAGENT_PORT}'
 
 
 def stack_fullname(release: str, chart: str) -> str:
