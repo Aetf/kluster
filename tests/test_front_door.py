@@ -29,6 +29,7 @@ from typing import Any, cast
 import pulumi
 import pytest
 import pytest_asyncio
+from client_kubeconfig import KUBECONFIG
 from k8s_base_installation import (
     CHART,
     OUTPUTS,
@@ -97,7 +98,7 @@ async def declare(*, sealed: dict[str, object] | None) -> tuple[Run, list[str]]:
     """The whole program with `sealed` as its sealed values, and every warning it logged."""
     from kluster.stacks import k8s_base
 
-    config = {f'kluster:{KUBECONFIG_KEY}': 'a-fake-kubeconfig-that-reaches-no-cluster'}
+    config = {f'kluster:{KUBECONFIG_KEY}': KUBECONFIG}
     if sealed is not None:
         config[f'kluster:{conventions.sealed.CONFIG_KEY}'] = json.dumps(sealed)
     pulumi.runtime.set_all_config(config | VERSIONS_CONFIG, secret_keys=[f'kluster:{KUBECONFIG_KEY}'])

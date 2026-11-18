@@ -14,14 +14,19 @@ application's namespace is one a route attaches from, whose pods only the
 Gateways reach from outside it, and whose pods reach out anywhere but private
 space outside the cluster, a node's listeners and the API, except where the
 namespace declares a reach or its API clients, and that a custom resource of
-the generated CRD SDK reaches the provider as the object the API server takes.
+the generated CRD SDK reaches the provider as the object the API server takes;
+and that the expiry of a kubeconfig's client certificate is read off it, or
+the kubeconfig refused where its user authenticates some other way.
 """
 
 from __future__ import annotations
 
+import base64
+import datetime as dt
 import hashlib
 import json
 import re
+import traceback
 from collections.abc import Awaitable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum
@@ -35,6 +40,7 @@ import pulumi_crds as crds
 import pulumi_kubernetes as k8s
 import pytest
 import pytest_asyncio
+from client_kubeconfig import NOT_AFTER, USER, certificate_user, kubeconfig
 from k8s_base_installation import Run, applied
 from mock_monitor import Recorder, declaring, run_with, the_run_failed_with
 from ruamel.yaml import YAML
@@ -43,6 +49,7 @@ from kluster import conventions
 from kluster.conventions import Transports
 from kluster.lib.config import Shape, ShapeRefused
 from kluster.lib.install_order import DEPENDS_ON
+from kluster.lib.k8s import KUBECONFIG_KEY, UnusableKubeconfig, client_certificate_expiry
 from kluster.lib.versions import ChartPin, ManifestPin, versions
 
 DIGEST = f'sha256:{"c" * 64}'
@@ -1312,3 +1319,92 @@ def test_every_chart_the_installation_declares_orders_its_render_in_its_namespac
             },
             'Widget': {f'apps/namespaces/{namespace}/Deployment/runner'},
         }, chart
+
+
+# -- The kubeconfig's client certificate --------------------------------------------
+
+
+@pytest.mark.parametrize('not_after', [NOT_AFTER, NOT_AFTER + dt.timedelta(days=365, seconds=1)])
+def test_a_kubeconfig_s_expiry_is_its_current_users_certificate_s_not_after(not_after: dt.datetime) -> None:
+    """The certificate is the current context's user's, generated here with a known `NotAfter`."""
+    assert client_certificate_expiry(kubeconfig(certificate_user(not_after))) == not_after
+
+
+def test_the_certificate_read_is_the_current_contexts_users_and_no_other() -> None:
+    """A second user beside the current context's is not read, whichever comes first."""
+    current = json.loads(kubeconfig(certificate_user(NOT_AFTER)))
+    other = {'name': 'another', 'user': certificate_user(NOT_AFTER + dt.timedelta(days=1))}
+    current['users'].insert(0, other)
+
+    assert client_certificate_expiry(json.dumps(current)) == NOT_AFTER
+
+
+#: A credential no refusal may repeat.
+CREDENTIAL = 'a-token-no-refusal-may-repeat'
+
+#: The command a refusal sends the operator to, which replaces the copy.
+FILLED_BY = f'credentials derived sync --only {KUBECONFIG_KEY}'
+
+
+def reported(refusal: BaseException) -> str:
+    """A refusal as a run reports one it does not handle: the traceback, with every exception chained to it."""
+    return ''.join(traceback.format_exception(refusal))
+
+
+@pytest.mark.parametrize(
+    'user',
+    [
+        {'token': CREDENTIAL},
+        {'exec': {'apiVersion': 'client.authentication.k8s.io/v1', 'command': CREDENTIAL}},
+        {'client-certificate': f'/{CREDENTIAL}.crt', 'client-key': f'/{CREDENTIAL}.key'},
+        {'username': 'admin', 'password': CREDENTIAL},
+        {'client-certificate-data': base64.b64encode(CREDENTIAL.encode()).decode()},
+        {'client-certificate-data': CREDENTIAL},
+        {},
+    ],
+)
+def test_a_kubeconfig_whose_user_authenticates_with_no_embedded_certificate_is_refused_without_its_values(
+    user: dict[str, object],
+) -> None:
+    """A token, an exec plugin, a certificate by path, a password, data that is no certificate, or nothing at all.
+
+    The refusal names the user and the command that replaces the copy, and
+    nothing it reports carries a credential the kubeconfig holds.
+    """
+    with pytest.raises(UnusableKubeconfig, match=re.escape(repr(USER))) as refused:
+        _ = client_certificate_expiry(kubeconfig(cast('dict[str, str]', user)))
+    assert FILLED_BY in str(refused.value)
+    assert CREDENTIAL not in reported(refused.value)
+
+
+#: What stands for a field taken out of the kubeconfig.
+REMOVED = object()
+
+
+@pytest.mark.parametrize(
+    ('field', 'value'),
+    [('current-context', 'elsewhere'), ('current-context', REMOVED), ('users', []), ('contexts', 'no list')],
+)
+def test_a_kubeconfig_with_no_current_users_certificate_to_read_is_refused(field: str, value: object) -> None:
+    """No context of the current name, no current context, no user of the context's name, no list of contexts."""
+    edited = cast('dict[str, object]', json.loads(kubeconfig(certificate_user(NOT_AFTER))))
+    if value is REMOVED:
+        del edited[field]
+    else:
+        edited[field] = value
+
+    with pytest.raises(UnusableKubeconfig) as refused:
+        _ = client_certificate_expiry(json.dumps(edited))
+    assert FILLED_BY in str(refused.value)
+
+
+def test_a_kubeconfig_that_is_no_yaml_is_refused_without_repeating_it() -> None:
+    """The parser's own message quotes the text around its fault, which is the credential.
+
+    Read as the run reports the refusal, chain and all, since an exception
+    the refusal were raised from or during would be printed beside it.
+    """
+    with pytest.raises(UnusableKubeconfig) as refused:
+        _ = client_certificate_expiry(f'users: [{CREDENTIAL}')
+    assert FILLED_BY in str(refused.value)
+    assert CREDENTIAL not in reported(refused.value)

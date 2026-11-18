@@ -950,7 +950,11 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     nothing, so
     state still holds what the last deploy wrote, and only the device
     resources, whose `diff` reads the device (architecture.md §5.2),
-    are put back without it.
+    are put back without it. A refreshed `physical` preview whose one
+    step is the update of the `Kubeconfig`, `<cluster>-kubeconfig`, is
+    no drift: it is the renewal window of the cluster-admin client
+    certificate, in which every plan of `physical` plans a new one, and
+    the apply and the copy that follow it are operations.md §2.5's.
 
     An alert keyed `kluster-ops/drift-trigger` is the trigger's: no
     drift run started that week, and the step that failed in the ops

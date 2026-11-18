@@ -28,10 +28,12 @@ from urllib.parse import urlsplit
 
 import image_busybox
 import process_sessions
+import promql_parser
 import pulumi
 import pytest
 import pytest_asyncio
 import yaml
+from client_kubeconfig import KUBECONFIG, NOT_AFTER
 from fences import prose
 from k8s_base_installation import (
     PUBLISHED,
@@ -54,11 +56,13 @@ from kluster.components.monitoring.rules import (
     HEARTBEAT,
     HEARTBEAT_TIMER,
     JOB_LABEL,
+    KUBECONFIG_COPY,
     SCRAPER_DOWN,
     TIER_LABEL,
     ScrapeJob,
     Selector,
     inputs,
+    kubeconfig_copy,
     selectors,
     target_down,
 )
@@ -66,6 +70,7 @@ from kluster.components.talos import ETCD_METRICS_PORT
 from kluster.conventions import backup, schedule
 from kluster.conventions.alert import Tier
 from kluster.conventions.backup import BackupFamily
+from kluster.conventions.cluster import KUBECONFIG_ALERT_MARGIN, KUBECONFIG_RENEWAL
 from kluster.conventions.outputs import BOOT_VOLUME
 from kluster.conventions.providers import OCI_BLOCKSTORE_METRICS
 from kluster.lib.k8s import KUBECONFIG_KEY
@@ -128,7 +133,7 @@ async def declare(*, sealed: dict[str, object] | None) -> tuple[Run, list[str]]:
     """The whole program with `sealed` as its sealed values, and every warning it logged."""
     from kluster.stacks import k8s_base
 
-    config = {f'kluster:{KUBECONFIG_KEY}': 'a-fake-kubeconfig-that-reaches-no-cluster'}
+    config = {f'kluster:{KUBECONFIG_KEY}': KUBECONFIG}
     if sealed is not None:
         config[f'kluster:{conventions.sealed.CONFIG_KEY}'] = json.dumps(sealed)
     pulumi.runtime.set_all_config(config | VERSIONS_CONFIG, secret_keys=[f'kluster:{KUBECONFIG_KEY}'])
@@ -1235,6 +1240,52 @@ def test_every_rule_reaches_home_assistant_and_the_check_in_repeats_inside_its_t
     route = _route(top, check_in['labels'])
     latest = _duration(route['repeat_interval']) + _duration(route['group_interval'])
     assert latest < HEARTBEAT_TIMER
+
+
+# -- The kubeconfig copy's expiry ---------------------------------------------------
+
+
+def _kubeconfig_copy(run: Run) -> Mapping[str, Any]:
+    (rule,) = [rule for rule in _declared_rules(run) if rule['alert'] == KUBECONFIG_COPY]
+    return rule
+
+
+def test_the_kubeconfig_copys_rule_fires_from_the_margin_before_its_certificate_expires(
+    absent: tuple[Run, list[str]],
+) -> None:
+    """The threshold is read off the copy the program is configured with: its certificate's `NotAfter`, less the margin.
+
+    The expression keeps every evaluation from the threshold on, and none
+    before it: the evaluation's time against a number of seconds since the
+    epoch. It reaches the engine in the clear, so a preview shows the date
+    move when a new copy is committed.
+    """
+    run, _ = absent
+    rule = _kubeconfig_copy(run)
+    tree = promql_parser.parse(rule['expr'])
+
+    assert isinstance(tree, promql_parser.BinaryExpr), rule['expr']
+    assert str(tree.op) == '>'
+    assert isinstance(tree.lhs, promql_parser.Call) and str(tree.lhs) == 'vector(time())', rule['expr']
+    assert isinstance(tree.rhs, promql_parser.NumberLiteral), rule['expr']
+    assert dt.datetime.fromtimestamp(tree.rhs.val, dt.UTC) == NOT_AFTER - KUBECONFIG_ALERT_MARGIN
+    assert rule['labels'][TIER_LABEL] == Tier.ACTIONABLE.value
+    assert 'for' not in rule
+
+
+def test_an_expiry_with_no_time_zone_is_refused() -> None:
+    """A date with no zone is no instant, and its threshold would move with the zone the program ran in."""
+    with pytest.raises(ValueError, match='time zone'):
+        _ = kubeconfig_copy(NOT_AFTER.replace(tzinfo=None))
+
+
+def test_the_alert_margin_lies_inside_the_renewal_window() -> None:
+    """The playbook's `physical` apply issues a new certificate only within the window, so the alert fires inside it.
+
+    Fired earlier, the apply its playbook asks for would issue nothing, and
+    the sync after it would find nothing new to copy.
+    """
+    assert dt.timedelta(0) < KUBECONFIG_ALERT_MARGIN < KUBECONFIG_RENEWAL
 
 
 # -- The workaround layer: its tripwire, and what it gives up --------------------------

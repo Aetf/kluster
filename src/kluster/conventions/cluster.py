@@ -1,7 +1,8 @@
-"""Inside the cluster: its address ranges, its ports, its mesh's MTU, its routing session, its pools, its namespaces, its storage classes."""
+"""Inside the cluster: its address ranges, its ports, its mesh's MTU, its routing session, its pools, its namespaces, its storage classes, the renewal of its admin credential."""
 
 from __future__ import annotations
 
+import datetime as dt
 from collections.abc import Mapping
 from enum import Enum
 from ipaddress import IPv4Network, IPv6Network
@@ -154,6 +155,23 @@ class TalosGrant(NamedTuple):
 #: the etcd backup's namespace. `physical` states it; it is for the
 #: `ServiceAccount` the snapshot's pod asks with.
 ETCD_SNAPSHOT_GRANT = TalosGrant(role='os:etcd:backup', namespace=ETCD_BACKUP_NAMESPACE)
+
+#: How close to its expiry the cluster-admin kubeconfig's client certificate
+#: is issued again: a `physical` apply within this of the certificate's
+#: `NotAfter` plans a new one, on the Talos provider's `Kubeconfig`
+#: (`certificate_renewal_duration`, which `components.talos` sets from it).
+#: The provider's own default, stated so that the alert's margin below is
+#: held against the window the resource actually takes. The certificate lives
+#: a year, so the copies in `k8s-base`'s and `apps`'s configuration go stale
+#: once a year (operations.md §2.5).
+KUBECONFIG_RENEWAL = dt.timedelta(hours=720)
+
+#: How long before the client certificate in `k8s-base`'s copy of the
+#: kubeconfig expires `KubeconfigCopyExpiring` fires
+#: (`components.monitoring.rules.kubeconfig_copy`). Inside
+#: `KUBECONFIG_RENEWAL`, so the `physical` apply its playbook asks for issues
+#: a new certificate, and two weeks for an act of minutes.
+KUBECONFIG_ALERT_MARGIN = dt.timedelta(days=14)
 
 #: The MTU of KubeSpan's WireGuard link, which the machine configuration
 #: states; rfc-007 §4.1 has `k8s-base` size Cilium from it too. Cilium's own MTU setting

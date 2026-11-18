@@ -25,6 +25,7 @@ from typing import Any, cast
 
 import pulumi
 import pytest
+from client_kubeconfig import KUBECONFIG
 from mock_monitor import Recorder, declaring, run_under_backstop
 
 from kluster import conventions
@@ -338,7 +339,7 @@ async def declare(physical: Physical, *, preview: bool = False, sealed: dict[str
     """
     from kluster.stacks import k8s_base
 
-    config = {f'kluster:{KUBECONFIG_KEY}': 'a-fake-kubeconfig-that-reaches-no-cluster'}
+    config = {f'kluster:{KUBECONFIG_KEY}': KUBECONFIG}
     if sealed is not None:
         config[f'kluster:{conventions.sealed.CONFIG_KEY}'] = json.dumps(sealed)
     pulumi.runtime.set_all_config(config | VERSIONS_CONFIG, secret_keys=[f'kluster:{KUBECONFIG_KEY}'])

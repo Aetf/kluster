@@ -1,7 +1,7 @@
 """Kubernetes helpers for the `k8s-base` and `apps` stacks.
 
 What both stacks need: checking the kubeconfig their Kubernetes provider is
-opened with, installing a pinned upstream chart with its objects created in
+opened with and reading when its client certificate expires, installing a pinned upstream chart with its objects created in
 the order they need (`kluster.lib.install_order`), reaching into what one
 rendered, creating a namespace at its Pod Security level, declaring a
 SealedSecret in the shape
@@ -30,6 +30,8 @@ were passed to the provider.
 
 from __future__ import annotations
 
+import base64
+import datetime as dt
 import fnmatch
 import json
 import string
@@ -43,7 +45,10 @@ from typing import Annotated, Any, Literal, NoReturn, cast
 import pulumi
 import pulumi_crds as crds
 import pulumi_kubernetes as k8s
+from cryptography import x509
 from pulumi.runtime.rpc import UNKNOWN as UNKNOWN_SENTINEL
+from ruamel.yaml import YAML
+from ruamel.yaml.error import YAMLError
 
 from kluster import conventions
 from kluster.conventions.cluster import POOL_WORKER, Transports
@@ -76,6 +81,7 @@ __all__ = (
     'application_namespace',
     'await_admission_path',
     'bare_listener',
+    'client_certificate_expiry',
     'find_rendered',
     'helm_chart',
     'identity_stripped',
@@ -110,7 +116,7 @@ _FILLED_BY = f'`credentials derived sync --only {KUBECONFIG_KEY}`'
 
 
 class UnusableKubeconfig(ValueError):
-    """The stack's configuration holds no kubeconfig, or holds one no provider can open."""
+    """The stack's configuration holds no kubeconfig, or one no provider can open or whose certificate's expiry is unreadable."""
 
 
 def kubeconfig_from(configured: pulumi.Output[str] | None) -> pulumi.Output[str]:
@@ -160,6 +166,66 @@ def _usable_kubeconfig(value: object) -> str:
         f"this stack's configured {KUBECONFIG_KEY!r} is {found}; no Kubernetes provider is opened with it. "
         f'{remedy[0].upper()}{remedy[1:]}'
     )
+
+
+def client_certificate_expiry(kubeconfig: str) -> dt.datetime:
+    """When the client certificate a kubeconfig opens the cluster with expires, refused unless it opens it with one.
+
+    The user read is the current context's, the one a client authenticates
+    as, and its certificate is read from `client-certificate-data`: the form
+    the Talos provider issues the cluster-admin kubeconfig in, the certificate
+    embedded as base64 of its PEM. A user that authenticates any other way --
+    a token, an exec plugin, a certificate by file path -- is refused, since
+    the expiry is what `KubeconfigCopyExpiring` watches the copy by
+    (`components.monitoring.rules.kubeconfig_copy`), and a copy that carries
+    none would leave the rule watching nothing. A certificate's `NotAfter` is
+    in its public half; every refusal names what it found -- the names of the
+    context and the user, and the fields the user holds -- and never a
+    credential, since the rest of the kubeconfig is the cluster-admin one,
+    and it names the command that replaces the copy.
+    """
+    try:
+        document: object = YAML(typ='safe', pure=True).load(kubeconfig)  # pyright: ignore[reportUnknownMemberType] -- ruamel's `load` is untyped
+    except YAMLError:
+        # The parser's message quotes the text around the fault, so it is
+        # neither the refusal's message nor its context.
+        raise _no_expiry('is no YAML document') from None
+    fields = _fields(document)
+    current = fields.get('current-context')
+    context = _fields(_named(fields.get('contexts'), current).get('context'))
+    if not context:
+        named = 'no current context' if current is None else f'no context {current!r} as its current one'
+        raise _no_expiry(f'names {named}')
+    name = context.get('user')
+    user = _fields(_named(fields.get('users'), name).get('user'))
+    data = user.get('client-certificate-data')
+    if not isinstance(data, str):
+        raise _no_expiry(
+            f"authenticates its current context's user {name!r} with {sorted(user) or 'nothing'} "
+            'rather than a client certificate embedded as `client-certificate-data`'
+        )
+    try:
+        certificate = x509.load_pem_x509_certificate(base64.b64decode(data, validate=True))
+    except ValueError:
+        raise _no_expiry(
+            f"holds no base64 of a PEM certificate in the user {name!r}'s `client-certificate-data`"
+        ) from None
+    return certificate.not_valid_after_utc
+
+
+def _no_expiry(found: str) -> UnusableKubeconfig:
+    """The refusal of a kubeconfig whose client certificate's expiry cannot be read, saying what it `found` and the remedy."""
+    return UnusableKubeconfig(
+        f"this stack's configured {KUBECONFIG_KEY!r} {found}, so the expiry of its client certificate cannot be "
+        f"read. {_FILLED_BY} replaces it with physical's"
+    )
+
+
+def _named(entries: object, name: object) -> Mapping[str, Any]:
+    """The entry of a kubeconfig's list of named entries -- `contexts`, `users` -- whose `name` is `name`, if one is."""
+    listed: Sequence[object] = cast('Sequence[object]', entries) if isinstance(entries, list) else ()
+    none: Mapping[str, Any] = {}
+    return next((_fields(entry) for entry in listed if _fields(entry).get('name') == name), none)
 
 
 def helm_chart(
