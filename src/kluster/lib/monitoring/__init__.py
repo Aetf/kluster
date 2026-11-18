@@ -8,7 +8,10 @@ them read lives here:
     once, which the component's recording rules, SLO alerts and dashboard are
     made from.
 -   `jobs`: the `job` label each scrape gives its series, which the readings
-    and the rules select a series's source by.
+    and the rules select a series's source by, and the interval every job is
+    scraped at.
+-   `selectors`: which series a PromQL expression selects, which the rules'
+    scrape-target family and `perf` both read off an expression.
 -   `vmsingle`: how the operator names a vmsingle's Deployment, Service and
     claim, and the port it serves one at, which the component's stores and a
     reader outside the program address a store by.

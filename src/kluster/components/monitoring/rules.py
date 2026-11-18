@@ -38,7 +38,7 @@ series for that CronJob, both `actionable` and both naming the row's playbook
 family** (`rule_groups`): a rule that reads no series evaluates over none and
 is silent, so a job that stops reporting raises `ScrapeTargetDown` for that
 job instead. The set is read off the alerts: the metric names each
-expression selects (`selectors`, through GreptimeDB's `promql_parser`), mapped
+expression selects (`kluster.lib.monitoring.selectors`), mapped
 to the jobs that export them
 (`inputs`). A recorded series is read through the recording rule that writes
 it (`recorded`), so an alert over a reading watches the jobs the reading
@@ -71,8 +71,6 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from types import MappingProxyType
 
-import promql_parser
-
 from kluster.conventions import backup, schedule
 from kluster.conventions.alert import Playbook, Tier
 from kluster.conventions.cluster import KUBECONFIG_ALERT_MARGIN
@@ -81,6 +79,7 @@ from kluster.conventions.schedule import ScheduledJob
 from kluster.lib.monitoring import readings
 from kluster.lib.monitoring.jobs import ETCD_JOB
 from kluster.lib.monitoring.readings import Reading, Resource
+from kluster.lib.monitoring.selectors import JOB_LABEL, selectors
 
 __all__ = (
     'ALERT_GROUPS',
@@ -90,7 +89,6 @@ __all__ = (
     'HEARTBEAT_REPEAT',
     'HEARTBEAT_TIMER',
     'IMPORTED',
-    'JOB_LABEL',
     'KUBECONFIG_COPY',
     'READING_GROUPS',
     'SCRAPER_DOWN',
@@ -101,14 +99,12 @@ __all__ = (
     'RecordingRule',
     'RuleGroup',
     'ScrapeJob',
-    'Selector',
     'failed',
     'inputs',
     'kubeconfig_copy',
     'recorded',
     'rule_groups',
     'scrape_targets',
-    'selectors',
     'slo',
     'stale',
     'target_down',
@@ -489,9 +485,6 @@ def kubeconfig_copy(expiry: dt.datetime) -> RuleGroup:
 
 # -- The scrape-target family ------------------------------------------------------
 
-#: The label vmagent gives every series of a scrape job, the job's name.
-JOB_LABEL = 'job'
-
 
 @dataclass(frozen=True)
 class ScrapeJob:
@@ -502,14 +495,6 @@ class ScrapeJob:
     """A regular expression matching, in full, the metric names this job
     exports that a selector naming no job reads. Every job a name matches is
     one the selector reads, so a name two jobs export is claimed by both."""
-
-
-@dataclass(frozen=True)
-class Selector:
-    """One series selector of an expression: the metric it names, and the jobs its `job` matcher names, if it has one."""
-
-    metric: str
-    jobs: frozenset[str] | None
 
 
 #: How long a job reports nothing before its alert fires: past a single failed
@@ -566,61 +551,6 @@ def target_down(job: str) -> AlertRule:
         pending=TARGET_DOWN_PENDING,
         labels={JOB_LABEL: job},
     )
-
-
-#: A `job` value the reader takes: a literal name, or for `=~` an alternation of
-#: them. A Service name holds none of a regular expression's other
-#: metacharacters, and the empty name selects series with no `job` at all.
-_JOB_ALTERNATION = re.compile(r'[\w:-]+(?:\|[\w:-]+)*')
-
-
-def _selector(expr: str, node: promql_parser.VectorSelector) -> Selector:
-    """One parsed selector as the reader takes it, refusing one it could read only short."""
-    if node.name is None:
-        # A `__name__` matcher is among these: the parser takes one only on a
-        # selector that names no metric otherwise.
-        raise ValueError(f'{expr!r} selects series by their labels alone, which names no metric')
-    if node.matchers.or_matchers:
-        # `{a="x" or b="y"}` leaves `matchers` empty and puts each alternative
-        # here, so reading `matchers` alone would read it as naming no job.
-        raise ValueError(f'{expr!r} selects {node.name} by alternatives of matchers, which the reader does not follow')
-    named: frozenset[str] | None = None
-    for matcher in node.matchers.matchers:
-        if matcher.name != JOB_LABEL:
-            continue
-        literal = matcher.op == promql_parser.MatchOp.Equal
-        if (
-            named is not None
-            or not (literal or matcher.op == promql_parser.MatchOp.Re)
-            or not _JOB_ALTERNATION.fullmatch(matcher.value)
-            or (literal and '|' in matcher.value)
-        ):
-            raise ValueError(f'{expr!r}: {matcher} names no definite set of jobs')
-        named = frozenset(matcher.value.split('|'))
-    return Selector(node.name, named)
-
-
-def selectors(expr: str) -> tuple[Selector, ...]:
-    """Every series selector of a PromQL expression, in order, as `promql_parser` parses it.
-
-    An expression the reader cannot follow is refused rather than read short:
-    one the parser refuses, MetricsQL's own syntax among them; a selector by
-    labels alone; a metric named by a `__name__` matcher; alternatives of
-    matchers; and a `job` matcher that names no definite set of jobs.
-    """
-    try:
-        tree = promql_parser.parse(expr)
-    except ValueError as error:
-        raise ValueError(f'{expr!r}: {error}') from error
-    found: list[Selector] = []
-
-    def visit(node: promql_parser.Expr) -> bool:
-        if isinstance(node, promql_parser.VectorSelector):
-            found.append(_selector(expr, node))
-        return True
-
-    _ = promql_parser.walk(tree, pre_visit=visit)
-    return tuple(found)
 
 
 #: The names of the series a job writes into the stores rather than vmagent

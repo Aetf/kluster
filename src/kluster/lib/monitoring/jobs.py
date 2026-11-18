@@ -1,4 +1,4 @@
-"""The `job` label each scrape gives its series, which the rules and the readings select a series's source by.
+"""The scrape jobs: the `job` label each gives its series, which the rules and the readings select a series's source by, and the interval every one is scraped at.
 
 A selector that names its job reads that job alone, so a reading is never
 summed with a same-named series of another exporter -- the API server's and
@@ -8,7 +8,15 @@ the jobs a rule names (`components.monitoring.rules.inputs`).
 
 from __future__ import annotations
 
-__all__ = ('APISERVER_JOB', 'ETCD_JOB', 'KUBELET_JOB', 'KUBE_STATE_METRICS_JOB', 'NODE_EXPORTER_JOB')
+import datetime as dt
+
+__all__ = ('APISERVER_JOB', 'ETCD_JOB', 'KUBELET_JOB', 'KUBE_STATE_METRICS_JOB', 'NODE_EXPORTER_JOB', 'SCRAPE_INTERVAL')
+
+#: How often vmagent scrapes every job, the chart's kubelet scrapes and
+#: etcd's included: one interval, so that a rate over a window reads the same
+#: number of samples whichever source it is computed from. `perf import`
+#: judges where the cluster scraped a node by it.
+SCRAPE_INTERVAL = dt.timedelta(seconds=30)
 
 #: The `job` etcd's series carry. Stated, because the operator's default is the
 #: scrape object's namespace and name, and the object's name is autonamed.

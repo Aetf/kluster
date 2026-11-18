@@ -55,7 +55,7 @@ a service of the host; and the operator's pre-delete cleanup, a second hook.
 (cluster-infra.md §1.2).
 
 **What vmagent scrapes** is held to what the stores keep. Every job is
-scraped at one interval, `SCRAPE_INTERVAL`. The chart's kubelet scrapes, the
+scraped at one interval, `SCRAPE_INTERVAL` (`kluster.lib.monitoring.jobs`). The chart's kubelet scrapes, the
 kubelet's own metrics and cAdvisor's among them, label a series with its
 node's name and none of the node's labels (`KUBELET_RELABELING`): copied
 onto every series, a node's labels take it past the 40 labels a store
@@ -174,7 +174,7 @@ from kluster.conventions.alert import Tier
 from kluster.conventions.backup import BackupFamily
 from kluster.conventions.outputs import BOOT_VOLUME
 from kluster.lib.k8s import LooserLevel, PodSecurity, helm_chart, namespace, sealed_value
-from kluster.lib.monitoring.jobs import ETCD_JOB, KUBE_STATE_METRICS_JOB, KUBELET_JOB
+from kluster.lib.monitoring.jobs import ETCD_JOB, KUBE_STATE_METRICS_JOB, KUBELET_JOB, SCRAPE_INTERVAL
 from kluster.lib.versions import ChartPin, ImagePin
 from putils import Component
 
@@ -196,7 +196,6 @@ __all__ = (
     'KUBE_STATE_METRICS_ENDPOINT',
     'NODE_EXPORTER_ENDPOINT',
     'RECEIVER',
-    'SCRAPE_INTERVAL',
     'SNAPSHOTS_MAX_AGE',
     'WEBHOOK_URL_KEY',
     'WORKER_AFFINITY',
@@ -260,11 +259,6 @@ GRAFANA_ADMIN_USER = 'admin'
 #: which bounds how late a repeat is: at most one interval after
 #: `rules.HEARTBEAT_REPEAT` has passed.
 HEARTBEAT_GROUP_INTERVAL = dt.timedelta(minutes=1)
-
-#: How often vmagent scrapes every job, the chart's kubelet scrapes and
-#: etcd's included: one interval, so that a rate over a window reads the same
-#: number of samples whichever source it is computed from.
-SCRAPE_INTERVAL = dt.timedelta(seconds=30)
 
 #: How often vmalert evaluates every rule. Stated rather than left to the
 #: chart: with `SCRAPE_INTERVAL`, it is how long a CronJob's status takes to

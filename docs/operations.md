@@ -295,6 +295,18 @@ preview with `denydefaultprovider not registered`.
     deliberate replacement makes the node a lost one on purpose, one
     node per sitting, and takes the same recovery.
 
+    **The peak recorder runs around either path** (§8.5), in a terminal
+    of its own at the root of the checkout, from before the refresh, or
+    before the termination of a deliberate replacement:
+
+        mise x uv -- uv run perf record .claude/peaks
+
+    Once the `up` has written the new node's address, it is stopped with
+    Ctrl-C and started again with the same command, which appends to the
+    file and reads that address. After the closing readings it is
+    stopped, `mise x uv -- uv run perf import .claude/peaks` writes the
+    file into the history store, and the file is deleted.
+
     The program has no delete-first path for the node holding the
     **dedicated VIP**. A targeted destroy of that instance reaches its
     dependents: the secondary private IP and, through it, the reserved
@@ -584,6 +596,17 @@ preview with `denydefaultprovider not registered`.
     `off` comes back empty and is derived again; NAS claims
     re-point untouched; BGP session re-establishes from the static IP
     in the config.
+
+    **The peak recorder runs around the `up`** (§8.5): `mise x uv -- uv
+    run perf record .claude/peaks`, from the root of the checkout in a
+    terminal of its own, from before the `up` until both metrics
+    stores, which the worker holds, have restored themselves and run.
+    The control planes keep their addresses, so it runs once. It is then
+    stopped, `mise x uv -- uv run perf import .claude/peaks` writes the
+    file into the history store once vmagent's queue has drained, and
+    the file is deleted. The cluster's own scrape of the control planes
+    resumes under the labels it had, which is the case of §8.5 where a
+    count read across the gap reads its events twice.
 -   **§3.3 Total-cloud-loss / total-home-loss** — owned by nodes.md
     §5 (cold-standby drill, both directions). The loss of every cloud
     node with the account intact is §3.5.
@@ -924,6 +947,15 @@ preview with `denydefaultprovider not registered`.
     nothing changed but the workflow and the two backup schedules, which
     are enabled and resumed again.
 
+    **On the go, the peak recorder starts** (§8.5), in a terminal of
+    its own at the root of the checkout, which outlives the sitting, and
+    runs until step 9 imports what it recorded:
+
+        mise x uv -- uv run perf record .claude/drill/peaks
+
+    It reads the control planes' addresses once, when it starts, and
+    the rebuilt nodes have new ones, so step 6 starts it again.
+
     **Step 1: the day-1 chain leaves state.**
 
         T=($(urns '::kluster:talos:TalosDay1\$talos:')); printf '%s\n' "${T[@]}"
@@ -1008,7 +1040,11 @@ preview with `denydefaultprovider not registered`.
     `tal -n "$WORKER" get volumestatus EPHEMERAL` reads that capacity
     less the image's partitions and STATE.
 
-    **Step 6: `physical` converges.** A further `physical up` reports
+    **Step 6: `physical` converges.** The peak recorder is stopped with
+    Ctrl-C and started again with the same command, which appends to
+    `.claude/drill/peaks` and reads the new nodes' addresses: until then
+    it read their etcd, through the API server, and none of their files.
+    A further `physical up` reports
     no changes, and `physical preview --refresh --run-program
     --expect-no-changes` exits 0 over the whole stack, the gateway and
     the overlay included. `protected` prints what `$D/protected` holds,
@@ -1087,7 +1123,17 @@ preview with `denydefaultprovider not registered`.
     it. Once its merge has
     applied `k8s-base`, both stores leave `Init`, and `metrics` prints
     the baseline's earliest sample and at least the baseline's rows.
-    Then the pass readings.
+    Then the peak recorder is stopped with Ctrl-C, and the import writes
+    its file into the history store, printing the lines written for each
+    control plane (§8.5). It refuses while vmagent still holds what it
+    queued for the stores while they waited in `Init`, and is run again
+    once that has drained:
+
+        mise x uv -- uv run perf import "$D/peaks"
+
+    Before bring-up stage 6, the history store started empty with
+    `k8s-base`'s apply, and the import writes the run there all the
+    same. Then the pass readings.
 
     **It passes when each of these holds:**
 
@@ -1229,6 +1275,20 @@ every recovery path on this table an assumed-broken one.
 | Orphan-volume audit, target zero (storage.md §3.3) | Quarterly | In-cluster CronJob, alert only on findings |
 | Credential expiry tripwires (credentials.md §4) | Continuous (scheduled checks) | Each placed by the rule below like any scheduled job (the census); `actionable` alert when an expiry approaches |
 | **Offline day**: age key rotation (proves offline custody, state-backend.md §7.4) + full cold-standby reverse bootstrap on homelab libvirt (nodes.md §5) + offline-kit verification against the register (credentials.md §2.1) + a `pulumi preview` against the Vultr-fallback stack config (nodes.md §3.1 — proves the scripted fallback still computes, creating nothing) + anything the probes can't reach | Yearly | One `actionable` issue, human-run |
+
+**The peak recorder runs around every run that creates nodes or
+applies `k8s-base` from empty, from the moment `physical` holds the
+control planes' addresses** (§8.5): a control plane's replacement and
+the worker's (§3.1, §3.2), the whole-cluster rebuild above, whose
+steps name it, and the bring-up
+([physical/bring-up.md](physical/bring-up.md) §5). Such a run installs
+the monitoring partway through or replaces the worker the stores live
+on, so the cluster records none of its first minutes, which carry its
+peak, and the recording is what the per-wave gate and the dashboard
+read of them. What it cannot record is what comes before those
+addresses: a node's files until `physical`'s `up` has written its
+address, though its etcd is read by name as soon as the API server
+answers.
 
 **Rule: a checksum does not pass a claim that holds an embedded
 database.** The VolSync spot-restore of a claim whose application keeps
@@ -1964,7 +2024,9 @@ rebuild (§3), a Talos upgrade (§2), a wave's land
 copy, VolSync's movers at 03:00. One that comes during such a peak and
 resolves after it is recorded on the work's issue with the reading
 beside it, which is what the per-wave gate reads; one that comes
-outside any is what the steps below are for.
+outside any is what the steps below are for. §8.5 is how the peak of a
+bring-up or a rebuild, which no store in the cluster sees, reaches the
+history all the same.
 
 ### 8.1 etcd is slow
 
@@ -2099,3 +2161,108 @@ follows the throttling by up to that.
     contradicts the budget does (nodes.md §1.1).
 4.  **Confirm**: throttled I/O is 0 for an hour and a half, and the
     alert resolves.
+
+### 8.5 The peaks the cluster cannot see
+
+**When**: around every run that creates nodes or applies `k8s-base`
+from empty, from the moment `physical` holds the control planes'
+addresses until the history store runs again: a bring-up
+([physical/bring-up.md](physical/bring-up.md) §5), a control plane's
+replacement and the worker's (§3.1, §3.2), and the whole-cluster
+rebuild (§3.5), whose steps name it. Such a run installs
+the monitoring partway through, or replaces the worker the stores live
+on, so its first minutes, which carry its peak, reach no store in the
+cluster. `perf` (`kluster.scripts.perf`) records them from the
+workstation and writes them into the history store afterward
+(the design of Aetf/kluster-ops#790).
+
+**Record**, from the root of the checkout that holds `.credentials/`,
+in a terminal that outlives the sitting:
+
+    mise x uv -- uv run perf record <file>
+
+-   Every 5 seconds it reads, on each control plane, its hostname and
+    then `/proc/pressure/{cpu,io,memory}`, `/proc/diskstats`,
+    `/proc/loadavg` and `/proc/meminfo` through Talos, under
+    `~/.talos/kluster`, and etcd's metrics through the API server's node
+    proxy, under `~/.kube/kluster`, once the API answers. It appends
+    them to `<file>` and flushes the file after every round.
+-   Of etcd's metrics it keeps every family some reading takes as an
+    input, found in the readings' own expressions, and whether a member
+    has a leader, leads, and was slow to apply.
+-   It reads the control planes' addresses from `physical`'s
+    `node_private_ips` once, when it starts, under `physical`'s own
+    passphrase. A run that replaces the control planes stops it once
+    `physical`'s `up` has written their new addresses, and starts it
+    again on the same file. Until then an old address can answer as
+    another rebuilt node: a node whose hostname is not the name it was
+    read for has its files left out, and that is logged.
+-   A read that does not answer costs its own rounds alone. One that
+    outlasts its round starts again only once it has answered, within
+    its bound of 10 seconds, and every other read keeps the 5-second
+    cadence. Before the API server answers, each node's
+    files are recorded without its etcd. A source's failure is logged
+    when it starts and when it ends.
+-   Ctrl-C stops it once the reads under way have answered. A recorder
+    killed mid-write leaves a line cut off at the end of the file, which
+    the next `perf record` on the file drops before it appends, and
+    which the import skips.
+
+**Import**, once the history store is running:
+
+    mise x uv -- uv run perf import <file>
+
+-   **It refuses while vmagent holds data queued for the stores.** A
+    store that waited in `Init` has its scrapes queued by vmagent until
+    it starts, and the import judges where the cluster scraped by what
+    the history holds; it reads vmagent's pending data through the API
+    server first, and is run again once that has drained.
+-   **It leaves out what the cluster scraped.** Two of the cluster's own
+    samples of a node's job no more than four scrape intervals apart,
+    two minutes, bracket a stretch of its scrape, missed scrapes inside
+    it included, and a recorded line inside such a stretch is left out.
+    Every other line is written, up to a stretch's first sample and from
+    its last.
+-   **Each region of the recording is a series of its own.** The lines
+    written between two of the cluster's stretches carry
+    `recorded_from`, the time the region starts, so a region after a
+    stretch never resumes the series of the region before it.
+-   **It leaves out what an earlier import wrote**: a line within a
+    round, 15 seconds, of an earlier import's sample of the same node
+    and job. So a second import of the file writes nothing, and one cut
+    off partway, such as by the API server not answering, ends non-zero
+    with what it wrote kept; a second run writes the rest, short of at
+    most a round where the first stopped.
+
+For each node and job it prints how many lines it wrote and how many it
+left out, as scraped and as imported already.
+
+**What the readings show of a recorded period.** Each recorded series
+carries the `job` and the `node` the cluster's scrape gives the same
+series, and `source="peak-recorder"`, so every reading, the
+`Control planes` dashboard and the per-wave gate read a recorded period
+as they read a scraped one. **At a seam, where the recording meets a
+new series of the cluster's own scrape** or a new series of the
+recording meets the end of the cluster's, neither holds the time from
+the last recorded round to the first scrape, or from the last scrape to
+the next recorded round, so a count, such as the WAL's syncs over a
+second or the leader changes, loses at most what one round of 5
+seconds held there. A window of a rate reading, such as a pressure or
+the boot volume's writes, that holds the tail of one series and the
+head of the other reads both, each at its own rate over its own part
+of the window: up to twice the rate, for that one window at each seam.
+A node exporter pod the cluster replaces leaves the same seam in the
+readings.
+
+**Where the cluster's own series resumes under the labels it had**,
+after a gap the recording filled — a gap in its scrape longer than two
+minutes with the control planes unchanged, such as the worker's
+replacement (§3.2) — a count read by a range query that reaches across
+the gap reads the gap's events twice in the first window after the
+resume: once from the recording, and once from the cluster's series,
+which VictoriaMetrics reads across the gap from its sample before it.
+An instant query reads it true outside the window that holds the
+resume.
+
+**Confirm**: on the dashboard, the run's window holds the pressure,
+disk and etcd rows of every control plane.

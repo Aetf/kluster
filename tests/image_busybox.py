@@ -31,9 +31,16 @@ it is skipped, naming why, except on CI's runner, which has podman and where
 the case must run: there it fails. Pulling the pinned images is a network
 call a unit test otherwise does not make (framework/testing.md §7): the
 bytes the scripts run under are the images' only by being read out of them.
-The files are cached under pytest's cache directory keyed by the image's
-digest, so the pull and the read happen once for a pin, and a worker that
-finds another reading waits for it. A run with that cache turned off, as
+
+**A file of an image with no busybox** is read out by `copied`, from a
+container of the image created and never started: the history store's own
+binary, which `tests/test_perf.py` runs as the store it imports into, so
+that store is the one the pin deploys.
+
+The files are cached under pytest's cache directory (`cached`), keyed by the
+image's digest, and by the path too for `copied`, so the pull and the read
+happen once for a pin, and a worker that finds another reading waits for
+it. A run with that cache turned off, as
 framework/testing.md §6's mutation runs are, reads into a temporary
 directory of its own instead.
 """
@@ -46,6 +53,7 @@ import os
 import shutil
 import struct
 import uuid
+from collections.abc import Callable
 from pathlib import Path, PurePosixPath
 
 import process_sessions
@@ -185,26 +193,51 @@ def cache_directory(config: pytest.Config, tmp_path_factory: pytest.TempPathFact
     return tmp_path_factory.mktemp('image-busybox')
 
 
-def extracted(image: ImagePin, cache: Path) -> Path:
-    """The directory under `cache` holding `image`'s busybox and its interpreter, read on the first call for the digest.
+def cached(cache: Path, key: str, fill: Callable[[Path], None]) -> Path:
+    """The directory `key` under `cache`, which `fill` fills on the first call for the key.
 
-    A partial read never takes the digest's name: the files are written into
-    a directory of the caller's own and renamed into place whole.
+    A worker that finds another filling it waits for it. A partial fill never
+    takes the key's name: `fill` writes into a directory of the caller's own,
+    which is renamed into place whole.
     """
-    require_podman()
-    digest = image.digest.removeprefix('sha256:')
-    done = cache / digest
-    with (cache / f'{digest}.lock').open('w') as lock:
+    done = cache / key
+    with (cache / f'{key}.lock').open('w') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         if not done.is_dir():
-            partial = cache / f'{digest}.{uuid.uuid4().hex[:12]}'
+            partial = cache / f'{key}.{uuid.uuid4().hex[:12]}'
             partial.mkdir()
             try:
-                _read_out(image, partial)
+                fill(partial)
                 partial.rename(done)
             finally:
                 shutil.rmtree(partial, ignore_errors=True)
     return done
+
+
+def extracted(image: ImagePin, cache: Path) -> Path:
+    """The directory under `cache` holding `image`'s busybox and its interpreter, read on the first call for the digest."""
+    require_podman()
+    return cached(cache, image.digest.removeprefix('sha256:'), lambda into: _read_out(image, into))
+
+
+def copied(image: ImagePin, path: str, cache: Path) -> Path:
+    """The file `path` of `image`, read out under `cache` on the first call for the digest and the path.
+
+    For an image that carries no busybox to read a file out with: a container
+    of the image is created, never started, under the teardown that removes
+    it, and the file copied out of it. Its key is the digest and the path, so
+    it never shares a directory with `extracted`'s, or with another path's.
+    """
+    require_podman()
+    key = f'{image.digest.removeprefix("sha256:")}-{hashlib.sha256(path.encode()).hexdigest()[:12]}'
+
+    def fill(into: Path) -> None:
+        name = f'kluster-test-copied-{uuid.uuid4().hex[:12]}'
+        with process_sessions.removing(name, timeout=COMMAND_TIMEOUT):
+            _ = _podman('create', '--rm', '--label', LABEL, '--name', name, _pulled(image))
+            _ = _podman('cp', f'{name}:{path}', str(into))
+
+    return cached(cache, key, fill) / PurePosixPath(path).name
 
 
 def applets(files: Path, into: Path) -> Path:

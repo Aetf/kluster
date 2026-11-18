@@ -63,15 +63,12 @@ from kluster.components.monitoring.operator_objects import type_token
 from kluster.components.monitoring.rules import (
     HEARTBEAT,
     HEARTBEAT_TIMER,
-    JOB_LABEL,
     KUBECONFIG_COPY,
     SCRAPER_DOWN,
     TIER_LABEL,
     ScrapeJob,
-    Selector,
     inputs,
     kubeconfig_copy,
-    selectors,
     target_down,
 )
 from kluster.conventions import backup, schedule
@@ -82,6 +79,7 @@ from kluster.conventions.outputs import BOOT_VOLUME
 from kluster.conventions.providers import OCI_BLOCKSTORE_METRICS
 from kluster.lib.k8s import KUBECONFIG_KEY
 from kluster.lib.monitoring import readings
+from kluster.lib.monitoring.selectors import JOB_LABEL, Selector, selectors
 from kluster.lib.versions import ChartPin, versions
 
 ROOT = Path(__file__).resolve().parents[1]

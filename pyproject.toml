@@ -66,8 +66,9 @@ dependencies = [
     # `YAML()` imports only the extension this one installs, and without it runs
     # in pure Python.
     "ruamel-yaml[oldlibyaml]>=0.19.1,<0.20",
-    # The monitoring component's reading of which series an alert rule selects
-    # (`components.monitoring.rules.selectors`): GreptimeDB's PromQL parser.
+    # The reading of which series an expression selects
+    # (`kluster.lib.monitoring.selectors`), which the monitoring component's
+    # rules and `perf` share: GreptimeDB's PromQL parser.
     "promql-parser>=0.12.0,<0.13",
 ]
 
@@ -78,6 +79,7 @@ state-backend = 'kluster.scripts.state_backend.cli:main'
 operator-stack = 'kluster.scripts.operator_stack.cli:main'
 stack-plan = 'kluster.scripts.stack_plan.cli:main'
 typecheck = 'kluster.scripts.typecheck:main'
+perf = 'kluster.scripts.perf.cli:main'
 
 [dependency-groups]
 dev = [
