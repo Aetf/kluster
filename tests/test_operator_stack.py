@@ -21,8 +21,9 @@ Three levels, because they answer different questions:
     that the apply writes to the
     driver's own output, a terminal's or a pipe's, and is still read from
     the events and the state, that no `up` runs over nothing planned, that
-    a write over an unchanged deployment keeps the file's bytes, that no
-    switch of the caller's moves the state out of the file the checks read,
+    a write over an unchanged deployment keeps the file's bytes, whatever
+    order it lists a resource's dependencies in, that no switch of the
+    caller's moves the state out of the file the checks read,
     that the check needing no value finds a secret in the clear at each
     place the engine marks one, and that a held step is named by the
     driver's progress lines, in the preview and in an apply under a pipe.
@@ -345,13 +346,13 @@ def _writes_the_operator_bundle(refusal: BaseException) -> bool:
     return (parsed.action, parsed.name) == ('bundle', 'operator')
 
 
-def _checkpoint(checkout: Path, resources: list[dict[str, Any]]) -> Path:
+def _checkpoint(checkout: Path, resources: list[dict[str, Any]], *, time: str = 't0') -> Path:
     """A committed checkpoint of `probe` holding `resources`, as `pulumi` lays one out."""
     path = checkout / stack_environment.CHECKPOINTS / '.pulumi' / 'stacks' / 'probe' / f'{PROBE}.json'
     path.parent.mkdir(parents=True, exist_ok=True)
     document = {
         'version': 3,
-        'checkpoint': {'stack': PROBE, 'latest': {'manifest': {'time': 't0'}, 'resources': resources}},
+        'checkpoint': {'stack': PROBE, 'latest': {'manifest': {'time': time}, 'resources': resources}},
     }
     _ = path.write_text(json.dumps(document))
     return path
@@ -1381,6 +1382,50 @@ def test_a_write_over_an_unchanged_deployment_keeps_the_files_bytes(repository: 
     assert path.read_bytes() == before
 
 
+def test_a_write_that_lists_dependencies_in_another_order_keeps_the_files_bytes(
+    repository: Repository, committed: str
+) -> None:
+    """The engine lists `dependencies` and each list of `propertyDependencies` in a fresh order on every `up`."""
+
+    def gathered(dependencies: list[str], value: list[str]) -> dict[str, Any]:
+        return {
+            'urn': 'urn:gathered',
+            'inputs': {},
+            'outputs': {},
+            'dependencies': dependencies,
+            'propertyDependencies': {'value': value},
+        }
+
+    as_it_was = gathered(['urn:a', 'urn:b', 'urn:c', 'urn:d'], ['urn:c', 'urn:d'])
+    reordered = gathered(['urn:c', 'urn:a', 'urn:d', 'urn:b'], ['urn:d', 'urn:c'])
+    one_fewer = gathered(['urn:c', 'urn:a', 'urn:d'], ['urn:d', 'urn:c'])
+    path = _checkpoint(repository.checkout, [as_it_was])
+    before = path.read_bytes()
+    # Each `up` is exported before and after it, and writes its own state.
+    fake = FakePulumi(
+        exports=[
+            _export([as_it_was]),
+            _export([reordered], time='t1'),
+            _export([as_it_was]),
+            _export([one_fewer], time='t2'),
+        ]
+    )
+    writes = [('t1', reordered), ('t2', one_fewer)]
+
+    def rewrite(_args: list[str]) -> None:
+        time, written = writes.pop(0)
+        _ = _checkpoint(repository.checkout, [written], time=time)
+
+    fake.effect = rewrite
+    run = driver.Run.open(committed, repository.checkout, pulumi=fake, base=AMBIENT)
+
+    assert run.passthrough(['up', '--yes', '--skip-preview']) == 0
+    assert path.read_bytes() == before
+    # A dependency gone is a change, and the file keeps what the engine wrote.
+    assert run.passthrough(['up', '--yes', '--skip-preview']) == 0
+    assert checkpoint.resources(json.loads(path.read_text())) == [one_fewer]
+
+
 def test_a_secret_that_lost_its_marking_in_the_run_fails_it(
     repository: Repository, committed: str, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -1512,6 +1557,17 @@ def test_an_export_that_moved_only_its_timestamp_and_resource_order_is_the_same_
         _export([{'urn': 'urn:a', 'outputs': {'s': 'x'}}]),
         _export([{'urn': 'urn:a', 'outputs': {'s': _plaintext('x')}}]),
     )
+
+
+def test_a_pending_operation_whose_dependencies_moved_only_their_order_is_the_same_deployment() -> None:
+    def pending(dependencies: list[str]) -> dict[str, Any]:
+        resource = {'urn': 'urn:b', 'dependencies': dependencies, 'propertyDependencies': {'value': dependencies}}
+        export = _export([])
+        export['deployment']['pending_operations'] = [{'type': 'creating', 'resource': resource}]
+        return export
+
+    assert checkpoint.same_deployment(pending(['urn:a', 'urn:c']), pending(['urn:c', 'urn:a']))
+    assert not checkpoint.same_deployment(pending(['urn:a', 'urn:c']), pending(['urn:a']))
 
 
 def test_a_value_too_short_to_identify_and_pem_armor_are_not_searched_for() -> None:
@@ -1921,6 +1977,25 @@ def test_an_unchanged_real_program_plans_nothing_whatever_order_its_dependencies
     assert unstepped.run.up(yes=True) == driver.NOTHING_PLANNED
 
     assert unstepped.history() == history
+
+
+@needs_pulumi
+@engine_bound
+def test_a_real_write_that_lists_dependencies_in_a_fresh_order_keeps_the_files_bytes(unstepped: Scratch) -> None:
+    """Every `up` lists `gathered`'s dependencies, and those of its `value`, in a fresh order.
+
+    The verdict holds whichever order an `up` writes. The case bites only on
+    an order other than the file's, and one `up` can write the file's own by
+    chance, so it runs two.
+    """
+    before, history = unstepped.path.read_bytes(), unstepped.history()
+
+    for _ in range(2):
+        assert unstepped.run.passthrough(['up', '--yes', '--skip-preview']) == 0
+
+    # The engine did write, and what it wrote differed in no member.
+    assert unstepped.history() > history
+    assert unstepped.path.read_bytes() == before
 
 
 @needs_pulumi

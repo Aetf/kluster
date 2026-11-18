@@ -31,7 +31,9 @@ step's new state is compared with the same field of its old state, except the
 fields a `same` step does not take from the program (`EXCLUDED`), and every
 resource's old and new outputs are compared. The exclusions are the
 enumerated side, so a field a later release adds to the state is compared by
-default, and the answer errs toward an `up` rather than away from one.
+default, and the answer errs toward an `up` rather than away from one. The
+lists of a state that hold sets compare by their members
+(`kluster.lib.dependency_sets`).
 
 **The one change neither caller plans** is a secret an `up` writes with no
 step -- in practice an output the stack or a component registers -- whose
@@ -141,12 +143,14 @@ stands in this docstring alone, where a pin bump's reviewer reads it.
     `AsTheBox.events`; the real-engine cases' section assertions, to the
     plan the CLI then prints; pulumi.md §3.3's sentences on how the second
     preview is read; and ci.md's naming of the command;
--   **leaves untouched** the driver's two previews, `Preview.stepped`, the
-    calls in `Run.plan` and `Run.up` and the verdict they combine, the rule
-    of pulumi.md §3.3, the driver's exit table and its question, its
-    `up --refresh --yes --skip-preview`, the deploy chain's reading of 0, 7
-    and anything else, and the real-engine cases' verdicts, which hold what
-    the driver plans and applies and not how it learns of it.
+-   **leaves untouched** `kluster.lib.dependency_sets`, which the
+    checkpoint's comparison of two deployments reads as well; the driver's
+    two previews, `Preview.stepped`, the calls in `Run.plan` and `Run.up`
+    and the verdict they combine, the rule of pulumi.md §3.3, the driver's
+    exit table and its question, its `up --refresh --yes --skip-preview`,
+    the deploy chain's reading of 0, 7 and anything else, and the
+    real-engine cases' verdicts, which hold what the driver plans and
+    applies and not how it learns of it.
 
 What an approver or an operator reads for a plan that changes no resource
 after the removal is what the CLI then reports: the per-field section goes
@@ -161,21 +165,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast, final
 
+from kluster.lib.dependency_sets import by_members
+
 #: The fields of a resource's state that an `up` of a `same` step does not
 #: take from the program. `id` and `outputs` are copied from the old state
 #: when the step applies (`SameStep.Apply`, pkg/resource/deploy/step.go);
 #: `sourcePosition` and `stackTrace` say where the registration sits, and move
 #: with every edit above it. Every other field is compared.
 EXCLUDED = frozenset({'id', 'outputs', 'sourcePosition', 'stackTrace'})
-
-#: The field of a resource's state that lists a set, and the field that maps
-#: each input to one. The engine gathers their members in a set and lists them
-#: in its map's iteration order (`pkg/resource/deploy/source_eval.go`), so two
-#: registrations of the same members list them in different orders, and no
-#: `up` settles one. They compare by their members; every other list in a
-#: state, those inside `inputs` among them, is a value whose order counts.
-DEPENDENCIES = 'dependencies'
-PROPERTY_DEPENDENCIES = 'propertyDependencies'
 
 #: The key under which an engine event's property value names its special
 #: kind, and the kind that makes it a secret (`sig.Key` and `sig.Secret`,
@@ -344,7 +341,7 @@ def changes(steps: list[States], outputs: list[Outputs]) -> list[Change]:
     grouped: dict[str, list[Change]] = {}
     for step in steps:
         grouped.setdefault(step.urn, []).extend(
-            _fields(step.urn, '', _by_members(step.old), _by_members(step.new), skip=EXCLUDED)
+            _fields(step.urn, '', by_members(step.old), by_members(step.new), skip=EXCLUDED)
         )
     for resource in outputs:
         grouped.setdefault(resource.urn, []).extend(
@@ -372,25 +369,6 @@ def _fields(
                     yield Change(urn=urn, field=f'{prefix}{key}.{inner}', old=was, new=now)
         else:
             yield Change(urn=urn, field=f'{prefix}{key}', old=before, new=after)
-
-
-def _by_members(state: Mapping[str, object]) -> Mapping[str, object]:
-    """`state` with `DEPENDENCIES` and each list of `PROPERTY_DEPENDENCIES` in one order, and each member once."""
-    ordered = dict(state)
-    if isinstance(listed := ordered.get(DEPENDENCIES), list):
-        ordered[DEPENDENCIES] = _members(cast('list[object]', listed))
-    if isinstance(mapped := ordered.get(PROPERTY_DEPENDENCIES), dict):
-        ordered[PROPERTY_DEPENDENCIES] = {
-            key: _members(cast('list[object]', value)) if isinstance(value, list) else value
-            for key, value in cast('dict[str, object]', mapped).items()
-        }
-    return ordered
-
-
-def _members(listed: list[object]) -> list[object]:
-    """The members of `listed`, each once, in the order of their JSON."""
-    by_json = {json.dumps(member, sort_keys=True): member for member in listed}
-    return [by_json[key] for key in sorted(by_json)]
 
 
 def _map_or_absent(value: object) -> bool:

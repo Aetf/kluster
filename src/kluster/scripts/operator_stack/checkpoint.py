@@ -35,7 +35,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
-from kluster.lib import stack_environment
+from kluster.lib import dependency_sets, stack_environment
 
 #: The two keys of Pulumi's secret envelope: the signature key, and the value
 #: it holds in every envelope. A file carries the value encrypted beside them
@@ -268,12 +268,15 @@ def _run(command: Sequence[str], cwd: Path, *, what: str) -> str:
 def same_deployment(before: Mapping[str, Any], after: Mapping[str, Any]) -> bool:
     """Whether two `pulumi stack export --show-secrets` documents hold the same deployment.
 
-    Compared without the manifest's timestamp, which every write moves, and
-    with the resources in one canonical order, since the engine does not keep
-    theirs between runs when resources register concurrently. The export carries each
-    secret's envelope beside its plaintext rather than a ciphertext, so a
-    re-encryption under a fresh nonce is no difference, and a property that
-    became secret is one.
+    Compared without the manifest's timestamp, which every write moves; with
+    the resources in one canonical order, since the engine does not keep
+    theirs between runs when resources register concurrently; and with each
+    resource state's dependency lists by their members
+    (`dependency_sets.by_members`), since the engine lists those in a fresh
+    order on every registration -- a resource's own, and the one a pending
+    operation holds. The export carries each secret's envelope beside its
+    plaintext rather than a ciphertext, so a re-encryption under a fresh
+    nonce is no difference, and a property that became secret is one.
     """
     return _normal(before) == _normal(after)
 
@@ -283,9 +286,18 @@ def _normal(export: Mapping[str, Any]) -> object:
     deployment = cast('dict[str, Any]', document.get('deployment') or {})
     manifest = cast('dict[str, Any]', deployment.get('manifest') or {})
     _ = manifest.pop('time', None)
-    resources = cast('list[Any]', deployment.get('resources') or [])
+    resources = [_state_by_members(resource) for resource in cast('list[object]', deployment.get('resources') or [])]
     deployment['resources'] = sorted(resources, key=lambda resource: json.dumps(resource, sort_keys=True))
+    for operation in cast('list[object]', deployment.get('pending_operations') or []):
+        if isinstance(operation, dict) and 'resource' in operation:
+            held = cast('dict[str, object]', operation)
+            held['resource'] = _state_by_members(held['resource'])
     return document
+
+
+def _state_by_members(state: object) -> object:
+    """`state` with its dependency lists by their members, where it is a state at all."""
+    return dependency_sets.by_members(cast('dict[str, object]', state)) if isinstance(state, dict) else state
 
 
 # --------------------------------------------------------------------------

@@ -734,16 +734,18 @@ such a stack:
     and the conflict's remedy would throw that run away.
 3.  **A command that changed no part of the deployment leaves the file's
     bytes as they were.** Every write moves the manifest's timestamp and
-    encrypts every secret again under a fresh nonce, and the engine does
-    not keep the order of resources that register concurrently, so a run
-    that changed nothing would otherwise still be a change and a pull
-    request. The deployment is read from
-    `pulumi stack export --show-secrets` before and after, compared
-    without `manifest.time` and with the resources in one canonical
-    order, and where it is the one the command started from the previous
-    bytes are put back. That export carries each secret's envelope
-    beside its plaintext, so a property that became secret is a change
-    and keeps its new bytes.
+    encrypts every secret again under a fresh nonce, the engine does not
+    keep the order of resources that register concurrently, and it lists
+    each resource's dependencies in the iteration order of the map it
+    gathers them in, a fresh one on every registration, so a run that
+    changed nothing would otherwise still be a change and a pull request.
+    The deployment is read from `pulumi stack export --show-secrets`
+    before and after, compared without `manifest.time`, with the
+    resources in one canonical order and with each resource's dependency
+    lists by their members (`kluster.lib.dependency_sets`), and where it
+    is the one the command started from the previous bytes are put back.
+    That export carries each secret's envelope beside its plaintext, so a
+    property that became secret is a change and keeps its new bytes.
 4.  **After the command, the stack has no file under
     `checkpoints/.pulumi/stacks/` but its checkpoint and that one's
     `.bak`.** Any other file named for it is its state in a form the
