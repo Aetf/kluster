@@ -373,7 +373,8 @@ oraclecloud`, x86_64), the qcow2 imports as a custom image
     the value until it ends, so the box's memory under load is the
     number of such statements running at once times the size of the
     largest value they touch. The pooler bounds the first factor (below);
-    `state-backend census` reports the second.
+    `state-backend census --ceiling` reports the second, and fails on a
+    value larger than the one the cap is derived for.
 -   **The pooler is the box's one listener, and it caps what runs in
     Postgres.** It is published on 5432 and presents the server
     certificate. It asks each client for a certificate in the handshake
@@ -470,9 +471,9 @@ oraclecloud`, x86_64), the qcow2 imports as a custom image
     what each of its N client connections adds. W·R + b is one write:
     the server process's peak per byte of the value, times R, plus every
     server process's baseline b. With the inputs as the settings hold
-    them, R being `physical`'s checkpoint, which is still stored
-    uncompressed, and with R at the 1.48 MB of the largest compressed
-    checkpoint, `k8s-base`'s:
+    them, R being the largest value, a plain `backups/` copy of
+    `physical`'s checkpoint, and with R at the 1.48 MB of the largest
+    compressed checkpoint, `k8s-base`'s:
 
     | Term | `MiB`, R = 2.13 MB | `MiB`, R = 1.48 MB |
     | --- | --- | --- |
@@ -486,9 +487,22 @@ oraclecloud`, x86_64), the qcow2 imports as a custom image
     | One write: 5.8 × R + 3 (W·R + b) | 14.8 | 11.2 |
     | Statements at once, rounded down | 10 | 13 |
 
-    The settings hold R as `state-backend census` last read the largest
-    row, a reading rather than a forecast, so the cap moves when the
-    census reads another. The second column is what the census reads
+    The settings hold R as `state-backend census --ceiling` last read the
+    largest value, rounded up (`LARGEST_ROW_BYTES`), a reading rather
+    than a forecast, so the cap moves when the ceiling reads another. R
+    is a value's own size, which is what every multiple above is per
+    byte of: the ceiling reads it as `octet_length` of the value, one row
+    at a time, in a session that cannot write, and never through `->>`,
+    so nothing parses the JSON and its server process peaks at a few
+    copies of the largest value, as a read of it does. It is not the
+    stored size the census prints (`pg_column_size`), which TOAST's
+    compression can bring to half of a plain checkpoint's value. The ceiling prints the largest value's size
+    whether it passes or fails, and fails, naming each row and its size,
+    when a value exceeds R: a row the cap was not derived for, so R is
+    read again and the cap derived from it. It reads the table after the
+    prune a run asks for, since a row the prune takes is no row a
+    statement can touch, and it runs whatever the prune answered. The
+    second column is what the census reads
     once three things hold: `physical`'s next `up` has stored its
     checkpoint compressed, a re-run of `census --prune-superseded` has
     taken `physical`'s plain `history/` and `backups/` copies, which stay
@@ -595,7 +609,7 @@ oraclecloud`, x86_64), the qcow2 imports as a custom image
     -   **Enforcement.** `state-backend census --prune-expired` lists the
         expired rows, each with its stored size and the clause that
         expires it, and with `--yes` deletes them. The rule is written
-        once, in SQL (`state.EXPIRED`): the listing selects from it in
+        once, in SQL (`table.EXPIRED`): the listing selects from it in
         the census's read-only session, and the delete takes the listed
         keys and applies the rule again as of its own snapshot, so a row
         written again, or a record back among the newest, since the
@@ -1413,11 +1427,14 @@ its design. The machine is the files in
 | `backup-recipients.txt` | The backup generations' public halves, one line per generation the box encrypts to. Written by `credentials derived backup-age-<N> generate` and committed; `credentials derived check` holds it to the escrow, and the stack refuses to plan without it. |
 | `drill-recipient.txt` | The public half of the drill age identity, one recipient. Written by `credentials derived drill-age-identity generate` — which pushes the private half into the ops repository's `drill` Environment first — and committed; absent until that generator has run, and the appliance then encrypts to the escrowed generations alone. |
 
-The code that renders them, dumps and restores the state and reads the
-committed files is `kluster.lib.state_backend`, beside them; the stack
+The code that renders them, dumps and restores the state, reads and
+prunes the state table and reads the committed files is
+`kluster.lib.state_backend`, beside them; the state table's grammar and
+statements are `table` there, a module that imports nothing but the
+standard library, so it also runs as a program of its own. The stack
 that declares the appliance is `kluster.components.state_backend`,
 built by the `state-backend` stack program; and the code that renders a
-scratch box, logs in, writes bundles, probes and counts the state table is
+scratch box, logs in, writes bundles, probes and runs the census is
 `src/kluster/scripts/state_backend/`, exposed as the `state-backend`
 console script.
 
@@ -1463,7 +1480,7 @@ serves no stack it is the answer whatever else the run did, a failed
 must not be pushed. `4` likewise stands in for `0` and `1`, while a
 failed `up` keeps `pulumi`'s status. The backend is asked over a
 connection that must open within a few seconds
-(`state.CONNECT_TIMEOUT`), so an address whose traffic is dropped is `4`
+(`table.CONNECT_TIMEOUT`), so an address whose traffic is dropped is `4`
 in seconds rather than when TCP gives up.
 
 Other commands:
@@ -1479,6 +1496,7 @@ state-backend census --prune-superseded        # also list the copies stored in 
 state-backend census --prune-superseded --yes  # and delete them
 state-backend census --prune-expired           # also list the rows the retention rule expires (§2)
 state-backend census --prune-expired --yes     # and delete them
+state-backend census --ceiling                 # read every row's value size, print the largest, and fail naming each over LARGEST_ROW_BYTES (§2); after any prune given beside it
 state-backend probe                   # the scheduled checks, run by the ops repository
 state-backend ssh                     # a diagnostic login; the box is never configured by hand
 ```

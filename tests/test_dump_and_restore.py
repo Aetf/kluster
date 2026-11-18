@@ -32,7 +32,7 @@ from memory_kit import MemoryKit
 from state_dump_box import CHECKPOINT, CHECKPOINT_BAK, META, OPENED, SERVING, UNOPENED, rows
 
 from kluster.lib.bundle import CA_FILE, CERT_FILE, KEY_FILE, URL_FILE, dump_url
-from kluster.lib.state_backend import render, settings, state
+from kluster.lib.state_backend import render, settings, state, table
 from kluster.scripts.credentials import age, escrow
 from kluster.scripts.credentials.kdbx import PATH_ENV, KdbxStore
 from kluster.scripts.state_backend import cli
@@ -221,7 +221,7 @@ class Double:
 def double(monkeypatch: pytest.MonkeyPatch) -> Callable[..., Double]:
     def install(**kwargs: Any) -> Double:
         tools = Double(**kwargs)
-        monkeypatch.setattr(state.sp, 'run', tools)
+        monkeypatch.setattr(table.sp, 'run', tools)
         return tools
 
     return install
@@ -822,7 +822,7 @@ def test_every_slow_step_announces_itself_before_it_starts(
             announced_by_then[step] = {getattr(record, 'step', None) for record in caplog.records}
         return tools(argv, **kwargs)
 
-    monkeypatch.setattr(state.sp, 'run', watch)
+    monkeypatch.setattr(table.sp, 'run', watch)
     dump = tmp_path / 'taken.dump.age'
 
     assert _dump(kit, registry, bundle, dump) == 0
