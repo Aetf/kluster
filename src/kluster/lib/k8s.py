@@ -1307,7 +1307,7 @@ class PassthroughRefused(ValueError):
 
 
 def refuse_passthrough(host: str) -> NoReturn:
-    """Refuse a `Passthrough` row by its host, naming why and where its reach is being decided.
+    """Refuse a `Passthrough` row by its host, naming why and what reaches such a pod instead.
 
     Cilium treats a TLS passthrough listener and an HTTPS listener on one
     port as conflicting whenever their hostnames can match one name, and
@@ -1317,8 +1317,8 @@ def refuse_passthrough(host: str) -> NoReturn:
     """
     raise PassthroughRefused(
         f'the passthrough {host!r} cannot be served: Cilium drops a TLS passthrough listener together with the '
-        "zone's wildcard HTTPS listener on the same port, and every name of the zone with it. How the row is "
-        'reached instead is Aetf/kluster-ops#723'
+        "zone's wildcard HTTPS listener on the same port, and every name of the zone with it. A pod that "
+        'terminates its own TLS is reached at a raw port instead, as the discovery server is (Aetf/kluster-ops#723)'
     )
 
 

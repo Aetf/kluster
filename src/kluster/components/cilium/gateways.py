@@ -26,8 +26,9 @@ passthrough listener and an HTTPS listener on one port to conflict whenever
 their hostnames can match one name, and drops both, so a passthrough for a
 name under a served zone would take the zone's wildcard listener, and every
 name of the zone, off the Gateway (`listenerPairConflict` in
-`operator/pkg/gateway-api/gateway_reconcile.go`, v1.20.1). How such a row is
-reached instead is Aetf/kluster-ops#723.
+`operator/pkg/gateway-api/gateway_reconcile.go`, v1.20.1). A pod that
+terminates its own TLS is reached at a raw port instead, as the discovery
+server is (Aetf/kluster-ops#723).
 
 Where a Gateway answers is decided by where its address is routed, since
 Cilium hands its traffic to the Envoy on the node it arrives at (rfc-007

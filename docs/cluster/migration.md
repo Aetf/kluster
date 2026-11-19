@@ -298,7 +298,9 @@ spends its way back (rfc-008 §5.9).
     port for roaming devices, and the balancer's peer port now reaches
     the NAS instance, which keeps its own device identity; so the NAS
     instance and the WebDAV server move here rather than in Wave C →
-    **stdiscosrv** on `syncapi`, on the cloud pool, its clients on 443.
+    **stdiscosrv** on `syncapi`, on the cloud pool, at a raw port on
+    8443, where each device's discovery address is re-entered once
+    ([Aetf/kluster-ops#723](https://github.com/Aetf/kluster-ops/issues/723)).
     Legacy splitpro and matrix run on the homelab host, so Wave A frees
     homelab memory and asks for no growth (§0 rule 4).
 -   **hath, after Wave A2 has soaked** (operator ruling, rfc-008 §11.1),
