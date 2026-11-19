@@ -1,0 +1,38 @@
+# continuwuity's configuration, rendered by `kluster.components.apps.matrix`.
+# The client's identifier reaches the server as an environment variable, and
+# its secret as a file, both from the ported Secret: nothing secret is here.
+
+[global]
+# The domain of every user ID, which the apex's `.well-known` delegates to the
+# homeserver's own name. Fixed once the server has federated.
+server_name = {{ server_name | tojson }}
+
+address = "0.0.0.0"
+port = {{ port }}
+
+# The database and the media store, on the one claim.
+database_path = {{ database | tojson }}
+
+# Accounts come into being through the portal's sign-in alone, which never
+# consults this switch; it guards the client-server API's `/register` endpoint.
+allow_registration = false
+
+admins_list = {{ admins | tojson }}
+
+# Display names come from the portal's claim, undecorated.
+new_user_displayname_suffix = ""
+
+[global.well_known]
+client = {{ base_url | tojson }}
+server = {{ federation | tojson }}
+
+[global.oauth.oidc]
+discovery_url = {{ issuer | tojson }}
+client_secret_file = {{ secret_file | tojson }}
+additional_scopes = {{ scopes | tojson }}
+# The localpart is the portal's username, so `@<name>` here is the `<name>`
+# the portal knows.
+prompt_for_localpart = false
+preferred_username_claim = {{ localpart_claim | tojson }}
+email_claim = {{ email_claim | tojson }}
+profile_key_map = { displayname = {{ displayname_claim | tojson }} }
