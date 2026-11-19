@@ -1140,7 +1140,7 @@ each sits where the fact it compares against is declared:
 | Piece | Lives in | Runs | Compares the device against |
 | --- | --- | --- | --- |
 | `gateway-health` | this repository, rendered onto the device as `/data/custom/bin/gateway-health` | on demand, over the homelab host's SSH | what `Gateway` declares: its machines and the bridge each attaches to, the units the persistence layer delivers, the BGP daemon's hold on the declared peer, each declared network's /64 of the delegated prefix and the PD lease's line for it, the offline package cache, the base the program is written for, and what `networkd` is told |
-| `check-gateway` | homelab-ops, behind a yadm timer on the homelab host | daily | `gateway-health`'s verdict, the proxy's certificates as a LAN host sees them, and how fresh the copies of the backups are; it mails each finding with its playbook |
+| `check-gateway` | homelab-ops, behind a yadm timer on the homelab host | daily | `gateway-health`'s verdict, the proxy's certificates as a LAN host sees them, and how fresh the copies of the backups are; it mails each finding with its playbook, and checks in to a Home Assistant timer of its own after every run that delivered its findings or had none |
 | `gateway-backup-pull` | homelab-ops, behind a yadm timer on the homelab host | weekly | nothing: it copies the controller's autobackups into `~/.config/gw-backups`, and the resolvers' configuration until [sources-of-truth.md](../sources-of-truth.md) R2 flips |
 
 The two host jobs are scripts in homelab-ops, a repository of the
@@ -1347,8 +1347,23 @@ and `Persistent=true`. Each run:
     subject `[actionable] homelab-ops/check-gateway: <n> finding(s)`.
     These are the fields of the one channel's payload convention
     ([architecture.md](../cluster/architecture.md) §4.3), so moving the
-    job onto that channel changes only the transport. A healthy run
-    writes one journal line.
+    job onto that channel changes only the transport;
+5.  checks in: the unit's `ExecStartPost=` runs homelab-ops's
+    `check-in check-gateway`, which POSTs once, with an empty body, to the
+    Home Assistant webhook whose URL is in
+    `~/.config/check-in/check-gateway.url`, a file yadm encrypts. The
+    webhook restarts `timer.homelab_ops_check_gateway`, 36 hours, whose
+    expiry pushes "no check-in from homelab-ops/check-gateway" with the
+    playbook "The check stopped checking in" in §3
+    ([operations.md](../operations.md) §4, "The homelab host's
+    check-in"). systemd runs `ExecStartPost=` only once the run has
+    exited 0, which `check-gateway` does when it is healthy and when its
+    mail was sent. So a run whose mail failed, one that hangs and one
+    that never starts do not check in, and a check-in that fails marks
+    the unit failed and names its cause in the journal.
+
+A healthy run writes two journal lines: the run's own, and the
+check-in's `checked in: check-gateway`.
 
 **`gateway-backup-pull`** runs weekly, on Monday at 07:41. It reads the
 same paths on the layout before the cutover and on the declared one, so
@@ -1376,9 +1391,11 @@ theirs. No resolver is probed, because every device in the house
 notices a resolver that stops answering within minutes. And the alert
 goes by mail rather than through the one channel
 ([operations.md](../operations.md) §4), whose dispatch handler is not
-built: until it is, mail is the one path that delivers. The residual
-that follows is that a host timer that stops is silent; the channel's
-heartbeat is what closes it.
+built: until it is, mail is the one path that delivers. A check that
+stops running is reported by its check-in's timer (step 5), which
+reaches Home Assistant directly. What that timer cannot report is the
+homelab host itself stopping: Home Assistant is a domain on the same
+host and stops with it.
 
 ## 2. ZeroTier network design
 
@@ -3065,7 +3082,8 @@ down, or the gateway, fail the job at the join.
     the tunnel during a replacement.
 
 The readings of §1.6 name the entries below: `gateway-health`'s
-findings first, then the ones `check-gateway` raises of its own. Every
+findings first, then the ones `check-gateway` raises of its own, then
+the one its check-in's timer raises. Every
 command runs on the device unless the entry says otherwise.
 
 -   **A declared machine not running** — trigger: `gateway-health`
@@ -3251,6 +3269,24 @@ command runs on the device unless the entry says otherwise.
     drift the next `physical` preview reports, and an apply writes it
     back. Otherwise, run `/data/custom/bin/gateway-health` by hand and
     read what it writes to stderr.
+-   **The check stopped checking in** — trigger:
+    `timer.homelab_ops_check_gateway` expired, and Home Assistant pushed
+    "no check-in from homelab-ops/check-gateway": no run of
+    `check-gateway` has checked in for 36 hours (§1.6, step 5). On the
+    homelab host, as the user that owns the unit,
+    `systemctl --user list-timers check-gateway.timer` shows the timer
+    with a next run, and one missing from the list is started with
+    `systemctl --user enable --now check-gateway.timer`. Then
+    `systemctl --user status check-gateway.service` reads the last run.
+    A failed unit's journal, `journalctl --user -u
+    check-gateway.service`, names whether the run or its check-in
+    failed; a run that hangs is `active (running)` well past 08:33. A
+    check-in that exited 0 while the timer did not restart landed on a
+    webhook id nothing is registered under: make the webhook automation
+    again in Home Assistant, write its URL into
+    `~/.config/check-in/check-gateway.url` without echoing it, and commit
+    the file in yadm. Then `systemctl --user start
+    check-gateway.service`, and the timer restarts.
 -   **The proxy's certificate is not renewing** — trigger: a probe from
     the LAN finds no certificate served for a name, one that does not
     verify for it, or one with fewer than 21 days left. Each site block

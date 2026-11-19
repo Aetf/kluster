@@ -1391,7 +1391,7 @@ object with no file behind it and goes at the next boot, or to
 
     ```sh
     systemctl --user start check-gateway.service
-    journalctl --user -u check-gateway.service -n 20 --no-pager   # one healthy line, no finding
+    journalctl --user -u check-gateway.service -n 20 --no-pager   # the healthy line, then "checked in: check-gateway"; no finding
     systemctl --user enable --now check-gateway.timer
     ```
 
@@ -1872,6 +1872,14 @@ nothing runs the daily drift check, and a homelab-containers merge
 reaches the device only when someone deploys it by hand. The weekly
 pull is in neither list: it reads both layouts and keeps running across
 the rollback (gateway.md §1.6).
+
+The daily check's check-in stops with its timer, so its Home Assistant
+timer goes too: in Home Assistant, the action `timer.cancel` on
+`timer.homelab_ops_check_gateway`. Left running, it expires 36 hours
+after the last check-in and pushes "no check-in from
+homelab-ops/check-gateway" about a check the rollback stopped on
+purpose. A retry of the window starts it again with the check's first
+run (§5).
 
 ## 7. Cleanup and retirement
 
