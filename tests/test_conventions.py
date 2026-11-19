@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import ast
 import base64
+import dataclasses
 import datetime as dt
 import ipaddress
 import json
@@ -62,7 +63,7 @@ from kluster.components.dns import legacy as dns_legacy
 from kluster.components.dns import record as dns_record
 from kluster.components.dns.base import overlay_records
 from kluster.components.dns.record import Block, zone_records
-from kluster.conventions import backup, identity, routes
+from kluster.conventions import backup, identity, routes, sso
 from kluster.conventions.cluster import Transports
 from kluster.conventions.outputs import BOOT_VOLUME
 from kluster.lib import k8s as lib_k8s
@@ -1193,6 +1194,165 @@ def test_an_apex_rows_zone_holds_its_address_record() -> None:
     assert _apex_zones_without_an_address(_census(_of(routes.Apex(conventions.WEB_ZONES))), _dns_blocks()) == set()
     assert _apex_zones_without_an_address(_census(), _dns_blocks()) == set()
     assert _apex_zones_without_an_address(_census(_of(routes.Apex(('jiahui.id',)))), _dns_blocks()) == {'jiahui.id'}
+
+
+# --------------------------------------------------------------------------
+# The single sign-on census.
+# --------------------------------------------------------------------------
+# `conventions.sso` refuses, where a client is built, what a client cannot
+# mean. What is left is a relation between clients, or between a client and
+# the names the installation answers: the exposure census and the records of
+# the `dns` stack. Each relation case applies its predicate to
+# `conventions.sso.CLIENTS` and to a census of its own that breaks it, as the
+# exposure census's cases do.
+
+
+def _client(host: str = 'photos', *, name: str = 'immich', zone: str = conventions.ZONE_PRIMARY) -> sso.Client:
+    """A client that builds, under the host and the name it is given."""
+    return sso.Client(
+        name,
+        host,
+        ('/auth/login',),
+        policy=(sso.Grant('users', sso.Factor.TWO),),
+        token_endpoint_auth=sso.TokenEndpointAuth.POST,
+        scopes=(sso.Scope.OPENID,),
+        zone=zone,
+    )
+
+
+def _unanswered_clients(
+    clients: Iterable[sso.Client], exposures: Iterable[routes.Exposure], blocks: Iterable[Block]
+) -> list[str]:
+    """Every client whose host, in its zone, no route row publishes and no record points at the legacy VPS."""
+    answered = {(name.host, name.zone) for name in routes.public_names(exposures)} | _points_at_the_vps(blocks)
+    return sorted(client.name for client in clients if (client.host, client.zone) not in answered)
+
+
+def test_every_clients_host_is_a_name_a_row_publishes_or_the_dns_stack_points_at_the_legacy_vps() -> None:
+    """A redirect address under a name nothing answers is a sign-in that lands nowhere.
+
+    The census carries every legacy client from Wave A1 on, so a client whose
+    application has not moved is answered by the legacy record, and one whose
+    application has is answered by its row; a zone the name is not answered
+    in is no better than a name nobody answers.
+    """
+    vps = dns_record.Block(conventions.PRIMARY_ONLY, (dns_record.cname('photos', dns_legacy.ANCHOR_ARCHVPS),))
+    published = _census(_of(routes.Route('photos', internet=routes.PROXIED)))
+
+    assert _unanswered_clients(sso.CLIENTS, _census(), _dns_blocks()) == []
+    assert _unanswered_clients([_client()], (), [vps]) == []
+    assert _unanswered_clients([_client()], published, []) == []
+    # A client under a name nobody publishes.
+    assert _unanswered_clients([_client('photo')], published, [vps]) == ['immich']
+    # A row on a home Gateway alone publishes no name a browser outside reaches.
+    assert _unanswered_clients([_client()], _census(_of(routes.Route('photos', lan=routes.REWRITE))), []) == ['immich']
+    # The name, answered in another zone than the client's.
+    assert _unanswered_clients([_client(zone='unlimitedcodeworks.xyz')], published, [vps]) == ['immich']
+
+
+def _repeated_client_names(clients: Iterable[sso.Client]) -> list[str]:
+    names = [client.name for client in clients]
+    return sorted({name for name in names if names.count(name) > 1})
+
+
+def test_clients_are_unique_by_name() -> None:
+    """The portal names a client's policy and its claims after the client, so two of one name share both."""
+    assert _repeated_client_names(sso.CLIENTS) == []
+    assert _repeated_client_names([_client(), _client('photos-two')]) == ['immich']
+
+
+def _vhost(label: str) -> conventions.gateway.LegacyVhost:
+    """A legacy vhost under `label`, whose upstream no case here reads."""
+    return conventions.gateway.LegacyVhost(
+        label=label,
+        upstream=conventions.gateway.PlainUpstream(host='upstream.home.arpa', port=8096),
+        wave=conventions.gateway.RetirementWave.C,
+    )
+
+
+def test_a_clients_redirect_addresses_are_its_paths_under_each_name_it_is_served_at_then_its_native_ones() -> None:
+    """The derivation the portal registers, against literals, over a vhost census of the case's own.
+
+    A legacy application signs in through the portal from Wave A1's cut, on
+    every name it is still served at, so the legacy LAN name the gateway's
+    proxy serves under the client's label is registered too, and a vhost of
+    another label adds nothing.
+    """
+    client = sso.Client(
+        'jellyfin',
+        'tube',
+        ('/sso/a', '/sso/b'),
+        policy=(sso.Grant('users', sso.Factor.ONE),),
+        token_endpoint_auth=sso.TokenEndpointAuth.POST,
+        scopes=(sso.Scope.OPENID,),
+        native=('app.jellyfin:///callback',),
+    )
+
+    assert sso.redirect_uris(client, (_vhost('bt'), _vhost('tube'))) == (
+        'https://tube.unlimited-code.works/sso/a',
+        'https://tube.unlimited-code.works/sso/b',
+        'https://tube.lan.ucw.phd/sso/a',
+        'https://tube.lan.ucw.phd/sso/b',
+        'app.jellyfin:///callback',
+    )
+    assert sso.redirect_uris(client, (_vhost('bt'),)) == (
+        'https://tube.unlimited-code.works/sso/a',
+        'https://tube.unlimited-code.works/sso/b',
+        'app.jellyfin:///callback',
+    )
+    assert sso.redirect_uris(_client(), ()) == ('https://photos.unlimited-code.works/auth/login',)
+
+
+def _built(**fields: Any) -> Callable[[], sso.Client]:
+    """`_client()` built again with the fields given replaced, which runs the checks a client is built under."""
+    return lambda: dataclasses.replace(_client(), **fields)
+
+
+#: What a client cannot say, each built the way the census would write it, and
+#: a client beside it that differs in the one respect and is accepted.
+SSO_REFUSED: dict[str, tuple[Callable[[], object], Callable[[], object]]] = {
+    'a client with no name': (_built(name=''), _built(name='immich')),
+    'a client with no host': (_built(host=''), _built(host='photos')),
+    'a client with no redirect path': (_built(paths=()), _built(paths=('/',))),
+    'a redirect path off the root': (_built(paths=('auth/login',)), _built(paths=('/auth/login',))),
+    'a client that grants no group': (_built(policy=()), _built(policy=(sso.Grant('users', sso.Factor.ONE),))),
+    'a grant to no group': (
+        lambda: sso.Grant('', sso.Factor.TWO),
+        lambda: sso.Grant('admins', sso.Factor.TWO),
+    ),
+    'a group granted twice': (
+        _built(policy=(sso.Grant('users', sso.Factor.TWO), sso.Grant('users', sso.Factor.ONE))),
+        _built(policy=(sso.Grant('users', sso.Factor.TWO), sso.Grant('admins', sso.Factor.ONE))),
+    ),
+    'a client that does not ask for openid': (
+        _built(scopes=(sso.Scope.PROFILE,)),
+        _built(scopes=(sso.Scope.PROFILE, sso.Scope.OPENID)),
+    ),
+    'a claim read under a scope not asked for': (
+        _built(scopes=(sso.Scope.OPENID, sso.Scope.PROFILE), id_token=(sso.Claim.NAME, sso.Claim.EMAIL)),
+        _built(
+            scopes=(sso.Scope.OPENID, sso.Scope.PROFILE, sso.Scope.EMAIL), id_token=(sso.Claim.NAME, sso.Claim.EMAIL)
+        ),
+    ),
+    'a native redirect under a web scheme': (
+        _built(native=('https://photos.unlimited-code.works/callback',)),
+        _built(native=('app.immich:///oauth-callback',)),
+    ),
+    'a native redirect under no scheme': (
+        _built(native=('/oauth-callback',)),
+        _built(native=('app.immich:///oauth-callback',)),
+    ),
+}
+
+
+@pytest.mark.parametrize('case', list(SSO_REFUSED))
+def test_what_a_client_cannot_say_is_refused_where_it_is_built(case: str) -> None:
+    """The census does not load while it holds one, so neither the portal nor an application is handed one."""
+    refused, accepted = SSO_REFUSED[case]
+
+    _ = accepted()
+    with pytest.raises(ValueError):
+        _ = refused()
 
 
 # --------------------------------------------------------------------------

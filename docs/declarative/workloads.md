@@ -9,7 +9,8 @@ changes.
 > **Status**: designed 2026-08-22. Declared: an application's namespace,
 > its level, its route label and its policies, its exposure through
 > `expose` with the records left out (§1), and its storage through `claim`
-> and `nas_claim` (§2, §3). Nothing else is implemented.
+> and `nas_claim` (§2, §3). The single sign-on census is written, and no
+> component reads it yet (§4). Nothing else is implemented.
 
 ## 1. The component contract
 
@@ -315,6 +316,41 @@ per-app number:
     hostPath webroots (blog *and* doors), kluster-code's nginx
     component, and the blog repo's rsync `deploy:` config (old-tracker
     rule).
+-   **Single sign-on (an application that signs in through the portal
+    over OpenID Connect)**: the application's client is its row of
+    `conventions.sso.CLIENTS`, the one census both sides of the client
+    read. The row holds what the portal and the application have to
+    agree on, and what the portal renders for that one client: the host
+    its web redirect addresses are under, in one zone, with their paths;
+    who may sign in, as groups each with its factors, first match
+    applying; how it proves at the token endpoint that it is the client;
+    the scopes it asks for; the proof key for code exchange it sends,
+    where the portal requires one; the claims it reads from the ID token,
+    each under a scope it asks for; and any redirect address its native
+    app answers under a scheme of its own. Where the gateway's proxy
+    still serves the application under the retiring LAN zone, its paths
+    are registered under that name too, derived from the proxy's census
+    (`conventions.gateway.LEGACY_VHOSTS`), so the name leaves the client
+    with the proxy's row and the census is not edited for it. A grant
+    names a group and never a network, because the address the portal
+    sees a browser at is the browser's own word (cluster-infra.md §2). A
+    subject in none of a client's groups, a subject with no groups
+    included, is refused: the portal renders every policy with
+    `default_policy: deny`, because Authelia's own default is
+    `two_factor`, and no grant names everyone. `apps` renders Authelia's
+    client list from the census, naming each policy and set of claims
+    after its client, and gives each application its row; Grafana's is
+    read by `k8s-base`'s monitoring component. The client's identifier
+    and secret are not in the census: each is sealed in the configuration
+    of the stack that declares its consumer, the legacy ciphertext as it
+    is where the consumer keeps its legacy namespace and sealed afresh
+    where it does not, as Grafana's are (§5). The census carries every
+    client the legacy authentication service carries from Wave A1 on,
+    each under the name it keeps across its move, which a route row
+    publishes or the `dns` stack points at the legacy VPS (rfc-008 §4.4).
+    Authelia's access-control rules for the routes its gate guards are its
+    own configuration, in its component, keyed by route rather than by
+    client.
 -   **LAN-device backend (haos.ucw → HAOS)**: the public entrance to a
     device that is deliberately *not* in the cluster
     (architecture.md §6.8). Shape: a selectorless Service + manually

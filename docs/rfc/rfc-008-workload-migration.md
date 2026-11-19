@@ -108,6 +108,17 @@
     deleted the dated exception for an absent sealed value, and an absent
     one stops the run at its read, naming the command that seals it
     ([Aetf/kluster-ops#774](https://github.com/Aetf/kluster-ops/issues/774)).
+*   **Updated:** 2026-11-19. §4.4's census carries, beside each client's
+    host, paths, policy and authentication method, what both sides of
+    the client configure from: the scopes, the proof key for code
+    exchange and the ID token's claims, typed, and the redirect addresses
+    a native app answers under no host. A legacy LAN name the gateway's
+    proxy still serves is registered from that proxy's census rather
+    than declared on the client, so the cut that retires the name edits
+    no census here. Grafana's identifier and secret are sealed afresh,
+    as §4.6 has it for a namespace that changes, and the portal's
+    access-control rules stay in its component because they are keyed by
+    route ([Aetf/kluster#872](https://github.com/Aetf/kluster/pull/872)).
 *   **Authority:** AGENTS.md,
     [framework/dispatch.md](../framework/dispatch.md),
     [framework/rfc.md](../framework/rfc.md) and the style rules
@@ -1506,11 +1517,18 @@ cover operations.md §4 asks of an in-cluster drill.
 ### 4.4 Single sign-on
 
 **The OpenID Connect clients are a census**, `conventions.sso.CLIENTS`:
-for each client, the host its redirect addresses are under, their paths,
-its authorization policy and its authentication method. Two programs
-read it: `apps`, which renders Authelia's client list and gives each
-application its client, and `k8s-base`, whose monitoring component gives
-Grafana its client.
+for each client, the host its web redirect addresses are under and their
+paths, any redirect address its native app answers under a scheme of
+its own and under no host, its authorization policy, how it
+authenticates at the token endpoint, the scopes it asks for, the proof
+key for code exchange it sends where the portal requires one, and the
+claims it reads from the ID token, each under a scope it asks for. Where the gateway's
+proxy still serves an application under the retiring LAN zone, its
+paths are registered under that name too, derived from the proxy's
+census and not declared on the client. Two programs read it: `apps`,
+which renders Authelia's client list and gives each application its
+client, and `k8s-base`, whose monitoring component gives Grafana its
+client.
 
 **The census carries every client the legacy authentication service
 carries, from Wave A1.** At A1's cut the new service takes the portal's
@@ -1523,14 +1541,15 @@ every client's host to a name that a route row publishes or that `dns`
 points at the VPS (§3.3), in a zone the row or the record names.
 
 **A client's identifier and secret are not in the census.** The legacy
-service keeps both sealed, and the port keeps them so: each is a ported
-ciphertext in the configuration of the stack that declares its consumer
-(§4.6), and no one reads the legacy cluster to write an identifier
-down.
+service keeps both sealed, and the port keeps them so: each is sealed in
+the configuration of the stack that declares its consumer, the ported
+ciphertext where the consumer keeps its legacy namespace and sealed
+afresh where it does not, as Grafana's are (§4.6), and neither is
+written down in the clear.
 
 Authelia's access-control rules for the forward-auth applications are
-its own configuration and stay in its component; the census holds only
-what a second component has to agree on.
+its own configuration and stay in its component: they are keyed by
+route, not by client.
 
 ### 4.5 Static sites
 
