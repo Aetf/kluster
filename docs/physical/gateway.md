@@ -1234,14 +1234,19 @@ What it reads:
     device's scripts under the package's own build.
 7.  **`networkd` can remove none of the firmware's policy rules** (§1.2),
     read three ways, each finding naming one playbook:
-    -   *the consequence*: `ip -4 rule show` holds a rule that looks up
-        `main`. With that rule gone the gateway cannot route its own
-        replies, so neither the SSH run nor its mail can be counted on
-        while it is gone; this reading is for an operator at the
-        device's shell after a controller apply, which the playbook
-        prescribes. The IPv6 rules join the reading
-        (`POLICY_RULE_FAMILIES`) once a reading of the healthy device
-        shows such a rule there too;
+    -   *the consequence*: in each family of `POLICY_RULE_FAMILIES`,
+        IPv4 and IPv6, `ip -<family> rule show` holds a rule that looks
+        up `main`, and a family without one is a finding naming
+        `ip -<family> rule`. With that rule gone the gateway cannot
+        route its own replies, so neither the SSH run nor its mail can
+        be counted on while it is gone; this reading is for an operator
+        at the device's shell after a controller apply, which the
+        playbook prescribes. The healthy device holds the firmware's
+        `32000: from all lookup main` in both families, and neither
+        holds the kernel's default `32766: from all lookup main`, which,
+        being of protocol `kernel`, would survive `networkd` and keep
+        the reading from firing. At 32766 the IPv6 set holds the
+        firmware's `lookup 201.eth8` (read 2026-11-15);
     -   *the trigger*: `networkctl list` shows no link whose setup state
         is other than `unmanaged`. A finding names each managed link.
         It is skipped while `networkd` is not active, since a stopped
@@ -3204,11 +3209,11 @@ command runs on the device unless the entry says otherwise.
     and the provider's version moved. Until it lands every `physical`
     run stops at the read.
 -   **The firmware's policy rules exposed to removal** — trigger:
-    `gateway-health` reports `ip -4 rule` holding no rule that looks up
-    `main`, a link `networkd` manages, or an option of the declared
-    drop-in not reading as declared (§1.6). It is also the reading to
-    take at the device's shell after a controller apply, since a gateway
-    whose rules are gone cannot send the daily mail. **One rule holds
+    `gateway-health` reports `ip -4 rule` or `ip -6 rule` holding no
+    rule that looks up `main`, a link `networkd` manages, or an option
+    of the declared drop-in not reading as declared (§1.6). It is also
+    the reading to take at the device's shell after a controller apply,
+    since a gateway whose rules are gone cannot send the daily mail. **One rule holds
     throughout: `networkd` is not restarted while a link is managed and
     the guard does not read clean**, because that restart runs the
     removal at once. Read `networkctl list` and
