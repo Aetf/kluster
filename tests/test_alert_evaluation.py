@@ -101,11 +101,12 @@ STACK_CHART = 'victoria-metrics-k8s-stack'
 
 ROOT = Path(__file__).resolve().parents[1]
 
-#: The bound of each `vmalert-tool` run. The slowest group's run, the
-#: scheduled-job family's, took about 20 s on an idle 24-core machine, and
-#: testing.md §8 measured the real-CLI cases taking three and a half times as
-#: long beside four busy processes per core; this is four times that. A
-#: stop-loss, which nothing asserts on.
+#: The bound of each `vmalert-tool` run. The slowest run, one of a daily
+#: scheduled job's cases, which runs for five days at the evaluation interval,
+#: took about 55 s on a lightly loaded 24-core machine; this is over five
+#: times that. A family whose cases together would run near it is split into
+#: runs (`Family.parts`) rather than the bound raised. A stop-loss, which
+#: nothing asserts on.
 COMMAND_TIMEOUT = 300
 
 #: The case bound, above the one run a case makes and the program's run under
@@ -261,6 +262,8 @@ class Case:
     checks: Sequence[Check] = ()
     interval: dt.timedelta = SCRAPE_INTERVAL
     samples: Sequence[Sample] = ()
+    part: str = ''
+    """The `vmalert-tool` run of its family the case is evaluated in, one of `Family.parts`."""
 
 
 def _number(value: float) -> str:
@@ -584,6 +587,9 @@ def scheduled_jobs(group: Group) -> Iterator[Case]:
 
     The last case fails the row's first run beside every other row's CronJob
     running healthily, which tells the alerts of rows that share a name apart.
+    Each case is a run of its own (`SCHEDULED_JOB_PARTS`): a daily row's cases
+    run for days at the evaluation interval, so the family's cases in one run
+    would take a share of the run's bound that grows with every row.
     """
 
     def alerts(job: ScheduledJob) -> tuple[Rule, Rule]:
@@ -602,17 +608,20 @@ def scheduled_jobs(group: Group) -> Iterator[Case]:
         period, deadline, age = job.period, job.deadline, backup.max_age(job.period)
         name = f'{job.namespace}/{job.cronjob}'
 
+        def of_row(kind: str, inputs: Sequence[Series], checks: Sequence[Check], row: str = name) -> Case:
+            return Case(f'{row}: {kind}', inputs, checks, part=f'{row}: {kind}')
+
         def quiet(*at: dt.timedelta, stale: Rule = stale, failed: Rule = failed) -> list[Check]:
             return [Check(time, rule['alert']) for time in at for rule in (stale, failed)]
 
         until = period * 5
-        yield Case(
-            f'{name}: every run succeeds',
+        yield of_row(
+            'every run succeeds',
             healthy(job, until),
             quiet(period / 2, period + deadline + MARGIN, age + MARGIN, period * 2 + deadline + MARGIN),
         )
-        yield Case(
-            f'{name}: never scheduled',
+        yield of_row(
+            'never scheduled',
             _cronjob(job, until),
             [
                 *quiet(age - MARGIN),
@@ -620,8 +629,8 @@ def scheduled_jobs(group: Group) -> Iterator[Case]:
                 Check(age + MARGIN, failed['alert']),
             ],
         )
-        yield Case(
-            f'{name}: the first run fails',
+        yield of_row(
+            'the first run fails',
             _cronjob(job, until, scheduled=[period]),
             [
                 *quiet(period + deadline - MARGIN),
@@ -630,14 +639,14 @@ def scheduled_jobs(group: Group) -> Iterator[Case]:
                 Check(age + MARGIN, failed['alert'], fire(failed, job)),
             ],
         )
-        yield Case(
-            f'{name}: the first run succeeds just inside its deadline',
+        yield of_row(
+            'the first run succeeds just inside its deadline',
             _cronjob(job, until, scheduled=[period], succeeded=[period + deadline - MARGIN]),
             quiet(period + deadline - 2 * MARGIN, period + deadline + MARGIN, age + MARGIN),
         )
         recovery = period * 3 + RUN
-        yield Case(
-            f'{name}: a run fails after one succeeds, and the next succeeds',
+        yield of_row(
+            'a run fails after one succeeds, and the next succeeds',
             _cronjob(job, until, scheduled=[period, period * 2, period * 3], succeeded=[period + RUN, recovery]),
             [
                 *quiet(period * 2 + deadline - MARGIN),
@@ -652,8 +661,8 @@ def scheduled_jobs(group: Group) -> Iterator[Case]:
         until = failing + MARGIN
         others = [other for other in schedule.SCHEDULED_JOBS if other != job]
         names = sorted({rule['alert'] for other in schedule.SCHEDULED_JOBS for rule in alerts(other)})
-        yield Case(
-            f'{name}: the first run fails, every other CronJob healthy',
+        yield of_row(
+            'the first run fails, every other CronJob healthy',
             [*_cronjob(job, until, scheduled=[period]), *(one for other in others for one in healthy(other, until))],
             [Check(failing, alert, fire(failed, job) if alert == failed['alert'] else []) for alert in names],
         )
@@ -1602,10 +1611,32 @@ def api_server(group: Group) -> Iterator[Case]:
 
 @dataclass(frozen=True)
 class Family:
-    """How a declared group is evaluated: its cases, and how often vmalert-tool evaluates its rules."""
+    """How a declared group is evaluated: its cases, how often vmalert-tool evaluates its rules, and in how many runs."""
 
     cases: Callable[[Group], Iterator[Case]]
     evaluation: dt.timedelta = EVALUATION_INTERVAL
+    parts: Sequence[str] = ('',)
+    """The runs of `vmalert-tool` the cases are split across, each the cases whose `part` is its own.
+
+    Each run evaluates the whole group, since a case holds every alert of a
+    name, and only the cases are divided: a family whose cases together run
+    long is split so that each run stays well inside `COMMAND_TIMEOUT`, and
+    the runs are cases of their own, which the workers share."""
+
+
+#: The cases `scheduled_jobs` gives each row, each a `vmalert-tool` run of its own.
+SCHEDULED_JOB_CASES = (
+    'every run succeeds',
+    'never scheduled',
+    'the first run fails',
+    'the first run succeeds just inside its deadline',
+    'a run fails after one succeeds, and the next succeeds',
+    'the first run fails, every other CronJob healthy',
+)
+#: The scheduled-job family's runs, one per case, named as the case is.
+SCHEDULED_JOB_PARTS = tuple(
+    f'{job.namespace}/{job.cronjob}: {kind}' for job in schedule.SCHEDULED_JOBS for kind in SCHEDULED_JOB_CASES
+)
 
 
 #: Each declared group's cases, by the group's name.
@@ -1614,7 +1645,7 @@ FAMILIES: Mapping[str, Family] = {
     'nodes': Family(nodes),
     'backup-freshness': Family(backup_freshness, BACKUP_CLOCK),
     'metrics-store': Family(metrics_store),
-    'scheduled-jobs': Family(scheduled_jobs),
+    'scheduled-jobs': Family(scheduled_jobs, parts=SCHEDULED_JOB_PARTS),
     'scrape-targets': Family(scrape_targets),
     'kubeconfig-copy': Family(kubeconfig_copy),
     'etcd': Family(etcd),
@@ -1646,8 +1677,24 @@ async def groups_fixture() -> dict[str, Group]:
     return groups
 
 
+#: Every `vmalert-tool` run, by its family and its part.
+RUNS = [
+    pytest.param(name, part, id=f'{name}[{part}]' if part else name)
+    for name in FAMILIES
+    for part in FAMILIES[name].parts
+]
+
+
 def test_every_declared_group_has_cases(groups: dict[str, Group]) -> None:
     assert set(groups) == set(FAMILIES)
+
+
+@pytest.mark.parametrize('name', FAMILIES)
+def test_every_case_is_in_a_run_and_every_run_has_cases(groups: dict[str, Group], name: str) -> None:
+    """A case whose part names no run would be evaluated by none, and a run with no case passes on nothing."""
+    parts = [case.part for case in FAMILIES[name].cases(groups[name])]
+
+    assert set(parts) == set(FAMILIES[name].parts)
 
 
 @pytest.mark.parametrize('name', FAMILIES)
@@ -1678,9 +1725,9 @@ def test_every_rule_of_the_group_fires_in_a_check_and_every_alert_is_silent_in_o
 
 
 @pytest.mark.timeout(CASE_TIMEOUT)
-@pytest.mark.parametrize('name', FAMILIES)
+@pytest.mark.parametrize(('name', 'part'), RUNS)
 def test_the_groups_alerts_are_what_each_case_says_they_are(
-    groups: dict[str, Group], name: str, tmp_path: Path
+    groups: dict[str, Group], name: str, part: str, tmp_path: Path
 ) -> None:
     tool = pinned_tools.located(VMALERT_TOOL)
     group = groups[name]
@@ -1692,7 +1739,7 @@ def test_the_groups_alerts_are_what_each_case_says_they_are(
             {
                 'rule_files': [rules.name],
                 'evaluation_interval': backup.duration(FAMILIES[name].evaluation),
-                'tests': [_test(case, group.name) for case in FAMILIES[name].cases(group)],
+                'tests': [_test(case, group.name) for case in FAMILIES[name].cases(group) if case.part == part],
             },
             sort_keys=False,
             width=1 << 20,
