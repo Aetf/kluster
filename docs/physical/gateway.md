@@ -129,26 +129,28 @@ declarative/physical.md §4.
         as, which is what `--keep-unit` makes it.
 
         **Which side of systemd 258 this box is on is measured**, and
-        it is the older one: `systemctl --version` says `systemd 247
-        (247.3-7+deb11u8)` — measured on the device 2026-09-05, on
-        UniFi OS 5.1.31, whose base is Debian 11 — so `terminate` here
-        stops the unit, which is the route above. Reading upstream, since
-        this box is not there: from 258 machined records that the
-        payload sits in a control group below the unit's own, and
-        `terminate` sends `SIGTERM` to `systemd-nspawn` itself
-        instead — the container goes down with it, the unit exits, and
-        the machine comes back. A firmware jump onto a newer base is
-        what would move this verb, and `gateway-health` reads
-        `systemctl --version` against the side of 258 the program
-        declares, so a firmware that crosses it is a finding (§1.6).
+        it is the older one: `systemctl --version` says
+        `systemd 257 (257.13-1~deb13u1)` — measured on the device
+        2026-11-18, on UniFi OS v6.0.17, whose base is Debian 13 — so
+        `terminate` here stops the unit, which is the route above.
+        Reading upstream, since this box is not there: from 258
+        machined records that the payload sits in a control group below
+        the unit's own, and `terminate` sends `SIGTERM` to
+        `systemd-nspawn` itself instead — the container goes down with
+        it, the unit exits, and the machine comes back. A firmware
+        whose systemd is 258 or later is what would move this verb, and
+        `gateway-health` reads `systemctl --version` against the side
+        of 258 the program declares, so a firmware that crosses it is a
+        finding (§1.6).
 
-        **The device's shells**, measured on the device 2026-10-27, on
-        UniFi OS 5.1.33 (`/usr/lib/version` reads
-        `UDMPROSE.al324.v5.1.33.44ce47b.260909.0025`):
-        `/etc/debian_version` reads `11.11`; `/bin/sh` resolves to
-        dash, which runs the device's `#!/bin/sh` scripts; and root's
-        login shell is `/bin/bash`, which runs a command sent over
-        root's SSH session.
+        **The device's shells**, measured on the device 2026-11-18, on
+        UniFi OS v6.0.17 (`/usr/lib/version` reads
+        `UDMPROSE.al324.v6.0.17.7bcad58.261103.1126`):
+        `/etc/debian_version` reads `13.7`; `/bin/sh` resolves to
+        `/usr/bin/dash`, since `/bin` is a link to `usr/bin` on this
+        base, and that is the `dash` package at `0.5.12-12`, which runs
+        the device's `#!/bin/sh` scripts; and root's login shell is
+        `/bin/bash`, which runs a command sent over root's SSH session.
 
         **`Gateway` declares this base as `DEVICE_BASE`**: the Debian
         release, what `/bin/sh` resolves to, and the side of systemd
@@ -3136,9 +3138,16 @@ command runs on the device unless the entry says otherwise.
     -   **A `/bin/sh` other than dash** is not a version move: the
         device's `#!/bin/sh` scripts no longer run under dash, so the
         shell the suite runs them under (`tests/device_shell.py`) is
-        replaced, and the pin with it.
+        replaced, and the pin with it. Dash at another path, which a
+        merged `/usr` gives, moves the declaration alone.
     -   **A systemd on the other side of 258** sends §1's paragraph
-        on `machinectl terminate` back to be measured again.
+        on `machinectl terminate` back to be measured again, with the
+        comment in `machine-dropin.conf.j2` that states which side the
+        device is on.
+    -   **Whichever fact moved, §1's readings of the base are taken
+        again**: the `systemctl --version` line and the device's
+        shells, each restated with the date and the firmware it was
+        read on.
     -   **Then the declaration moves**: `DEVICE_BASE` in
         `kluster.components.gateway` takes what the device reads, and
         the `physical` push that delivers it clears the finding.

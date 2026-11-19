@@ -2,9 +2,10 @@
 
 The gateway's `/bin/sh` is dash, and a host's is whichever `/bin/sh` the host
 has, which is not the device's: bash on a workstation, which runs `[[`, arrays
-and the other bashisms dash refuses, and a later dash on CI's Ubuntu runners.
-So a case that runs a delivered `#!/bin/sh` script does it through `argv`,
-which names the dash `mise.toml` pins, never through the host's `/bin/sh`.
+and the other bashisms dash refuses, and the runner image's own build of dash
+on CI's Ubuntu runners. So a case that runs a delivered `#!/bin/sh` script does
+it through `argv`, which names the dash `mise.toml` pins, never through the
+host's `/bin/sh`.
 
 A script is the device's dash's by its interpreter: a first line that names
 `/bin/sh`, with or without options after it. `argv` passes those options the

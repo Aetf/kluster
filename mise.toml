@@ -87,30 +87,52 @@ jq = "1.8.2"
 # The shell the gateway runs its `#!/bin/sh` scripts under, so the suite runs
 # every such device template under the interpreter the device runs it with
 # rather than whichever `/bin/sh` a host has, which is not the device's: bash
-# on a workstation, which accepts the bashisms dash refuses, and a later dash
-# on CI's Ubuntu runners (tests/device_shell.py). The gateway's base is
-# Debian 11 (docs/physical/gateway.md), whose dash is
-# `0.5.11+git20200708+dd9ef66`: upstream's master at that commit, which no
-# release is, with Debian's patches on it. 0.5.11.1, the 0.5.11 maintenance
-# release cut the same day, parses the same language. The two differ at run
-# time: the device's matches patterns with the C library's `fnmatch`, and has
-# a `wait` fix the 0.5.11 line took only in 0.5.11.3, whose Arch build links
-# libedit beside the C library. The pin follows the device's base rather than
-# dash's newest release, so a firmware jump onto a newer Debian moves it to
-# that base's dash by hand, once `gateway-health`'s reading of the device's
-# base reports the jump (docs/operations.md §1, the gateway's dash row, says
-# what moves it). dash publishes source alone, and conda-forge's
-# `dash` is a different program, so this is Arch Linux's build of the release,
-# from the Arch Linux Archive, which keeps the packages Arch has shipped at
-# fixed URLs. The package is a `tar.zst` holding the binary at
-# `usr/bin/dash`, and the binary links the C library alone, so any glibc host
-# runs it. The archive publishes no checksum file mise can read, so the sum is
-# written here: the sha256 of the package whose detached signature, beside it
-# in the archive, verifies against the Arch Linux keyring.
-"http:dash".version = "0.5.11.1"
+# on a workstation, which accepts the bashisms dash refuses, and the runner
+# image's own build of dash on CI's Ubuntu runners (tests/device_shell.py). The
+# gateway's base is Debian 13 (docs/physical/gateway.md §1), whose dash is
+# `0.5.12-12`: upstream's 0.5.12 release with Debian's patches on it, built
+# without the C library's `fnmatch` and without libedit. The patches change
+# what a script may say -- `set -o pipefail`, which upstream took only in
+# 0.5.13, and `\e` in `echo` and `printf` -- so a build of upstream's 0.5.12
+# refuses scripts the device runs, and the pin is Debian's own package: the
+# amd64 build of the device's, from the same source, patches and configuration,
+# the architecture all that separates the two. Its binary links the C library
+# alone, at the floor the package's `Pre-Depends` names, so any host with glibc
+# 2.38 or later runs it. The pin follows the device's base rather than dash's
+# newest release, so a firmware jump onto a newer Debian moves it to that
+# base's dash by hand, once `gateway-health`'s reading of the device's base
+# reports the jump (docs/operations.md §1, the gateway's dash row, says what
+# moves it). The package comes from snapshot.debian.org, which keeps every
+# package Debian has published at a fixed URL, and the sum is the one the
+# release's `Packages` index lists for it, in the `InRelease` that the
+# release's archive keys sign.
+#
+# mise's `http` backend does not unpack a `.deb`: it installs the package file
+# itself, here as `usr/bin/dash`, and the `postinstall` replaces that file with
+# the binary the package's data archive holds at that path, read by the
+# `bsdtar` of the `conda:libarchive` pin below. The binary alone is taken,
+# because the package's `usr/bin/sh` link would put dash ahead of a host's `sh`
+# for everything run under `mise x`. That layer is `bin`, `depends`,
+# `postinstall` and the `conda:libarchive` pin. It goes once mise unpacks a
+# `.deb` and can install one executable out of it; a mise that does unpack it
+# fails this install by name, since `bsdtar` is then handed an executable
+# instead of a package. mise's safe mode (`MISE_SAFE=1`) refuses an install
+# that runs a tool's `postinstall`; a `mise lock` is no install, so renovate's,
+# which runs in that mode, passes.
+"http:dash".version = "0.5.12"
 "http:dash".bin_path = "usr/bin"
-"http:dash".platforms.linux-x64.url = "https://archive.archlinux.org/packages/d/dash/dash-{{ version }}-1-x86_64.pkg.tar.zst"
-"http:dash".platforms.linux-x64.checksum = "sha256:d34b294eee83a21aa2241003bec50d9c4e21eb54232c9578a56e1bcf4eb3aabc"
+"http:dash".bin = "dash"
+"http:dash".depends = ["conda:libarchive"]
+"http:dash".postinstall = 'cd "$MISE_TOOL_INSTALL_PATH" && bsdtar -xOf usr/bin/dash "data.tar.*" | bsdtar -xf - ./usr/bin/dash'
+"http:dash".platforms.linux-x64.url = "https://snapshot.debian.org/archive/debian/20250204T211159Z/pool/main/d/dash/dash_{{ version }}-12_amd64.deb"
+"http:dash".platforms.linux-x64.checksum = "sha256:a8902cb6d8650134764a25fb80aec8589d858ef71ece1680a62e84816c37bb04"
+# The `bsdtar` that takes dash's binary out of its Debian package, in the
+# `http:dash` pin's `postinstall` above, and nothing else: libarchive reads
+# both the package's `ar` container and the compressed `tar` inside it. It is
+# part of that pin's layer and goes with it. libarchive publishes source alone,
+# so it comes from the `conda-forge` channel like the Postgres client, gawk and
+# libxslt.
+"conda:libarchive" = { version = "3.8.11", channel = "conda-forge" }
 
 # jj is the version control a workstation runs, and the operator-stack driver
 # reads a jj checkout's working copy through it, so the cases that hold that

@@ -965,6 +965,20 @@
       enabled: true,
     },
     {
+      // The local bsdtar's lookup, for the reason the client's rule above
+      // gives: the mise manager hands the conda datasource the bare name,
+      // `libarchive`, which api.anaconda.org does not answer, so the name is
+      // the channel's here, `conda-forge/libarchive`, the channel `mise.toml`
+      // writes.
+      matchDatasources: [
+        'conda',
+      ],
+      matchDepNames: [
+        'conda:libarchive',
+      ],
+      overridePackageName: 'conda-forge/libarchive',
+    },
+    {
       // The local kubectl's line: the minor of the Kubernetes the pinned
       // Talos release defaults to, the cluster's, which kubectl's skew policy
       // ties the client to (its comment in `mise.toml`). Kubernetes' newest
