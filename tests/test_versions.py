@@ -600,6 +600,11 @@ SCHEMES = {
     'ghcr.io/aetf/oci-sdk': Scheme(
         ('2.191.0-0123456789ab', '2.192.0-ba9876543210'), ('2.191.0-cc74b1a9273b-amd64', '2.191.0-cc74b1a9273b-arm64')
     ),
+    # The Postgres client runtime's tag is the client's major, which is the
+    # state backend's server major, and the fingerprint of its build.
+    'ghcr.io/aetf/postgres-client': Scheme(
+        ('17-0123456789ab', '18-ba9876543210'), ('17-739e9b5d045b-amd64', '17-739e9b5d045b-arm64')
+    ),
     'ghcr.io/aetf/golinks': Scheme(
         ('20261018-1c6080a-0123456789ab', '20261026-7d51de8-ba9876543210'),
         ('20260821-df12751', '20260821-df12751-e28925ffa30c-arm64'),

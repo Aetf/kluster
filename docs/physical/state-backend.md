@@ -408,7 +408,8 @@ oraclecloud`, x86_64), the qcow2 imports as a custom image
     number of such statements running at once times the size of the
     largest value they touch. The pooler bounds the first factor (below);
     `state-backend census --ceiling` reports the second, and fails on a
-    value larger than the one the cap is derived for.
+    value larger than the one the cap is derived for, and the cluster's
+    daily upkeep runs it every day (below).
 -   **The pooler is the box's one listener, and it caps what runs in
     Postgres.** It is published on 5432 and presents the server
     certificate. It asks each client for a certificate in the handshake
@@ -653,12 +654,29 @@ oraclecloud`, x86_64), the qcow2 imports as a custom image
         listing is kept, named, and makes the exit status 1. Neither
         statement reads a value. An empty listing is the reading that the
         rule holds.
+    -   **Who runs it.** The cluster, once a day: the CronJob
+        `state-upkeep`, which `k8s-base` declares in a namespace of its
+        own (`components.state_upkeep`), runs `table`'s program as the
+        role `upkeep`, which does what `state-backend census
+        --prune-expired --yes --ceiling` does on a workstation through the
+        same function — the census, the delete, and the ceiling over the
+        table as the delete left it (below). The program and the values
+        it reads, the database, the lengths above and the ceiling, reach
+        the cluster in the `up-k8s-base` that carries a change to them,
+        so the job runs the commit a workstation runs. It is a row of the
+        scheduled-job family (operations.md §4), whose rules report a run
+        that failed or a job gone stale, into §7.6. A workstation runs the
+        same command by hand.
     -   **What it leaves alone.** The prune takes no `pulumi` lock, and
         a lock would not cover the case, since the readers of a history
         directory take none: a `pulumi stack history` listing a directory
         while the prune deletes from it fails once and is run again, and
         a `pulumi stack rename` that meets a prune fails with its history
-        in two directories, so no stack is renamed while one runs.
+        in two directories, so no stack is renamed while one runs. The
+        daily run starts at a fixed time, declared in
+        `components.state_upkeep`, and is cut off at its row's deadline
+        (`conventions.schedule.STATE_UPKEEP`), which is the window a
+        rename keeps clear of.
         `pulumi up`, `preview` and `refresh` list no directory the prune
         deletes from. The prune does not shrink the data directory on the
         box, where Postgres reuses the space; the dumps and every listing
@@ -1120,6 +1138,20 @@ shell on it:
         though the reissue itself is a command and its delivery waits
         for `--force` — and the probe is the backstop behind it; for the
         dump the probe is the only watcher.
+-   **The state table's daily upkeep** (§2) watches the table from the
+    cluster: each run reads the largest value against the ceiling after
+    its prune, and fails naming a row over it or a row its delete passed
+    over. It is the CronJob `state-upkeep` in its namespace of the same
+    name, a row of the scheduled-job family
+    (`conventions.schedule.STATE_UPKEEP`, operations.md §4), so its two
+    alerts, both `actionable`, are the family's:
+    `StateUpkeepFailed`, a run scheduled after the last success that has
+    not succeeded within the deadline a run is cut off at, and
+    `StateUpkeepStale`, no success within the family's age over its
+    daily period. Each names §7.6. A run that cannot reach the box fails
+    too, so the job is also a daily connection, TLS and authentication
+    probe from the control planes, and its `upkeep` leaf reports its
+    expiry at the first run after it (above).
 -   **Deliberately unmonitored, with rationale**: Zincati/update
     failures and disk fill. The DB is ~4 orders of magnitude under
     the disk, and OS staleness is to be bounded by the quarterly
@@ -1711,3 +1743,51 @@ each converges on what is already there when it is created
 refused by the driver before a run starts (framework/pulumi.md §3.3), and a **corrupt** one is reverted
 by a commit, after which a refreshed `plan` shows what the revert does
 not know about.
+
+### 7.6 The state table's daily upkeep failed or is stale
+
+**Trigger**: the scheduled-job family's two alerts on the CronJob
+`state-upkeep` in the `state-upkeep` namespace
+(`conventions.schedule.STATE_UPKEEP`, §6). `StateUpkeepFailed` is a run
+that did not succeed within the deadline it is cut off at;
+`StateUpkeepStale` is no success within the family's age over the daily
+period. A run that fails leaves the table as its delete left it, so the
+next day's run takes what this one did not, and nothing is owed but the
+cause.
+
+**Outline**, from the root of the checkout:
+
+1.  **Read the last run.** `mise x -- kubectl -n state-upkeep get jobs
+    --sort-by=.metadata.creationTimestamp` lists the runs from the
+    oldest, and `mise x -- kubectl -n state-upkeep logs job/<run>` is
+    the census, the listing and the delete, the ceiling's reading, and
+    an `ERROR:` line for each step that failed. The branches below go
+    by that line.
+2.  **A row over the ceiling, named** (`exceed the ceiling of`). The
+    pooler's cap was not derived for a row that large. Read the census,
+    and set R again by §2's rule (`LARGEST_ROW_BYTES`); a cap that moves
+    with it replaces the box (§7.5, "Changing it"), and the new R
+    reaches the job in that change's `up-k8s-base`.
+3.  **`kept` rows alone** (`were not deleted`). Each is a row written
+    again, or a record back among the newest, since the listing, or one
+    already gone. The next run settles them, and a run started now
+    settles them at once: `mise x -- kubectl -n state-upkeep create job
+    --from=cronjob/state-upkeep state-upkeep-manual-<stamp>`.
+4.  **No connection, or a TLS or authentication refusal** (`the census
+    of pulumi_state failed`, with the client's reason). Either the box
+    is down, which §7.3 answers and §6's other probes confirm, or the
+    `upkeep` leaf has expired: it lasts `pki.LEAF_VALIDITY`, and
+    `credentials derived state-backend-upkeep seal` seals a fresh one,
+    whose commit the next `up-k8s-base` declares (credentials.md §4).
+5.  **A pod that never started.** It waits on what it mounts: the
+    program's `ConfigMap`, or the bundle's Secret, `state-backend-upkeep`,
+    which a SealedSecret the controller cannot open never creates.
+    `mise x -- kubectl -n state-upkeep describe pod` names which; the
+    seal above writes the bundle again.
+6.  **Stale, with no failed run.** No run was scheduled after the last
+    success, which is the family's reading of a CronJob that is no
+    longer scheduled (operations.md §4): read the CronJob, its
+    `suspend` and its last schedule time, with `mise x -- kubectl -n
+    state-upkeep get cronjob state-upkeep -o yaml`. A run the
+    controller could not start within an hour of its time is skipped
+    rather than run late, and leaves no Job.

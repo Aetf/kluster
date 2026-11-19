@@ -45,9 +45,11 @@ at all until its value is sealed in, and the scheduled-job rule family
 reads only a declared job (operations.md §4): the metrics stores'
 backups, and their restores with them, behind the monitoring
 namespace's writer key (declarative/cluster-infra.md §1 item 6); the
-pull of OCI's block-volume series, behind the metrics reader's key; and
-the hourly etcd snapshot, behind its writer key
-(declarative/cluster-infra.md §1 item 9).
+pull of OCI's block-volume series, behind the metrics reader's key; the
+hourly etcd snapshot, behind its writer key
+(declarative/cluster-infra.md §1 item 9); and the state table's daily
+upkeep, behind its client bundle (declarative/cluster-infra.md §1 item
+10).
 
 **Stage 6 seals every value a stack program reads before the first
 wave**, today every value `k8s-base` reads, as one commit to the stack

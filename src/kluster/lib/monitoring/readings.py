@@ -75,6 +75,7 @@ from enum import StrEnum
 
 from kluster import conventions
 from kluster.conventions.backup import duration, max_age
+from kluster.conventions.cluster import STATE_UPKEEP_NAMESPACE
 from kluster.conventions.providers import OCI_BLOCKSTORE_METRICS
 from kluster.conventions.schedule import OCI_METRICS_PULL
 from kluster.lib.monitoring.jobs import (
@@ -146,6 +147,7 @@ PLATFORM_NAMESPACES: tuple[str, ...] = (
     conventions.LOCAL_PATH_NAMESPACE,
     conventions.CNPG_NAMESPACE,
     conventions.RELOADER_NAMESPACE,
+    STATE_UPKEEP_NAMESPACE,
     conventions.VOLSYNC_NAMESPACE,
 )
 

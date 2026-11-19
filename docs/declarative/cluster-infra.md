@@ -435,12 +435,26 @@ classes its objects fall into (§1.2):
     SealedSecret. Until `writer-etcd` is sealed in, the namespace and
     the `ServiceAccount` are all it declares: the CronJob waits for
     bring-up stage 6's seal (physical/bring-up.md).
+10. **The state table's daily upkeep** — the CronJob `state-upkeep` in a
+    namespace of its own, `state-upkeep`, at `restricted`, on the control
+    planes (`components.state_upkeep`, physical/state-backend.md §2). It
+    runs `kluster.lib.state_backend.table`, rendered into a `ConfigMap`
+    with a settings file rendered from the state backend's settings, in
+    the `postgres-client` image, which carries the interpreter and the
+    Postgres client and no code of this repository: the census, the
+    prune of the rows the retention rule expires and the ceiling. It
+    reaches the state backend as the role `upkeep`, with that role's
+    client bundle sealed strict as `state-backend-upkeep` (§1.1), and
+    holds no Kubernetes grant. It is behind Cilium and the sealing
+    controller, which defines the SealedSecret. Until the bundle is
+    sealed in, the namespace and the `ConfigMap` are all it declares.
 
 Every chart this list installs is pinned in `Pulumi.yaml`'s `versions:`
 block as `versions:chart-<name>`, the Gateway API definitions as
 `versions:manifest-gateway-api`, and the images a component runs beside
 a chart, local-path-provisioner's two among them, the provisioner's and
-its helper pod's, and the etcd snapshot's, as `versions:image-<name>`
+its helper pod's, the etcd snapshot's and the state table's upkeep's, as
+`versions:image-<name>`
 (framework/pulumi.md §3.2). One copy:
 the stack program installs from those pins, and `update_crds` reads the
 same file through the same parser to render the CRD bundle

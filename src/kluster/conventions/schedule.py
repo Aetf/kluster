@@ -20,7 +20,7 @@ from types import MappingProxyType
 
 from kluster.conventions.alert import Playbook
 from kluster.conventions.backup import max_age
-from kluster.conventions.cluster import ETCD_BACKUP_NAMESPACE, MONITORING_NAMESPACE
+from kluster.conventions.cluster import ETCD_BACKUP_NAMESPACE, MONITORING_NAMESPACE, STATE_UPKEEP_NAMESPACE
 
 #: How long a change of a CronJob's status takes to reach the family's rules:
 #: kube-state-metrics publishes it at the next scrape, and vmalert reads it at
@@ -134,8 +134,24 @@ ETCD_SNAPSHOT = ScheduledJob(
     playbook=Playbook('docs/operations.md', '7.1'),
 )
 
+#: The state table's daily upkeep (`components.state_upkeep`): the census,
+#: the prune of the rows the retention rule expires and the ceiling, as the
+#: role `upkeep` (physical/state-backend.md §2). A run is a handful of
+#: statements, each cut off at `table.LISTING_TIMEOUT`, so it is cut off at a
+#: quarter of an hour; a run the controller could not start within the hour
+#: is left to the next day's.
+STATE_UPKEEP = ScheduledJob(
+    alert='StateUpkeep',
+    namespace=STATE_UPKEEP_NAMESPACE,
+    cronjob='state-upkeep',
+    period=dt.timedelta(days=1),
+    deadline=dt.timedelta(minutes=15),
+    starting_deadline=dt.timedelta(hours=1),
+    playbook=Playbook('docs/physical/state-backend.md', '7.6'),
+)
+
 #: Every CronJob a stack program declares, as a row of the family:
 #: `components.monitoring.rules` derives the family's alerts from each row,
 #: and `tests/test_monitoring.py` holds every CronJob the programs declare to
 #: a row of it, and every row to a CronJob some program declares.
-SCHEDULED_JOBS: Sequence[ScheduledJob] = (*METRICS_BACKUPS.values(), OCI_METRICS_PULL, ETCD_SNAPSHOT)
+SCHEDULED_JOBS: Sequence[ScheduledJob] = (*METRICS_BACKUPS.values(), OCI_METRICS_PULL, ETCD_SNAPSHOT, STATE_UPKEEP)

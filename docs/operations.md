@@ -1368,8 +1368,8 @@ cluster's check-in, and the daily check by the homelab host's check-in
 declared with the rest of the cluster's rules in `k8s-base`, and it reads
 a CronJob only once the CronJob is declared: a job that waits for its
 sealed value, as the metrics stores' backups, the pull of OCI's
-block-volume series and the etcd snapshot do, reports nothing until the
-value is sealed in. Bring-up stage 6 seals every value `k8s-base`
+block-volume series, the etcd snapshot and the state table's upkeep do,
+reports nothing until the value is sealed in. Bring-up stage 6 seals every value `k8s-base`
 reads, each of those keys among them, and reads each job's first run;
 what bounds a value it missed is the pull request of stage 8 that
 deletes the sealed tolerance, from which an absent value stops the run
@@ -1399,10 +1399,11 @@ for its place. The last column says which run, as of 2026-11-17:
 | The metrics stores' backups, hourly | The cluster: a CronJob per store, in `monitoring` (storage.md §5) | The `vm` writer key, sealed | The family's rules (§6.2), then the cluster's check-in | No: declared once bring-up stage 6 seals the `vm` key (storage.md §5) |
 | The block volumes' metrics, pulled hourly into the history store | The cluster: a CronJob in `monitoring` | The OCI metrics reader's key, sealed (credentials.md §3) | The family's rules (§6.3), then the cluster's check-in | No (`kluster-ops#790`) |
 | The authentication canary, every few minutes | The cluster: a CronJob in Authelia's namespace that requests a protected path with no credential (declarative/cluster-infra.md §2) | None: it presents none | Its own rule, which fires on anything but a refusal; the family's rules for the job; then the cluster's check-in | No: it ships with Authelia (rfc-008 §5.2) |
+| The state table's upkeep, daily: the census, the prune of the rows the retention rule expires, and the ceiling | The cluster: the CronJob `state-upkeep` in a namespace of its own, on the control planes, as the role `upkeep` (state-backend.md §2). It is no device's job: it deletes rows of the live table and checks the box, and a check never runs on what it watches. What it holds reads and deletes rows that an unmerged ref's runs already read and write (threat-model.md §3.1) | The `upkeep` client bundle, sealed (credentials.md §3) | The family's rules (state-backend.md §7.6), then the cluster's check-in | No: the first `up-k8s-base` after its merge declares it, its bundle sealed in ahead of it (`kluster-ops#784`) |
 | State-backend dump age | The cluster: a CronJob in `monitoring`, hourly, listing `pulumi-state/` (state-backend.md §6) | The list-only `B2 freshness key (state dumps)`, sealed | The family's rules, then the cluster's check-in | No; `probes.yml` reads it today |
 | State-backend server certificate's expiry | The cluster: `blackbox_exporter` probing the appliance's Postgres STARTTLS, with vmalert rules over its metrics (state-backend.md §6) | None: the CA's certificate, which is public | Its rules, then the cluster's check-in | No; `probes.yml` reads it today |
 | The kubeconfig copies' expiry, `KubeconfigCopyExpiring` | The cluster: a rule vmalert evaluates against the expiry `k8s-base` reads off its own copy, `conventions.cluster.KUBECONFIG_ALERT_MARGIN` ahead of it. It holds no credential, and it watches a date in `k8s-base`'s configuration rather than the cluster it runs on (§2.5) | None: the date is the certificate's public half | The cluster's check-in | No: it runs from the first `k8s-base` apply that declares monitoring |
-| The other credential expiry tripwires | Each placed by the same rule. Two are checked in the cluster: the state backend's server certificate, by the probe above, and the kubeconfig copies' client certificate, by the rule above. The client bundles report their expiry at their first `pulumi` command (state-backend.md §6), and the destroy dates stay with the offline day | — | — | — |
+| The other credential expiry tripwires | Each placed by the same rule. Two are checked in the cluster: the state backend's server certificate, by the probe above, and the kubeconfig copies' client certificate, by the rule above. The `ci` and `operator` client bundles report their expiry at their first `pulumi` command, and the `upkeep` bundle at the state table's upkeep's first run after it (state-backend.md §6); the destroy dates stay with the offline day | — | — | — |
 | etcd restore-verify, monthly | The cluster: a CronJob in `etcd-backup` | The `etcd` writer key, which lists and reads, and an age identity of its own, sealed | The family's rules, then the cluster's check-in | No (`kluster-ops#57`) |
 | CNPG restore, VolSync spot-restore, orphan-volume audit | The cluster (the drills above) | The writer keys of the backups they read, sealed; the audit needs none | The family's rules, then the cluster's check-in | No |
 | The state-backend appliance's dump, nightly (`state-dump.timer`) | The appliance itself: the job dumps the box's own database (state-backend.md §5) | The dump key, `writeFiles` alone, in the box's Ignition | The dump-age check above; the box's own failed-run notice reaches only a shell on it (state-backend.md §6) | Yes |
@@ -1586,7 +1587,7 @@ Owning docs keep the content — the index only locates it.
 
 | Playbook family | Lives in |
 | --- | --- |
-| State backend (cert/CA, PG major, rebuild, age rotation) | physical/state-backend.md §7 |
+| State backend (cert/CA, PG major, rebuild, age rotation; the state table's daily upkeep, a run that failed or the job gone stale) | physical/state-backend.md §7 |
 | Gateway (ZeroTier container down, firmware-wiped device, UDM replacement; and every finding of the daily gateway check: a machine, the boot chain, a delivered unit, the routing daemon or the offline package cache, a check that did not run, a check that stopped checking in, a certificate not renewing, an autobackup not copied off) | physical/gateway.md §3 |
 | Node replacement (CP node, worker VM, block volume and VIP extras; the whole cluster with the account intact) | §3 here |
 | Upgrades (Talos serial, Cilium canary); the cluster credential's copies near their expiry (`KubeconfigCopyExpiring`) | §2 here |
