@@ -22,7 +22,7 @@ from mock_monitor import Recorder, declaring, run_with
 from kluster import conventions
 from kluster.components.apps import WORLD_ENTITY, Fronts
 from kluster.components.apps import stdiscosrv as stdiscosrv_app
-from kluster.components.apps.stdiscosrv import Stdiscosrv, dialed_names
+from kluster.components.apps.stdiscosrv import Stdiscosrv
 from kluster.components.certificates import ISSUER
 from kluster.components.cilium import InternetPoolMembers
 from kluster.components.cilium.bgp import CONTROL_PLANE_LABEL
@@ -159,26 +159,6 @@ def test_the_server_serves_the_certificate_the_issuer_writes(declared: Recorder)
 def test_a_renewal_rolls_the_server(declared: Recorder) -> None:
     """The server reads its key pair at its start alone, so Reloader rolls it when the Secret it mounts changes."""
     assert deployment_of(declared)['metadata']['annotations']['reloader.stakater.com/auto'] == 'true'
-
-
-def test_a_name_both_sides_dial_is_certified_once() -> None:
-    """A row dialed at one name at the balancer and at home, as syncthing's peer row is, names it once."""
-    row = Port('st-x', 8444, Transports.TCP, internet=Balancer((Host('st-x'),)), lan=Vip('st-x'))
-
-    assert dialed_names(row) == (f'st-x.{conventions.ZONE_PRIMARY}',)
-
-
-def test_a_media_side_is_dialed_at_its_name() -> None:
-    row = Port('st-m', 8444, Transports.TCP, media=Vip('st-m'))
-
-    assert dialed_names(row) == (f'st-m.{conventions.ZONE_PRIMARY}',)
-
-
-def test_a_balancer_front_with_no_host_is_dialed_at_its_home_sides_name() -> None:
-    """It publishes none, so a device reaches it at the name its home side shares with the row that publishes it."""
-    row = Port('st-find', 8444, Transports.TCP, internet=Balancer(), lan=Vip('st-home'))
-
-    assert dialed_names(row) == (f'st-home.{conventions.ZONE_PRIMARY}',)
 
 
 # -- its port ------------------------------------------------------------------

@@ -15,15 +15,16 @@ which its Services forward to unchanged, so a device dials the name and the
 port the row states, `https://<name>:<port>/`, which is what syncthing's
 component configures its instance to announce to.
 
-**Its certificate is the cluster issuer's, for each name the row is dialed
-at**: the names its balancer front publishes, held or not, and the name its
-home side is rewritten for, each under the primary zone. A balancer front that
-publishes none is dialed at its home side's name, which another row publishes:
-the discovery server's front is reached at `syncapi`, the peer port's name. A
-device has no ID of
-the server's to pin, so it checks the certificate against the public roots, as
-it would any HTTPS server's. The server reads the certificate at its start
-alone, so Reloader rolls the pod when a renewal rewrites the Secret.
+**Its certificate is the cluster issuer's, for each name the row is dialed at**
+(`kluster.components.apps.dialed_names`, whose first is the name syncthing's
+component announces to): the names its balancer front publishes, held or not,
+and the name its home side is rewritten for, each under the primary zone. A
+balancer front that publishes none is dialed at its home side's name, which
+another row publishes: the discovery server's front is reached at `syncapi`,
+the peer port's name. A device has no ID of the server's to pin, so it checks
+the certificate against the public roots, as it would any HTTPS server's. The
+server reads the certificate at its start alone, so Reloader rolls the pod when
+a renewal rewrites the Secret.
 
 **It runs on the cloud pool**, so devices away from home find each other with
 the homelab down. Behind a raw port's `Cluster` policy it sees the client's
@@ -49,17 +50,16 @@ import pulumi
 import pulumi_crds as crds
 import pulumi_kubernetes as k8s
 
-from kluster import conventions
-from kluster.components.apps import Exposed, Fronts, expose
+from kluster.components.apps import Exposed, Fronts, dialed_names, expose
 from kluster.components.certificates import ISSUER
 from kluster.components.cilium.bgp import CONTROL_PLANE_LABEL
 from kluster.conventions.cluster import Transports
-from kluster.conventions.routes import Balancer, Exposure, Held, Port, Vip
+from kluster.conventions.routes import Exposure, Port
 from kluster.lib.k8s import ApplicationNamespace, application_namespace
 from kluster.lib.versions import ImagePin
 from putils import Component
 
-__all__ = ('DATABASE', 'LABELS', 'NAME', 'TLS_MOUNT', 'TLS_SECRET', 'USER', 'Stdiscosrv', 'dialed_names')
+__all__ = ('DATABASE', 'LABELS', 'NAME', 'TLS_MOUNT', 'TLS_SECRET', 'USER', 'Stdiscosrv')
 
 #: The application's name: its namespace, its Deployment and its certificate.
 NAME = 'stdiscosrv'
@@ -77,19 +77,6 @@ TLS_MOUNT = '/tls'
 #: The server's database directory, the image's working directory, where an
 #: `emptyDir` is mounted: the root filesystem is read-only.
 DATABASE = '/var/stdiscosrv'
-
-
-def dialed_names(row: Port) -> tuple[str, ...]:
-    """Each name a raw port is dialed at, once, under the primary zone: its balancer's hosts, held or not, then its home side's.
-
-    A balancer front that publishes no host is dialed at its home side's name,
-    which another row publishes, so that name is the front's too.
-    """
-    labels: list[str] = []
-    if isinstance(row.internet, Balancer):
-        labels += [host.row.label if isinstance(host, Held) else host.label for host in row.internet.hosts]
-    labels += [side.host for side in (row.lan, row.media) if isinstance(side, Vip)]
-    return tuple(f'{label}.{conventions.ZONE_PRIMARY}' for label in dict.fromkeys(labels))
 
 
 def _discovery(exposure: Exposure) -> Port:
