@@ -26,7 +26,7 @@ import pytest_asyncio
 from mock_monitor import Recorder, declaring, run_with
 
 from kluster import conventions
-from kluster.components.apps import Backend, Fronts, expose, published_once
+from kluster.components.apps import Backend, Fronts, dialed_names, expose, published_once
 from kluster.components.apps.echo import Echo
 from kluster.components.cilium import InternetPoolMembers
 from kluster.components.cilium.gateways import (
@@ -478,6 +478,41 @@ def test_a_port_on_no_gateway_of_a_kind_emits_no_service_for_it(exposed: Recorde
         'peer-lan',
     ]
     assert [it['metadata']['name'] for it in in_namespace(exposed, SERVICE, 'tv')] == ['tv-discovery-media']
+
+
+# -- the names a raw port is dialed at --------------------------------------------
+
+
+def test_a_raw_port_is_dialed_at_its_balancers_hosts_held_or_not_and_then_its_home_sides() -> None:
+    """The first name is the one a client is told to dial, so the balancer's come first."""
+    row = Port('x', 8444, Transports.TCP, internet=Balancer((Held(Host('x-held')), Host('x-out'))), lan=Vip('x-home'))
+    primary = conventions.ZONE_PRIMARY
+
+    assert dialed_names(row) == (f'x-held.{primary}', f'x-out.{primary}', f'x-home.{primary}')
+
+
+def test_a_name_both_sides_dial_is_named_once() -> None:
+    """A row dialed at one name at the balancer and at home, as syncthing's peer row is, names it once."""
+    row = Port('x', 8444, Transports.TCP, internet=Balancer((Host('x'),)), lan=Vip('x'))
+
+    assert dialed_names(row) == (f'x.{conventions.ZONE_PRIMARY}',)
+
+
+def test_a_media_side_is_dialed_at_its_name() -> None:
+    row = Port('x', 8444, Transports.TCP, media=Vip('x-tv'))
+
+    assert dialed_names(row) == (f'x-tv.{conventions.ZONE_PRIMARY}',)
+
+
+def test_a_balancer_front_with_no_host_is_dialed_at_its_home_sides_name() -> None:
+    """It publishes none, so a client reaches it at the name its home side shares with the row that publishes it."""
+    row = Port('x', 8444, Transports.TCP, internet=Balancer(), lan=Vip('x-home'))
+
+    assert dialed_names(row) == (f'x-home.{conventions.ZONE_PRIMARY}',)
+
+
+def test_a_port_at_no_name_is_dialed_at_none() -> None:
+    assert dialed_names(Port('x', 60011, Transports.TCP, internet=Dedicated())) == ()
 
 
 # -- the public records ----------------------------------------------------------

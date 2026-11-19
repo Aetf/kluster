@@ -12,7 +12,9 @@ that says how it is reached, and its component makes one call for it,
     one `Apex` row to an exposure;
 -   for each `Port`, one LoadBalancer Service per Gateway it sets, at that
     front's addresses (`port`), and one allow admitting the world on the
-    port and its transports alone;
+    port and its transports alone; the names a client dials it at are
+    `dialed_names`, which a component that names the port to a client, or
+    certifies it, reads;
 -   for each name the exposure publishes (`conventions.routes.public_names`),
     one CNAME to the cluster anchor in its zone, proxied exactly where its
     row is (`public_records`).
@@ -73,6 +75,7 @@ from kluster.conventions.routes import (
     PublicName,
     Route,
     SiteForward,
+    Vip,
     public_names,
 )
 from kluster.lib.k8s import Backend, identity_stripped, lb_pool_labels, refuse_passthrough, route, row_gateways
@@ -86,6 +89,7 @@ __all__ = (
     'Exposed',
     'Fronts',
     'PortResources',
+    'dialed_names',
     'expose',
     'port',
     'public_records',
@@ -188,6 +192,20 @@ async def _balancer_addresses(members: InternetPoolMembers) -> list[str]:
         balancer_v4,
         balancer_v6,
     ]
+
+
+def dialed_names(row: Port) -> tuple[str, ...]:
+    """Each name a raw port is dialed at, once, under the primary zone: its balancer's hosts, held or not, then its home side's.
+
+    A balancer front that publishes no host is dialed at its home side's name,
+    which another row publishes, so that name is the front's too. The first
+    name is the one a client is told to dial where it is told one.
+    """
+    labels: list[str] = []
+    if isinstance(row.internet, Balancer):
+        labels += [host.row.label if isinstance(host, Held) else host.label for host in row.internet.hosts]
+    labels += [side.host for side in (row.lan, row.media) if isinstance(side, Vip)]
+    return tuple(f'{label}.{conventions.ZONE_PRIMARY}' for label in dict.fromkeys(labels))
 
 
 #: The field of a row each Gateway is, which a Service at it is named after.

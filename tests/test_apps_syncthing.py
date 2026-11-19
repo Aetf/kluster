@@ -31,7 +31,9 @@ from mock_monitor import Recorder, declaring, run_with
 
 from kluster import conventions
 from kluster.components.apps import Fronts
+from kluster.components.apps import stdiscosrv as stdiscosrv_app
 from kluster.components.apps import syncthing as syncthing_app
+from kluster.components.apps.stdiscosrv import Stdiscosrv
 from kluster.components.apps.syncthing import Syncthing
 from kluster.components.apps.syncthing import webdav as webdav_app
 from kluster.components.apps.syncthing.webdav import WebDav
@@ -51,6 +53,7 @@ CLAIM = 'kubernetes:core/v1:PersistentVolumeClaim'
 VOLUME = 'kubernetes:core/v1:PersistentVolume'
 SOURCE = 'crds:volsync.backube/v1alpha1:ReplicationSource'
 POLICY = 'crds:cilium.io/v2:CiliumNetworkPolicy'
+CERTIFICATE = 'crds:cert-manager.io/v1:Certificate'
 
 FRONTS = Fronts(
     internet=InternetPoolMembers(
@@ -329,6 +332,48 @@ def test_the_instance_announces_to_the_discovery_server_at_its_name_and_raw_port
     assert [it.text for it in options(declared).findall('globalAnnounceServer')] == [
         f'https://st-find.{conventions.ZONE_PRIMARY}:8444'
     ]
+
+
+@pytest_asyncio.fixture(scope='module', loop_scope='module')
+async def with_the_discovery_server() -> Recorder:
+    """The instance and the discovery server, each from its row of the census, as the `apps` program wires them."""
+    discovery = conventions.routes.EXPOSURES['stdiscosrv']
+    monitor = await run_with(Recorder(), stack='apps')
+    async with declaring():
+        _ = Syncthing(
+            'syncthing',
+            exposure=conventions.routes.EXPOSURES['syncthing'],
+            discovery=discovery.ports[0],
+            retired_devices=(),
+            image=SYNCTHING_IMAGE,
+            config_image=MERGE_IMAGE,
+            writer_key=writer_key(syncthing_app.NAME),
+            fronts=FRONTS,
+            zone_ids=ZONE_IDS,
+        )
+        _ = Stdiscosrv(
+            'stdiscosrv',
+            exposure=discovery,
+            image=ImagePin('registry.example.invalid/discosrv', 'v9.9.9', f'sha256:{"3" * 64}'),
+            fronts=FRONTS,
+            zone_ids=ZONE_IDS,
+        )
+    return monitor
+
+
+def test_the_instance_announces_to_a_name_the_discovery_servers_certificate_carries_on_the_port_it_listens_on(
+    with_the_discovery_server: Recorder,
+) -> None:
+    """The instance checks the server's certificate against the name it dials, so that name is one the certificate is for."""
+    (announced,) = [it.text or '' for it in options(with_the_discovery_server).findall('globalAnnounceServer')]
+    (certificate,) = in_namespace(with_the_discovery_server, CERTIFICATE, stdiscosrv_app.NAME)
+    (deployment,) = in_namespace(with_the_discovery_server, DEPLOYMENT, stdiscosrv_app.NAME)
+    (server,) = deployment['spec']['template']['spec']['containers']
+    address = urlsplit(announced)
+
+    assert address.scheme == 'https'
+    assert address.hostname in certificate['spec']['dnsNames']
+    assert f':{address.port}' == flag(server['args'], 'listen')
 
 
 def flag(arguments: list[str], name: str) -> str:

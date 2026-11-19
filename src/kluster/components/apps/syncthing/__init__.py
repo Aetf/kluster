@@ -81,12 +81,11 @@ from dataclasses import dataclass
 import pulumi
 import pulumi_kubernetes as k8s
 
-from kluster import conventions
-from kluster.components.apps import Backend, Exposed, Fronts, expose
+from kluster.components.apps import Backend, Exposed, Fronts, dialed_names, expose
 from kluster.components.apps.storage import Claim, NasClaim, claim, nas_claim
 from kluster.conventions.backup import STANDARD
 from kluster.conventions.cluster import Transports
-from kluster.conventions.routes import Balancer, Exposure, Held, Port, Vip
+from kluster.conventions.routes import Exposure, Port
 from kluster.lib import templates
 from kluster.lib.k8s import ApplicationNamespace, application_namespace
 from kluster.lib.versions import ImagePin
@@ -177,17 +176,6 @@ class _ConfigParams:
     folder_root: str
 
 
-def _host_labels(row: Port) -> tuple[str, ...]:
-    """The names a raw port is dialed at, each once: its balancer's hosts, held or not, and its home side's."""
-    labels: list[str] = []
-    if isinstance(row.internet, Balancer):
-        labels += [host.row.label if isinstance(host, Held) else host.label for host in row.internet.hosts]
-    for side in (row.lan, row.media):
-        if isinstance(side, Vip):
-            labels.append(side.host)
-    return tuple(dict.fromkeys(labels))
-
-
 def _schemes(transports: Transports) -> tuple[str, ...]:
     """syncthing's listener schemes for a row's transports: TCP's own, and QUIC over UDP."""
     return tuple(scheme for scheme, protocol in (('tcp', 'tcp'), ('quic', 'udp')) if protocol in transports.protocols)
@@ -196,7 +184,7 @@ def _schemes(transports: Transports) -> tuple[str, ...]:
 def _listen_addresses(peer: Port) -> tuple[str, ...]:
     """Every address the instance listens at and announces: the peer port's own, the relays, and each name it is dialed at."""
     schemes = _schemes(peer.transports)
-    names = [f'{label}.{conventions.ZONE_PRIMARY}' for label in _host_labels(peer)]
+    names = dialed_names(peer)
     return (
         *(f'{scheme}://:{peer.port}' for scheme in schemes),
         _RELAYS,
@@ -205,13 +193,17 @@ def _listen_addresses(peer: Port) -> tuple[str, ...]:
 
 
 def _announce_server(discovery: Port) -> str:
-    """The discovery server's address: HTTPS at the first name its raw port is dialed at, on that port."""
-    labels = _host_labels(discovery)
-    if not labels:
+    """The discovery server's address: HTTPS at the first name its raw port is dialed at, on that port.
+
+    The server's certificate is for every name `dialed_names` gives, so the one
+    announced to is among them.
+    """
+    names = dialed_names(discovery)
+    if not names:
         raise ValueError(
             f'the discovery port {discovery.name!r} names no host a device dials it at, and an instance announces to one'
         )
-    return f'https://{labels[0]}.{conventions.ZONE_PRIMARY}:{discovery.port}'
+    return f'https://{names[0]}:{discovery.port}'
 
 
 def _peer(exposure: Exposure) -> Port:
