@@ -23,7 +23,9 @@ resort, object storage used directly where an app supports it.
 > storage classes — `local-path` and one class per node volume —
 > VolSync and CNPG are the `k8s-base` stack's, and the claims, their
 > backups and their moves are the `apps` stack's
-> (`kluster.components.apps.storage`). None of it is provisioned.
+> (`kluster.components.apps.storage`), as are the databases, their
+> archives and their drills (`kluster.components.apps.database`). None
+> of it is provisioned.
 
 ## 1. Principles
 
@@ -614,9 +616,31 @@ Per nodes.md §5, durability = declarative rebuild + backups + drills:
     (declarative/workloads.md §3). Installed by the `k8s-base` stack;
     no `ReplicationSource` is declared until the first `claim` under a
     class lands, so none runs (nodes.md §5 Tier 0).
-3.  **CNPG**: barman object-store backups + WAL archiving per database
-    cluster (port the legacy barman-plugin setup), monthly automated
-    restore drill (port the legacy drill; nothing runs it here yet).
+3.  **CNPG**: one instance per database, its archive in the bucket,
+    and a monthly restore drill, all declared by the database shape on
+    the application base (`kluster.components.apps.database`,
+    declarative/workloads.md §4).
+    -   **The archive**: the Barman Cloud plugin archives WAL
+        continuously and takes base backups on the database's retention
+        class's schedule, kept for the class's reach, to
+        `conventions.barman_repo_path` of the namespace and the
+        database's server name, `cnpg/<namespace>/<name>-g<generation>/`,
+        under the namespace's writer key of the barman family, sealed.
+        The server name carries a generation because barman archives a
+        new cluster only into a server's path that holds no archive: a
+        land retried after a revert raises it and archives apart.
+    -   **No standby**: a second instance would share the first's site,
+        node and disk, so durability is the archive, and the drill is
+        what proves it.
+    -   **A migrated database** recovers once, at its land, from the
+        legacy store it is handed, through the legacy credential ported
+        as it is, and archives to the bucket from then on.
+    -   **The drill**: a CronJob beside each database recovers a
+        throwaway cluster from the newest base backup in the archive
+        and the WAL after it, checks that it left recovery and holds
+        the application's rows and extensions, and removes it; its
+        playbook is operations.md §9.1.
+    -   **Status**: none runs. No application declares a database yet.
 4.  **Metrics history**: the monitoring stack's VictoriaMetrics stores,
     each copied hourly and incrementally by `vmbackup` to
     `b2://…/vm/monitoring/<store>/` (`conventions.backup.metrics_repo_path`)

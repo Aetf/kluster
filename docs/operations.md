@@ -117,10 +117,11 @@ request what it found for each.
 
 **Beside the keys, the same review reads the changelog for every CronJob
 and Job the new version renders or stops rendering.** The scheduled-job
-rule family watches a CronJob through its row in `conventions.schedule`
-(§4), and `tests/test_monitoring.py` holds every CronJob the `k8s-base`
-and `apps` programs declare to a row, and every row to one of them. A
-CronJob a chart renders is none of those: it has no row, a run of it
+rule family watches a CronJob through its `ScheduledJob` (§4), and
+`tests/test_monitoring.py` holds every CronJob the `k8s-base` and `apps`
+programs declare to the family's rules declared for it, and every such
+rule to one of them. A CronJob a chart renders is none of those: it has
+no job, a run of it
 that fails or stops raises nothing, and no check turns red when a bump
 brings one in. For each one the new version renders, the pull request
 names it, says what it runs, and says whether a run of it failing or
@@ -1261,11 +1262,13 @@ state-backend rebuild, has no workflow written (`kluster-ops#57`). Of
 the in-cluster rows, the etcd restore-verify alone has its job written:
 `k8s-base` declares it beside the hourly snapshot it reads, both in
 `etcd-backup` (storage.md §5), and it runs daily from the first
-`k8s-base` apply that declares it. The two restores and the
-orphan-volume audit are not written, nor is the audit's recipe
-(storage.md §3.3); `k8s-base` declares what they would stand on, the
-operators the two restores drive, and the alerting every in-cluster
-row reports into.
+`k8s-base` apply that declares it. The CNPG restore is written as part
+of the database shape, which carries a drill for every database it
+declares (`kluster.components.apps.database`, §9.1), and no application
+declares a database yet. The VolSync spot-restore and the orphan-volume
+audit are not written, nor is the audit's recipe (storage.md §3.3);
+`k8s-base` declares what the restores stand on, the operators they
+drive, and the alerting every in-cluster row reports into.
 The last column is the designed form, and where each scheduled job
 runs is the census below. Every row is an operator act today, and
 the only one written out as a procedure is the state-backend restore
@@ -1343,7 +1346,9 @@ homelab host already reads the device, it runs there. The ops
 repository is the last resort, with the reason beside each job there.
 Of the drills above, the state-backend rebuild alone runs in the ops
 repository, because its OCI user administers the `drill` compartment.
-The two restores are kube-native operations on scratch namespaces, the
+The CNPG restore recovers a throwaway cluster in its database's
+namespace and the VolSync spot-restore restores into a scratch
+namespace, both kube-native operations, the
 restore-verify starts a scratch etcd inside its own pod, and the
 orphan-volume audit compares each node's on-disk volume directories
 against the live volumes, which needs what only a node can read; all
@@ -1355,8 +1360,10 @@ workflow by its dead-man timer, an in-cluster CronJob by the
 scheduled-job rule family (the rule below) and, behind the family, the
 cluster's check-in, and the daily check by the homelab host's check-in
 (both in the alert contract). The family is
-declared with the rest of the cluster's rules in `k8s-base`, and it reads
-a CronJob only once the CronJob is declared. A job that reads a sealed
+declared with the CronJob's facts: with the rest of the cluster's rules
+in `k8s-base` for the rows of `conventions.schedule`, and beside the
+CronJob by a component that declares both. A rule reads a CronJob only
+once the CronJob is declared. A job that reads a sealed
 value, as the metrics stores' backups, the pull of OCI's block-volume
 series, the etcd snapshot and the state table's upkeep do, is declared
 with it: a value lands ahead of its reader (credentials.md §1 rule 6),
@@ -1384,7 +1391,7 @@ for its place. The last column says which run, as of 2026-11-17:
 | etcd snapshot, hourly | The cluster: `siderolabs/talos-backup` as a CronJob in `etcd-backup`, on the control planes (storage.md §5) | A certificate Talos issues for `os:etcd:backup` and renews itself; the `etcd` writer key, sealed | The family's rules (§7.1), then the cluster's check-in | No: declared once bring-up stage 6 seals the `etcd` key (storage.md §5) |
 | Age of the newest object under `etcd/` | No job of its own: the snapshot job's stale rule stands in for it, since a run that succeeded is an object uploaded, and the daily restore-verify reads the newest object's age off the bucket as a second, independent reading | None | The snapshot job's rules, and the restore-verify's (§7.2) | Yes, with the restore-verify |
 | VolSync backups, one `ReplicationSource` per backed claim | The cluster: VolSync's own schedule, the claim's retention class (`conventions.backup.RETENTION_CLASSES`, storage.md §5) | The namespace's writer key and each repository's password, sealed | The backup-freshness family (declarative/workloads.md §3), then the cluster's check-in | No: none is declared until the first claim under a class lands |
-| CNPG barman backups, per database cluster | The cluster: the operator's own schedule, beside continuous WAL archiving (storage.md §5) | The namespace's writer key, sealed | The backup-freshness family, then the cluster's check-in | No: no database cluster is declared yet |
+| CNPG barman backups, per database cluster | The cluster: the operator's own schedule, its retention class's, beside continuous WAL archiving (storage.md §5) | The namespace's writer key, sealed | The backup-freshness family, then the cluster's check-in | No: no series reports a barman backup's age, which the CNPG backup-freshness issue builds (`kluster-ops#872`), and no application declares a database yet |
 | The metrics stores' backups, hourly | The cluster: a CronJob per store, in `monitoring` (storage.md §5) | The `vm` writer key, sealed | The family's rules (§6.2), then the cluster's check-in | No: declared once bring-up stage 6 seals the `vm` key (storage.md §5) |
 | The block volumes' metrics, pulled hourly into the history store | The cluster: a CronJob in `monitoring` | The OCI metrics reader's key, sealed (credentials.md §3) | The family's rules (§6.3), then the cluster's check-in | No (`kluster-ops#790`) |
 | The authentication canary, every few minutes | The cluster: a CronJob in Authelia's namespace that requests a protected path with no credential (declarative/cluster-infra.md §2) | None: it presents none | Its own rule, which fires on anything but a refusal; the family's rules for the job; then the cluster's check-in | No: it ships with Authelia (rfc-008 §5.2) |
@@ -1394,7 +1401,8 @@ for its place. The last column says which run, as of 2026-11-17:
 | The kubeconfig copies' expiry, `KubeconfigCopyExpiring` | The cluster: a rule vmalert evaluates against the expiry `k8s-base` reads off its own copy, `conventions.cluster.KUBECONFIG_ALERT_MARGIN` ahead of it. It holds no credential, and it watches a date in `k8s-base`'s configuration rather than the cluster it runs on (§2.5) | None: the date is the certificate's public half | The cluster's check-in | No: it runs from the first `k8s-base` apply that declares monitoring |
 | The other credential expiry tripwires | Each placed by the same rule. Two are checked in the cluster: the state backend's server certificate, by the CronJob above, and the kubeconfig copies' client certificate, by the rule above. The `ci` and `operator` client bundles report their expiry at their first `pulumi` command, and the `upkeep` bundle at the state table's upkeep's first run after it (state-backend.md §6); the destroy dates stay with the offline day | — | — | — |
 | etcd restore-verify, daily | The cluster: the CronJob `etcd-restore-verify` in `etcd-backup`, off the control planes (storage.md §5) | The snapshots' read-only key, `reader-etcd`, which lists and downloads and writes nothing, and an age identity of its own, `etcd-drill`, both sealed | The family's rules (§7.2), then the cluster's check-in | Yes: from the first `k8s-base` apply that declares it, its two values sealed in ahead of it |
-| CNPG restore, VolSync spot-restore, orphan-volume audit | The cluster (the drills above) | The writer keys of the backups they read, sealed; the audit needs none | The family's rules, then the cluster's check-in | No |
+| CNPG restore, monthly, one per database | The cluster: the CronJob `<database>-restore-drill` in the database's namespace, which recovers a throwaway cluster from the database's archive, checks it and removes it (§9.1) | The namespace's writer key, which reads the archive it was written with, sealed; a role in the namespace that drives the throwaway cluster | The family's rules (§9.1), then the cluster's check-in | No: it ships with each database, whose component declares the CronJob and the family's rules over it, and no application declares a database yet |
+| VolSync spot-restore, orphan-volume audit | The cluster (the drills above) | The writer keys of the backups the spot-restore reads, sealed; the audit needs none | The family's rules, then the cluster's check-in | No |
 | The state-backend appliance's dump, nightly (`state-dump.timer`) | The appliance itself: the job dumps the box's own database (state-backend.md §5) | The dump key, `writeFiles` alone, in the box's Ignition | The dump-age check above; the box's own failed-run notice reaches only a shell on it (state-backend.md §6) | Yes |
 | The state-backend appliance's OS updates, a weekly window (Zincati) | The appliance itself: they update the box's own OS (state-backend.md §1) | None beyond the box's own | None, deliberately (state-backend.md §6) | Yes |
 | The gateway controller's autobackup, monthly | The gateway itself: the controller's own schedule, a console setting | None | The gateway's daily check, which holds the newest autobackup to 32 days (physical/gateway.md §1.6) | Yes |
@@ -1418,10 +1426,16 @@ rule family**: *stale* at `conventions.backup.max_age` of its period,
 and *last run failed* within its run deadline. Both rules are
 `actionable`, and each names the job's playbook. The facts the
 declaring component and the rules share — namespace, CronJob name,
-period and run deadline — are one row in `conventions.schedule`, from which
-`components.monitoring.rules` derives both rules, and a test holds
-every CronJob the `k8s-base` and `apps` programs declare to a row, and
-every row to a CronJob one of them declares. Both read the
+period and run deadline — are spelled once, as one `ScheduledJob`
+(`conventions.schedule`), from which `components.monitoring.rules`
+derives both rules (`scheduled_job_rules`). Where the CronJob and its
+rules are declared by two components, the job is a row of
+`conventions.schedule.SCHEDULED_JOBS`, which both read and whose rules
+the monitoring component declares; where one component declares both,
+the job is that component's, and it declares the rules beside the
+CronJob. A test holds every CronJob the `k8s-base` and `apps` programs
+declare to the family's two rules declared for it, and every such rule
+to a CronJob one of them declares. Both read the
 CronJob series of kube-state-metrics. Stale is the time since the last
 success, or since the CronJob's creation where there is none, past the
 job's `max_age`, which also catches a job suspended or no longer
@@ -1586,6 +1600,7 @@ Owning docs keep the content — the index only locates it.
 | Node replacement (CP node, worker VM, block volume and VIP extras; the whole cluster with the account intact) | §3 here |
 | Upgrades (Talos serial, Cilium canary); the cluster credential's copies near their expiry (`KubeconfigCopyExpiring`) | §2 here |
 | Backup restores (CNPG, VolSync, etcd) | storage.md §5; the drills are §4 here |
+| The databases (a restore drill that failed or went stale) | §9 here |
 | Alert-channel failure (HA push down → meta-alert; GitHub leg down; a scheduled ops-repo workflow that stopped checking in) | architecture.md §4.3; the contract and the dead-man are §4 here |
 | CI alerts (a red `checks` or `images` run; a drift diff) | framework/ci.md §3.1 and §3.2 |
 | The metrics stores (rows a store ignores; a backup run that failed, a backup gone stale or refused, or a store that does not restore; a pull of OCI's block-volume series that failed or went stale; a scrape job that reports nothing, or no scrape job at all) | §6 here |
@@ -1596,7 +1611,9 @@ vmalert rule families adopt this index as they are ported: an alert
 that cannot point at a row (or at its owner doc's census) does not
 ship — the same-change rule. For the rules the cluster declares it is
 a test rather than a review question: `tests/test_monitoring.py` holds
-every rule the `k8s-base` program declares to a `playbook` that names a
+every rule the `k8s-base` program declares, and every rule the `apps`
+program declares with a database wired beside it, whose component
+declares its drill's rules, to a `playbook` that names a
 document and a section that document has, beside a tier from the
 census and a summary (architecture.md §4.3).
 
@@ -2440,3 +2457,144 @@ resume.
 
 **Confirm**: on the dashboard, the run's window holds the pressure,
 disk and etcd rows of every control plane.
+
+## 9. The databases' playbooks
+
+What to do when a database's restore drill reports on itself. A
+database is declared through `database` on the application base
+(`kluster.components.apps.database`,
+[declarative/workloads.md](declarative/workloads.md) §4), in its
+application's namespace: the CNPG `Cluster` named after it, its
+archive in the backup bucket under its server name,
+`cnpg/<namespace>/<name>-g<generation>/` ([cluster/storage.md](cluster/storage.md)
+§5), and its drill, the CronJob `<name>-restore-drill` in the same
+namespace. The
+commands below run from the root of the checkout, with `<namespace>`
+and `<name>` the database's.
+
+### 9.1 A database's restore drill failed or is stale
+
+**Trigger**: the scheduled-job family's two alerts on the drill's
+CronJob, both `actionable`, which the database shape declares beside
+it from the drill's `ScheduledJob`,
+`kluster.components.apps.database.drill_job` (the rule in §4).
+`DatabaseRestoreDrillFailed`: its
+last run, scheduled after its last success, has not succeeded within
+the hour a run is cut off at. `DatabaseRestoreDrillStale`: it has not
+succeeded for one and a half of its periods, a period being the longest
+month, or has never succeeded since it was created that long ago. A run
+recovers a throwaway cluster, `<name>-drill`, from the newest base
+backup in the database's archive and the WAL after it, with the
+database's image, libraries and placement; checks that it has left
+recovery, that a table of the application's holds rows and that the
+application's extensions are there; and removes it, its claim with it,
+whatever happened, a TERM at the run's deadline included. The throwaway
+cluster archives nowhere, so a run
+never writes to the database's archive. What a run finds wrong is wrong
+for the archive a recovery would read, so the failed alert is the time
+from which the database's backups are not known to restore.
+
+**Gist**:
+
+1. **Which alert.** `DatabaseRestoreDrillFailed` is a run that failed,
+   and the steps from step 2 on find why.
+   `DatabaseRestoreDrillStale` firing without it is a job no run of
+   which was scheduled after its last success:
+   `mise x -- kubectl -n <namespace> get cronjob <name>-restore-drill`
+   shows whether it is suspended, and its last schedule. A run the
+   controller could not start within the hour after 04:00 on the first
+   of the month is skipped rather than run late, and leaves no Job.
+2. **Read the last run.**
+   `mise x -- kubectl -n <namespace> get jobs --sort-by=.metadata.creationTimestamp`
+   lists the runs from the oldest, and
+   `mise x -- kubectl -n <namespace> logs job/<run>` holds a `FAIL:`
+   line for each check that failed, each naming what it could not read
+   or what it found, or, for a run that passed, ends in
+   `passed: <database> recovered, <table> holds <n> rows`. The steps
+   below go by those lines.
+3. **A pod that never started.** It waits on the drill's `ConfigMap`,
+   `<name>-restore-drill`, or on an image that does not pull;
+   `mise x -- kubectl -n <namespace> describe pod` names which.
+4. **`FAIL: <name>-drill could not be applied: …`, `FAIL: the pods of
+   <name>-drill could not be listed: …`.** The API refused the drill,
+   and the rest of the line is `kubectl`'s reason. `Forbidden` is the
+   drill's role, `<name>-restore-drill`, which its CronJob runs as: read
+   it with `mise x -- kubectl -n <namespace> get role <name>-restore-drill -o yaml`
+   against what the component declares. A refusal by the operator's
+   admission webhook is the drill's manifest, `cluster.json` in the
+   `ConfigMap` `<name>-restore-drill`, which a CNPG release no longer
+   accepts: the line names the field, and the component's manifest
+   follows the release.
+5. **`FAIL: <name>-drill did not become ready`.** The recovery did not
+   finish inside the run's wait, and the run printed the throwaway
+   cluster's status below the line before removing it. Run a drill by
+   hand (step 10) and watch it with
+   `mise x -- kubectl -n <namespace> get cluster,pods -l cnpg.io/cluster=<name>-drill -w`;
+   the operator's log,
+   `mise x -- kubectl -n cnpg-system logs -l app.kubernetes.io/name=cloudnative-pg`,
+   and the recovery pod's, `<name>-drill-1-full-recovery-…`, say where
+   it stops.
+   -   **A recovery pod that cannot read the archive**: the store's
+       credential is the Secret `<name>-backup`, the namespace's writer
+       key sealed with the account's region beside it, which a
+       SealedSecret the controller cannot open never creates. Bring-up
+       stage 9 seals the key (`credentials derived b2-writer seal`).
+   -   **No base backup to recover**: `mise x -- kubectl -n <namespace> get backups`
+       lists the database's; none completed means its archive holds no
+       base backup, and the database's own `ScheduledBackup`,
+       `<name>`, is what to read.
+   -   **A pod pending**: no node of the database's pool has room for a
+       second instance of the database's size, which the throwaway one
+       asks for; the drill waits for room it does not make.
+   -   **An instance that does not start**: the throwaway cluster runs
+       the image and preloads the libraries the database's declaration
+       names, so an instance that starts on the database and not here
+       is a database changed outside the program.
+6. **`FAIL: <name>-drill has no primary`.** The cluster reported ready
+   and no pod of it carries `cnpg.io/instanceRole=primary`: a release of
+   the operator that labels its pods otherwise, which the drill's
+   selector follows.
+7. **`FAIL: <database> does not answer in <name>-drill-1: …`.** The run
+   stopped before its checks: the recovered instance refused the
+   query, and the rest of the line is `psql`'s reason. A database that
+   does not exist is a `Drill` or a database name the component no
+   longer agrees with, not a recovery that failed. `Forbidden` is the
+   drill's role, which lets `psql` run in `<name>-drill-1` alone: a
+   primary the operator named otherwise.
+8. **`FAIL: <name>-drill is still in recovery`, `FAIL: <table> holds no
+   rows`, `FAIL: the extension <extension> is missing`, and the lines of
+   a query that failed, `FAIL: whether <name>-drill left recovery could
+   not be read: …`, `FAIL: <table> could not be read in <database>: …`
+   and `FAIL: the extensions of <database> could not be read: …`, whose
+   rest is `psql`'s reason.** The recovered database is
+   not the one the application uses. Read the same query on the
+   database itself,
+   `mise x -- kubectl -n <namespace> exec <name>-1 -c postgres -- psql -U postgres -d <database> -tAc '<query>'`:
+   where the database answers as the drill expects, its backups do not
+   hold what it holds, and the issue is a `blocker`, since its archive
+   is what a recovery reads. Where the database answers as the
+   recovered one did, the application renamed the table or dropped the
+   extension in a release, and the component's `Drill` follows it.
+9. **A run cut off at its deadline**, `DeadlineExceeded` in
+   `mise x -- kubectl -n <namespace> describe job <run>`. A recovery
+   slower than the run's wait ends in step 5's line instead, since the
+   wait stops ten minutes short of the deadline. The deadline is an
+   hour from the pod's start, which counts its time pending and pulling
+   its image, so a pod that started late, or checks and a removal that
+   outran the ten minutes left them, end here; the line
+   `FAIL: the run was stopped by SIGTERM …` says the run had started,
+   and the deadline is `drill_job`'s. A run
+   that was stopped still removes the throwaway cluster, and a removal
+   that failed writes `FAIL: <name>-drill could not be removed`: read
+   `mise x -- kubectl -n <namespace> get cluster <name>-drill`, and
+   remove one that is left with
+   `mise x -- kubectl -n <namespace> delete cluster <name>-drill --cascade=foreground`,
+   which removes its claim before it. Until it is gone it holds a
+   second copy of the database's requests on its pool.
+10. **Confirm**: a manual run,
+   `mise x -- kubectl -n <namespace> create job --from=cronjob/<name>-restore-drill <name>-restore-drill-manual-<stamp>`,
+   reads `Complete` and its log ends in the `passed:` line, and both
+   alerts resolve at the next evaluation after the CronJob records a
+   success, which
+   `mise x -- kubectl -n <namespace> get cronjob <name>-restore-drill -o jsonpath='{.status.lastSuccessfulTime}'`
+   reads.

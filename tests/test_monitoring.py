@@ -21,7 +21,7 @@ import json
 import re
 import subprocess
 import sys
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any, cast
 from urllib.parse import urlsplit
@@ -51,9 +51,11 @@ from renovate_text import effective, package_rules, scalar
 from section_numbers import sections
 
 from kluster import conventions
+from kluster.components.apps.database import Drill, Resources, database
 from kluster.components.monitoring import (
     DATASOURCES_DIGEST_ENV,
     RECEIVER,
+    WORKER_AFFINITY,
     dashboard,
     memory,
     rules,
@@ -82,7 +84,8 @@ from kluster.lib.k8s import KUBECONFIG_KEY
 from kluster.lib.monitoring import readings
 from kluster.lib.monitoring.selectors import JOB_LABEL, Selector, selectors
 from kluster.lib.state_backend import settings as backend_settings
-from kluster.lib.versions import ChartPin, versions
+from kluster.lib.versions import ChartPin, ImagePin, versions
+from putils import Component
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -164,12 +167,21 @@ def _values(run: Run) -> dict[str, Any]:
 
 
 def _declared(run: Run) -> list[dict[str, Any]]:
+    return _rules(run.monitor)
+
+
+def _rules(monitor: Recorder) -> list[dict[str, Any]]:
+    """Every rule a run's `VMRule`s declare, in whatever namespace."""
     return [
         rule
-        for declared in run.monitor.of_type(VM_RULE)
+        for declared in monitor.of_type(VM_RULE)
         for group in declared.inputs['spec']['groups']
         for rule in group['rules']
     ]
+
+
+def _alert_rules(monitor: Recorder) -> list[dict[str, Any]]:
+    return [rule for rule in _rules(monitor) if 'alert' in rule]
 
 
 def _declared_rules(run: Run) -> list[dict[str, Any]]:
@@ -873,20 +885,24 @@ def test_grafanas_pod_changes_when_what_renders_its_datasources_changes(monkeypa
 
 
 def test_every_declared_rule_carries_a_census_tier_a_summary_and_a_playbook_that_resolves(
-    applied: Run,
+    applied: Run, wired: Recorder
 ) -> None:
     """The playbook rule as a gate: an alert whose response procedure is not written down is not shipped.
 
-    Every rule the program declares, whatever built it, is read off the
-    declaration: its tier is one `conventions.alert.Tier` defines, its summary
-    is a line, and its playbook names a document of this repository and a
-    section that document has (architecture.md §4.3, operations.md §5).
+    Every rule the programs declare, whatever built it, is read off the
+    declaration: `k8s-base`'s, and those of `apps` with a database wired
+    beside it, whose component declares its drill's rules. Its tier is one
+    `conventions.alert.Tier` defines, its summary is a line, and its playbook
+    names a document of this repository and a section that document has
+    (architecture.md §4.3, operations.md §5).
     """
     declared = _declared_rules(applied)
+    beside = _alert_rules(wired)
     tiers = {tier.value for tier in Tier}
 
     assert declared, 'the program declared no rule'
-    for rule in declared:
+    assert beside, 'the wired database declared no rule'
+    for rule in [*declared, *beside]:
         assert rule['labels'].get('tier') in tiers, rule['alert']
         summary = rule['annotations'].get('summary', '')
         assert summary.strip() and '\n' not in summary, rule['alert']
@@ -2497,9 +2513,12 @@ def test_no_container_is_handed_a_secret_in_its_command(applied: Run) -> None:
 # -- The scheduled-job family ------------------------------------------------------
 
 
-@pytest_asyncio.fixture(scope='module', loop_scope='module')
-async def apps() -> Recorder:
-    """The `apps` program, with every sealed value its stack declares sealed in, against a `physical` that has published."""
+async def _apps_program(*beside: Callable[[], object]) -> Recorder:
+    """The `apps` program, every sealed value its stack declares sealed in, against a `physical` that has published.
+
+    `beside` is declared in the same run after the program, as a land wires a
+    component into it.
+    """
     from kluster.stacks import apps as program
 
     secrets = {
@@ -2516,7 +2535,15 @@ async def apps() -> Recorder:
     monitor = await run_under_backstop(Physical(), stack=conventions.STACK_NAMES.apps)
     async with declaring():
         await program.main()
+        for declare in beside:
+            _ = declare()
     return monitor
+
+
+@pytest_asyncio.fixture(scope='module', loop_scope='module')
+async def apps() -> Recorder:
+    """The `apps` program as its stack file holds it."""
+    return await _apps_program()
 
 
 #: The type the provider registers a Kubernetes provider under, which every
@@ -2555,22 +2582,87 @@ def _period(schedule: str) -> dt.timedelta:
     return CRON_PERIODS[shape]
 
 
-def test_every_cronjob_a_program_declares_is_a_rows_and_every_row_a_declared_cronjob(
-    applied: Run, apps: Recorder
+class _WiredDatabase(Component, pulumi_type='kluster:test:WiredDatabase'):
+    """One database, declared as an application's component declares it at its land: a CronJob and its rules beside it."""
+
+    def __init__(self, name: str) -> None:
+        super().__init__(name)
+        image = ImagePin('registry.example.invalid/an-image', 'v1', f'sha256:{"d" * 64}')
+        _ = database(
+            f'{name}-database',
+            'a-database',
+            1,
+            backup.STANDARD,
+            namespace=WIRED_NAMESPACE,
+            image=image,
+            dbname='app',
+            resources=Resources(requests={'cpu': '100m', 'memory': '256Mi'}, limits={'cpu': '1', 'memory': '512Mi'}),
+            node_affinity=WORKER_AFFINITY['nodeAffinity'],
+            writer_key=dict.fromkeys(conventions.WRITER_KEY_FIELDS, 'AgB-sealed'),
+            drill=Drill(table='a_table'),
+            drill_image=image,
+            opts=self.child_opts(),
+        )
+        self.register_outputs({})
+
+
+#: The namespace of the database `wired` declares beside the `apps` program.
+WIRED_NAMESPACE = 'a-namespace'
+
+
+@pytest_asyncio.fixture(scope='module', loop_scope='module')
+async def wired() -> Recorder:
+    """The `apps` program as `apps` runs it, and beside it a database, which declares a CronJob and its rules itself."""
+    return await _apps_program(lambda: _WiredDatabase('wired'))
+
+
+#: What a scheduled-job family rule selects its CronJob's series by.
+_CRONJOB_SELECTOR = re.compile(r'\{namespace="(?P<namespace>[^"]+)", cronjob="(?P<cronjob>[^"]+)"\}')
+
+
+def _watched(*monitors: Recorder) -> dict[tuple[str, str], list[str]]:
+    """The family's alerts the runs declare, by the namespace and the CronJob each selects: the alerts' names."""
+    watched: dict[tuple[str, str], list[str]] = {}
+    for monitor in monitors:
+        for declared in monitor.of_type(VM_RULE):
+            for group in declared.inputs['spec']['groups']:
+                for rule in group['rules']:
+                    found = _CRONJOB_SELECTOR.search(rule.get('expr', ''))
+                    if 'alert' in rule and found is not None:
+                        watched.setdefault((found['namespace'], found['cronjob']), []).append(rule['alert'])
+    return watched
+
+
+def test_every_cronjob_a_program_declares_is_watched_by_the_family_and_every_family_rule_by_a_cronjob(
+    applied: Run, wired: Recorder
 ) -> None:
-    """The family watches a CronJob through its row, so a CronJob without one is a job nothing reports stopping.
+    """A CronJob the family does not watch is a job nothing reports stopping, wherever its job's facts are spelled.
 
     Read off the two programs that open the cluster, `k8s-base` and `apps`,
     each with every sealed value in, which is when each declares its every
-    CronJob. A row no program declares a CronJob for is two alerts over no
-    series, and two rows of one CronJob are its alerts twice.
+    CronJob, and a database beside `apps`, whose component declares its
+    drill's CronJob and the family's rules over it. Each CronJob is watched by
+    exactly one stale and one failed alert, whether `k8s-base` declares them
+    from a row of `SCHEDULED_JOBS` or the declaring component beside it: a
+    CronJob watched both ways, or by two rows, raises each alert twice, one
+    per group. A family rule over a CronJob nobody declares is two alerts
+    over no series.
     """
-    for monitor in (applied.monitor, apps):
+    for monitor in (applied.monitor, wired):
         assert monitor.of_type(KUBERNETES_PROVIDER), 'a run that opened no cluster'
     rows = [(job.namespace, job.cronjob) for job in schedule.SCHEDULED_JOBS]
+    cronjobs = set(_cronjobs(applied.monitor, wired))
+    watched = _watched(applied.monitor, wired)
 
     assert len(set(rows)) == len(rows)
-    assert set(_cronjobs(applied.monitor, apps)) == set(rows)
+    assert set(rows) <= cronjobs
+    assert (WIRED_NAMESPACE, 'a-database-restore-drill') in cronjobs
+    for key in sorted(cronjobs):
+        alerts = watched.get(key, [])
+        stale = [name for name in alerts if name.endswith('Stale')]
+        failed = [name for name in alerts if name.endswith('Failed')]
+        assert len(stale) == len(failed) == 1 and len(alerts) == 2, (key, alerts)
+    assert set(watched) == cronjobs
 
 
 def test_each_cronjob_runs_at_its_rows_period_and_is_cut_off_at_its_rows_deadline(applied: Run, apps: Recorder) -> None:
@@ -2584,8 +2676,12 @@ def test_each_cronjob_runs_at_its_rows_period_and_is_cut_off_at_its_rows_deadlin
     """
     rows = {(job.namespace, job.cronjob): job for job in schedule.SCHEDULED_JOBS}
 
+    # A CronJob whose component declares its rules beside it holds its job's
+    # facts there, and that component's tests hold the CronJob to them.
     for key, spec in _cronjobs(applied.monitor, apps).items():
-        row = rows[key]
+        row = rows.get(key)
+        if row is None:
+            continue
         starting = row.starting_deadline.total_seconds() if row.starting_deadline is not None else None
         assert _period(spec['schedule']) == row.period, key
         assert spec['jobTemplate']['spec']['activeDeadlineSeconds'] == row.deadline.total_seconds(), key
@@ -2623,6 +2719,21 @@ def _kube_state_metrics_endpoint(run: Run) -> dict[str, Any]:
     """The one endpoint of kube-state-metrics' scrape, which publishes every CronJob's status."""
     (endpoint,) = _values(run)['kube-state-metrics']['vmScrape']['spec']['endpoints']
     return endpoint
+
+
+def test_vmalert_evaluates_the_rules_declared_in_every_namespace(applied: Run) -> None:
+    """A component that declares a CronJob and its rules beside it declares them in its own namespace.
+
+    The operator selects every `VMRule` in every namespace it watches when
+    `selectAllByDefault` is set and no rule selector narrows it
+    (`VMAlert.spec`, at operator v0.74.0); a database's drill declares its
+    rules in its application's namespace, and nothing else would read them.
+    """
+    spec = _values(applied)['vmalert']['spec']
+
+    assert spec['selectAllByDefault'] is True
+    assert 'ruleSelector' not in spec
+    assert 'ruleNamespaceSelector' not in spec
 
 
 def test_a_status_reaches_the_rules_inside_the_lag_every_deadline_leaves(applied: Run) -> None:

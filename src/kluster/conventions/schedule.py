@@ -1,14 +1,21 @@
-"""Scheduled work: every CronJob a stack program declares, as a row of the scheduled-job rule family.
+"""Scheduled work: the shape the scheduled-job rule family reads a CronJob by, and the rows of the jobs it is shared for.
 
-**Every CronJob a stack program declares is a row of `SCHEDULED_JOBS`**
-(operations.md §4). A row holds what the component declaring the CronJob and
-`components.monitoring.rules` share, so neither spells it for itself: the
-component names the CronJob, places it and cuts each run off at the row's
-deadline, and the rules derive the family's two alerts from the same row, both
-`actionable` and both naming the row's playbook. *Stale* is the last success
-older than `backup.max_age` of the period. *Failed* is a run scheduled after the
-last success, held for the deadline, by which the run has either succeeded or
-been cut off.
+**Every CronJob a stack program declares is watched by the scheduled-job
+family** (operations.md §4), through a `ScheduledJob`: what the component
+declaring the CronJob and the family's rules share, so that it is spelled
+once. The component names the CronJob, places it and cuts each run off at the
+job's deadline, and the rules derive the family's two alerts from the same
+job, both `actionable` and both naming the job's playbook. *Stale* is the last
+success older than `backup.max_age` of the period. *Failed* is a run scheduled
+after the last success, held for the deadline, by which the run has either
+succeeded or been cut off.
+
+**Where a job is spelled follows from who reads it.** Where the CronJob and its
+rules are declared by two components, the job is a row of `SCHEDULED_JOBS`
+here, which both import, and `components.monitoring` declares the rules of
+every row. Where one component declares both, the job is that component's,
+and it declares the rules beside the CronJob
+(`components.monitoring.rules.scheduled_job_rules`).
 """
 
 from __future__ import annotations
@@ -189,10 +196,12 @@ STATE_BACKEND_CERTIFICATE = ScheduledJob(
     playbook=Playbook('docs/physical/state-backend.md', '6'),
 )
 
-#: Every CronJob a stack program declares, as a row of the family:
-#: `components.monitoring.rules` derives the family's alerts from each row,
-#: and `tests/test_monitoring.py` holds every CronJob the programs declare to
-#: a row of it, and every row to a CronJob some program declares.
+
+#: Every job whose CronJob and rules two components declare, as a row of the
+#: family: `components.monitoring.rules` derives the family's alerts from each
+#: row, and `tests/test_monitoring.py` holds every CronJob the programs declare
+#: to a row or to the family's rules declared for it, and every row and every
+#: such rule to a CronJob some program declares.
 SCHEDULED_JOBS: Sequence[ScheduledJob] = (
     *METRICS_BACKUPS.values(),
     OCI_METRICS_PULL,

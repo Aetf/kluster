@@ -9,8 +9,10 @@ changes.
 > **Status**: designed 2026-08-22. Declared: an application's namespace,
 > its level, its route label and its policies, its exposure through
 > `expose` with the records left out (§1), and its storage through `claim`
-> and `nas_claim` (§2, §3). The single sign-on census is written, and no
-> component reads it yet (§4). Nothing else is implemented.
+> and `nas_claim` (§2, §3). The database shape is written, `database`,
+> and no component calls it yet (§4). The single sign-on census is
+> written, and no component reads it yet (§4). Nothing else is
+> implemented.
 
 ## 1. The component contract
 
@@ -257,10 +259,52 @@ per-app number:
     replication is the dataset's redundancy (storage.md §3.3). No
     sidecar, no privileged namespace for the application, and no
     filesystem between the app and its data.
--   **CNPG-backed app (immich, splitpro, …)**: CNPG `Cluster` on
-    local-path + barman to B2, a monthly restore drill to be inherited
-    from the legacy discipline (storage.md §5; nothing runs it here
-    yet). **Major-version policy
+-   **CNPG-backed app (immich, splitpro, …)**: one call on the
+    application base, **`database(resource_name, name, size, retention,
+    *, namespace, image, dbname, resources, node_affinity, writer_key,
+    drill, drill_image, generation=0, recovery=None, …)`**
+    (`kluster.components.apps.database`), which emits the rest
+    (storage.md §5):
+    -   **One instance, and the call takes no count**: a CNPG `Cluster`
+        with `instances: 1` and no standby, on a claim of `size` GiB the
+        operator makes under `local-path` or a node volume's class,
+        placed in its site's pool by `node_affinity`, and protected.
+        A second instance would share the first's site, node and disk,
+        so the archive is the durability and the drill its proof. It
+        has no disruption budget, which over one instance would refuse
+        every eviction and hang each drain of its node.
+    -   **The archive**: the Barman Cloud plugin as its WAL archiver,
+        to `conventions.barman_repo_path` of the namespace and the
+        server name, `<name>-g<generation>`, through an `ObjectStore`
+        that reads `writer_key`, the namespace's sealed writer key of the
+        barman family, as the program read it, and holds the plugin's
+        sidecar to a CPU limit in every pod it runs in; base backups on the
+        retention class's schedule, kept for its reach, since barman
+        thins nothing inside its window. The generation is raised by a
+        land retried after a revert, which then archives apart.
+    -   **A migrated database recovers once** from the store `recovery`
+        names, `Recovery`: the legacy `gs://` store, the legacy server
+        name, and the legacy credential's data key and ciphertext,
+        ported as it is.
+        Without it the database is initialized empty, with the
+        application's SQL.
+    -   **The restore drill**: a CronJob, `<name>-restore-drill`, which
+        recovers a throwaway cluster from the newest backup monthly and
+        checks that it left recovery and that `drill`, its table's rows
+        and its extensions, are there, by a role that changes the
+        throwaway cluster and enters its pod and nothing else in the
+        namespace. The shape spells the drill's `ScheduledJob`,
+        `drill_job`, once, and declares from it the CronJob and, beside
+        it, the scheduled-job family's two rules over it
+        (operations.md §4, §9.1).
+    -   **The pods the shape runs call the API**: the instances carry
+        `conventions.API_CLIENT_LABEL` through the `Cluster`'s
+        `inheritedMetadata`, and the drill's pod through its template,
+        so the namespace declares `API_CLIENTS` (§1). The shape admits
+        the operator's namespace to the instances on the instance
+        manager's port, which the namespace's default-deny refuses.
+
+    **Major-version policy
     (2026-08-24)** — minors ride the normal renovate image-bump flow;
     majors use CNPG's **declarative offline in-place upgrade**
     (operator ≥1.26 — the cluster-infra.md §1 floor): bumping the
@@ -274,8 +318,8 @@ per-app number:
     change must never share a PR with a Postgres major). Major pins
     are **never automerged**: they arrive as ordinary human-reviewed
     deploy PRs, preceded by a verified-fresh barman backup — the
-    barman restore is the rollback, and until the monthly drill above
-    runs here it is an undrilled one.
+    barman restore is the rollback, and until the database's monthly
+    drill has run it is an undrilled one.
 -   **Static-site template (one component, two content sources)**: a
     single `StaticSite` component — stock static server, multi-vhost
     (one instance serves several hostnames), `route` per zone —

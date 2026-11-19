@@ -29,12 +29,17 @@ over a reading compares its recorded series with the reading's budget
 and the alert's tier and playbook are its own (operations.md §8).
 
 **Every CronJob a stack program declares is watched by the scheduled-job
-family**: each row of `conventions.schedule.SCHEDULED_JOBS` gives a *stale*
-alert (`stale`) and a *failed* one (`failed`), read off kube-state-metrics'
-series for that CronJob, both `actionable` and both naming the row's playbook
-(operations.md §4). A CronJob a chart renders is not a stack program's and has
-no row: whether one a chart bump brings in needs watching is the bump's review
-to say (operations.md §1).
+family**: its `ScheduledJob` gives a *stale* alert (`stale`) and a *failed*
+one (`failed`), together `scheduled_job_rules`, read off kube-state-metrics'
+series for that CronJob, both `actionable` and both naming the job's playbook
+(operations.md §4). The job's facts are spelled once, where the CronJob and
+its rules are both read: a row of `conventions.schedule.SCHEDULED_JOBS`, whose
+rules this component declares, for a CronJob another component declares; the
+component's own `ScheduledJob`, for a component that declares the CronJob and
+its rules beside it, rendered by `rule_group_spec` as this component renders
+its own. A CronJob a chart renders is not a stack program's and has no job:
+whether one a chart bump brings in needs watching is the bump's review to say
+(operations.md §1).
 
 **Every scrape job some alerting rule reads is watched by the scrape-target
 family** (`rule_groups`): a rule that reads no series evaluates over none and
@@ -105,7 +110,9 @@ __all__ = (
     'inputs',
     'kubeconfig_copy',
     'recorded',
+    'rule_group_spec',
     'rule_groups',
+    'scheduled_job_rules',
     'scrape_targets',
     'slo',
     'stale',
@@ -394,6 +401,28 @@ def failed(job: ScheduledJob) -> AlertRule:
     )
 
 
+def scheduled_job_rules(job: ScheduledJob) -> tuple[AlertRule, AlertRule]:
+    """The scheduled-job family's two rules over one job: `stale`, then `failed`."""
+    return stale(job), failed(job)
+
+
+def rule_group_spec(group: RuleGroup) -> dict[str, object]:
+    """One rule group as a `VMRule` spells it, every alert labeled with its tier and annotated with the rest."""
+    return {'name': group.name, 'rules': [_rule_spec(rule) for rule in group.rules]}
+
+
+def _rule_spec(rule: AlertRule | RecordingRule) -> dict[str, object]:
+    if isinstance(rule, RecordingRule):
+        return {'record': rule.record, 'expr': rule.expr}
+    return {
+        'alert': rule.alert,
+        'expr': rule.expr,
+        **({'for': backup.duration(rule.pending)} if rule.pending is not None else {}),
+        'labels': {**rule.labels, TIER_LABEL: rule.tier.value},
+        'annotations': {'summary': rule.summary, 'playbook': str(rule.playbook)},
+    }
+
+
 #: Every rule the component declares but the scrape-target family and the
 #: kubeconfig copy's, by group (rfc-007 §7.2): the rules whose inputs that
 #: family is derived from, so a new group of rules joins this tuple
@@ -449,7 +478,7 @@ ALERT_GROUPS: Sequence[RuleGroup] = (
         ),
     ),
     *READING_GROUPS,
-    RuleGroup('scheduled-jobs', tuple(rule for job in schedule.SCHEDULED_JOBS for rule in (stale(job), failed(job)))),
+    RuleGroup('scheduled-jobs', tuple(rule for job in schedule.SCHEDULED_JOBS for rule in scheduled_job_rules(job))),
 )
 
 
