@@ -91,9 +91,10 @@
     from stage 6 (declarative/physical.md §6,
     [Aetf/kluster-ops#857](https://github.com/Aetf/kluster-ops/issues/857)).
 *   **Updated:** 2026-11-19. §4.2's node-volume class allows only the
-    node carrying the volume, by its node label, so a consumer that does
-    not select that node is refused a node by the scheduler rather than
-    placed on another one (storage.md §6,
+    node carrying the volume, by its node label, so the scheduler confines
+    every consumer of the class to that node: one that selects no node
+    lands there, and one that selects another node is never scheduled.
+    hath's client therefore selects no node (storage.md §6,
     [Aetf/kluster-ops#870](https://github.com/Aetf/kluster-ops/issues/870)).
 *   **Updated:** 2026-11-19. §10's echo row is `Route('echo',
     internet=Direct(…))`, as rfc-007 §9.2 has it: off the proxy, so the
@@ -1393,17 +1394,20 @@ pool at the pinned v0.0.37 is `/var/mnt/<row>` under
 name. Each class reclaims `Retain`, carries the parameter `pathPattern:
 {{ .PVC.Namespace }}/{{ .PVC.Name }}/`, so that a claim made again finds
 its directory, and the annotation `defaultVolumeType: local`. hath
-declares an ordinary claim of its class, protected, and its client and
-the copy pair's destination select `NODE_VOLUME_LABEL`, the label `physical`
-already sets on the volume's node, because a claim that waits for its
-first consumer holds no pod anywhere by itself. storage.md §6's static
-`PersistentVolume` and seeding step go, and `k8s-base` gains the class
-and one key of a configuration it already renders.
+declares an ordinary claim of its class, protected. The class's allowed
+topology matches `NODE_VOLUME_LABEL`, the label `physical` already sets
+on the volume's node, so its client selects no node: the scheduler
+places it on the volume's node. The copy pair's destination names that
+label all the same, because a copy names the node labels it moves to
+(`moving_to`) and cannot leave them empty.
+storage.md §6's static `PersistentVolume` and seeding step go, and
+`k8s-base` gains the class and one key of a configuration it already
+renders.
 
 **A volume that failed to mount still cannot take the data**, and
-neither half needs a step of its own. A pod that does not select the
-volume's node is refused a node by the class's allowed topology
-(storage.md §6):
+neither half needs a step of its own. The class's allowed topology
+confines every consumer to the volume's node (storage.md §6), so the
+refusal is that node's:
 
 *   **At provisioning.** The helper pod's `hostPath` asks for
     `DirectoryOrCreate`, but the kubelet's view of `/var/mnt` is

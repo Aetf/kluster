@@ -222,10 +222,11 @@ def _admits(topologies: list[dict[str, Any]], labels: dict[str, str]) -> bool:
 def test_a_node_volumes_class_admits_the_node_carrying_it_and_no_other(applied: Run, row: str) -> None:
     """The scheduler places a consumer of the class only on the node its machine configuration labels with the row.
 
-    A consumer that does not select that node is refused a node rather than
-    placed where nothing mounts the volume. The labels are those the Talos
-    configuration gives the volume's node, a node carrying another volume and
-    a node carrying none.
+    Every other node is dropped from the consumer's candidates, so a consumer
+    that selects no node lands on the volume's node, and one that selects
+    another node is unschedulable rather than placed where nothing mounts the
+    volume. The labels are those the Talos configuration gives the volume's
+    node, a node carrying another volume and a node carrying none.
     """
     topologies = applied.inputs(STORAGE_CLASS, f'{LOCAL_PATH}-{row}').get('allowedTopologies', [])
 

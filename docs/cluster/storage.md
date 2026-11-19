@@ -743,16 +743,18 @@ are the rules a node volume lives by:
     so that a claim made again finds its directory, and hands out
     `local` volumes (the annotation `defaultVolumeType`). An application
     declares an ordinary `claim` of the class, and the pod that consumes
-    it selects `conventions.NODE_VOLUME_LABEL`, because a claim that
-    waits for its first consumer holds no pod anywhere by itself.
--   **A consumer that does not select the volume's node is refused a
-    node.** Each class allows one topology, the node label with the
+    it needs no node selection of its own: the class places it.
+-   **The class confines its consumers to the node carrying the
+    volume.** Each class allows one topology, the node label with the
     row's name, which only the volume's node carries. The scheduler holds
     every candidate node of a pod against the allowed topologies of each
     claim it still has to provision, as a selector over the node's
-    labels, so a pod without that selection cannot be scheduled and its
-    claim is never handed to the provisioner. Its `FailedScheduling`
-    event counts each node refused this way under `didn't find available
+    labels, and drops each node outside them from the pod's candidates.
+    A consumer that selects no node therefore lands on the volume's node.
+    One that selects another node, or that the volume's node cannot take
+    for its other constraints or its resources, is never scheduled, and
+    its claim is never handed to the provisioner. Its `FailedScheduling`
+    event counts each node dropped this way under `didn't find available
     persistent volumes to bind`. The topology is the label rather than
     `kubernetes.io/hostname` so that the class names no Kubernetes node:
     a volume that moves to another node changes which node carries the
