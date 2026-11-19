@@ -7,6 +7,13 @@ stack, applied by `operator-stack state-backend up`. One that moves what the
 box is rendered from replaces the box, which waits for `--force`; a bump of
 the image imports a new image and replaces nothing (physical/state-backend.md
 §1).
+
+The state table's daily upkeep in the cluster reads from here too: the
+database, the retention rule's lengths (`EXPIRY_AGE`, `HISTORY_RECORDS`) and
+the ceiling (`LARGEST_ROW_BYTES`), in a settings file `k8s-base` renders from
+them (`components.state_upkeep`). A change to one of them reaches that job
+through `up-k8s-base`, the deploy's apply of that stack on the merge, and not
+through a replacement of the box.
 """
 
 from __future__ import annotations

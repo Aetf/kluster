@@ -78,6 +78,11 @@ config:
   # the program a ConfigMap of the monitoring component's. The digest is the
   # image index's.
   versions:image-oci-sdk: ghcr.io/aetf/oci-sdk:2.191.0-cc74b1a9273b@sha256:475a520f8c5b876b4470466152aa2386be41ac6452e0705aa75d18c52b888582
+  # The runtime the state table's daily upkeep runs in: the interpreter and the
+  # Postgres client at the state backend's major, built by this repository
+  # (`docker/postgres-client.conf`), with the program a ConfigMap of the
+  # `state_upkeep` component's. The digest is the image index's.
+  versions:image-postgres-client: ghcr.io/aetf/postgres-client:17-739e9b5d045b@sha256:b26c5740cb5ef772f444d2f68a312ba55e299f7da68f6cfcf00628dd203d94f8
 
   # The images the applications' components run, `apps` and the shapes it
   # builds them from (rfc-008 §4 and §5): one pin per container a component

@@ -2,8 +2,8 @@
 
 Gateway API CRDs, Cilium, sealed-secrets, cert-manager, CNPG and VolSync with
 the volume snapshot definitions it watches, VictoriaMetrics, NFD and the GPU
-plugin, the small standing set the legacy cluster proved, and the hourly etcd
-snapshot — in that dependency order, per
+plugin, the small standing set the legacy cluster proved, the hourly etcd
+snapshot and the state table's daily upkeep — in that dependency order, per
 docs/declarative/cluster-infra.md. The component list is closed: additions
 argue for themselves in writing first.
 
@@ -62,7 +62,8 @@ pin in `Pulumi.yaml`'s `config:` block, which renovate moves
 `versions:manifest-<name>` pin, the volume snapshot definitions a
 `versions:source-<name>` pin and the images a component runs beside a chart,
 local-path-provisioner's two, the monitoring stack's history store, backups,
-restores and OCI pull, and the etcd snapshot, `versions:image-<name>` pins; a component installs what the program reads
+restores and OCI pull, the etcd snapshot and the state table's upkeep,
+`versions:image-<name>` pins; a component installs what the program reads
 through `kluster.lib.versions` and hands it. The custom resources are written
 against `sdks/crds`, which `mise x -- uv run update_crds` regenerates from the
 same pins, but for the VictoriaMetrics operator's, which that SDK cannot import
@@ -87,6 +88,7 @@ from kluster.components.monitoring import Monitoring, OciPull
 from kluster.components.postgres import PostgresOperator
 from kluster.components.reloader import Reloader
 from kluster.components.sealing import SealedSecretsController
+from kluster.components.state_upkeep import StateUpkeep
 from kluster.conventions.backup import BackupFamily
 from kluster.lib import stack_addresses, stack_volumes
 from kluster.lib.k8s import KUBECONFIG_KEY, client_certificate_expiry, kubeconfig_from, sealed_ciphertext
@@ -129,11 +131,13 @@ async def main() -> None:
     sealed = config.get_object(conventions.sealed.CONFIG_KEY)
 
     # cluster-infra.md §1's order. Nothing schedules before the CNI, so
-    # everything is behind Cilium; cert-manager, the BGP session, monitoring
-    # and the etcd snapshot are behind the sealing controller, because the
-    # credential cert-manager's solver uses, the session's password, the
-    # address alertmanager posts to and the key the metrics stores are backed
-    # up with, and the key the snapshots are uploaded with are sealed values.
+    # everything is behind Cilium; cert-manager, the BGP session, monitoring,
+    # the etcd snapshot and the state table's upkeep are behind the sealing
+    # controller, because the credential cert-manager's solver uses, the
+    # session's password, the address alertmanager posts to and the key the
+    # metrics stores are backed up with, the key the snapshots are uploaded
+    # with and the bundle the upkeep reaches the state backend with are sealed
+    # values.
     # A chart that declares objects another chart defines is behind that
     # chart: the database operator's backup plugin and the GPU plugin's
     # operator declare cert-manager's, and the GPU plugin declares NFD's.
@@ -208,6 +212,15 @@ async def main() -> None:
         image=versions.image['etcd-backup'],
         writer_key=sealed_ciphertext(conventions.sealed.ETCD_WRITER_KEY, sealed),
         recipients=tuple(committed.backup_recipients().values()),
+        after=[cilium, sealing],
+        opts=opts,
+    )
+    # As the role `upkeep`, which reads and deletes rows of the state table
+    # and nothing else, with the bundle sealed for it.
+    _ = StateUpkeep(
+        'state-upkeep',
+        image=versions.image['postgres-client'],
+        bundle=sealed_ciphertext(conventions.sealed.STATE_UPKEEP_BUNDLE, sealed),
         after=[cilium, sealing],
         opts=opts,
     )
