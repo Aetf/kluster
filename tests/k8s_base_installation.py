@@ -183,6 +183,7 @@ VERSIONS_CONFIG = {
     'versions:image-metrics-bucket': f'registry.example.invalid/curl:9.16.0@sha256:{"3" * 64}',
     'versions:image-oci-sdk': f'registry.example.invalid/oci-sdk:9.17.0-{"a" * 12}@sha256:{"4" * 64}',
     'versions:image-etcd-backup': f'registry.example.invalid/talos-backup:v9.18.0@sha256:{"5" * 64}',
+    'versions:image-etcd-verify': f'registry.example.invalid/etcd-age:v9.19.0-{"c" * 12}@sha256:{"7" * 64}',
     'versions:image-postgres-client': f'registry.example.invalid/postgres-client:99-{"b" * 12}@sha256:{"6" * 64}',
     'versions:image-echo': f'registry.example.invalid/whoami:v9.19.0@sha256:{"7" * 64}',
     'versions:manifest-gateway-api': json.dumps(

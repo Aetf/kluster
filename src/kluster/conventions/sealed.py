@@ -248,7 +248,7 @@ ETCD_READER_KEY = SealedValue(
     stack=STACK_NAMES.k8s_base,
 )
 
-#: The etcd restore-verify's age identity, private half: what the monthly
+#: The etcd restore-verify's age identity, private half: what the daily
 #: verify decrypts the newest etcd snapshot with before it restores it into a
 #: scratch member. Its own identity rather than the state-backend drill's,
 #: whose contract is the newest state dump alone, and which would open every

@@ -28,8 +28,9 @@ store only where the bucket holds no backup, and fail where the backup cannot
 be read, so a store never starts empty over a history that exists. vmagent's
 persistent queue holds what is scraped meanwhile.
 
-**The bucket is reached through B2's native API** (`shell/b2.sh`), for the two
-things `vmbackup` and `vmrestore` do not do: whether a prefix holds a backup at
+**The bucket is reached through B2's native API** (`b2.sh`, the backup
+bucket's shell client, which `components.backup` keeps beside its own
+scripts), for the two things `vmbackup` and `vmrestore` do not do: whether a prefix holds a backup at
 all, and the history's row count kept beside its backup. Those calls run in
 curl's image, whose `curl` reads the request headers carrying the writer key
 and B2's tokens from files in the pod's memory, so no credential is ever a
@@ -37,7 +38,8 @@ process's argument, which every process on the node that sees the PID can
 read; `vmbackup` and `vmrestore` read the key from their environment, and
 `vmbackup` the snapshot key too. The scripts are shell because the images
 carry no other interpreter: busybox, and the one binary each. They are one
-ConfigMap, which the jobs and the init containers mount.
+ConfigMap, the scripts of `shell/` and `b2.sh` beside them, which the jobs and
+the init containers mount.
 """
 
 from __future__ import annotations
@@ -120,8 +122,12 @@ WORK_DIR = '/work'
 #: The variable `vmbackup` reads the store's snapshot key from.
 SNAPSHOT_KEY_ENV = 'SNAPSHOT_AUTH_KEY'
 
-#: The scripts, by file name, as the ConfigMap carries them.
-SHELL: Mapping[str, str] = templates.render_tree('kluster.components.monitoring', 'shell')
+#: The scripts, by file name, as the ConfigMap carries them: this package's
+#: own, and the bucket client they source.
+SHELL: Mapping[str, str] = {
+    **templates.render_tree('kluster.components.monitoring', 'shell'),
+    'b2.sh': templates.load('kluster.components.backup', 'shell/b2.sh'),
+}
 
 #: Where each image keeps its one binary.
 _VMBACKUP = '/vmbackup-prod'
@@ -314,7 +320,7 @@ class Bucket:
 
 
 def _writer_env(bucket: Bucket) -> list[dict[str, Any]]:
-    """The writer key's two halves, under the names `vmbackup`, `vmrestore` and `shell/b2.sh` read them by."""
+    """The writer key's two halves, under the names `vmbackup`, `vmrestore` and `b2.sh` read them by."""
     return [
         {'name': field, 'valueFrom': {'secretKeyRef': {'name': bucket.writer_secret, 'key': field}}}
         for field in sorted(conventions.WRITER_KEY_FIELDS)

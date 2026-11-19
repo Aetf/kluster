@@ -454,7 +454,17 @@ classes its objects fall into (§1.2):
     Cilium and the sealing controller, whose chart defines the
     SealedSecret. Until `writer-etcd` is sealed in, the namespace and
     the `ServiceAccount` are all it declares: the CronJob waits for
-    bring-up stage 6's seal (physical/bring-up.md).
+    bring-up stage 6's seal (physical/bring-up.md). Each snapshot is
+    encrypted to the escrowed backup generations and to the
+    restore-verify's recipient. Beside it, the **daily restore-verify**
+    is the CronJob `etcd-restore-verify` in the same namespace, off the
+    control planes, in the `etcd-age` image this repository builds: it
+    restores the newest snapshot into a scratch etcd that has to serve
+    it (cluster/storage.md §5). It lists and downloads with the
+    snapshots' read-only key, sealed strict as `reader-etcd`, and
+    decrypts with an age identity of its own, sealed strict as
+    `etcd-drill` (§1.1), and holds no Kubernetes or Talos grant. Until
+    both are sealed in, its scripts' `ConfigMap` is all it declares.
 10. **The state table's daily upkeep** — the CronJob `state-upkeep` in a
     namespace of its own, `state-upkeep`, at `restricted`, on the control
     planes (`components.state_upkeep`, physical/state-backend.md §2). It
@@ -473,8 +483,8 @@ Every chart this list installs is pinned in `Pulumi.yaml`'s `versions:`
 block as `versions:chart-<name>`, the Gateway API definitions as
 `versions:manifest-gateway-api`, and the images a component runs beside
 a chart, local-path-provisioner's two among them, the provisioner's and
-its helper pod's, the etcd snapshot's and the state table's upkeep's, as
-`versions:image-<name>`
+its helper pod's, the etcd snapshot's and its restore-verify's, and the
+state table's upkeep's, as `versions:image-<name>`
 (framework/pulumi.md §3.2). One copy:
 the stack program installs from those pins, and `update_crds` reads the
 same file through the same parser to render the CRD bundle

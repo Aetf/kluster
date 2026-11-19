@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Any, cast
 from urllib.parse import urlsplit
 
+import fake_b2_shell
 import image_busybox
 import process_sessions
 import promql_parser
@@ -34,6 +35,7 @@ import pytest
 import pytest_asyncio
 import yaml
 from client_kubeconfig import KUBECONFIG, NOT_AFTER
+from fake_b2_shell import AUTHORIZATION_V4, BUCKET, FAKE_KEY, FAKE_TOKENS, authorization, fake_env
 from fences import prose
 from k8s_base_installation import (
     PUBLISHED,
@@ -2008,96 +2010,6 @@ def test_the_writer_key_is_declared_where_the_backups_and_restores_read_it(seale
 
 # -- The scripts, run --------------------------------------------------------------------
 
-#: A B2 account's native API and a store's `/metrics`, answered from a directory:
-#: `bucket/` holds the bucket's current files by name, `metrics` the store's
-#: exposition, `authorization.json` what `b2_authorize_account` answers, `down`
-#: makes B2 answer nothing, `list-down` makes it answer the authorization and
-#: nothing after. Its arguments are `curl`'s as the scripts pass them, each
-#: run's appended to `curl.argv`, and a `-H @<file>` reads one header a line, as
-#: `curl` does. B2's answers are the shape its v4 API documents for
-#: `b2_authorize_account`, `b2_list_file_names`, `b2_get_upload_url` and
-#: `b2_upload_file`. The key it admits is a writer key as `BackupBucket` creates
-#: one, restricted through `bucketIds`, which B2 authorizes on v4 alone and
-#: refuses with a 400 on an earlier version. An error is `curl --fail`'s exit
-#: status, 22.
-FAKE_CURL = """
-import base64, hashlib, json, os, sys
-from pathlib import Path
-from urllib.parse import urlsplit
-
-state = Path(os.environ['FAKE_STATE'])
-with (state / 'curl.argv').open('a') as log:
-    log.write(json.dumps(sys.argv[1:]) + '\\n')
-args, headers, body, url = sys.argv[1:], {}, None, None
-while args:
-    arg = args.pop(0)
-    if arg == '-H':
-        value = args.pop(0)
-        lines = Path(value[1:]).read_text().splitlines() if value.startswith('@') else [value]
-        for line in lines:
-            name, found = line.split(':', 1)
-            headers[name.strip().lower()] = found.strip()
-    elif arg in ('--data', '--data-binary'):
-        value = args.pop(0)
-        body = Path(value[1:]).read_text() if value.startswith('@') else value
-    elif arg == '--max-time':
-        args.pop(0)
-    elif not arg.startswith('-'):
-        url = arg
-bucket = state / 'bucket'
-path = urlsplit(url).path
-
-
-def refuse(status):
-    print(f'curl: (22) The requested URL returned error: {status}', file=sys.stderr)
-    sys.exit(22)
-
-
-def answer(found):
-    print(json.dumps(found, indent=2))
-    sys.exit(0)
-
-
-if path == '/metrics':
-    sys.stdout.write((state / 'metrics').read_text())
-    sys.exit(0)
-if (state / 'down').exists():
-    refuse(503)
-authorization = json.loads((state / 'authorization.json').read_text())
-if path == '/b2api/v4/b2_authorize_account':
-    if headers.get('authorization') != 'Basic ' + base64.b64encode(os.environ['FAKE_KEY'].encode()).decode():
-        refuse(401)
-    answer(authorization)
-if path.endswith('/b2_authorize_account'):
-    refuse(400)
-if (state / 'list-down').exists():
-    refuse(503)
-if headers.get('authorization') not in (authorization['authorizationToken'], 'upload-token'):
-    refuse(401)
-if path == '/b2api/v4/b2_list_file_names':
-    request = json.loads(body)
-    assert request['bucketId'] == os.environ['FAKE_BUCKET_ID']
-    names = sorted(str(it.relative_to(bucket)) for it in bucket.rglob('*') if it.is_file())
-    listed = [name for name in names if name.startswith(request['prefix'])][: request['maxFileCount']]
-    answer({'files': [{'fileName': name, 'action': 'upload'} for name in listed], 'nextFileName': None})
-if path.startswith(f"/file/{os.environ['FAKE_BUCKET_NAME']}/"):
-    found = bucket / path.removeprefix(f"/file/{os.environ['FAKE_BUCKET_NAME']}/")
-    if not found.is_file():
-        refuse(404)
-    sys.stdout.write(found.read_text())
-    sys.exit(0)
-if path == '/b2api/v4/b2_get_upload_url':
-    answer({'bucketId': os.environ['FAKE_BUCKET_ID'], 'uploadUrl': 'https://pod.b2.invalid/upload', 'authorizationToken': 'upload-token'})
-if path == '/upload':
-    assert headers['authorization'] == 'upload-token'
-    assert headers['x-bz-content-sha1'] == hashlib.sha1(body.encode()).hexdigest()
-    target = bucket / headers['x-bz-file-name']
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(body)
-    answer({'fileName': headers['x-bz-file-name']})
-refuse(400)
-"""
-
 #: `vmrestore` and `vmbackup`: each records its arguments, and fails where its
 #: name is in the state directory's `fails`; `vmrestore` writes a part into
 #: the data directory its arguments name.
@@ -2114,71 +2026,6 @@ for arg in sys.argv[1:]:
     if name == 'vmrestore' and arg.startswith('-storageDataPath='):
         (Path(arg.split('=', 1)[1]) / 'restored-part').write_text('part')
 """
-
-#: What `b2_authorize_account` v4 answers, recorded whole from the example on
-#: the operation's reference page (https://www.backblaze.com/apidocs/b2-authorize-account):
-#: the storage API's addresses under `apiInfo.storageApi`, with the key's
-#: restriction beside them in `allowed`, the Partner API's under `groupsApi`,
-#: and the token at the top. The fake bucket answers it with `allowed.buckets`
-#: replaced by the buckets its case restricts the key to (`Pod.restrict`).
-AUTHORIZATION_V4: dict[str, Any] = {
-    'accountId': 'ACCOUNT_ID',
-    'apiInfo': {
-        'storageApi': {
-            'absoluteMinimumPartSize': 5000000,
-            'apiUrl': 'https://api001.backblazeb2.com',
-            'allowed': {
-                'buckets': [
-                    {'id': 'bucketId1', 'name': 'bucketIdName1'},
-                    {'id': 'bucketId2', 'name': 'bucketIdName2'},
-                    {'id': 'bucketId3', 'name': None},
-                ],
-                'capabilities': [
-                    'listAllBucketNames',
-                    'listBuckets',
-                    'writeBuckets',
-                    'readBuckets',
-                    'listFiles',
-                    'readFiles',
-                    'shareFiles',
-                    'writeFiles',
-                    'deleteFiles',
-                    'readBucketEncryption',
-                    'writeBucketEncryption',
-                    'readBucketNotifications',
-                    'writeBucketNotifications',
-                    'bypassGovernance',
-                    'readBucketRetentions',
-                    'writeBucketRetentions',
-                    'readFileRetentions',
-                    'writeFileRetentions',
-                    'readFileLegalHolds',
-                    'writeFileLegalHolds',
-                ],
-                'namePrefix': None,
-            },
-            'downloadUrl': 'https://f001.backblazeb2.com',
-            'recommendedPartSize': 100000000,
-            's3ApiUrl': 'https://s3.us-west-001.backblazeb2.com',
-        },
-        'groupsApi': {
-            'capabilities': ['all'],
-            'groupsApiUrl': 'https://apiNNN.backblazeb2.com',
-            'infoType': 'groupsApi',
-        },
-    },
-    'applicationKeyExpirationTimestamp': None,
-    'authorizationToken': 'AUTHORIZATION_TOKEN',
-}
-
-#: The bucket the fake bucket's writer key is restricted to, the one whose id
-#: its listing reads and whose name its downloads are addressed by.
-BUCKET = {'id': 'bucket-id', 'name': 'bucket-name'}
-
-#: The writer key the fake bucket admits, `id:secret`, and the tokens it hands
-#: out: every credential a script holds.
-FAKE_KEY = ('key-id', 'key-secret')
-FAKE_TOKENS = (AUTHORIZATION_V4['authorizationToken'], 'upload-token')
 
 #: The bound on one script's run, which takes a fraction of a second.
 SHELL_TIMEOUT = 30
@@ -2277,7 +2124,8 @@ class Pod:
             directory.mkdir(parents=True, exist_ok=True)
         for name, text in stores.SHELL.items():
             (shell / name).write_text(text)
-        for name, text in (('curl', FAKE_CURL), ('vmrestore', FAKE_BINARY), ('vmbackup', FAKE_BINARY)):
+        fake_b2_shell.install(self.state, self.fakes)
+        for name, text in (('vmrestore', FAKE_BINARY), ('vmbackup', FAKE_BINARY)):
             binary = self.fakes / name
             binary.write_text(f'#!{sys.executable}\n{text}')
             binary.chmod(0o755)
@@ -2295,10 +2143,7 @@ class Pod:
 
     def restrict(self, buckets: Sequence[Mapping[str, str | None]]) -> None:
         """Answer the authorization with the key restricted to `buckets`."""
-        storage = {**AUTHORIZATION_V4['apiInfo']['storageApi']}
-        storage['allowed'] = {**storage['allowed'], 'buckets': list(buckets)}
-        answer = {**AUTHORIZATION_V4, 'apiInfo': {**AUTHORIZATION_V4['apiInfo'], 'storageApi': storage}}
-        (self.state / 'authorization.json').write_text(json.dumps(answer, indent=2))
+        (self.state / 'authorization.json').write_text(json.dumps(authorization(buckets), indent=2))
 
     def _shell(self, container: Mapping[str, Any]) -> Path | None:
         """The applets of the busybox in `container`'s image, `None` for an image whose busybox is not read."""
@@ -2317,12 +2162,7 @@ class Pod:
 
     def fake_env(self) -> dict[str, str]:
         """What the fakes read: the state directory, the key B2 admits, and the bucket it is restricted to."""
-        return {
-            'FAKE_STATE': str(self.state),
-            'FAKE_KEY': self.key,
-            'FAKE_BUCKET_ID': BUCKET['id'],
-            'FAKE_BUCKET_NAME': BUCKET['name'],
-        }
+        return fake_env(self.state, self.key)
 
     def _env(self, container: Mapping[str, Any], shell: Path | None) -> dict[str, str]:
         halves = dict(zip(sorted(conventions.WRITER_KEY_FIELDS), FAKE_KEY, strict=True))
@@ -2457,18 +2297,18 @@ def test_the_writer_key_authorizes_on_v4_as_the_one_bucket_its_answer_lists(
     [
         ([], 'to no bucket'),
         (AUTHORIZATION_V4['apiInfo']['storageApi']['allowed']['buckets'][:2], 'to more than one bucket'),
-        (AUTHORIZATION_V4['apiInfo']['storageApi']['allowed']['buckets'][2:], 'no id or name'),
+        ([{'id': None, 'name': BUCKET['name']}], 'no id'),
     ],
-    ids=['none', 'two', 'unnamed'],
+    ids=['none', 'two', 'no id'],
 )
-def test_an_authorization_that_does_not_list_one_named_bucket_is_refused(
+def test_an_authorization_that_does_not_list_one_bucket_with_an_id_is_refused(
     tmp_path: Path, shells: Mapping[str, Path], buckets: list[dict[str, str | None]], refusal: str
 ) -> None:
-    """No bucket, two, or one B2 names `null`: refused by what is wrong, before any call reads the bucket.
+    """No bucket, two, or one B2 gives no id: refused by what is wrong, before any call reads the bucket.
 
-    The writer key is restricted to one bucket, so an answer listing any
-    other number is not the key the scripts were handed, and a bucket with
-    no name cannot be downloaded from by name.
+    The key is restricted to one bucket, so an answer listing any other
+    number is not the key the scripts were handed, and every call but a
+    download by name addresses the bucket by its id.
     """
     pod = Pod(tmp_path, shells, [])
     pod.restrict(buckets)
@@ -2479,6 +2319,28 @@ def test_an_authorization_that_does_not_list_one_named_bucket_is_refused(
     assert refusal in run.stderr
     assert not (pod.work / 'b2-account').exists()
     assert len(pod.curl_arguments()) == 1
+
+
+def test_a_bucket_b2_names_null_authorizes_and_only_a_read_by_name_is_refused(
+    tmp_path: Path, shells: Mapping[str, Path]
+) -> None:
+    """B2's own example answers `null` for a bucket's name: the listing by id goes on, and `b2_cat` refuses, naming why.
+
+    A refusal ahead of the call is what keeps a download from being sent to
+    `/file//<name>`, an address of no bucket.
+    """
+    pod = Pod(tmp_path, shells, [])
+    pod.restrict([{'id': BUCKET['id'], 'name': None}])
+    (pod.bucket / 'vm').mkdir()
+    (pod.bucket / 'vm' / 'record').write_text('42')
+
+    listed = _authorized(pod, shells, 'b2_listed vm/ >/dev/null')
+    read = _authorized(pod, shells, 'b2_cat vm/record')
+
+    assert listed.returncode == 0, listed.stderr
+    assert read.returncode != 0
+    assert "named no bucket, and vm/record is read by its bucket's name" in read.stderr
+    assert not [call for call in pod.curl_arguments() if '/file/' in call[-1]]
 
 
 @pytest.mark.parametrize('store', ['recent', 'history'])
