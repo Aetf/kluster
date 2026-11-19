@@ -49,7 +49,15 @@ from kluster import conventions
 from kluster.conventions import Transports
 from kluster.lib.config import Shape, ShapeRefused
 from kluster.lib.install_order import DEPENDS_ON
-from kluster.lib.k8s import KUBECONFIG_KEY, UnusableKubeconfig, client_certificate_expiry
+from kluster.lib.k8s import (
+    KUBECONFIG_KEY,
+    AbsentSealedValue,
+    PortedSecret,
+    UnusableKubeconfig,
+    client_certificate_expiry,
+    sealed_ciphertext,
+    sealed_value,
+)
 from kluster.lib.versions import ChartPin, ManifestPin, versions
 
 DIGEST = f'sha256:{"c" * 64}'
@@ -1147,6 +1155,64 @@ def test_a_value_held_but_not_whole_is_refused_naming_its_path(configured: objec
 
     assert (refused.value.what, refused.value.shape) == (what, shape)
     assert 'AgB-not-a-mapping' not in str(refused.value)
+
+
+# -- a Secret ported from the legacy cluster --------------------------------------------
+
+#: A ported Secret of the test's own: no census row, a data key with a dot in it.
+PORTED = PortedSecret(name='legacy-app', namespace='legacy-ns', keys=('user', 'tls.key'))
+
+
+def test_a_ported_secret_is_read_back_from_where_its_path_says_it_is_held() -> None:
+    """A ported ciphertext is held as a row's is, by its name and then each data key, and read back from there."""
+    writes = {PORTED.path(key): f'AgB-ported-{key}' for key in PORTED.keys}
+
+    assert sealed_ciphertext(PORTED, _as_the_cli_stores(writes)) == {key: f'AgB-ported-{key}' for key in PORTED.keys}
+
+
+@pytest.mark.parametrize(
+    'configured', [None, {}, {'another-app': {'user': 'AgB-other'}}], ids=['no-sealed-value', 'empty', 'others-only']
+)
+def test_an_absent_ported_secret_stops_the_run_naming_the_copy_that_brings_it(configured: object) -> None:
+    """The refusal carries the Secret, and sends the operator to the legacy cluster rather than to a sealing command."""
+    with pytest.raises(AbsentSealedValue) as refused:
+        _ = sealed_ciphertext(PORTED, configured)
+
+    message = str(refused.value)
+    assert refused.value.value == PORTED
+    assert f'{PORTED.name!r} ({PORTED.namespace})' in message
+    assert 'copied as it is from the legacy cluster' in message
+
+
+@pytest.mark.parametrize(
+    ('configured', 'what'),
+    [
+        ('AgB-not-a-mapping', conventions.sealed.CONFIG_KEY),
+        ({PORTED.name: 'AgB-not-a-mapping'}, f'{conventions.sealed.CONFIG_KEY}["{PORTED.name}"]'),
+        ({PORTED.name: {'user': 'AgB-not-a-mapping'}}, PORTED.path('tls.key')),
+    ],
+    ids=['sealed-key-not-a-mapping', 'secret-not-a-mapping', 'no-key'],
+)
+def test_a_ported_secret_held_but_not_whole_is_refused_naming_its_path(configured: object, what: str) -> None:
+    """A ported entry the stack holds in the wrong shape is a write gone wrong, never a Secret still to be copied."""
+    with pytest.raises(ShapeRefused) as refused:
+        _ = sealed_ciphertext(PORTED, configured)
+
+    assert (refused.value.what, refused.value.shape) == (what, Shape.WRONG_TYPE)
+    assert 'AgB-not-a-mapping' not in str(refused.value)
+
+
+@pytest.mark.asyncio
+async def test_a_ported_secret_is_declared_namespace_wide_in_the_namespace_it_was_sealed_to() -> None:
+    """The legacy key sealed it namespace-wide, so the object carries that scope, under the Secret's name."""
+    monitor = await run_with(Recorder(), stack='apps')
+    async with declaring():
+        _ = sealed_value('declaring-component-ported', PORTED, ciphertext=dict.fromkeys(PORTED.keys, 'AgB-ported'))
+
+    secret = monitor.inputs_of('declaring-component-ported', SEALED_SECRET)
+    assert (secret['metadata']['name'], secret['metadata']['namespace']) == (PORTED.name, PORTED.namespace)
+    assert secret['spec']['encryptedData'] == dict.fromkeys(PORTED.keys, 'AgB-ported')
+    assert secret['spec']['template']['metadata']['annotations'] == {'sealedsecrets.bitnami.com/namespace-wide': 'true'}
 
 
 @pytest.mark.asyncio

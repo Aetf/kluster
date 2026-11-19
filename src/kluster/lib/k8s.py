@@ -75,6 +75,7 @@ __all__ = (
     'PassthroughRefused',
     'PodSecurity',
     'Portal',
+    'PortedSecret',
     'Reach',
     'SealingScope',
     'SecretTemplate',
@@ -120,19 +121,58 @@ class UnusableKubeconfig(ValueError):
     """The stack's configuration holds no kubeconfig, or one no provider can open or whose certificate's expiry is unreadable."""
 
 
-class AbsentSealedValue(ValueError):
-    """The declaring stack holds no ciphertext for a census row its program reads.
+@dataclass(frozen=True)
+class PortedSecret:
+    """A legacy SealedSecret whose ciphertext is copied as it is: its name, the namespace it is sealed to, its data keys.
 
-    `value` is the row, so a caller can tell which one stopped the run
-    without reading the message.
+    The `kubeseal` ciphertext of a legacy Secret an application keeps,
+    sealed namespace-wide against the legacy key (declarative/workloads.md
+    §5). It is held where a census row's is, under `CONFIG_KEY` by its name
+    and then by each data key, but it has no row: nothing here seals it, and
+    the component that declares it is its one reader, so that component
+    holds the instance, naming the Secret and the namespace it was sealed to
+    (`conventions.sealed`).
     """
 
-    def __init__(self, value: SealedValue) -> None:
-        super().__init__(
-            f"sealed value {value.name!r} ({value.namespace}) is absent from {value.stack}'s "
-            f'{conventions.sealed.CONFIG_KEY}; `{value.sealed_by}` seals it, from main, ahead of the merge of what '
-            'reads it (credentials.md §1 rule 6)'
-        )
+    name: str
+    """The legacy Secret's name, which its ciphertext is held under."""
+    namespace: str
+    """The namespace the legacy key sealed it to, the only one it opens in."""
+    keys: tuple[str, ...]
+    """The keys of the Secret's data, each sealed on its own."""
+    scope: SealingScope = SealingScope.NAMESPACE_WIDE
+    """What every legacy Secret is sealed at."""
+
+    def path(self, key: str) -> str:
+        """Where the ciphertext of `key` is held, in `SealedValue.path`'s form; refused for a key it does not carry."""
+        if key not in self.keys:
+            raise KeyError(f'{self.name} carries {", ".join(self.keys)}, not {key}')
+        return f'{conventions.sealed.CONFIG_KEY}["{self.name}"]["{key}"]'
+
+
+class AbsentSealedValue(ValueError):
+    """The declaring stack holds no ciphertext for a sealed value its program reads.
+
+    `value` is the census row or the ported Secret, so a caller can tell
+    which one stopped the run without reading the message, which names the
+    remedy of its kind: the command that seals a row, or the copy from the
+    legacy cluster that brings a ported Secret.
+    """
+
+    def __init__(self, value: SealedValue | PortedSecret) -> None:
+        if isinstance(value, PortedSecret):
+            message = (
+                f"ported Secret {value.name!r} ({value.namespace}) is absent from the stack's "
+                f'{conventions.sealed.CONFIG_KEY}; its ciphertext is copied as it is from the legacy cluster '
+                '(declarative/workloads.md §5)'
+            )
+        else:
+            message = (
+                f"sealed value {value.name!r} ({value.namespace}) is absent from {value.stack}'s "
+                f'{conventions.sealed.CONFIG_KEY}; `{value.sealed_by}` seals it, from main, ahead of the merge of '
+                'what reads it (credentials.md §1 rule 6)'
+            )
+        super().__init__(message)
         self.value = value
 
 
@@ -1028,8 +1068,8 @@ def sealed_secret(
     )
 
 
-def sealed_ciphertext(value: SealedValue, configured: object) -> dict[str, str]:
-    """The ciphertext of each of a census row's keys, out of what the declaring stack holds under its sealed key.
+def sealed_ciphertext(value: SealedValue | PortedSecret, configured: object) -> dict[str, str]:
+    """The ciphertext of each key of a census row or a ported Secret, out of what the declaring stack holds under its sealed key.
 
     `configured` is that whole object as the program read it, `None` when the
     stack holds no sealed value at all. The read is the inverse of
@@ -1037,9 +1077,10 @@ def sealed_ciphertext(value: SealedValue, configured: object) -> dict[str, str]:
     sealing command wrote is what is found.
 
     **Absent, it stops the run**, as an unusable kubeconfig does: a stack
-    that holds nothing under the row's name, or no sealed value at all, is
-    refused with `AbsentSealedValue`, naming the value, its namespace and the
-    command that seals it (`SealedValue.sealed_by`). A value lands ahead of
+    that holds nothing under the value's name, or no sealed value at all, is
+    refused with `AbsentSealedValue`, naming the value, its namespace and
+    what brings it: the command that seals a row (`SealedValue.sealed_by`),
+    or the copy from the legacy cluster for a `PortedSecret`. A value lands ahead of
     what reads it (credentials.md §1 rule 6), so a reader merged ahead of its
     ciphertext stops at its own preview rather than declaring a consumer of a
     Secret that is not there. Anything else that is not a non-empty string
@@ -1068,18 +1109,19 @@ def _not_a_mapping(what: str, found: object, expected: str) -> ShapeRefused:
 
 def sealed_value(
     resource_name: str,
-    value: SealedValue,
+    value: SealedValue | PortedSecret,
     *,
     ciphertext: Mapping[str, pulumi.Input[str]],
     rendered: Mapping[str, str] | None = None,
     opts: pulumi.ResourceOptions | None = None,
 ) -> crds.bitnami.v1alpha1.SealedSecret:
-    """The SealedSecret of a census row, named, placed and scoped as the row says.
+    """The SealedSecret of a census row or a ported Secret, named, placed and scoped as the value says.
 
     A row's ciphertext is sealed to the row's name and namespace at the row's
-    scope (`conventions.sealed`), so the object is declared from the row
-    rather than from arguments a caller could get wrong. `ciphertext` is what
-    the program read for the row with `sealed_ciphertext`. The row names the
+    scope (`conventions.sealed`), and a ported Secret's to its namespace,
+    namespace-wide, so the object is declared from the value rather than from
+    arguments a caller could get wrong. `ciphertext` is what the program read
+    for the value with `sealed_ciphertext`. The row names the
     object and not the resource: `resource_name`, the logical name, is the
     caller's, and carries the declaring component's name as every child's
     does (style/pulumi.md), whichever row the component declares.
@@ -1103,7 +1145,7 @@ def sealed_value(
     )
 
 
-def rendered_template(value: SealedValue, rendered: Mapping[str, str]) -> dict[str, str]:
+def rendered_template(value: SealedValue | PortedSecret, rendered: Mapping[str, str]) -> dict[str, str]:
     """`rendered` as the controller's `spec.template.data`: each field of a sealed key, its decrypted value.
 
     The controller renders every `template.data` entry as a Go template, and
