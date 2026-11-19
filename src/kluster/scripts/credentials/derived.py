@@ -33,7 +33,9 @@ in the clear into the configuration of the stack that declares it
 OCI key the block-volume metrics pull reads with (`oci_metrics`), and
 the backup bucket's writer keys, which `physical` mints and this side seals
 out of that stack's state into `apps`, or into `k8s-base` for a namespace
-the platform holds and for the etcd snapshots (`b2_writer_seal`); Authelia's
+the platform holds and for the etcd snapshots (`b2_writer_seal`), and the
+etcd snapshots' read-only key the same way into `k8s-base`
+(`b2_reader_seal`); Authelia's
 storage encryption key, which is escrowed and sealed from the escrow
 (`authelia_storage_key_seal`); the client bundle the state table's daily
 upkeep reaches the state backend with, issued from the escrowed CA
@@ -99,7 +101,7 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import cast
 
@@ -266,6 +268,7 @@ ZONES_ROW = 'cloudflare-zones'
 GATEWAY_ACME_ROW = 'cloudflare-gateway-acme'
 DNS01_ROW = 'cloudflare-dns01'
 B2_WRITER_ROW = 'b2-writer'
+B2_READER_ROW = 'b2-reader'
 OCI_PHYSICAL_ROW = 'oci-physical'
 OCI_STATE_BACKEND_ROW = f'oci-{conventions.STATE_BACKEND}'
 OCI_METRICS_ROW = 'oci-metrics'
@@ -536,32 +539,32 @@ def cloudflare_dns01(kit: KdbxStore, *, sealer: sealing.Sealer, seed_entry: str 
     return delivered.token_id
 
 
-class WriterKeyMissing(pulumi_config.SlotRefused):
-    """A backed namespace whose writer key `physical`'s state does not hold, or holds in no usable shape."""
+class BucketKeyMissing(pulumi_config.SlotRefused):
+    """A scope whose backup bucket key `physical`'s state does not hold, or holds in no usable shape."""
 
     def __init__(self, message: str, *, scope: str) -> None:
         super().__init__(message)
         self.scope: str = scope
 
 
-#: Which half of a minted B2 key each field of a sealed writer key carries:
+#: Which half of a minted B2 key each field of a sealed bucket key carries:
 #: the fields are a mover's (`conventions.WRITER_KEY_FIELDS`), the halves are
 #: the names `physical` exports each key under. A field the row does not
 #: carry is refused by the seal itself, so the two cannot drift apart unseen.
 WRITER_KEY_HALVES: dict[str, str] = {'AWS_ACCESS_KEY_ID': 'id', 'AWS_SECRET_ACCESS_KEY': 'secret'}
 
 
-def _writer_key(keys: object, scope: str, *, physical: str) -> dict[str, str]:
-    """One scope's key out of `physical`'s `backup_keys` export, by field; `WriterKeyMissing` where it is not there.
+def _bucket_key(keys: object, scope: str, *, physical: str) -> dict[str, str]:
+    """One scope's key out of `physical`'s `backup_keys` export, by field; `BucketKeyMissing` where it is not there.
 
     Refused by its scope and the half that is wrong, never by its content.
     """
     output = conventions.PHYSICAL_OUTPUTS.backup_keys
     held = cast('dict[str, object]', keys).get(scope) if isinstance(keys, dict) else None
     if not isinstance(held, dict):
-        raise WriterKeyMissing(
-            f'the `{physical}` stack exports no writer key for `{scope}` in `{output}`; '
-            f"`{physical}`'s apply after the census names its namespace mints it",
+        raise BucketKeyMissing(
+            f'the `{physical}` stack exports no key for `{scope}` in `{output}`; '
+            f"`{physical}`'s apply after the scope is declared mints it",
             scope=scope,
         )
     halves = cast('dict[str, object]', held)
@@ -576,22 +579,58 @@ def _writer_key(keys: object, scope: str, *, physical: str) -> dict[str, str]:
                 output=output,
             )
         if not isinstance(value, str) or not value:
-            raise WriterKeyMissing(
+            raise BucketKeyMissing(
                 f'the `{physical}` stack exports the {half} of `{scope}` as no key half', scope=scope
             )
         fields[field] = value
     return fields
 
 
-class UnknownWriterKey(ValueError):
-    """A sealed value `b2-writer seal --only` was asked for, which is no writer key it seals."""
+class UnknownBucketKey(ValueError):
+    """A sealed value a bucket key's `seal --only` was asked for, which is no key that command seals."""
 
-    def __init__(self, name: str) -> None:
+    def __init__(self, name: str, *, row: str, values: Mapping[str, conventions.sealed.SealedValue]) -> None:
         super().__init__(
-            f'{name!r} is no writer key `{B2_WRITER_ROW} seal` seals; the writer keys are '
-            f'{", ".join(value.name for value in conventions.sealed.WRITER_KEYS_BY_SCOPE.values())}'
+            f'{name!r} is no key `{row} seal` seals; it seals {", ".join(value.name for value in values.values())}'
         )
         self.name: str = name
+        self.row: str = row
+
+
+def _seal_bucket_keys(
+    values: Mapping[str, conventions.sealed.SealedValue], *, row: str, sealer: sealing.Sealer, only: str | None
+) -> list[str]:
+    """Seal the backup bucket keys `values` names, by scope, out of `physical`'s state; returns what was written.
+
+    The one mechanism behind `b2_writer_seal` and `b2_reader_seal`, which
+    differ in the rows they seal and nothing else. `only` names one row's
+    sealed value, and a name of none refuses (`UnknownBucketKey`) before
+    anything is read. Each declaring stack is held to exist, then `physical`
+    is opened through `sealer` and every key read out of its `backup_keys`
+    export before any is sealed, so a key `physical` does not export yet
+    refuses the run before anything is written (`BucketKeyMissing`).
+    """
+    rows = [(scope, value) for scope, value in values.items() if only is None or value.name == only]
+    if only is not None and not rows:
+        raise UnknownBucketKey(only, row=row, values=values)
+    # Each declaring stack once, before `physical` is read.
+    for value in {value.stack: value for _, value in rows}.values():
+        _ = sealer.stack(value)
+    physical = sealer.open_stack(PHYSICAL_STACK)
+    log.info("reading the backup bucket's keys for `%s` out of the %s stack's state", row, physical.name)
+    keys = physical.outputs().get(conventions.PHYSICAL_OUTPUTS.backup_keys)
+    held = [(value, _bucket_key(keys, scope, physical=physical.name)) for scope, value in rows]
+    sealed = [(value, sealer.seal(value, fields)) for value, fields in held]
+    for value, ciphertext in sealed:
+        sealer.write(value, ciphertext)
+    for stack in sorted({value.stack for value, _ in sealed}):
+        log.info(
+            'sealed %d backup bucket keys into the %s stack; commit its file, and the Secrets it declares carry '
+            'their key from its next apply',
+            sum(1 for value, _ in sealed if value.stack == stack),
+            stack,
+        )
+    return [value.name for value, _ in sealed]
 
 
 def b2_writer_seal(*, sealer: sealing.Sealer, only: str | None = None) -> list[str]:
@@ -599,7 +638,7 @@ def b2_writer_seal(*, sealer: sealing.Sealer, only: str | None = None) -> list[s
 
     Returns the names of the sealed values written: every row of
     `conventions.sealed.WRITER_KEYS_BY_SCOPE`, or the one named `only`, which a name of none of them
-    refuses (`UnknownWriterKey`) before anything is read.
+    refuses (`UnknownBucketKey`) before anything is read.
 
     `physical` mints each key from the B2 management key, one per scope on the
     backup bucket, and exports them under `backup_keys` in its state, which
@@ -619,7 +658,7 @@ def b2_writer_seal(*, sealer: sealing.Sealer, only: str | None = None) -> list[s
     `sealer` read the cluster's kubeconfig out of it, and refuses a stack
     with none (`sealing.cluster_kubeconfig`).
 
-    The etcd snapshots' key is the exception to both: one Secret reads it,
+    The etcd snapshots' writer key is the exception to both: one Secret reads it,
     so it is sealed **strict** to that Secret's name, and its consumer is the
     platform's, so it goes into `k8s-base` (`conventions.sealed.ETCD_WRITER_KEY`).
     `only` seals one key alone, which is how this one is sealed at the
@@ -634,31 +673,32 @@ def b2_writer_seal(*, sealer: sealing.Sealer, only: str | None = None) -> list[s
     Every run seals afresh, so it rewrites every value whatever the file
     held (`sealing.py`).
     """
-    rows = [
-        (scope, value)
-        for scope, value in conventions.sealed.WRITER_KEYS_BY_SCOPE.items()
-        if only is None or value.name == only
-    ]
-    if only is not None and not rows:
-        raise UnknownWriterKey(only)
-    # Each declaring stack once, before `physical` is read.
-    for value in {value.stack: value for _, value in rows}.values():
-        _ = sealer.stack(value)
-    physical = sealer.open_stack(PHYSICAL_STACK)
-    log.info("reading the backup bucket's writer keys out of the %s stack's state", physical.name)
-    keys = physical.outputs().get(conventions.PHYSICAL_OUTPUTS.backup_keys)
-    held = [(value, _writer_key(keys, scope, physical=physical.name)) for scope, value in rows]
-    sealed = [(value, sealer.seal(value, fields)) for value, fields in held]
-    for value, ciphertext in sealed:
-        sealer.write(value, ciphertext)
-    for stack in sorted({value.stack for value, _ in sealed}):
-        log.info(
-            'sealed %d writer keys into the %s stack; commit its file, and the Secrets of each namespace it '
-            'declares carry their key from its next apply',
-            sum(1 for value, _ in sealed if value.stack == stack),
-            stack,
-        )
-    return [value.name for value, _ in sealed]
+    return _seal_bucket_keys(conventions.sealed.WRITER_KEYS_BY_SCOPE, row=B2_WRITER_ROW, sealer=sealer, only=only)
+
+
+def b2_reader_seal(*, sealer: sealing.Sealer, only: str | None = None) -> list[str]:
+    """Seal the backup bucket's read-only keys out of `physical`'s state, each strict into `k8s-base`.
+
+    Returns the names of the sealed values written: every row of
+    `conventions.sealed.READER_KEYS_BY_SCOPE`, or the one named `only`, which
+    a name of none of them refuses (`UnknownBucketKey`) before anything is
+    read. Today that is the etcd snapshots' reader, `reader-etcd`, which the
+    restore-verify lists and downloads the newest snapshot with.
+
+    The mechanism is `b2_writer_seal`'s: `physical` mints each key with the
+    bucket and exports it under `backup_keys`, which opens under that stack's
+    own passphrase, and nothing here opens the kit. A key that only reads is
+    sealed apart from the writer keys because it is not one, and a command or
+    a row map named for writers would say otherwise. Each is sealed strict,
+    since one Secret reads it under one name, into the stack its row names.
+
+    Every refusal comes before anything is written: a cluster whose
+    certificate could not be fetched, which building `sealer` does; a
+    declaring stack that does not exist; and a scope whose key `physical`
+    does not export yet, which a reader declared since `physical`'s last
+    apply is (`BucketKeyMissing`). Every run seals afresh.
+    """
+    return _seal_bucket_keys(conventions.sealed.READER_KEYS_BY_SCOPE, row=B2_READER_ROW, sealer=sealer, only=only)
 
 
 #: Where the legacy cluster holds Authelia's storage key, and the pipe that

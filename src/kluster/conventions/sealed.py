@@ -38,7 +38,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from types import MappingProxyType
 
-from kluster.conventions.backup import BACKED_NAMESPACES, ETCD_SCOPE, BackupFamily, writer_scope
+from kluster.conventions.backup import BACKED_NAMESPACES, ETCD_READER_SCOPE, ETCD_SCOPE, BackupFamily, writer_scope
 from kluster.conventions.cluster import (
     BGP_SECRETS_NAMESPACE,
     CERT_MANAGER_NAMESPACE,
@@ -58,9 +58,11 @@ __all__ = (
     'DKIM_EXIM',
     'DNS01_TOKEN',
     'ETCD_DRILL_IDENTITY',
+    'ETCD_READER_KEY',
     'ETCD_WRITER_KEY',
     'NAMESPACE_WRITER_KEYS',
     'OCI_METRICS',
+    'READER_KEYS_BY_SCOPE',
     'STATE_UPKEEP_BUNDLE',
     'VALUES',
     'WRITER_KEYS_BY_SCOPE',
@@ -229,6 +231,23 @@ ETCD_WRITER_KEY = SealedValue(
     stack=STACK_NAMES.k8s_base,
 )
 
+#: The backup bucket's `etcd-reader` key, which the etcd restore-verify lists
+#: and downloads the newest snapshot with: `physical` mints it with the bucket,
+#: as the scope `ETCD_READER_SCOPE` (`components.backup.etcd_reader_scope`),
+#: `listFiles` and `readFiles` on the snapshots' prefix and nothing else, and
+#: `credentials derived b2-reader seal` seals it out of that stack's state.
+#: A key of its own rather than the uploader's, so that nothing the verify
+#: runs can write a snapshot a recovery would take for the newest. Strict, as
+#: `ETCD_WRITER_KEY` is: one Secret reads it, under one name. Its data keys are
+#: the fields the bucket scripts authorize a key from, which are a mover's
+#: (`WRITER_KEY_FIELDS`).
+ETCD_READER_KEY = SealedValue(
+    name=f'reader-{ETCD_SCOPE}',
+    namespace=ETCD_BACKUP_NAMESPACE,
+    keys=tuple(sorted(WRITER_KEY_FIELDS)),
+    stack=STACK_NAMES.k8s_base,
+)
+
 #: The etcd restore-verify's age identity, private half: what the monthly
 #: verify decrypts the newest etcd snapshot with before it restores it into a
 #: scratch member. Its own identity rather than the state-backend drill's,
@@ -333,6 +352,11 @@ WRITER_KEYS_BY_SCOPE: Mapping[str, SealedValue] = MappingProxyType(
     }
 )
 
+#: Every read-only key on the backup bucket that `credentials derived b2-reader
+#: seal` seals out of `physical`'s state, by the scope `physical` exports it
+#: under: the etcd snapshots' (`ETCD_READER_KEY`).
+READER_KEYS_BY_SCOPE: Mapping[str, SealedValue] = MappingProxyType({ETCD_READER_SCOPE: ETCD_READER_KEY})
+
 #: Every sealed value, by name.
 VALUES: Mapping[str, SealedValue] = MappingProxyType(
     {
@@ -345,6 +369,7 @@ VALUES: Mapping[str, SealedValue] = MappingProxyType(
             STATE_UPKEEP_BUNDLE,
             B2_FRESHNESS_DUMPS,
             ETCD_WRITER_KEY,
+            ETCD_READER_KEY,
             ETCD_DRILL_IDENTITY,
             DKIM_EXIM,
             AUTHELIA_STORAGE_KEY,

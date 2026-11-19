@@ -9,13 +9,14 @@ slips, and it fails at exactly the moment it is needed.
 """
 
 import inspect
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any
 
 import pulumi
 import pytest
 import pytest_asyncio
+from b2_api import API_URL, AUTHORIZE_URL, DOWNLOAD_URL, FakeApi
 from mock_monitor import Recorder, declaring, run_with
 from pulumi_b2.outputs import BucketLifecycleRule
 
@@ -28,6 +29,7 @@ from kluster.components.backup import (
     Scope,
     UnseparatedPrefix,
     barman_scope,
+    etcd_reader_scope,
     etcd_scope,
     s3_endpoint,
     volsync_scope,
@@ -86,7 +88,7 @@ def build(scopes: Sequence[Scope] = SCOPES) -> BackupBucket:
 
 @pytest.mark.asyncio
 async def test_no_key_can_delete_a_file() -> None:
-    scopes = [etcd_scope(), volsync_scope('immich'), barman_scope('immich')]
+    scopes = [etcd_scope(), etcd_reader_scope(), volsync_scope('immich'), barman_scope('immich')]
     bucket = build(scopes)
     # The rule is about every key there is, so which keys there are is pinned
     # before the loop: a bucket that minted none would satisfy the loop below
@@ -104,18 +106,118 @@ async def test_no_key_can_delete_a_file() -> None:
 
 
 @pytest.mark.asyncio
-async def test_a_writer_key_can_still_read_its_own_index() -> None:
-    bucket = build()
-    assert set(bucket.keys) == {scope.name for scope in SCOPES}
+async def test_a_store_keeping_writer_key_can_still_read_its_own_index() -> None:
+    """Every family's key lists, reads and writes: a literally write-only key cannot back a store up.
 
-    for key in bucket.keys.values():
+    restic and barman list and read their own index before they write, and
+    `vmbackup` lists the destination to upload only what it lacks. Over every
+    family `physical` mints a key for, which is where that requirement lives;
+    the etcd snapshots' uploader keeps no store and is held to its own calls
+    below. B2's names for the three, so the requirement is held against what a
+    mover does rather than against the component's own tuple.
+    """
+    scopes = [scope('a-namespace') for scope in physical.FAMILY_SCOPES.values()]
+    bucket = build(scopes)
+    assert set(bucket.keys) == {scope.name for scope in scopes}
+    assert scopes
+
+    for name, key in bucket.keys.items():
         capabilities = await key.capabilities.future()
         assert capabilities is not None
-        # A literally write-only key cannot back anything up: restic and
-        # barman list and read their own index before they write. B2's names
-        # for the three, so the requirement is held against what a mover does
-        # rather than against the component's own tuple.
-        assert {'listFiles', 'readFiles', 'writeFiles'} <= set(capabilities)
+        assert {'listFiles', 'readFiles', 'writeFiles'} <= set(capabilities), name
+
+
+#: A snapshot already in the bucket, and a file of another consumer beside it.
+STORED_SNAPSHOT = f'{conventions.ETCD_SNAPSHOT_PREFIX}/kluster-2026-11-17T06:05:00Z.snap.age'
+STORED_ELSEWHERE = metrics_repo_path('monitoring', 'recent') + '/backup_complete.ignore'
+
+#: One call as a key: the API's name and the body, answered with the status.
+Call = Callable[[str, dict[str, Any]], int]
+
+
+async def as_declared(scope: Scope) -> tuple[FakeApi, Call]:
+    """An account holding the bucket and a key minted as the component declares `scope`'s, and a call as that key.
+
+    The key's capabilities, bucket and prefix are read off the declared
+    `ApplicationKey`, and the account answers each endpoint as the API
+    reference states its capability (`b2_api`), so what is held is what B2
+    lets the declared key do rather than what the declaration lists.
+    """
+    bucket = build([scope])
+    key = bucket.keys[scope.name]
+    capabilities = await key.capabilities.future()
+    bucket_ids = await key.bucket_ids.future()
+    assert capabilities is not None
+    assert bucket_ids is not None
+    (bucket_id,) = bucket_ids
+    api = FakeApi()
+    api.buckets[bucket_id] = {'bucketId': bucket_id, 'bucketName': BUCKET_NAME, 'bucketType': 'allPrivate'}
+    api.objects[bucket_id] = [STORED_SNAPSHOT, STORED_ELSEWHERE]
+    held = api.add_key(scope.name, tuple(capabilities), bucket_id=bucket_id, name_prefix=await key.name_prefix.future())
+    token = api.get(AUTHORIZE_URL, auth=(held.key_id, held.secret), timeout=10).json()['authorizationToken']
+
+    def call(endpoint: str, body: dict[str, Any]) -> int:
+        host = DOWNLOAD_URL if endpoint == 'b2_download_file_by_id' else API_URL
+        url = f'{host}/b2api/v3/{endpoint}'
+        return api.post(url, json=body, headers={'Authorization': token}, timeout=10).status_code
+
+    return api, call
+
+
+def snapshot_named(name: str) -> dict[str, Any]:
+    return {'bucketId': BUCKET_ID, 'fileName': name}
+
+
+@pytest.mark.asyncio
+async def test_the_etcd_reader_lists_and_downloads_the_snapshots_and_can_do_nothing_else() -> None:
+    """The restore-verify's key reads the newest snapshot back, and cannot write one or reach another prefix.
+
+    Both a recovery and the restore-verify take the newest name under the
+    prefix, so a reading key that could upload would let its consumer plant
+    the snapshot a recovery bootstraps from.
+    """
+    api, call = await as_declared(etcd_reader_scope())
+    prefix = f'{conventions.ETCD_SNAPSHOT_PREFIX}/'
+
+    assert call('b2_list_file_names', {'bucketId': BUCKET_ID, 'prefix': prefix, 'maxFileCount': 100}) == 200
+    assert call('b2_download_file_by_id', {'fileId': api.file_id(BUCKET_ID, STORED_SNAPSHOT)}) == 200
+
+    planted = f'{prefix}kluster-2099-01-01T00:00:00Z.snap.age'
+    assert call('b2_get_upload_url', {'bucketId': BUCKET_ID}) == 401
+    assert call('b2_start_large_file', snapshot_named(planted) | {'contentType': 'b2/x-auto'}) == 401
+    assert call('b2_hide_file', snapshot_named(STORED_SNAPSHOT)) == 401
+    assert call('b2_list_file_names', {'bucketId': BUCKET_ID, 'prefix': 'vm/', 'maxFileCount': 100}) == 401
+    assert call('b2_download_file_by_id', {'fileId': api.file_id(BUCKET_ID, STORED_ELSEWHERE)}) == 401
+    assert api.objects[BUCKET_ID] == [STORED_SNAPSHOT, STORED_ELSEWHERE]
+
+
+@pytest.mark.asyncio
+async def test_the_etcd_uploader_can_upload_a_snapshot_whole_or_in_parts_and_cannot_list_one() -> None:
+    """The snapshot job's key makes the calls its uploader makes, and the reading is another key's.
+
+    `talos-backup` puts a snapshot in one request or, past the transfer
+    manager's part size, as a multipart upload it completes or aborts
+    (`PutObject`, the multipart create, part, complete and abort); in the
+    native API those are an upload address and the large-file calls.
+    """
+    api, call = await as_declared(etcd_scope())
+    upload = f'{conventions.ETCD_SNAPSHOT_PREFIX}/kluster-2026-11-18T06:05:00Z.snap.age'
+
+    assert call('b2_get_upload_url', {'bucketId': BUCKET_ID}) == 200
+    assert call('b2_start_large_file', snapshot_named(upload) | {'contentType': 'b2/x-auto'}) == 200
+    (whole,) = api.large_files
+    assert call('b2_get_upload_part_url', {'fileId': whole}) == 200
+    assert call('b2_finish_large_file', {'fileId': whole, 'partSha1Array': []}) == 200
+    assert upload in api.objects[BUCKET_ID]
+
+    aborted = upload.replace('06:05', '07:05')
+    assert call('b2_start_large_file', snapshot_named(aborted) | {'contentType': 'b2/x-auto'}) == 200
+    (unfinished,) = api.large_files
+    assert call('b2_cancel_large_file', {'fileId': unfinished}) == 200
+
+    prefix = f'{conventions.ETCD_SNAPSHOT_PREFIX}/'
+    assert call('b2_list_file_names', {'bucketId': BUCKET_ID, 'prefix': prefix, 'maxFileCount': 100}) == 401
+    assert call('b2_download_file_by_id', {'fileId': api.file_id(BUCKET_ID, STORED_SNAPSHOT)}) == 401
 
 
 @pytest.mark.asyncio
@@ -300,6 +402,37 @@ def test_a_hide_repeating_another_scopes_prefix_is_refused() -> None:
     with pytest.raises(OverlappingHide) as refused:
         build([pruning, hiding])
     assert (refused.value.scope, refused.value.other) == ('hiding', 'pruning')
+
+
+@pytest.mark.asyncio
+async def test_a_scope_that_cannot_write_may_read_a_hiding_scopes_prefix() -> None:
+    """A key that writes nothing puts no file under the prefix, so the hide there retires nothing of its.
+
+    The etcd snapshots' reader is this case: it reads the prefix whose hide
+    retires the snapshots, and each key reaches the prefix it was declared on.
+    """
+    hiding = Scope(name='hiding', prefix='shared/', hide_after_days=3)
+    reading = Scope(name='reading', prefix='shared/', capabilities=('listFiles', 'readFiles'))
+
+    bucket = build([hiding, reading])
+
+    assert {name: await key.name_prefix.future() for name, key in bucket.keys.items()} == {
+        'hiding': 'shared/',
+        'reading': 'shared/',
+    }
+
+
+@pytest.mark.parametrize('capabilities', [('writeFiles',), ('listFiles', 'readFiles', 'writeFiles')])
+def test_a_scope_that_writes_under_a_hiding_scopes_prefix_is_refused_whatever_else_it_may_do(
+    capabilities: tuple[str, ...],
+) -> None:
+    # Its uploads are files the hide reaches, whether or not it reads them.
+    hiding = Scope(name='hiding', prefix='shared/', hide_after_days=3)
+    writing = Scope(name='writing', prefix='shared/', capabilities=capabilities)
+
+    with pytest.raises(OverlappingHide) as refused:
+        build([writing, hiding])
+    assert (refused.value.scope, refused.value.other) == ('hiding', 'writing')
 
 
 @pytest.mark.asyncio

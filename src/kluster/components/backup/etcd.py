@@ -27,9 +27,9 @@ carries its definition and it is declared untyped.
 
 **Its bucket credential is the `etcd` scope's writer key**, which `physical`
 mints with the bucket (`etcd_scope`) and `credentials derived b2-writer seal`
-seals into `k8s-base` (`conventions.sealed.ETCD_WRITER_KEY`). The key lists,
-reads and writes the prefix and cannot delete; an upload asks for nothing but
-writes. Until its ciphertext is in the configuration, nothing is declared but
+seals into `k8s-base` (`conventions.sealed.ETCD_WRITER_KEY`). The key writes
+under the prefix and does nothing else: it cannot list, read or delete, and an
+upload asks for nothing more. Until its ciphertext is in the configuration, nothing is declared but
 the namespace and the `ServiceAccount`: no CronJob, and so no series for the
 family's rules to read (`kluster.lib.k8s.sealed_value`, physical/bring-up.md
 §1).

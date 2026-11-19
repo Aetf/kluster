@@ -56,7 +56,7 @@ from pulumi.runtime import rpc
 from scratch_projects import cli_directories, scrubbed
 
 from kluster import conventions
-from kluster.conventions.backup import BACKED_NAMESPACES, ETCD_SCOPE, writer_scope
+from kluster.conventions.backup import BACKED_NAMESPACES, ETCD_READER_SCOPE, ETCD_SCOPE, writer_scope
 from kluster.lib import bundle, pulumi_cli
 from kluster.lib.k8s import rendered_template
 from kluster.lib.state_backend import settings
@@ -1449,13 +1449,19 @@ WRITER_ROWS = {
     },
 }
 
-#: Every stack a writer key is sealed into: the one that declares what reads
+#: The etcd snapshots' read-only key, as the stack's state carries it beside
+#: the writer keys.
+READER_EXPORTED = {ETCD_READER_SCOPE: {'id': f'{ETCD_READER_SCOPE}-id', 'secret': f'{ETCD_READER_SCOPE}-secret'}}
+
+#: Every stack a bucket key is sealed into: the one that declares what reads
 #: it, by its row.
-DECLARING = sorted({value.stack for value in WRITER_ROWS.values()})
+DECLARING = sorted(
+    {value.stack for value in (*WRITER_ROWS.values(), *conventions.sealed.READER_KEYS_BY_SCOPE.values())}
+)
 
 
 def nothing_written(stacks: Stacks) -> bool:
-    """Whether no stack a writer key is sealed into holds anything in the clear."""
+    """Whether no stack a bucket key is sealed into holds anything in the clear."""
     return not any(stacks.runner(stack).plain for stack in DECLARING)
 
 
@@ -1471,8 +1477,12 @@ class StatePulumi(PathPulumi):
 
 @pytest.fixture
 def backed(stacks: Stacks) -> Stacks:
-    """`apps` exists beside the two, and `physical`'s state exports every writer key the census names."""
-    stacks.runners[PHYSICAL] = StatePulumi(stacks=[PHYSICAL], outputs={BACKUP_KEYS: EXPORTED})
+    """`apps` exists beside the two, and `physical`'s state exports every key the bucket carries.
+
+    Every writer key the census names, and the etcd snapshots' reader beside
+    them, as `physical` exports them all under one output.
+    """
+    stacks.runners[PHYSICAL] = StatePulumi(stacks=[PHYSICAL], outputs={BACKUP_KEYS: EXPORTED | READER_EXPORTED})
     stacks.runner(APPS).stacks.append(APPS)
     return stacks
 
@@ -1530,7 +1540,7 @@ def test_the_etcd_snapshots_key_physical_does_not_export_refuses_its_seal_before
     }
     sealer = sealing.Sealer(certificate='', open_stack=backed.open, run=sealed_as_marked)
 
-    with pytest.raises(derived.WriterKeyMissing) as refused:
+    with pytest.raises(derived.BucketKeyMissing) as refused:
         _ = derived.b2_writer_seal(sealer=sealer, only=conventions.sealed.ETCD_WRITER_KEY.name)
 
     assert refused.value.scope == ETCD_SCOPE
@@ -1542,7 +1552,7 @@ def test_an_only_that_names_no_writer_key_refuses_before_physical_is_read(backed
     name = conventions.sealed.ALERT_WEBHOOK.name
     sealer = sealing.Sealer(certificate='', open_stack=backed.open, run=sealed_as_marked)
 
-    with pytest.raises(derived.UnknownWriterKey) as refused:
+    with pytest.raises(derived.UnknownBucketKey) as refused:
         _ = derived.b2_writer_seal(sealer=sealer, only=name)
 
     assert refused.value.name == name
@@ -1557,7 +1567,7 @@ def test_a_writer_key_physical_does_not_export_refuses_the_seal_before_anything_
     backed.runner(PHYSICAL).outputs = {BACKUP_KEYS: {scope: key for scope, key in EXPORTED.items() if scope != missing}}
     sealer = sealing.Sealer(certificate='', open_stack=backed.open, run=sealed_as_marked)
 
-    with pytest.raises(derived.WriterKeyMissing) as refused:
+    with pytest.raises(derived.BucketKeyMissing) as refused:
         _ = derived.b2_writer_seal(sealer=sealer)
 
     assert refused.value.scope == missing
@@ -1578,7 +1588,7 @@ def test_a_writer_key_half_that_is_not_a_key_half_refuses_the_seal_before_anythi
     backed.runner(PHYSICAL).outputs = {BACKUP_KEYS: EXPORTED | {scope: exported}}
     sealer = sealing.Sealer(certificate='', open_stack=backed.open, run=sealed_as_marked)
 
-    with pytest.raises(derived.WriterKeyMissing) as refused:
+    with pytest.raises(derived.BucketKeyMissing) as refused:
         _ = derived.b2_writer_seal(sealer=sealer)
 
     assert refused.value.scope == scope
@@ -1611,6 +1621,83 @@ def test_a_writer_key_seal_into_a_stack_that_does_not_exist_reads_nothing_of_phy
     assert not [args for args in backed.runner(PHYSICAL).invocations if args[:2] == ['stack', 'output']]
 
 
+# -- the read-only keys -------------------------------------------------------
+
+READER = conventions.sealed.ETCD_READER_KEY
+
+
+def test_the_etcd_snapshots_reader_is_sealed_out_of_physicals_state_for_its_one_secret(
+    stacks: Stacks, sealer: sealing.Sealer, kubeseal: str, key_pair: KeyPair
+) -> None:
+    """The key `physical` exports under the reader's scope is what the reader's Secret opens to, under its name alone.
+
+    Sealed by the real tool and opened as the controller opens the
+    SealedSecret its row declares, so what reaches the cluster is the pair
+    the stack minted, under the fields the bucket scripts authorize from.
+    `physical` exports no writer key here, so a seal that also read those
+    would refuse.
+    """
+    exported = {'id': 'the-reader-key-id', 'secret': 'the-reader-key'}
+    stacks.runners[PHYSICAL] = StatePulumi(stacks=[PHYSICAL], outputs={BACKUP_KEYS: {ETCD_READER_SCOPE: exported}})
+
+    sealed = derived.b2_reader_seal(sealer=sealer)
+
+    assert sealed == [READER.name]
+    ciphertexts = written(stacks, READER)
+    opened_as = {field: exported[half] for field, half in derived.WRITER_KEY_HALVES.items()}
+    assert unseal(kubeseal, key_pair, READER, ciphertexts) == opened_as
+    with pytest.raises(Unopened):
+        _ = unseal(kubeseal, key_pair, READER, ciphertexts, name=conventions.sealed.ETCD_WRITER_KEY.name)
+    assert stacks.runner(PHYSICAL).plain == {}
+
+
+def test_the_reader_seal_writes_the_readers_paths_and_no_writer_keys(backed: Stacks) -> None:
+    # `physical` exports every key at once; the writer keys are the other
+    # command's, so a seal that walked the whole export would write them too.
+    sealer = sealing.Sealer(certificate='', open_stack=backed.open, run=sealed_as_marked)
+
+    sealed = derived.b2_reader_seal(sealer=sealer)
+
+    assert sealed == [value.name for value in conventions.sealed.READER_KEYS_BY_SCOPE.values()]
+    written_paths = {stack: set(backed.runner(stack).plain) for stack in DECLARING}
+    expected = {
+        stack: {
+            value.path(field)
+            for value in conventions.sealed.READER_KEYS_BY_SCOPE.values()
+            if value.stack == stack
+            for field in value.keys
+        }
+        for stack in DECLARING
+    }
+    assert written_paths == expected
+
+
+def test_an_only_that_names_a_writer_key_refuses_the_reader_seal_before_physical_is_read(backed: Stacks) -> None:
+    # The uploader's key is sealed by the writer command, and only there.
+    name = conventions.sealed.ETCD_WRITER_KEY.name
+    sealer = sealing.Sealer(certificate='', open_stack=backed.open, run=sealed_as_marked)
+
+    with pytest.raises(derived.UnknownBucketKey) as refused:
+        _ = derived.b2_reader_seal(sealer=sealer, only=name)
+
+    assert (refused.value.name, refused.value.row) == (name, derived.B2_READER_ROW)
+    assert not [args for args in backed.runner(PHYSICAL).invocations if args[:2] == ['stack', 'output']]
+    assert nothing_written(backed)
+
+
+def test_a_reader_physical_does_not_export_refuses_its_seal_before_anything_is_written(backed: Stacks) -> None:
+    # The state before the `physical` apply that declares the reader: the
+    # writer keys are there, and the reader is not.
+    backed.runner(PHYSICAL).outputs = {BACKUP_KEYS: EXPORTED}
+    sealer = sealing.Sealer(certificate='', open_stack=backed.open, run=sealed_as_marked)
+
+    with pytest.raises(derived.BucketKeyMissing) as refused:
+        _ = derived.b2_reader_seal(sealer=sealer)
+
+    assert refused.value.scope == ETCD_READER_SCOPE
+    assert nothing_written(backed)
+
+
 @dataclass
 class UnderOwnPassphrases:
     """Every stack's recorded `pulumi` behind the one runner a `credentials` command starts.
@@ -1635,13 +1722,28 @@ class UnderOwnPassphrases:
         return self.runners[stack](args, cwd=cwd, env=env, stdin=stdin)
 
 
-def test_the_writer_seal_needs_no_kit_on_a_machine_holding_both_passphrase_slots(
-    tmp_path: Path, credential_files: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize(
+    ('row', 'value', 'scope'),
+    [
+        (derived.B2_WRITER_ROW, conventions.sealed.ETCD_WRITER_KEY, ETCD_SCOPE),
+        (derived.B2_READER_ROW, READER, ETCD_READER_SCOPE),
+    ],
+    ids=[derived.B2_WRITER_ROW, derived.B2_READER_ROW],
+)
+def test_a_bucket_key_seal_needs_no_kit_on_a_machine_holding_both_passphrase_slots(
+    tmp_path: Path,
+    credential_files: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    row: str,
+    value: conventions.sealed.SealedValue,
+    scope: str,
 ) -> None:
-    """`credentials derived b2-writer seal --only writer-etcd`, the command as the operator runs it.
+    """`credentials derived <row> seal --only <value>`, the command as the operator runs it.
 
     It reads `physical`'s state under that stack's passphrase and writes into
-    `k8s-base` under the stack passphrase, each from its workstation slot.
+    the row's stack under the stack passphrase, each from its workstation
+    slot. Both commands that seal a bucket key, the etcd snapshots' uploader
+    key and their reader, are held to it.
     The kit is a real one, locked, every prompt fails the case, and the
     escrow holds nothing, so a run that reached for either would stop. Only
     the certificate fetch is stood in for, which reads the kubeconfig as the
@@ -1659,14 +1761,13 @@ def test_the_writer_seal_needs_no_kit_on_a_machine_holding_both_passphrase_slots
         raise AssertionError(f'the run prompted: {prompt}')
 
     monkeypatch.setattr('getpass.getpass', unasked)
-    row = conventions.sealed.ETCD_WRITER_KEY
     physical_state: dict[str, object] = {
         conventions.PHYSICAL_OUTPUTS.kubeconfig: KUBECONFIG,
-        BACKUP_KEYS: {ETCD_SCOPE: EXPORTED[ETCD_SCOPE]},
+        BACKUP_KEYS: {scope: (EXPORTED | READER_EXPORTED)[scope]},
     }
     backend = UnderOwnPassphrases(
-        runners={PHYSICAL: PathPulumi(outputs=physical_state), row.stack: PathPulumi()},
-        passphrases={PHYSICAL: 'the-physical-passphrase', row.stack: 'the-stack-passphrase'},
+        runners={PHYSICAL: PathPulumi(outputs=physical_state), value.stack: PathPulumi()},
+        passphrases={PHYSICAL: 'the-physical-passphrase', value.stack: 'the-stack-passphrase'},
     )
     monkeypatch.setattr(pulumi_cli, 'run_pulumi', backend)
 
@@ -1688,19 +1789,19 @@ def test_the_writer_seal_needs_no_kit_on_a_machine_holding_both_passphrase_slots
             '--escrow',
             str(tmp_path / 'escrow'),
             'derived',
-            derived.B2_WRITER_ROW,
+            row,
             'seal',
             '--only',
-            row.name,
+            value.name,
             '--bundle-dir',
             str(bundle),
         ]
     )
 
     assert status == 0
-    assert backend.runners[row.stack].plain == {
-        row.path('AWS_ACCESS_KEY_ID'): f'AgB-sealed-{ETCD_SCOPE}-id',
-        row.path('AWS_SECRET_ACCESS_KEY'): f'AgB-sealed-{ETCD_SCOPE}-secret',
+    assert backend.runners[value.stack].plain == {
+        value.path('AWS_ACCESS_KEY_ID'): f'AgB-sealed-{scope}-id',
+        value.path('AWS_SECRET_ACCESS_KEY'): f'AgB-sealed-{scope}-secret',
     }
 
 

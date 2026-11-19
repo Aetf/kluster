@@ -13,13 +13,15 @@ compromised app namespace or a runaway CI job must not be able to destroy the
 safety net it lives inside, and the design answers that with two rules which
 only work together (storage.md §4, backup-integrity rules):
 
--   **No key in automation carries `deleteFiles`.** A writer key is
+-   **No key in automation carries `deleteFiles`.** A store's writer key is
     `listFiles + readFiles + writeFiles` — list and read included because
     restic and barman cannot *back up* without reading their own index, and
     `vmbackup` lists the destination to upload only the parts it lacks, so a
-    literally write-only key is not an option. Without the delete capability
-    a B2 deletion degrades to a **hide**: the version stops being current and
-    stays recoverable.
+    literally write-only key is not an option for them. The etcd snapshots'
+    uploader reads nothing, and its key is `writeFiles` alone; the key that
+    reads the snapshots back is `listFiles + readFiles`, and writes nothing.
+    Without the delete capability a B2 deletion degrades to a **hide**: the
+    version stops being current and stays recoverable.
 -   **A key whose consumer keeps a store in the bucket also carries
     `listBuckets`.** restic, barman and `vmbackup` each read a name that may
     not exist yet — a repository's config, an archive's object, a backup's
@@ -27,7 +29,9 @@ only work together (storage.md §4, backup-integrity rules):
     answers that read with 403 instead of 404 unless the key holds
     `listBuckets`, so without it a store's first backup cannot start. The
     capability reads this bucket's own settings and nothing in it. The etcd
-    snapshots' key goes without: its uploader reads nothing.
+    snapshots' keys go without: the uploader reads nothing, and the reader
+    downloads only a file it has just listed, so it never asks after a name
+    that may be missing.
 -   **A lifecycle rule is what finally removes a hidden version**, after
     `conventions.BACKUP_VERSION_RETENTION_DAYS`. That is the floor under both
     ransomware and a fat finger, and it is also what lets each consumer keep
@@ -69,6 +73,7 @@ import pulumi_b2 as b2
 
 from kluster import conventions
 from kluster.conventions.backup import (
+    ETCD_READER_SCOPE,
     ETCD_SCOPE,
     ETCD_SNAPSHOT_RETENTION_DAYS,
     BackupFamily,
@@ -77,10 +82,10 @@ from kluster.conventions.backup import (
 )
 from putils import Component, own_provider_opts, with_provider
 
-#: The set every writer key carries. `readFiles` and `listFiles` are not
-#: generosity: restic and barman read their own index before every write, and
-#: `vmbackup` lists what the destination holds, so a key without them cannot
-#: take a backup at all.
+#: The base set of a writer key whose consumer keeps a store in the bucket.
+#: `readFiles` and `listFiles` are not generosity: restic and barman read their
+#: own index before every write, and `vmbackup` lists what the destination
+#: holds, so a key without them cannot take a backup at all.
 WRITER_CAPABILITIES: tuple[str, ...] = ('listFiles', 'readFiles', 'writeFiles')
 
 #: What a writer whose consumer keeps a store in the bucket needs: the above,
@@ -101,6 +106,16 @@ WRITER_CAPABILITIES: tuple[str, ...] = ('listFiles', 'readFiles', 'writeFiles')
 #: The grant stands apart from the base set so that it comes out whole: if B2
 #: ever answers a missing name with 404 without it, this line is the change.
 STORE_WRITER_CAPABILITIES: tuple[str, ...] = (*WRITER_CAPABILITIES, 'listBuckets')
+
+#: What an uploader that keeps no store needs: it puts objects and reads none.
+#: The etcd snapshot's calls are `PutObject` and, for a snapshot large enough,
+#: the multipart upload's create, part, complete and abort, and B2 asks
+#: `writeFiles` of every one of them.
+UPLOADER_CAPABILITIES: tuple[str, ...] = ('writeFiles',)
+
+#: What a consumer that reads a prefix back needs: it lists the names and
+#: downloads a file it listed, and writes nothing.
+READER_CAPABILITIES: tuple[str, ...] = ('listFiles', 'readFiles')
 
 #: Unfinished large files are the invisible half of an object-storage bill: a
 #: multipart upload killed mid-flight bills for its parts forever and appears
@@ -144,11 +159,12 @@ class NonPositiveHideAge(ValueError):
 
 
 class OverlappingHide(ValueError):
-    """A hiding scope whose prefix also covers another scope's files.
+    """A hiding scope whose prefix also covers files another scope writes.
 
     B2 applies a rule to every file whose name starts with its prefix, so a
-    hide on a prefix that encloses or repeats another consumer's would retire
-    that consumer's files on the same timer, current backups included.
+    hide on a prefix that encloses or repeats another writer's would retire
+    that consumer's files on the same timer, current backups included. A
+    scope that writes nothing puts no file there for the hide to reach.
     """
 
     def __init__(self, message: str, *, scope: str, other: str) -> None:
@@ -187,10 +203,12 @@ class Scope:
     hide on a timer would delete a live one.
     """
     capabilities: tuple[str, ...] = WRITER_CAPABILITIES
-    """The B2 capabilities the scope's key carries.
+    """The B2 capabilities the scope's key carries, as few as its consumer needs.
 
-    The base writer set unless the consumer needs more: a consumer that keeps
-    a store in the bucket takes `STORE_WRITER_CAPABILITIES`.
+    The base writer set unless the consumer needs another: a consumer that
+    keeps a store in the bucket takes `STORE_WRITER_CAPABILITIES`, an uploader
+    that reads nothing `UPLOADER_CAPABILITIES`, and one that only reads the
+    prefix back `READER_CAPABILITIES`.
     """
 
 
@@ -201,12 +219,37 @@ def etcd_scope() -> Scope:
     the snapshot uploads with once `credentials` has sealed it into `k8s-base`
     (`conventions.sealed.ETCD_WRITER_KEY`). Its retention is the bucket's: a
     snapshot is hidden `ETCD_SNAPSHOT_RETENTION_DAYS` after its upload, since
-    every snapshot is a whole backup on its own. Its key carries the base
-    writer set: the uploader only puts objects, so it never asks B2 about a
-    missing name.
+    every snapshot is a whole backup on its own. Its key is an uploader's,
+    `writeFiles` alone: `talos-backup` puts the object, in parts when it is
+    large, and lists and reads nothing, so it never asks B2 about a missing
+    name either. Reading the snapshots back is `etcd_reader_scope`'s.
     """
     return Scope(
-        name=ETCD_SCOPE, prefix=f'{conventions.ETCD_SNAPSHOT_PREFIX}/', hide_after_days=ETCD_SNAPSHOT_RETENTION_DAYS
+        name=ETCD_SCOPE,
+        prefix=f'{conventions.ETCD_SNAPSHOT_PREFIX}/',
+        hide_after_days=ETCD_SNAPSHOT_RETENTION_DAYS,
+        capabilities=UPLOADER_CAPABILITIES,
+    )
+
+
+def etcd_reader_scope() -> Scope:
+    """The etcd snapshots read back: a listing of the prefix and a download of what it lists, and no write.
+
+    Its own key rather than the uploader's, because whoever reads the
+    snapshots must not be able to write one. A recovery and the
+    restore-verify both take the newest name under the prefix, so a key that
+    could upload would let any code its consumer runs plant the snapshot a
+    recovery bootstraps the cluster from. It is sealed into `k8s-base` for the
+    restore-verify (`conventions.sealed.ETCD_READER_KEY`). It hides nothing:
+    the prefix's retention is `etcd_scope`'s rule, and this scope, writing
+    nothing, puts no file under it. No `listBuckets`: the consumer downloads a
+    file it has just listed, so it never needs B2 to tell a missing name from
+    a refused one.
+    """
+    return Scope(
+        name=ETCD_READER_SCOPE,
+        prefix=f'{conventions.ETCD_SNAPSHOT_PREFIX}/',
+        capabilities=READER_CAPABILITIES,
     )
 
 
@@ -393,13 +436,17 @@ def _check(scopes: Sequence[Scope]) -> None:
         if scope.name in seen:
             raise DuplicateScope(f'scope {scope.name!r} is declared twice', scope=scope.name)
         seen.add(scope.name)
-    # A hide stays on its own consumer's prefix: a hiding scope inside another
-    # scope's prefix is fine, one enclosing or repeating another's is not.
+    # A hide stays on its own consumer's files: a hiding scope inside another
+    # scope's prefix is fine, one enclosing or repeating the prefix of a scope
+    # that writes is not. A scope whose key cannot write puts no file under
+    # its prefix, so the hide can retire nothing of its.
     for scope in scopes:
         if scope.hide_after_days is None:
             continue
         for other in scopes:
-            if other is not scope and other.prefix.startswith(scope.prefix):
+            if other is scope or 'writeFiles' not in other.capabilities:
+                continue
+            if other.prefix.startswith(scope.prefix):
                 raise OverlappingHide(
                     f'scope {scope.name!r} hides files under {scope.prefix!r} {scope.hide_after_days} days after '
                     f'upload, and scope {other.name!r} writes under {other.prefix!r}: B2 would hide that '

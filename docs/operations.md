@@ -823,7 +823,10 @@ preview with `denydefaultprovider not registered`.
     would draw a new password and rewrite the gateway's BGP
     configuration; after stage 9 that sitting seals every writer key
     with the bare `credentials derived b2-writer seal`, the
-    applications' keys with the rest. Until that sitting, both metrics stores wait in `Init` for
+    applications' keys with the rest. Either way it seals the etcd
+    snapshots' read-only key, `reader-etcd`, with
+    `credentials derived b2-reader seal`, which no form of
+    `b2-writer seal` covers. Until that sitting, both metrics stores wait in `Init` for
     the monitoring namespace's writer key. Once it has run, each store
     restores itself from the backup bucket before it starts
     (storage.md §5), and the readings below hold the history to its
@@ -1997,8 +2000,11 @@ nothing from the ones that failed.
    creates, and which the sealing sitting of bring-up stage 6
    (physical/bring-up.md §2) seals, and seals again after a rebuild
    (§3.5), with `credentials derived b2-writer seal --only writer-etcd`.
-   `mise x -- kubectl -n etcd-backup describe pod` names which. Talos
-   writes the first only for the role and the namespace the control
+   `mise x -- kubectl -n etcd-backup describe pod` names which. The
+   same sitting seals the snapshots' read-only key, `reader-etcd`, again
+   with `credentials derived b2-reader seal`; the snapshot does not read
+   that one, so it is never what holds the pod back. Talos writes the
+   Secret `etcd-snapshot` only for the role and the namespace the control
    planes' machine configuration grants (`conventions.ETCD_SNAPSHOT_GRANT`,
    [declarative/physical.md](declarative/physical.md) §2), so a
    `ServiceAccount` that stands with no Secret beside it is outside the
