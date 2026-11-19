@@ -295,9 +295,9 @@ checksum = "sha256:258e830a9e613c8a7a302d6059b4bb3b9758f2f3e1bb8ea0d707ce10a9a72
 url = "https://get.helm.sh/helm-v3.20.2-linux-amd64.tar.gz"
 
 [[tools."http:dash"]]
-version = "0.5.12"
+version = "0.5.12-12"
 backend = "http:dash"
-specifiers = ["0.5.12"]
+specifiers = ["0.5.12-12"]
 
 [tools."http:dash"."platforms.linux-x64"]
 checksum = "sha256:a8902cb6d8650134764a25fb80aec8589d858ef71ece1680a62e84816c37bb04"

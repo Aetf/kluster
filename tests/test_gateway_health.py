@@ -4,7 +4,8 @@ The executable is rendered from the declarations the stack program builds the
 gateway out of, and run as the homelab host runs it: no argument for the
 reading, `--certificates` for the list a LAN probe works from. Its systemd is
 `tests/fake_systemd.py`, behind a `systemctl` that answers `--version` itself
-with the release a case sets. `machinectl`, which names a running machine's
+with the release a case sets. `dpkg-query`, which answers for the `dash`
+package with the version a case sets, `machinectl`, which names a running machine's
 leader, `nsenter`, which runs `zerotier-cli info` in the overlay member's
 leader's mount namespace and `ip -o link show host0` in a bridged machine's
 leader's network namespace, the package script, whose `--check` the reading
@@ -199,6 +200,8 @@ class _Device:
     check_fails: Path
     #: The release `systemctl --version` names.
     systemd_release: Path
+    #: The version `dpkg-query` gives for the `dash` package; absent, it knows no such package.
+    dash_version: Path
     #: What `ip -<family> rule show` prints, one file per family.
     rules: Path
     #: The directories networkd's configuration is assembled from, most specific first.
@@ -315,6 +318,7 @@ def _device(tmp_path: Path, *, legacy: tuple[conventions.gateway.LegacyVhost, ..
         member=root / 'member-info',
         check_fails=root / 'check-fails',
         systemd_release=root / 'systemd-release',
+        dash_version=root / 'dash-version',
         rules=root / 'rules',
         etc_networkd=etc_networkd,
         ports={
@@ -454,8 +458,20 @@ def _device(tmp_path: Path, *, legacy: tuple[conventions.gateway.LegacyVhost, ..
         'fi\n'
         f'exec {Path(systemd.tools) / "systemctl"} "$@"\n',
     )
+    # `dpkg-query -W -f '${Version}' dash` as dpkg answers it: the version
+    # alone, with no newline, or, for a package it does not know, its refusal
+    # and exit status 1. Nothing else is modeled.
+    _stub(
+        tools / 'dpkg-query',
+        'if [ "$*" != "-W -f \\${Version} dash" ]; then\n'
+        '    echo "stand-in dpkg-query: modeled for -W -f \'\\${Version}\' dash only, not $*" >&2; exit 1\n'
+        'fi\n'
+        f'[ -e {device.dash_version} ] || {{ echo "dpkg-query: no packages found matching dash" >&2; exit 1; }}\n'
+        f'cat {device.dash_version}\n',
+    )
     base = gateway.DEVICE_BASE
     _ = (root / 'etc' / 'debian_version').write_text(f'{base.debian_release}.11\n')
+    _ = device.dash_version.write_text(base.dash_version)
     _link_bin_sh(root, base.shell)
     _ = device.systemd_release.write_text(str(_systemd_release(terminate_signals_nspawn=base.terminate_signals_nspawn)))
 
@@ -597,8 +613,17 @@ def _leave_a_member_uncached(device: _Device) -> None:
     _ = device.check_fails.write_text('packages: the offline cache in /data/custom/dpkg holds no deb of rsync\n')
 
 
+#: A Debian revision of the declared dash within its release, the shape a
+#: stable update gives one.
+DASH_REVISION = f'{gateway.DEVICE_BASE.dash_version}+deb{gateway.DEVICE_BASE.debian_release}u1'
+
+
 def _move_the_debian_release(device: _Device) -> None:
     _ = (device.root / 'etc' / 'debian_version').write_text(f'{int(gateway.DEVICE_BASE.debian_release) + 1}.1\n')
+
+
+def _revise_dash(device: _Device) -> None:
+    _ = device.dash_version.write_text(DASH_REVISION)
 
 
 def _another_shell() -> str:
@@ -691,6 +716,7 @@ def _misshape_the_bridges_lease_line(device: _Device) -> None:
         (_take_the_member_offline, conventions.gateway.OVERLAY.name, gateway.PLAYBOOKS.overlay),
         (_leave_a_member_uncached, f'{persistence.PACKAGES_SCRIPT} --check', gateway.PLAYBOOKS.packages),
         (_move_the_debian_release, '/etc/debian_version', gateway.PLAYBOOKS.base),
+        (_revise_dash, 'dash', gateway.PLAYBOOKS.base),
         (_replace_bin_sh, '/bin/sh', gateway.PLAYBOOKS.base),
         (_move_systemd_across_the_terminate_release, 'systemd', gateway.PLAYBOOKS.base),
         (_lose_the_main_rule, f'ip -{FAMILY} rule', gateway.PLAYBOOKS.networkd),
@@ -718,6 +744,7 @@ def _misshape_the_bridges_lease_line(device: _Device) -> None:
         'member-offline',
         'cache',
         'debian-release',
+        'dash',
         'bin-sh',
         'systemd',
         'no-main-rule',
@@ -904,9 +931,10 @@ def test_a_point_release_of_the_declared_debian_release_is_no_finding(tmp_path: 
     ('deviation', 'read'),
     [
         (_move_the_debian_release, f'{int(gateway.DEVICE_BASE.debian_release) + 1}.1'),
+        (_revise_dash, DASH_REVISION),
         (_replace_bin_sh, _another_shell()),
     ],
-    ids=['debian-release', 'bin-sh'],
+    ids=['debian-release', 'dash', 'bin-sh'],
 )
 def test_a_base_finding_says_what_the_device_read_on_the_devices_terms(
     tmp_path: Path, deviation: Callable[[_Device], None], read: str
@@ -919,6 +947,44 @@ def test_a_base_finding_says_what_the_device_read_on_the_devices_terms(
 
     assert read in finding['state']
     assert str(device.root) not in finding['state']
+
+
+#: The declared dash and a Debian revision of it, each of which can be the declared one.
+DASH_VERSIONS = (gateway.DEVICE_BASE.dash_version, DASH_REVISION)
+
+
+@pytest.mark.parametrize('declared', DASH_VERSIONS, ids=['release', 'revision'])
+def test_the_dash_package_is_read_against_the_declared_version_whole(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, declared: str
+) -> None:
+    """The declared version passes, and any other is a finding, a Debian revision within the same release among them.
+
+    The suite runs the device's scripts under the package's own build, so a
+    revision that adds a patch moves what they may say though the upstream
+    release and the Debian release stay where they were.
+    """
+    monkeypatch.setattr(gateway, 'DEVICE_BASE', replace(gateway.DEVICE_BASE, dash_version=declared))
+    device = _device(tmp_path)
+    assert _read(device).lines == []
+
+    other = next(version for version in DASH_VERSIONS if version != declared)
+    _ = device.dash_version.write_text(other)
+
+    (finding,) = _findings(_read(device))
+    assert (finding['subject'], finding['title']) == ('dash', gateway.PLAYBOOKS.base)
+    assert other in finding['state']
+
+
+def test_a_dpkg_that_knows_no_dash_package_is_a_finding(tmp_path: Path) -> None:
+    """A device on which dpkg has no `dash` is not taken for one with the declared version."""
+    device = _device(tmp_path)
+    device.dash_version.unlink()
+
+    reading = _read(device)
+
+    (finding,) = _findings(reading)
+    assert (finding['subject'], finding['title']) == ('dash', gateway.PLAYBOOKS.base)
+    assert reading.errors == ''
 
 
 @pytest.mark.parametrize('shell', ['/bin/dash', '/usr/bin/dash'], ids=['bin', 'merged-usr'])

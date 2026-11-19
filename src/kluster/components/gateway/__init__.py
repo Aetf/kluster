@@ -184,6 +184,12 @@ class DeviceBase:
     #: The Debian major release, which `/etc/debian_version` starts with: the
     #: release whose dash `mise.toml`'s `http:dash` pin follows.
     debian_release: str
+    #: The version of the `dash` package, as `dpkg-query -W -f '${Version}' dash`
+    #: prints it. `mise.toml`'s `http:dash` pin is the amd64 build of that
+    #: package at that version: Debian's patches are part of the language the
+    #: device's scripts are written in, so a revision within the release can
+    #: change what they may say.
+    dash_version: str
     #: What `readlink -f /bin/sh` resolves to: the shell the device runs its
     #: `#!/bin/sh` scripts under, which the suite's shell for their templates
     #: stands in for (`tests/device_shell.py`).
@@ -202,8 +208,12 @@ SYSTEMD_TERMINATE_RELEASE = 258
 
 #: The device's base, as read on the device (physical/gateway.md §1). It moves
 #: last in §3's "The device's base moved", once what depends on it has moved:
-#: moved alone, it silences the finding and leaves the dash pin behind.
-DEVICE_BASE = DeviceBase(debian_release='13', shell='/usr/bin/dash', terminate_signals_nspawn=False)
+#: moved alone, it silences the finding and leaves the dash pin behind. Its
+#: `dash_version` cannot move alone: `tests/test_dash_pin.py` holds it equal to
+#: the pin's version.
+DEVICE_BASE = DeviceBase(
+    debian_release='13', dash_version='0.5.12-12', shell='/usr/bin/dash', terminate_signals_nspawn=False
+)
 
 
 @final
@@ -256,6 +266,7 @@ class _HealthParams:
     debian_version: str
     bin_sh: str
     debian_release: str
+    dash_version: str
     shell: str
     systemd_release: int
     terminate_signals_nspawn: bool
@@ -295,9 +306,10 @@ def health_program(
     holds that script, and is a parameter so the executable can be run against
     a tree that is not a device.
 
-    The base is `DEVICE_BASE`, read off `/etc/debian_version`, `/bin/sh` and
-    `systemctl --version`. `root` is the tree those paths are read under, empty
-    for the device's own, and a parameter for the same reason.
+    The base is `DEVICE_BASE`, read off `/etc/debian_version`, `dpkg-query`'s
+    answer for the `dash` package, `/bin/sh` and `systemctl --version`. `root`
+    is the tree the two paths are read under, empty for the device's own, and a
+    parameter for the same reason.
 
     networkd is read three ways: the consequence, a policy rule that looks up
     the main table in each of `POLICY_RULE_FAMILIES`; the trigger, a link
@@ -348,6 +360,7 @@ def health_program(
             debian_version=shlex.quote(f'{root}/etc/debian_version'),
             bin_sh=shlex.quote(f'{root}/bin/sh'),
             debian_release=shlex.quote(DEVICE_BASE.debian_release),
+            dash_version=shlex.quote(DEVICE_BASE.dash_version),
             shell=shlex.quote(DEVICE_BASE.shell),
             systemd_release=SYSTEMD_TERMINATE_RELEASE,
             terminate_signals_nspawn=DEVICE_BASE.terminate_signals_nspawn,

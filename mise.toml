@@ -98,14 +98,17 @@ jq = "1.8.2"
 # amd64 build of the device's, from the same source, patches and configuration,
 # the architecture all that separates the two. Its binary links the C library
 # alone, at the floor the package's `Pre-Depends` names, so any host with glibc
-# 2.38 or later runs it. The pin follows the device's base rather than dash's
-# newest release, so a firmware jump onto a newer Debian moves it to that
-# base's dash by hand, once `gateway-health`'s reading of the device's base
-# reports the jump (docs/operations.md §1, the gateway's dash row, says what
-# moves it). The package comes from snapshot.debian.org, which keeps every
-# package Debian has published at a fixed URL, and the sum is the one the
-# release's `Packages` index lists for it, in the `InRelease` that the
-# release's archive keys sign.
+# 2.38 or later runs it. The pin's version is the package's Debian version,
+# revision included, and it follows the device's package rather than dash's
+# newest release: `gateway-health` reads the device's `dash` package against
+# `DEVICE_BASE.dash_version` in `kluster.components.gateway`, which
+# `tests/test_dash_pin.py` holds equal to this version, so a firmware that
+# brings another dash -- a newer Debian, or a revision within this one -- is a
+# finding, and the pin moves to that package by hand (docs/operations.md §1,
+# the gateway's dash row, says what moves it). The package comes from
+# snapshot.debian.org, which keeps every package Debian has published at a
+# fixed URL, and the sum is the one the release's `Packages` index lists for
+# it, in the `InRelease` that the release's archive keys sign.
 #
 # mise's `http` backend does not unpack a `.deb`: it installs the package file
 # itself, here as `usr/bin/dash`, and the `postinstall` replaces that file with
@@ -119,12 +122,12 @@ jq = "1.8.2"
 # instead of a package. mise's safe mode (`MISE_SAFE=1`) refuses an install
 # that runs a tool's `postinstall`; a `mise lock` is no install, so renovate's,
 # which runs in that mode, passes.
-"http:dash".version = "0.5.12"
+"http:dash".version = "0.5.12-12"
 "http:dash".bin_path = "usr/bin"
 "http:dash".bin = "dash"
 "http:dash".depends = ["conda:libarchive"]
 "http:dash".postinstall = 'cd "$MISE_TOOL_INSTALL_PATH" && bsdtar -xOf usr/bin/dash "data.tar.*" | bsdtar -xf - ./usr/bin/dash'
-"http:dash".platforms.linux-x64.url = "https://snapshot.debian.org/archive/debian/20250204T211159Z/pool/main/d/dash/dash_{{ version }}-12_amd64.deb"
+"http:dash".platforms.linux-x64.url = "https://snapshot.debian.org/archive/debian/20250204T211159Z/pool/main/d/dash/dash_{{ version }}_amd64.deb"
 "http:dash".platforms.linux-x64.checksum = "sha256:a8902cb6d8650134764a25fb80aec8589d858ef71ece1680a62e84816c37bb04"
 # The `bsdtar` that takes dash's binary out of its Debian package, in the
 # `http:dash` pin's `postinstall` above, and nothing else: libarchive reads

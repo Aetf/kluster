@@ -153,10 +153,14 @@ declarative/physical.md §4.
         `/bin/bash`, which runs a command sent over root's SSH session.
 
         **`Gateway` declares this base as `DEVICE_BASE`**: the Debian
-        release, what `/bin/sh` resolves to, and the side of systemd
-        258 above. `gateway-health` reads each against the device
-        (§1.6), and a mismatch is "The device's base moved" (§3). Root's
-        login shell is not among them, and neither is the firmware's own
+        release, the version of the `dash` package, what `/bin/sh`
+        resolves to, and the side of systemd 258 above. `gateway-health`
+        reads each against the device (§1.6), and a mismatch is "The
+        device's base moved" (§3). `mise.toml`'s `http:dash` pin
+        installs the amd64 build of the `dash` package at the declared
+        version, which a test holds it to, so the suite runs the device's
+        `#!/bin/sh` scripts under the device's own package. Root's login
+        shell is not among these facts, and neither is the firmware's own
         release. The login shell goes unread because what reaches it is
         held portable: the suite runs the commands the push sends under
         dash on CI, so any POSIX shell in that place runs them (the
@@ -1217,12 +1221,17 @@ What it reads:
     restate it.
 6.  **The base is the declared one** (§1): the major release
     `/etc/debian_version` starts with is `DEVICE_BASE`'s Debian
-    release, `readlink -f /bin/sh` is its shell, and the release
+    release, `dpkg-query -W -f '${Version}' dash` gives its `dash`
+    version, `readlink -f /bin/sh` is its shell, and the release
     `systemctl --version` names is on its side of 258. Each mismatch is
-    one finding, and so is a `systemctl` whose answer names no release.
-    The firmware's own release is not compared, nor a point release:
-    one that keeps the base moves nothing these facts decide, and a
-    finding on every vendor update would be noise.
+    one finding, as is a `systemctl` whose answer names no release, or
+    a `dpkg-query` that gives no version. The firmware's own release
+    is not compared, nor a point release: one that keeps the base moves
+    nothing these facts decide, and a finding on every vendor update
+    would be noise. The `dash` version is compared whole, Debian
+    revision included, since a revision within the release can add a
+    patch that changes what a script may say, and the suite runs the
+    device's scripts under the package's own build.
 7.  **`networkd` can remove none of the firmware's policy rules** (§1.2),
     read three ways, each finding naming one playbook:
     -   *the consequence*: `ip -4 rule show` holds a rule that looks up
@@ -3130,11 +3139,15 @@ command runs on the device unless the entry says otherwise.
     is the case §1.2 describes for an archive that no longer serves the
     installed version.
 -   **The device's base moved** — trigger: `gateway-health` reports
-    `/etc/debian_version`, `/bin/sh` or `systemd` against `DEVICE_BASE`
-    (§1.6). The finding says what the device reads; what depends on it
-    moves first, by hand:
-    -   **Another Debian release** moves `mise.toml`'s `http:dash` pin
-        to that release's dash ([operations.md](../operations.md) §1).
+    `/etc/debian_version`, `dash`, `/bin/sh` or `systemd` against
+    `DEVICE_BASE` (§1.6). The finding says what the device reads; what
+    depends on it moves first, by hand:
+    -   **Another `dash` package**, a revision within the release or
+        another Debian release's, moves `mise.toml`'s `http:dash` pin to
+        that package, at the version the finding quotes
+        ([operations.md](../operations.md) §1). `tests/test_dash_pin.py`
+        holds the pin's version equal to `DEVICE_BASE`'s, so the two
+        move in one change.
     -   **A `/bin/sh` other than dash** is not a version move: the
         device's `#!/bin/sh` scripts no longer run under dash, so the
         shell the suite runs them under (`tests/device_shell.py`) is
