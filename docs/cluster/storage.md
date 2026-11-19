@@ -500,8 +500,17 @@ be able to destroy the safety net it lives inside.
     per the retention classes: without `deleteFiles`, a B2 deletion
     degrades to a **hide**, which the ≥30-day lifecycle rule purges.
     Retention semantics are preserved while nothing in automation can
-    destroy a version before it ages out.) **No delete-capable key exists in
-    any automation**; the B2 account's master key is an account root in
+    destroy a version before it ages out.) A key whose consumer keeps a
+    store in the bucket — restic, barman, `vmbackup` — also carries
+    `listBuckets`: each of them reads names that may not exist yet and
+    takes only a 404 for absence, and B2's S3 API answers a read of a
+    missing name with 403 instead unless the key holds `listBuckets`
+    ([bisected over single capabilities](https://github.com/kopia/kopia/issues/5329)),
+    so without it a store's first backup cannot start. On a key
+    restricted to the one bucket, `listBuckets` reads that bucket's own
+    settings and grants nothing on files. The etcd snapshots' uploader
+    reads nothing, and its key goes without. **No delete-capable key
+    exists in any automation**; the B2 account's master key is an account root in
     the operator's personal estate — deliberately not in the seed kit
     (credentials.md §2) — and is borrowed only to re-seed, account 2FA
     on. The one genuine write-only key is the micro's

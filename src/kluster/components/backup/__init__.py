@@ -20,6 +20,14 @@ only work together (storage.md §4, backup-integrity rules):
     literally write-only key is not an option. Without the delete capability
     a B2 deletion degrades to a **hide**: the version stops being current and
     stays recoverable.
+-   **A key whose consumer keeps a store in the bucket also carries
+    `listBuckets`.** restic, barman and `vmbackup` each read a name that may
+    not exist yet — a repository's config, an archive's object, a backup's
+    completion marker — and take only a "not found" for absence. B2's S3 API
+    answers that read with 403 instead of 404 unless the key holds
+    `listBuckets`, so without it a store's first backup cannot start. The
+    capability reads this bucket's own settings and nothing in it. The etcd
+    snapshots' key goes without: its uploader reads nothing.
 -   **A lifecycle rule is what finally removes a hidden version**, after
     `conventions.BACKUP_VERSION_RETENTION_DAYS`. That is the floor under both
     ransomware and a fat finger, and it is also what lets each consumer keep
@@ -69,11 +77,30 @@ from kluster.conventions.backup import (
 )
 from putils import Component, own_provider_opts, with_provider
 
-#: What a backup mover needs, and nothing beyond it. `readFiles` and
-#: `listFiles` are not generosity: restic and barman read their own index
-#: before every write, and `vmbackup` lists what the destination holds, so a
-#: key without them cannot take a backup at all.
+#: The set every writer key carries. `readFiles` and `listFiles` are not
+#: generosity: restic and barman read their own index before every write, and
+#: `vmbackup` lists what the destination holds, so a key without them cannot
+#: take a backup at all.
 WRITER_CAPABILITIES: tuple[str, ...] = ('listFiles', 'readFiles', 'writeFiles')
+
+#: What a writer whose consumer keeps a store in the bucket needs: the above,
+#: and `listBuckets` so that B2 can say a name is missing.
+#:
+#: restic, barman and `vmbackup` each read a name that may not exist yet, as
+#: part of an ordinary run -- restic's `init` stats the repository's config,
+#: barman heads its objects, `vmbackup` gets its completion marker before
+#: every backup -- and each takes only a 404 (`NoSuchKey`) for absence, any
+#: other answer being a failure. B2's S3 API answers a GET or HEAD of a
+#: missing name with 403 `Cannot access bucket` instead of 404 unless the key
+#: holds `listBuckets` (kopia/kopia#5329, bisected over single capabilities;
+#: Aetf/kluster-ops#864, probed under this bucket's own `vmbackup` key).
+#: Backblaze documents the capability as list and head bucket, and on a key
+#: restricted to one bucket that is a read of that bucket's own settings:
+#: nothing on files, nothing beyond the bucket, and no write.
+#:
+#: The grant stands apart from the base set so that it comes out whole: if B2
+#: ever answers a missing name with 404 without it, this line is the change.
+STORE_WRITER_CAPABILITIES: tuple[str, ...] = (*WRITER_CAPABILITIES, 'listBuckets')
 
 #: Unfinished large files are the invisible half of an object-storage bill: a
 #: multipart upload killed mid-flight bills for its parts forever and appears
@@ -140,7 +167,7 @@ class DuplicateScope(ValueError):
 
 @dataclass(frozen=True)
 class Scope:
-    """One consumer of the bucket: the key and prefix it reaches, and whether the bucket retires its files.
+    """One consumer of the bucket: the prefix its key reaches, what the key may do there, and whether the bucket retires its files.
 
     The prefix ends in a separator, and that is load-bearing rather than
     cosmetic — B2 matches a name prefix as plain text, so `volsync/app` also
@@ -159,6 +186,12 @@ class Scope:
     own store, where an old file can still be part of the newest backup and a
     hide on a timer would delete a live one.
     """
+    capabilities: tuple[str, ...] = WRITER_CAPABILITIES
+    """The B2 capabilities the scope's key carries.
+
+    The base writer set unless the consumer needs more: a consumer that keeps
+    a store in the bucket takes `STORE_WRITER_CAPABILITIES`.
+    """
 
 
 def etcd_scope() -> Scope:
@@ -168,7 +201,9 @@ def etcd_scope() -> Scope:
     the snapshot uploads with once `credentials` has sealed it into `k8s-base`
     (`conventions.sealed.ETCD_WRITER_KEY`). Its retention is the bucket's: a
     snapshot is hidden `ETCD_SNAPSHOT_RETENTION_DAYS` after its upload, since
-    every snapshot is a whole backup on its own.
+    every snapshot is a whole backup on its own. Its key carries the base
+    writer set: the uploader only puts objects, so it never asks B2 about a
+    missing name.
     """
     return Scope(
         name=ETCD_SCOPE, prefix=f'{conventions.ETCD_SNAPSHOT_PREFIX}/', hide_after_days=ETCD_SNAPSHOT_RETENTION_DAYS
@@ -182,18 +217,28 @@ def volsync_scope(namespace: str) -> Scope:
     `credentials` reads the key by when it seals it.
     """
     return Scope(
-        name=writer_scope(namespace, BackupFamily.VOLSYNC), prefix=conventions.volsync_repo_path(namespace, '')
+        name=writer_scope(namespace, BackupFamily.VOLSYNC),
+        prefix=conventions.volsync_repo_path(namespace, ''),
+        capabilities=STORE_WRITER_CAPABILITIES,
     )
 
 
 def barman_scope(namespace: str) -> Scope:
     """One namespace's database archives, base backups and WAL alike, under its family's scope (`writer_scope`)."""
-    return Scope(name=writer_scope(namespace, BackupFamily.BARMAN), prefix=conventions.barman_repo_path(namespace, ''))
+    return Scope(
+        name=writer_scope(namespace, BackupFamily.BARMAN),
+        prefix=conventions.barman_repo_path(namespace, ''),
+        capabilities=STORE_WRITER_CAPABILITIES,
+    )
 
 
 def metrics_scope(namespace: str) -> Scope:
     """One namespace's `vmbackup` copies, every VictoriaMetrics store it holds, under its family's scope."""
-    return Scope(name=writer_scope(namespace, BackupFamily.VM), prefix=metrics_repo_path(namespace, ''))
+    return Scope(
+        name=writer_scope(namespace, BackupFamily.VM),
+        prefix=metrics_repo_path(namespace, ''),
+        capabilities=STORE_WRITER_CAPABILITIES,
+    )
 
 
 class BackupBucket(Component, pulumi_type='kluster:backup:BackupBucket'):
@@ -280,7 +325,7 @@ class BackupBucket(Component, pulumi_type='kluster:backup:BackupBucket'):
             scope.name: b2.ApplicationKey(
                 f'{name}-backup-{scope.name}',
                 key_name=f'{bucket_name}-{scope.name}',
-                capabilities=list(WRITER_CAPABILITIES),
+                capabilities=list(scope.capabilities),
                 # `bucket_ids` rather than the deprecated singular field; the
                 # key sees this bucket and no other in the account.
                 bucket_ids=[self.bucket.bucket_id],
