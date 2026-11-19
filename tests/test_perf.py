@@ -62,6 +62,8 @@ KUBECTL_TIMEOUT = 60.0
 
 #: The store's own binary in its image.
 BINARY = '/victoria-metrics-prod'
+#: The store's count of the index entries it holds in memory, not yet searchable.
+PENDING_INDEX = 'vm_pending_rows{type="indexdb"}'
 
 NODES = (cluster.Node('cp1', '10.0.0.11'), cluster.Node('cp2', '10.0.0.12'), cluster.Node('cp3', '10.0.0.13'))
 
@@ -291,8 +293,27 @@ class Store:
         return answer
 
     def flushed(self) -> None:
-        """What the store was written made searchable."""
+        """What the store was written made searchable.
+
+        A selector the store answered before the write can still be answered
+        from its cache afterwards, until the store's own periodic reset, once
+        the store had flushed the new series by itself before this call.
+        `perf import` never asks a selector twice for that reason.
+        """
         _ = self.request('GET', '/internal/force_flush')
+
+    def indexed(self) -> None:
+        """Every series the store was written made searchable by the store's own flusher, within `STORE_TIMEOUT`."""
+        deadline = time.monotonic() + STORE_TIMEOUT
+        while True:
+            metrics = self.request('GET', '/metrics').decode().splitlines()
+            (pending,) = [float(line.rsplit(' ', 1)[1]) for line in metrics if line.startswith(f'{PENDING_INDEX} ')]
+            if pending == 0:
+                return
+            assert time.monotonic() < deadline, (
+                f'the store held {pending:g} index entries unflushed after {STORE_TIMEOUT:g}s'
+            )
+            time.sleep(0.05)
 
     def query(self, expr: str, at: float) -> list[dict[str, Any]]:
         answer = json.loads(self.request('GET', '/api/v1/query?' + urllib.parse.urlencode({'query': expr, 'time': at})))
@@ -854,6 +875,20 @@ def test_an_import_cut_off_partway_writes_the_rest_when_run_again_but_for_at_mos
             holes.append(max(missing) - min(missing))
     assert holes, 'the cut-off import left no hole, so the case judges nothing'
     assert max(holes) <= history.ROUND.total_seconds() * 1000
+
+
+def test_a_second_import_reads_what_the_first_wrote_where_the_store_flushed_it_by_itself(
+    store: Store, api: cluster.Kubectl, tmp_path: Path
+) -> None:
+    """The first import asked the store for its samples before it wrote them; the second import is not answered from that."""
+    path = tmp_path / 'recording'
+    _ = recording(path, dt.timedelta(minutes=1), StandIns(Clock()))
+    first = history.import_file(path, api)
+    store.indexed()
+    store.flushed()
+    again = history.import_file(path, api)
+    assert first.written
+    assert again.written == {}
 
 
 def test_an_import_refuses_while_vmagent_holds_data_queued_for_the_stores(
