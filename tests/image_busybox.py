@@ -26,11 +26,9 @@ output and ends, started with `--rm`, a `--timeout` and the module's label as
 every container a case starts is, and named for the teardown that removes it,
 armed before the `podman run` (framework/testing.md §1.2).
 
-The reading runs where podman is on `PATH`. Anywhere else a case that needs
-it is skipped, naming why, except on CI's runner, which has podman and where
-the case must run: there it fails. Pulling the pinned images is a network
-call a unit test otherwise does not make (framework/testing.md §7): the
-bytes the scripts run under are the images' only by being read out of them.
+The image is the pin's, pulled by its digest, and the reading runs where
+podman is on `PATH`, both as `pinned_image` has them: the bytes the scripts
+run under are the images' only by being read out of them.
 
 **A file of an image with no busybox** is read out by `copied`, from a
 container of the image created and never started: the history store's own
@@ -49,7 +47,6 @@ from __future__ import annotations
 
 import fcntl
 import hashlib
-import os
 import shutil
 import struct
 import uuid
@@ -58,18 +55,16 @@ from pathlib import Path, PurePosixPath
 
 import process_sessions
 import pytest
+from pinned_image import COMMAND_TIMEOUT, CONTAINER_TIMEOUT, pulled, require_podman
 
-from kluster.lib.versions import ImagePin, ProjectFile, Versions
-from kluster.scripts.update_crds import sources
+# Reached through this module by the suites that read a pinned image's busybox.
+from pinned_image import pinned as pinned
+from pinned_image import source as source
 
-ROOT = Path(__file__).resolve().parents[1]
+from kluster.lib.versions import ImagePin
 
 #: Where an Alpine image keeps its busybox, which `/bin/sh` and every applet link to.
 BINARY = '/bin/busybox'
-
-#: Docker Hub's prefix on a pinned repository, and Google's mirror of it.
-DOCKER_HUB = 'docker.io/'
-DOCKER_HUB_MIRROR = 'mirror.gcr.io/'
 
 #: The directory of `applets`' layout that holds the image's own files, apart
 #: from the applets on `PATH`.
@@ -79,14 +74,8 @@ IMAGE = 'image'
 #: has left: `podman ps --all --filter label=kluster-test=image_busybox`.
 LABEL = f'kluster-test={Path(__file__).stem}'
 
-#: The bound on a pull, which reaches a registry: a stop-loss, below the case
-#: bound, which nothing asserts on.
-PULL_TIMEOUT = 45
-#: The bound on each other podman command, every one local.
-COMMAND_TIMEOUT = 30
-#: How long a container started here may run: the run's outer bound
-#: (framework/testing.md §1.2).
-CONTAINER_TIMEOUT = 1200
+#: Why a case that reads an image's files needs podman.
+WHY = 'the files a case runs are read out of a pinned image with it'
 
 #: The longest interpreter line the kernel reads, `#!` and the newline
 #: included (`BINPRM_BUF_SIZE`); a longer one fails the `exec`.
@@ -94,22 +83,6 @@ INTERPRETER_LINE_LIMIT = 256
 
 #: The ELF program header type naming the interpreter.
 _PT_INTERP = 3
-
-
-def pinned(name: str) -> ImagePin:
-    """The image `versions:image-<name>` pins in `Pulumi.yaml`, the reference the deployment pulls."""
-    return Versions(ProjectFile(sources.read_config(ROOT / 'Pulumi.yaml'))).image[name]
-
-
-def require_podman() -> None:
-    """Skips the calling case where podman is not on `PATH`, and fails it there on CI's runner."""
-    if shutil.which('podman') is not None:
-        return
-    why = 'podman is not on PATH, and the busybox the scripts run under is read out of a pinned image with it'
-    # GitHub sets `GITHUB_ACTIONS` on every job's runner, which has podman.
-    if os.environ.get('GITHUB_ACTIONS') == 'true':
-        pytest.fail(f'{why}; CI runs these cases')
-    pytest.skip(why)
 
 
 def interpreter(binary: bytes) -> str | None:
@@ -133,30 +106,9 @@ def _podman(*args: str, timeout: float = COMMAND_TIMEOUT) -> bytes:
     return done.stdout
 
 
-def source(image: ImagePin) -> str:
-    """The reference `image` is pulled by here: its digest, from Google's mirror where the repository is Docker Hub's.
-
-    Docker Hub limits anonymous pulls per address, and CI's runner shares its
-    address, so a pull from Docker Hub itself fails at random there
-    (framework/ci.md §3 says the same of the Postgres image). By the digest,
-    a registry serves the pinned image or nothing.
-    """
-    repository = image.repository
-    if repository.startswith(DOCKER_HUB):
-        repository = DOCKER_HUB_MIRROR + repository.removeprefix(DOCKER_HUB)
-    return f'{repository}@{image.digest}'
-
-
-def _pulled(image: ImagePin) -> str:
-    reference = source(image)
-    if process_sessions.run(['podman', 'image', 'exists', reference], timeout=COMMAND_TIMEOUT).returncode != 0:
-        _ = _podman('pull', '--quiet', reference, timeout=PULL_TIMEOUT)
-    return reference
-
-
 def in_image(image: ImagePin, *argv: str) -> bytes:
     """What `argv`, an applet of the image's own busybox, writes to its standard output in a container of `image`."""
-    require_podman()
+    require_podman(WHY)
     name = f'kluster-test-busybox-{uuid.uuid4().hex[:12]}'
     with process_sessions.removing(name, timeout=COMMAND_TIMEOUT):
         return _podman(
@@ -172,7 +124,7 @@ def in_image(image: ImagePin, *argv: str) -> bytes:
             'none',
             '--entrypoint',
             BINARY,
-            _pulled(image),
+            pulled(image),
             *argv,
         )
 
@@ -216,7 +168,7 @@ def cached(cache: Path, key: str, fill: Callable[[Path], None]) -> Path:
 
 def extracted(image: ImagePin, cache: Path) -> Path:
     """The directory under `cache` holding `image`'s busybox and its interpreter, read on the first call for the digest."""
-    require_podman()
+    require_podman(WHY)
     return cached(cache, image.digest.removeprefix('sha256:'), lambda into: _read_out(image, into))
 
 
@@ -228,13 +180,13 @@ def copied(image: ImagePin, path: str, cache: Path) -> Path:
     it, and the file copied out of it. Its key is the digest and the path, so
     it never shares a directory with `extracted`'s, or with another path's.
     """
-    require_podman()
+    require_podman(WHY)
     key = f'{image.digest.removeprefix("sha256:")}-{hashlib.sha256(path.encode()).hexdigest()[:12]}'
 
     def fill(into: Path) -> None:
         name = f'kluster-test-copied-{uuid.uuid4().hex[:12]}'
         with process_sessions.removing(name, timeout=COMMAND_TIMEOUT):
-            _ = _podman('create', '--rm', '--label', LABEL, '--name', name, _pulled(image))
+            _ = _podman('create', '--rm', '--label', LABEL, '--name', name, pulled(image))
             _ = _podman('cp', f'{name}:{path}', str(into))
 
     return cached(cache, key, fill) / PurePosixPath(path).name
