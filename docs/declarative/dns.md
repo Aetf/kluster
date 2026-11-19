@@ -615,12 +615,14 @@ plane names:
 
 ## 5. The exposure declaration, and its one helper
 
-> **The declaration and its helper are built; the records are not.**
+> **The declaration, its helper and the records are built.**
 > `conventions.routes` holds the types and the census, `EXPOSURES`, and
 > the `dns`, `physical` and `k8s-base` stacks read it. `expose`, on the
-> `apps` stack's application base, emits everything below but the
-> public records of the rows on `internet`, which it does not declare.
-> No application's component is wired into the `apps` program yet.
+> `apps` stack's application base, emits everything below. The one
+> component the `apps` program wires is the echo server, the front
+> door's exit criterion
+> ([rfc-007](../rfc/rfc-007-k8s-base-and-apps.md) §9.2), whose row is
+> published direct.
 
 **An application has one `Exposure`, and it has two dimensions** —
 the two questions deploying an application answers
@@ -741,10 +743,19 @@ transports. A held row's routes attach all the same. It refuses a
 listener together with the zone's wildcard listener on the same port
 (cluster-infra.md §2), and how such a row is reached is
 [Aetf/kluster-ops#723](https://github.com/Aetf/kluster-ops/issues/723).
-It declares no
-record: the public records of the rows on `internet` are not built. It
-never writes a rewrite, which is the
-split §3 describes.
+For each name the exposure publishes (`public_names` over that
+exposure alone) it declares one CNAME to the cluster anchor in the
+name's zone, proxied exactly where its row is, through the `apps`
+stack's Cloudflare provider and in the zone whose identifier the `dns`
+stack exports as `zone_ids`
+(`kluster.components.apps.public_records`). Each application's
+exposure declares its own, so two exposures one program wires never
+publish one name: the program refuses them, naming it
+(`kluster.components.apps.published_once`). The records are not
+`route`'s, which sees a row with its `Held` wrapper taken off and never
+a raw port's `Host`; a component of another stack that publishes a row
+calls `public_records` beside `route`. It never writes a rewrite, which
+is the split §3 describes.
 
 **There is one helper, because the declaration already states the
 exposure.** A helper per kind would make the call a second statement of

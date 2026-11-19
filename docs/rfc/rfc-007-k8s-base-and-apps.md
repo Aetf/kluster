@@ -167,6 +167,16 @@
     HTTPS listener offers HTTP/2 and a backend's Service port names in
     `appProtocol` what Envoy speaks to it (declarative/cluster-infra.md
     §2).
+*   **Updated:** 2026-11-19 — §9.1 and §14 slice 12, as
+    [Aetf/kluster-ops#772](https://github.com/Aetf/kluster-ops/issues/772)
+    built the echo server: the public records are not `route`'s but
+    `public_records` on the application base, which `expose` calls, one
+    CNAME to the cluster anchor per name `public_names` yields over the
+    exposure, proxied exactly where its row is. What a row publishes
+    turns on its `Held` wrapper, which `route` never sees, and a raw
+    port's `Host` publishes one with no route. The echo row is
+    `Route('echo', internet=Direct(…))`, in the primary, as §9.2 has it,
+    and its image is `traefik/whoami`.
 *   **Authority:** AGENTS.md,
     [framework/dispatch.md](../framework/dispatch.md),
     [framework/rfc.md](../framework/rfc.md) and the style rules
@@ -1401,11 +1411,16 @@ pod's egress is the component's, with what the pod reaches.
 
 **`route(row)` lives in `kluster.lib.k8s`**, not on the base, because
 two stacks call it: every application, and the monitoring component
-(§7.4). It emits what dns.md §5 says — the `HTTPRoute` on the gateways
-the row's exposure selects, and the public records across the row's
-zones where the row publishes one — and a stack that calls it for a row
-with a public record builds a Cloudflare provider and reads `dns`'s zone
-identifiers. `public_port` stays with the base, since only applications
+(§7.4). It emits one `HTTPRoute` per Gateway the row sets (dns.md §5).
+**The public records are `public_records` on the base**, which `expose`
+calls: one CNAME to the cluster anchor for each name
+`conventions.routes.public_names` yields over the exposure, proxied
+exactly where its row is. They are not `route`'s, because what a row
+publishes turns on its `Held` wrapper, which `route` never sees, and a
+raw port's `Host` publishes a record with no route. A stack that
+declares a public row's record builds a Cloudflare provider and reads
+`dns`'s zone identifiers, and the monitoring component calls
+`public_records` beside `route` for its row. `public_port` stays with the base, since only applications
 publish raw ports, and emits the Service alone, under `Cluster` (§4.4,
 §5.3). Each is written
 when an application first needs it: M2's needs `route` and not
@@ -1974,13 +1989,16 @@ Built before M1's bring-up, cut in two by
 — the namespace at `restricted`, the route label, the default-deny
 policy and the admission of the Gateways — depends on nothing below it
 and has merged, as `application_namespace` in `kluster.lib.k8s`, with
-its test. **`route`, the census's rows and the echo server** wait for
-rfc-008 slices 3 and 4, which declare the route census they read and
-change what `route` takes; that part merges after slice 9 is applied.
+its test. **`route` and the census's rows** are rfc-008 slices 3 and 4's,
+which declare the route census and change what `route` takes. **The echo
+server**, its row, its record and its pin are
+[Aetf/kluster-ops#772](https://github.com/Aetf/kluster-ops/issues/772)'s,
+whose merge applies them and so follows slice 9's certificate.
 **After** slices 8 and 9, and for `route` rfc-008 slices 3 and 4.
 
 *   **Done means**: §9.1's base and `route` in `kluster.lib.k8s`; the
-    echo component, its public row and its image pin (§9.2); dns.md §5,
+    echo component, its public row, its record (`public_records`, §9.1)
+    and its image pin (§9.2); dns.md §5,
     dns.md §2 and workloads.md §1 are true, the last of these with the
     traffic-policy rule of §4.4 and without the `release` label (§10,
     findings 10 and 12).
@@ -1990,9 +2008,13 @@ change what `route` takes; that part merges after slice 9 is applied.
     `tests/test_apps.py` (new), `tests/test_k8s.py`,
     `tests/test_conventions.py`, `docs/declarative/dns.md`,
     `docs/declarative/workloads.md`.
-*   **Tests that fail without it**: `route` attaches the gateways the
-    exposure selects and publishes records only for public rows (attach
-    every row to `internet-gw`; publish a LAN-only row's record); the
+*   **Tests that fail without it**: `route` attaches the Gateways the
+    row sets (attach every row to `internet-gw`); `expose` publishes a
+    record for each name on `internet` and for no other (publish a
+    LAN-only row's record), proxied exactly where its row is (flip one),
+    in the zone whose identifier `dns` exports (inline one); the echo
+    server runs as a numeric user that is not root, escalates nothing,
+    and runs its pin (leave its context empty; inline a tag); the
     namespace enforces `restricted`, carries the route label and admits
     `ingress` (drop any), which the base merged with; the census
     invariants of rfc-003 §6.6 hold with the new row, which exists.

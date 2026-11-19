@@ -1,4 +1,4 @@
-"""The application base's exposure, declared against mocks: `expose`, `port` and the `route` it calls.
+"""The application base's exposure, declared against mocks: `expose`, `port`, the `route` it calls and its records.
 
 Every row here is the test's own, one of each shape the census can hold, so
 what is held is how a row's fields decide what is emitted rather than what the
@@ -10,7 +10,11 @@ actually carries rather than to a copy of it.
 
 Literals written here are the upstream projects' contracts: the Gateway API's
 filter and listener spellings, the annotation and the families LB IPAM and
-Kubernetes read, the entity Cilium names a client outside the cluster.
+Kubernetes read, the entity Cilium names a client outside the cluster, the
+fields of a Cloudflare record.
+
+The echo server, the one component the `apps` program wires, is declared on
+its own against its census row, with an image pin of the test's.
 """
 
 from __future__ import annotations
@@ -22,7 +26,8 @@ import pytest_asyncio
 from mock_monitor import Recorder, declaring, run_with
 
 from kluster import conventions
-from kluster.components.apps import Backend, Fronts, expose
+from kluster.components.apps import Backend, Fronts, expose, published_once
+from kluster.components.apps.echo import Echo
 from kluster.components.cilium import InternetPoolMembers
 from kluster.components.cilium.gateways import (
     SHARING_KEY,
@@ -30,6 +35,7 @@ from kluster.components.cilium.gateways import (
     InternetGatewayAddresses,
     apex_listener,
 )
+from kluster.components.dns import base as dns_base
 from kluster.conventions.cluster import POOL_WORKER, Transports
 from kluster.conventions.routes import (
     BARE,
@@ -52,12 +58,15 @@ from kluster.conventions.routes import (
     Vip,
 )
 from kluster.lib.k8s import PORTAL, PassthroughRefused, bare_listener
+from kluster.lib.versions import ImagePin
 
 HTTP_ROUTE = 'crds:gateway.networking.k8s.io/v1:HTTPRoute'
 GATEWAY = 'crds:gateway.networking.k8s.io/v1:Gateway'
 SERVICE = 'kubernetes:core/v1:Service'
 POLICY = 'crds:cilium.io/v2:CiliumNetworkPolicy'
 IPS = 'lbipam.cilium.io/ips'
+RECORD = 'cloudflare:index/dnsRecord:DnsRecord'
+DEPLOYMENT = 'kubernetes:apps/v1:Deployment'
 
 NODE_PRIVATE_IPS = {'cp-1': '10.0.1.11', 'cp-2': '10.0.1.12'}
 NODE_GUAS = {'cp-1': '2001:db8:1::11', 'cp-2': '2001:db8:1::12'}
@@ -78,6 +87,10 @@ FRONTS = Fronts(
     worker_gua=WORKER_GUA,
 )
 
+#: Each zone's identifier, as the program reads them from the `dns` stack:
+#: the primary, and the zone the website's `www` is published in.
+ZONE_IDS = {conventions.ZONE_PRIMARY: 'the-primary-zones-id', 'a.example': 'a-examples-zone-id'}
+
 #: The applications this suite exposes, one per shape, by the namespace each
 #: is declared in.
 EXPOSURES: dict[str, Exposure] = {
@@ -95,6 +108,7 @@ EXPOSURES: dict[str, Exposure] = {
     'torrent': Exposure(ports=(Port('torrent', 53363, Transports.TCP_AND_UDP, internet=SiteForward()),)),
     'site': Exposure(routes=(Apex(('a.example', 'b.example')), Route('www', internet=PROXIED, zones=('a.example',)))),
     'held': Exposure(routes=(Held(Route('held', internet=PROXIED)),)),
+    'upload': Exposure(routes=(Route('upload', internet=Direct('bodies larger than the proxy accepts')),)),
 }
 
 
@@ -127,6 +141,7 @@ async def exposed() -> Recorder:
                 backend=Backend(service=application, port=8080),
                 selector=selector(application),
                 fronts=FRONTS,
+                zone_ids=ZONE_IDS,
             )
     return monitor
 
@@ -301,6 +316,7 @@ def test_a_passthrough_is_refused_naming_its_host_and_where_its_reach_is_decided
             backend=Backend(service='peer', port=8080),
             selector=None,
             fronts=FRONTS,
+            zone_ids=ZONE_IDS,
         )
 
 
@@ -326,12 +342,15 @@ def test_two_apex_rows_in_one_exposure_are_refused() -> None:
             backend=Backend(service='site', port=8080),
             selector=None,
             fronts=FRONTS,
+            zone_ids=ZONE_IDS,
         )
 
 
 def test_an_exposure_with_route_rows_and_no_backend_is_refused() -> None:
     with pytest.raises(ValueError, match='needs the Service'):
-        _ = expose('dav', EXPOSURES['dav'], namespace='dav', backend=None, selector=None, fronts=FRONTS)
+        _ = expose(
+            'dav', EXPOSURES['dav'], namespace='dav', backend=None, selector=None, fronts=FRONTS, zone_ids=ZONE_IDS
+        )
 
 
 @pytest.mark.parametrize('pods', [None, {}], ids=['none', 'empty'])
@@ -345,6 +364,7 @@ def test_an_exposure_with_ports_and_no_pods_named_is_refused(pods: dict[str, str
             backend=None,
             selector=pods,
             fronts=FRONTS,
+            zone_ids=ZONE_IDS,
         )
 
 
@@ -458,3 +478,174 @@ def test_a_port_on_no_gateway_of_a_kind_emits_no_service_for_it(exposed: Recorde
         'peer-lan',
     ]
     assert [it['metadata']['name'] for it in in_namespace(exposed, SERVICE, 'tv')] == ['tv-discovery-media']
+
+
+# -- the public records ----------------------------------------------------------
+
+
+def records(monitor: Recorder) -> dict[str, dict[str, Any]]:
+    """Every public record declared, by the name it publishes."""
+    return {it.inputs['name']: it.inputs for it in monitor.of_type(RECORD)}
+
+
+def test_a_record_is_declared_for_each_name_on_internet_and_for_no_other(exposed: Recorder) -> None:
+    """A row on `internet` publishes its host in each of its zones, and a raw port's host its label in the primary.
+
+    A row on a home Gateway alone publishes nothing, nor does a held row,
+    whose name the legacy record holds, nor an apex, whose address is the
+    `dns` stack's web origin.
+    """
+    primary = conventions.ZONE_PRIMARY
+
+    assert sorted(records(exposed)) == sorted(
+        [
+            f'shop.{primary}',
+            f'dav.{primary}',
+            f'tv.{primary}',
+            f'peer.{primary}',
+            'www.a.example',
+            f'upload.{primary}',
+        ]
+    )
+
+
+def test_each_record_is_a_cname_to_the_anchor_the_dns_stack_declares(exposed: Recorder) -> None:
+    """Every name, in every zone, aliases the one cluster anchor, in the primary, so a rebuild moves one record."""
+    anchors = dns_base.AnchorAddresses(cluster_v4='203.0.113.10', cluster_v6='2001:db8::10', vip1_v4='203.0.113.20')
+    declared = {
+        record.fqdn(zone)
+        for block in dns_base.blocks(anchors=anchors)
+        for record in block.records
+        if record.type == 'A' and record.label == conventions.ANCHOR_CLUSTER
+        for zone in block.zones
+    }
+
+    assert len(declared) == 1
+    for name, record in records(exposed).items():
+        assert (record['type'], record['content']) == ('CNAME', *declared), name
+
+
+@pytest.mark.parametrize(
+    ('name', 'proxied'),
+    [
+        (f'shop.{conventions.ZONE_PRIMARY}', True),
+        ('www.a.example', True),
+        (f'upload.{conventions.ZONE_PRIMARY}', False),
+        (f'peer.{conventions.ZONE_PRIMARY}', False),
+    ],
+    ids=['gated', 'proxied', 'direct', 'raw-port-host'],
+)
+def test_a_record_is_proxied_exactly_where_its_row_is(exposed: Recorder, name: str, proxied: bool) -> None:
+    """`Proxied` behind the proxy, gated or not; `Direct` and a raw port's host past it, which a raw port needs."""
+    assert records(exposed)[name]['proxied'] is proxied
+
+
+def test_each_record_is_declared_in_its_zone_by_the_identifier_the_program_read(exposed: Recorder) -> None:
+    found = {name: record['zoneId'] for name, record in records(exposed).items()}
+
+    assert found[f'shop.{conventions.ZONE_PRIMARY}'] == ZONE_IDS[conventions.ZONE_PRIMARY]
+    assert found['www.a.example'] == ZONE_IDS['a.example']
+
+
+@pytest.mark.asyncio
+async def test_a_zone_the_identifiers_lack_stops_the_run_naming_it() -> None:
+    """The mapping is the `dns` stack's, and a zone it lacks would put the record nowhere."""
+    _ = await run_with(Recorder(), stack='apps')
+    with pytest.raises(ValueError, match=r"none for 'a\.example'"):
+        async with declaring():
+            exposed = expose(
+                'site',
+                EXPOSURES['site'],
+                namespace='site',
+                backend=Backend(service='site', port=8080),
+                selector=None,
+                fronts=FRONTS,
+                zone_ids={conventions.ZONE_PRIMARY: ZONE_IDS[conventions.ZONE_PRIMARY]},
+            )
+            _ = await exposed.records[0].zone_id.future()
+
+
+def test_two_exposures_that_publish_one_name_are_refused_naming_it() -> None:
+    """Each exposure declares its own records, and Cloudflare holds one per name.
+
+    The census lets a raw port's host share its name with a row published
+    direct in another application's exposure, which a program wiring both
+    would declare twice.
+    """
+    peer = Exposure(ports=(Port('peer', 22000, Transports.TCP, internet=Balancer((Host('sync'),))),))
+    discovery = Exposure(routes=(Route('sync', internet=Direct('clients present a certificate')),))
+
+    held_peer = Exposure(ports=(Port('peer', 22000, Transports.TCP, internet=Balancer((Held(Host('sync')),))),))
+
+    published_once(EXPOSURES.values())
+    published_once([held_peer, discovery])
+    with pytest.raises(ValueError, match=rf'sync\.{conventions.ZONE_PRIMARY}'):
+        published_once([peer, discovery])
+
+
+# -- the echo server -------------------------------------------------------------
+
+#: The pin the echo server is declared with here: a reference that is no
+#: published image, so a container carrying it carries the pin.
+ECHO_IMAGE = ImagePin('registry.example.invalid/whoami', 'v9.9.9', f'sha256:{"e" * 64}')
+
+
+@pytest_asyncio.fixture(scope='module', loop_scope='module')
+async def echo() -> Recorder:
+    """The echo server, declared from its row of the census."""
+    monitor = await run_with(Recorder(), stack='apps')
+    async with declaring():
+        _ = Echo(
+            'echo',
+            exposure=conventions.routes.EXPOSURES['echo'],
+            image=ECHO_IMAGE,
+            fronts=FRONTS,
+            zone_ids=ZONE_IDS,
+        )
+    return monitor
+
+
+def pod_of(monitor: Recorder) -> dict[str, Any]:
+    (deployment,) = [it.inputs for it in monitor.of_type(DEPLOYMENT)]
+    return deployment['spec']['template']
+
+
+def test_the_echo_server_runs_as_a_numeric_user_that_is_not_root_and_escalates_nothing(echo: Recorder) -> None:
+    """Its image names no user, and `restricted` refuses a pod that does not say it runs as one that is not root."""
+    spec = pod_of(echo)['spec']
+    context = spec['securityContext']
+    (container,) = spec['containers']
+
+    assert context['runAsNonRoot'] is True
+    # The mock hands numbers back as floats, so the user is held to a whole one.
+    assert context['runAsUser'] == int(context['runAsUser']) > 0
+    assert context['seccompProfile'] == {'type': 'RuntimeDefault'}
+    assert container['securityContext']['allowPrivilegeEscalation'] is False
+    assert container['securityContext']['capabilities'] == {'drop': ['ALL']}
+    assert container['image'] == str(ECHO_IMAGE)
+
+
+def test_the_echo_servers_route_reaches_its_pods(echo: Recorder) -> None:
+    """The route forwards to the Service, whose selector picks the pods and whose port is the one they listen on."""
+    (service_inputs,) = in_namespace(echo, SERVICE, 'echo')
+    (route,) = in_namespace(echo, HTTP_ROUTE, 'echo')
+    pod = pod_of(echo)
+    (container,) = pod['spec']['containers']
+    (port,) = service_inputs['spec']['ports']
+    named = {it['name']: it['containerPort'] for it in container['ports']}
+
+    assert parents(route) == [conventions.GATEWAY_INTERNET]
+    assert route['spec']['hostnames'] == [f'echo.{conventions.ZONE_PRIMARY}']
+    assert route['spec']['rules'][0]['backendRefs'] == [
+        {'name': service_inputs['metadata']['name'], 'port': port['port']}
+    ]
+    assert service_inputs['spec']['selector'].items() <= pod['metadata']['labels'].items()
+    assert named[port['targetPort']] == port['port']
+    assert container['args'] == ['--port', str(int(port['port']))]
+
+
+def test_the_echo_servers_name_is_published_direct(echo: Recorder) -> None:
+    """Past the proxy, so the request crosses the balancer with the client's own address (rfc-007 §9.2)."""
+    assert {name: record['proxied'] for name, record in records(echo).items()} == {
+        f'echo.{conventions.ZONE_PRIMARY}': False
+    }

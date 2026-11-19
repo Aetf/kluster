@@ -12,7 +12,10 @@ that says how it is reached, and its component makes one call for it,
     one `Apex` row to an exposure;
 -   for each `Port`, one LoadBalancer Service per Gateway it sets, at that
     front's addresses (`port`), and one allow admitting the world on the
-    port and its transports alone.
+    port and its transports alone;
+-   for each name the exposure publishes (`conventions.routes.public_names`),
+    one CNAME to the cluster anchor in its zone, proxied exactly where its
+    row is (`public_records`).
 
 A `Passthrough` row is refused, naming its host: Cilium drops a TLS
 passthrough listener together with the zone's wildcard listener on the same
@@ -21,10 +24,10 @@ port, and how such a row is reached instead is Aetf/kluster-ops#723
 portal's identity headers from the request, since nothing but the client
 writes them there (`kluster.lib.k8s.Portal`).
 
-It writes no rewrite, which is the `dns` stack's from the same rows, and no
-record: the records of the rows on `internet` are not declared by this base
-yet. A row the legacy VPS holds (`Held`) attaches all the same, which is how
-an application is verified at the front door before its cut.
+It writes no rewrite, which is the `dns` stack's from the same rows. A row
+the legacy VPS holds (`Held`) attaches all the same, which is how an
+application is verified at the front door before its cut, and publishes no
+record, since the legacy record holds its name until the cut.
 
 The namespace the component installs into is `kluster.lib.k8s.application_namespace`,
 whose default-deny admits the Gateways' identity and the namespace's own
@@ -32,22 +35,31 @@ pods. That is right for what a Gateway's Envoy forwards and drops every
 client of a raw port, which is why a `Port` brings its own allow.
 
 `route` lives in `kluster.lib.k8s` rather than here, because a second stack
-calls it; everything else here is `apps`' alone (rfc-007 §9.1).
+calls it (rfc-007 §9.1). The records are not `route`'s: what a row publishes
+turns on its `Held` wrapper, which `route` never sees, and a raw port's
+`Host` publishes one with no route at all, so they are `public_names` over
+the exposure, which is the derivation the `dns` stack's records are held
+against too. `public_records` is that one function, and a component of
+another stack that publishes a row calls it beside `route`, with a
+Cloudflare provider and the `dns` stack's zone identifiers of its own
+(rfc-008 §5.5). Everything else here is `apps`' alone.
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Literal
 
 import pulumi
+import pulumi_cloudflare as cloudflare
 import pulumi_crds as crds
 import pulumi_kubernetes as k8s
 
 from kluster import conventions
 from kluster.components.cilium import InternetPoolMembers
 from kluster.components.cilium.gateways import apex_listener, sharing_annotations
+from kluster.components.dns.record import cname
 from kluster.conventions.cluster import POOL_WORKER
 from kluster.conventions.routes import (
     Apex,
@@ -57,13 +69,16 @@ from kluster.conventions.routes import (
     Held,
     Passthrough,
     Port,
+    PublicName,
     Route,
     SiteForward,
+    public_names,
 )
 from kluster.lib.k8s import Backend, identity_stripped, lb_pool_labels, refuse_passthrough, route, row_gateways
 from putils import async_output, resolve
 
 __all__ = (
+    'CLUSTER_ANCHOR',
     'LB_IPAM_IPS',
     'WORLD_ENTITY',
     'Backend',
@@ -72,6 +87,8 @@ __all__ = (
     'PortResources',
     'expose',
     'port',
+    'public_records',
+    'published_once',
 )
 
 #: The annotation a Service asks LB IPAM for its addresses by, a
@@ -329,12 +346,107 @@ def _apex(
     )
 
 
+#: What every public record is a CNAME to: the cluster anchor, which the
+#: `dns` stack declares in the primary zone alone, whatever zone the name is
+#: in (declarative/dns.md §2).
+CLUSTER_ANCHOR = f'{conventions.ANCHOR_CLUSTER}.{conventions.ZONE_PRIMARY}'
+
+#: The comment each public record carries on Cloudflare's dashboard, which is
+#: where an operator reading the zone learns which stack holds it.
+_RECORD_COMMENT = "an application's name, declared beside the application by the apps stack"
+
+
+def public_records(
+    resource_name: str,
+    exposure: Exposure,
+    *,
+    zone_ids: pulumi.Input[Mapping[str, str]],
+    opts: pulumi.ResourceOptions | None = None,
+) -> tuple[cloudflare.DnsRecord, ...]:
+    """One CNAME to the cluster anchor for each name the exposure publishes, in that name's zone.
+
+    The names are `conventions.routes.public_names` over this exposure alone:
+    a `Route` or a `Passthrough` on `internet` publishes its host in each of
+    its zones, a raw port's `Host` its label in the primary, a held row and an
+    `Apex` nothing. Each record is proxied exactly where its row is, `Direct`
+    and a raw port's host going past the proxy (declarative/dns.md §2), and
+    its TTL is Cloudflare's automatic one: the anchor carries the short TTL a
+    rebuild moves.
+
+    :param resource_name: The logical name, which carries the declaring
+        component's name; each record's is this with its name.
+    :param zone_ids: Each zone's Cloudflare identifier, as the `dns` stack
+        publishes them; a zone the exposure publishes in and the mapping
+        lacks stops the run naming it.
+    :param opts: Carries the Cloudflare provider the records are written
+        through.
+    """
+    ids = pulumi.Output.from_input(zone_ids)
+    return tuple(
+        _public_record(
+            resource_name, name, zone_id=ids.apply(lambda found, zone=name.zone: _zone_id(found, zone)), opts=opts
+        )
+        for name in public_names((exposure,))
+    )
+
+
+def _zone_id(found: Mapping[str, str], zone: str) -> str:
+    if zone not in found:
+        raise ValueError(f'the zone identifiers the program read hold none for {zone!r}, which a public name is in')
+    return found[zone]
+
+
+def _public_record(
+    resource_name: str, name: PublicName, *, zone_id: pulumi.Input[str], opts: pulumi.ResourceOptions | None
+) -> cloudflare.DnsRecord:
+    record = cname(name.host, CLUSTER_ANCHOR, unproxied=name.unproxied, comment=_RECORD_COMMENT)
+    fqdn = record.fqdn(name.zone)
+    return cloudflare.DnsRecord(
+        f'{resource_name}-record-{fqdn}',
+        zone_id=zone_id,
+        name=fqdn,
+        type=record.type,
+        content=record.content,
+        ttl=record.ttl,
+        proxied=record.proxied,
+        comment=record.comment,
+        # Cloudflare refuses a record identical to one the zone holds, so a
+        # replacement created before the delete would fail.
+        opts=pulumi.ResourceOptions.merge(opts, pulumi.ResourceOptions(delete_before_replace=True)),
+    )
+
+
+def published_once(exposures: Iterable[Exposure]) -> None:
+    """Refuse exposures two of which publish one name, which their `expose` calls would each declare a record for.
+
+    The census holds rows that share a host to one answer, and a raw port's
+    `Host` may share its name with a row published direct in another
+    application's exposure (declarative/dns.md §5). Cloudflare holds one
+    record per name, and `public_records` declares an exposure's own, so a
+    program wiring both would declare the name twice and fail at the apply.
+    Which of the two publishes it is the land that wires the second's to
+    decide.
+    """
+    claimed: dict[tuple[str, str], int] = {}
+    for exposure in exposures:
+        for name in public_names((exposure,)):
+            key = (name.host, name.zone)
+            claimed[key] = claimed.get(key, 0) + 1
+    shared = sorted(f'{host}.{zone}' for (host, zone), count in claimed.items() if count > 1)
+    if shared:
+        raise ValueError(
+            f'{", ".join(shared)} is published by more than one exposure the program wires; Cloudflare holds one '
+            'record per name, so one exposure publishes it'
+        )
+
+
 @dataclass(frozen=True)
 class Exposed:
     """What `expose` emitted, by kind."""
 
     http_routes: tuple[crds.gateway.v1.HTTPRoute, ...]
     ports: tuple[PortResources, ...]
+    records: tuple[cloudflare.DnsRecord, ...]
 
 
 def expose(
@@ -345,9 +457,10 @@ def expose(
     backend: Backend | None,
     selector: Mapping[str, str] | None,
     fronts: Fronts,
+    zone_ids: pulumi.Input[Mapping[str, str]],
     opts: pulumi.ResourceOptions | None = None,
 ) -> Exposed:
-    """Everything an application's `Exposure` derives in its namespace, from the rows and nothing else.
+    """Everything an application's `Exposure` derives, in its namespace and its zones, from the rows and nothing else.
 
     :param resource_name: The logical name, which carries the declaring
         component's name.
@@ -361,6 +474,10 @@ def expose(
         least one where the exposure has a port (`port`).
     :param fronts: The addresses of the `internet` fronts, as the program
         read them.
+    :param zone_ids: Each zone's Cloudflare identifier, as the program read
+        them from the `dns` stack (`public_records`).
+    :param opts: Carries the Kubernetes provider the cluster's objects are
+        declared through and the Cloudflare provider the records are.
     """
     http_routes: list[crds.gateway.v1.HTTPRoute] = []
     if exposure.routes:
@@ -388,4 +505,5 @@ def expose(
         port(f'{resource_name}-{row.name}', row, namespace=namespace, selector=selector or {}, fronts=fronts, opts=opts)
         for row in exposure.ports
     )
-    return Exposed(http_routes=tuple(http_routes), ports=ports)
+    records = public_records(resource_name, exposure, zone_ids=zone_ids, opts=opts)
+    return Exposed(http_routes=tuple(http_routes), ports=ports, records=records)

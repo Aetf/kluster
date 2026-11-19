@@ -572,6 +572,7 @@ SCHEMES = {
     'docker.io/syncthing/syncthing': Scheme(('2.0.16', '2.1.0')),
     'docker.io/mikefarah/yq': Scheme(('4.53.6', '4.54.1')),
     'docker.io/sigoden/dufs': Scheme(('v0.46.0', 'v0.47.0')),
+    'docker.io/traefik/whoami': Scheme(('v1.11.0', 'v1.12.0')),
     'docker.io/syncthing/discosrv': Scheme(('2.0.16', '2.1.0')),
     'docker.io/frosty5689/hath': Scheme(('1.6.5', '1.6.6')),
     'ghcr.io/donkie/spoolman': Scheme(('0.26.1', '0.27.0')),

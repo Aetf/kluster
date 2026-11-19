@@ -9,16 +9,26 @@ are declared beside each of them (dns.md §1); the split-horizon rewrites its
 routes imply are applied by `dns`, from the same plain-data declaration (dns.md
 §3).
 
-What the program builds today is the two providers every application will be
-declared through, each opened with a credential in this stack's own
-configuration, and the one read across a StackReference its applications are
-handed: the addresses of a raw port's `internet` fronts, which are `physical`'s
-outputs -- the `internet` pool's members and the worker's GUA -- each read so
-that anything but an address stops the run (`kluster.lib.stack_addresses`,
-rfc-008 §4.1). No application's component is wired yet: each is wired here as
-it lands (sources-of-truth.md §3), handed its `Exposure` and these fronts,
-and the read stands ahead of the first so that a `physical` that cannot
-supply them stops this stack's run rather than that land's. The Kubernetes provider is opened with the
+What the program builds is the two providers every application is declared
+through, each opened with a credential in this stack's own configuration; the
+two reads across a StackReference its applications are handed; and each
+application's component, wired here as it lands (sources-of-truth.md §3) and
+handed its `Exposure`, the providers and both reads. The reads:
+
+-   the addresses of a raw port's `internet` fronts, which are `physical`'s
+    outputs -- the `internet` pool's members and the worker's GUA -- each
+    read so that anything but an address stops the run
+    (`kluster.lib.stack_addresses`, rfc-008 §4.1);
+-   each zone's Cloudflare identifier, the `dns` stack's `zone_ids`, which an
+    application's public records are declared in (rfc-007 §3.1, dns.md §1),
+    read so that its absence stops the run naming it, and a zone a record is
+    in and the mapping lacks stops it naming the zone
+    (`kluster.components.apps.public_records`).
+
+The one application wired is the echo server, the front door's exit criterion
+(rfc-007 §9.2), which goes at Wave A1's land. No two exposures the program
+wires publish one name (`kluster.components.apps.published_once`). The
+Kubernetes provider is opened with the
 cluster-admin kubeconfig, which `credentials derived sync --only kubeconfig`
 copies there out of the `physical` stack's state, a StackReference being unable
 to carry a secret across `physical`'s own passphrase (rfc-005 §5.1); it is read
@@ -35,10 +45,12 @@ import pulumi_cloudflare as cloudflare
 import pulumi_kubernetes as k8s
 
 from kluster import conventions
-from kluster.components.apps import Fronts
+from kluster.components.apps import Fronts, published_once
+from kluster.components.apps.echo import Echo
 from kluster.components.cilium import internet_pool_members
 from kluster.lib import stack_addresses
 from kluster.lib.k8s import KUBECONFIG_KEY, kubeconfig_from
+from kluster.lib.versions import versions
 
 #: Where the zones token is read: at the line that builds the provider it
 #: configures, and nowhere else (rfc-002 §8.1). The same key as the `dns`
@@ -47,13 +59,21 @@ from kluster.lib.k8s import KUBECONFIG_KEY, kubeconfig_from
 #: this key into both stacks' configuration (credentials.md §3).
 CLOUDFLARE_API_TOKEN = 'cloudflareApiToken'
 
+#: The `dns` stack's output that maps each zone to its Cloudflare identifier,
+#: under the name that program exports it.
+DNS_ZONE_IDS = 'zone_ids'
+
+#: The applications wired here, each the key of its row of
+#: `conventions.routes.EXPOSURES`.
+ECHO = 'echo'
+
 
 async def main() -> None:
     config = pulumi.Config()
 
     # Read so that anything but a kubeconfig stops the run, for the reason
     # `k8s_base` gives.
-    _ = k8s.Provider(
+    kubernetes = k8s.Provider(
         f'{conventions.CLUSTER_NAME}-kubernetes',
         kubeconfig=kubeconfig_from(config.get_secret(KUBECONFIG_KEY)),
     )
@@ -61,15 +81,30 @@ async def main() -> None:
     # One provider for every zone, as in `dns`: the token is scoped to the
     # installation's zones as a set, so it belongs to the program rather than
     # to any one application's component (rfc-002 §8.1).
-    _ = cloudflare.Provider(
+    zones = cloudflare.Provider(
         f'{conventions.CLUSTER_NAME}-cloudflare',
         api_token=config.require_secret(CLOUDFLARE_API_TOKEN),
     )
+    opts = pulumi.ResourceOptions(providers=[kubernetes, zones])
 
-    physical = pulumi.StackReference(
-        f'{pulumi.get_organization()}/{pulumi.get_project()}/{conventions.STACK_NAMES.physical}'
+    def reference(stack: str) -> pulumi.StackReference:
+        return pulumi.StackReference(f'{pulumi.get_organization()}/{pulumi.get_project()}/{stack}')
+
+    fronts = _fronts(reference(conventions.STACK_NAMES.physical))
+    # A plain output, which every stack sharing the stack passphrase decrypts;
+    # the records read the zone each is in out of it.
+    zone_ids = reference(conventions.STACK_NAMES.dns).require_output(DNS_ZONE_IDS)
+
+    exposures = conventions.routes.EXPOSURES
+    published_once(exposures[application] for application in (ECHO,))
+    _ = Echo(
+        ECHO,
+        exposure=exposures[ECHO],
+        image=versions.image['echo'],
+        fronts=fronts,
+        zone_ids=zone_ids,
+        opts=opts,
     )
-    _ = _fronts(physical)
 
 
 def _fronts(physical: pulumi.StackReference) -> Fronts:

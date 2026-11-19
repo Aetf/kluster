@@ -5,8 +5,10 @@ the kubeconfig and the zones token, both out of the stack's own configuration,
 the kubeconfig read so that anything but a kubeconfig stops the run -- what
 each reads across a StackReference, with no sealed value configured and with
 every one, read so that anything but the machine fact it names stops the run,
-and that each committed stack file turns a missed provider into an error.
-What `k8s-base` installs is `test_cilium.py`'s and `test_standing_set.py`'s.
+that what `apps` reads reaches the application it wires, and that each
+committed stack file turns a missed provider into an error. What `k8s-base`
+installs is `test_cilium.py`'s and `test_standing_set.py`'s; what an
+application's component declares is `test_apps.py`'s.
 
 Every run here is under the parent backstop `kluster.main` installs before a
 real run declares anything, so a resource the program leaves unparented fails
@@ -23,7 +25,14 @@ import pytest
 import pytest_asyncio
 import yaml
 from client_kubeconfig import KUBECONFIG
-from k8s_base_installation import PUBLISHED, VERSIONS_CONFIG, Physical, release_assets, sealed_values
+from k8s_base_installation import (
+    PUBLISHED,
+    VERSIONS_CONFIG,
+    ZONE_IDS,
+    Physical,
+    release_assets,
+    sealed_values,
+)
 from mock_monitor import declaring, run_under_backstop
 from pulumi.output import UNKNOWN
 from pulumi.runtime.rpc import UNKNOWN as UNKNOWN_SENTINEL
@@ -40,6 +49,8 @@ ZONES_TOKEN = 'a-fake-zones-token-that-opens-nothing'
 
 KUBERNETES_PROVIDER = 'pulumi:providers:kubernetes'
 CLOUDFLARE_PROVIDER = 'pulumi:providers:cloudflare'
+RECORD = 'cloudflare:index/dnsRecord:DnsRecord'
+DEPLOYMENT = 'kubernetes:apps/v1:Deployment'
 
 #: The prefix every provider resource's type carries; what follows it is the
 #: package the provider serves.
@@ -90,15 +101,16 @@ EXTENSIONS = _extensions()
 
 #: What each program reads across a StackReference, by stack and by whether
 #: its configuration holds every sealed value its stack declares or none: the
-#: pools' outputs, and for `k8s-base` with the metrics reader's key sealed in,
+#: pools' outputs; for `apps`, the `dns` stack's zone identifiers its records
+#: are declared in; and for `k8s-base` with the metrics reader's key sealed in,
 #: the volumes' OCIDs the pull of OCI's block-volume series is configured with.
 #: The stack files hold every sealed value; a run with none is the bring-up's
 #: tolerance (physical/bring-up.md §1).
 READS: dict[tuple[str, bool], frozenset[str]] = {
     (conventions.STACK_NAMES.k8s_base, False): POOL_OUTPUTS,
     (conventions.STACK_NAMES.k8s_base, True): POOL_OUTPUTS | {conventions.PHYSICAL_OUTPUTS.volume_ids},
-    (conventions.STACK_NAMES.apps, False): POOL_OUTPUTS,
-    (conventions.STACK_NAMES.apps, True): POOL_OUTPUTS,
+    (conventions.STACK_NAMES.apps, False): POOL_OUTPUTS | {apps.DNS_ZONE_IDS},
+    (conventions.STACK_NAMES.apps, True): POOL_OUTPUTS | {apps.DNS_ZONE_IDS},
 }
 
 #: Stack name → the program it runs, read off the dispatch table, so a case
@@ -141,21 +153,28 @@ PUBLISHED_KUBECONFIG = 'the-kubeconfig-physical-published-which-no-registration-
 
 
 class Run(Physical):
-    """One program's run against a fully applied `physical`, and every output it read across a StackReference by name."""
+    """One program's run against a fully applied `physical`, a `dns` that publishes `dns_outputs`, and every output it read across a StackReference by name."""
 
-    def __init__(self) -> None:
-        super().__init__(PUBLISHED | {conventions.PHYSICAL_OUTPUTS.kubeconfig: PUBLISHED_KUBECONFIG})
+    def __init__(self, dns_outputs: dict[str, object] | None = None) -> None:
+        super().__init__(PUBLISHED | {conventions.PHYSICAL_OUTPUTS.kubeconfig: PUBLISHED_KUBECONFIG}, dns_outputs)
         #: The output names asked of any StackReference, in the order asked.
         self.read_across: list[str] = []
 
 
 async def declare(
-    name: str, *, kubeconfig: str | None = KUBECONFIG, preview: bool = False, sealed: bool = False
+    name: str,
+    *,
+    kubeconfig: str | None = KUBECONFIG,
+    preview: bool = False,
+    sealed: bool = False,
+    dns_outputs: dict[str, object] | None = None,
 ) -> Run:
     """One program, declared once, with `kubeconfig` in its configuration, or none at all.
 
     With `sealed`, the configuration holds every sealed value the census has
     the stack declare (`sealed_values`), as the committed stack files do.
+    `dns_outputs` is what the `dns` stack publishes, its zone identifiers
+    unless given.
 
     The reads through a StackReference's by-name methods -- `get_output`,
     `require_output`, `get_output_details` -- are recorded on the way through.
@@ -168,7 +187,7 @@ async def declare(
         secrets[f'kluster:{KUBECONFIG_KEY}'] = kubeconfig
     plain = {f'kluster:{conventions.sealed.CONFIG_KEY}': json.dumps(sealed_values(name))} if sealed else {}
     pulumi.runtime.set_all_config(secrets | plain | VERSIONS_CONFIG, secret_keys=list(secrets))
-    monitor = await run_under_backstop(Run(), stack=name, preview=preview)
+    monitor = await run_under_backstop(Run(dns_outputs), stack=name, preview=preview)
 
     def recording(read: Callable[..., Any]) -> Callable[..., Any]:
         def read_by_name(reference: pulumi.StackReference, output: str) -> Any:
@@ -228,8 +247,10 @@ def test_no_program_reads_the_kubeconfig_across_a_stack_reference(
     kubeconfig; the copy in the stack's own configuration is the only route.
     What does cross is plain machine facts a program declares something
     from: the pools' members, which `k8s-base` builds its pools from and
-    `apps` hands a raw port's Service (rfc-007 §3.1, §4.4; rfc-008 §4.1),
-    and, once the metrics reader's key is sealed in, the volumes' OCIDs,
+    `apps` hands a raw port's Service (rfc-007 §3.1, §4.4; rfc-008 §4.1);
+    the `dns` stack's zone identifiers, which `apps` declares its records
+    in (rfc-007 §3.1); and, once the metrics reader's key is sealed in, the
+    volumes' OCIDs,
     which `k8s-base` configures the pull of OCI's block-volume series with
     (`READS`).
 
@@ -376,7 +397,7 @@ async def test_a_front_apps_reads_that_is_not_an_address_stops_its_run_by_name(
 ) -> None:
     """`apps` reads the fronts' addresses so that anything but an address stops the run, naming the output.
 
-    No component is wired to hand them to, and the run stops all the same:
+    The run stops whether or not a component it wires declares a raw port:
     a Service declared from what a targeted apply of `physical` left behind
     would carry `"None"` as its address.
     """
@@ -385,3 +406,44 @@ async def test_a_front_apps_reads_that_is_not_an_address_stops_its_run_by_name(
 
     assert repr(output) in str(refused.value)
     assert (refused.value.output, refused.value.held) == (output, held)
+
+
+def test_apps_declares_the_echo_servers_record_in_the_zone_identifier_dns_publishes(applied: dict[str, Run]) -> None:
+    """The record goes in the zone the `dns` stack holds, by the identifier that stack published for it."""
+    found = {
+        inputs['name']: inputs['zoneId'] for inputs in applied[conventions.STACK_NAMES.apps].by_name(RECORD).values()
+    }
+
+    assert found == {f'echo.{conventions.ZONE_PRIMARY}': ZONE_IDS[conventions.ZONE_PRIMARY]}
+
+
+def test_apps_runs_the_echo_server_from_its_pin(applied: dict[str, Run]) -> None:
+    (deployment,) = applied[conventions.STACK_NAMES.apps].by_name(DEPLOYMENT).values()
+    (container,) = deployment['spec']['template']['spec']['containers']
+
+    assert container['image'] == VERSIONS_CONFIG['versions:image-echo']
+
+
+@pytest.mark.asyncio
+async def test_apps_with_no_zone_identifiers_published_stops_its_run_naming_the_output() -> None:
+    """A `dns` stack that publishes none has not run, and a record declared without its zone goes nowhere."""
+    with pytest.raises(KeyError, match=apps.DNS_ZONE_IDS):
+        _ = await declare(conventions.STACK_NAMES.apps, dns_outputs={})
+
+
+@pytest.mark.asyncio
+async def test_the_dns_stack_publishes_each_zones_identifier_under_the_name_apps_reads() -> None:
+    """The producer and the reader of one output name it alike, and every zone a record of `apps` is in is there."""
+    from kluster.stacks import dns
+
+    exported: dict[str, Any] = {}
+    pulumi.runtime.set_all_config({f'kluster:{dns.CLOUDFLARE_API_TOKEN}': ZONES_TOKEN})
+    _ = await run_under_backstop(Physical(), stack=conventions.STACK_NAMES.dns)
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(pulumi, 'export', exported.__setitem__)
+        async with declaring():
+            await dns.main()
+
+    zone_ids = await pulumi.Output.from_input(exported[apps.DNS_ZONE_IDS]).future()
+    assert zone_ids is not None
+    assert {name.zone for name in conventions.routes.public_names()} <= set(zone_ids)

@@ -156,7 +156,11 @@ above, and neither moves with the other.
 **Cross-component facts flow through parameters; cross-stack decisions
 flow through `conventions`.** StackReference is the exception and each
 use needs a recorded reason. Today's uses each read a machine fact
-that `physical` publishes and that a program declares something from:
+that another stack publishes and that a program declares something
+from. One reads `dns`: `apps` reading each zone's Cloudflare
+identifier, `zone_ids`, which the cloud assigns when the zone is
+created and an application's public record is declared in. The rest
+read `physical`:
 the `dns` stack reading the cluster anchors; `k8s-base` reading the
 addresses its `internet` pool and the worker's pool are made of
 (rfc-007 §4.4, rfc-008 §4.1), and the OCID of each

@@ -1,7 +1,8 @@
 """The `k8s-base` program's stand-ins and its whole run: what `physical` has published, the pins, the fetched files.
 
 Every suite that runs `k8s_base.main` whole needs the same three things the
-program reads besides its kubeconfig, so they are here rather than in any one
+program reads besides its kubeconfig, and a suite that runs `apps.main` the
+zone identifiers `dns` publishes as well, so they are here rather than in any one
 of those suites (framework/testing.md §2): `test_stack_programs.py` runs it for
 its providers, `test_cilium.py` for what Cilium declares, and every suite that
 takes an `applied` fixture for what the other components install. `applied`
@@ -33,6 +34,7 @@ from kluster.conventions.outputs import BOOT_VOLUME
 from kluster.lib.k8s import KUBECONFIG_KEY
 from kluster.lib.stack_addresses import UnusableAddressOutput
 from kluster.lib.versions import ManifestPin, SourcePin
+from kluster.stacks.apps import DNS_ZONE_IDS
 
 OUTPUTS = conventions.PHYSICAL_OUTPUTS
 
@@ -61,6 +63,12 @@ PUBLISHED: dict[str, object] = {
     },
     OUTPUTS.kubeconfig: {},
 }
+
+#: Each zone's identifier, as an applied `dns` publishes them, and everything
+#: it publishes: the identifiers, under the output name the `apps` program
+#: reads.
+ZONE_IDS = {zone: f'the-id-of-{zone}' for zone in conventions.ALL_ZONES}
+DNS_PUBLISHED: dict[str, object] = {DNS_ZONE_IDS: ZONE_IDS}
 
 DIGEST = f'sha256:{"d" * 64}'
 
@@ -176,6 +184,7 @@ VERSIONS_CONFIG = {
     'versions:image-oci-sdk': f'registry.example.invalid/oci-sdk:9.17.0-{"a" * 12}@sha256:{"4" * 64}',
     'versions:image-etcd-backup': f'registry.example.invalid/talos-backup:v9.18.0@sha256:{"5" * 64}',
     'versions:image-postgres-client': f'registry.example.invalid/postgres-client:99-{"b" * 12}@sha256:{"6" * 64}',
+    'versions:image-echo': f'registry.example.invalid/whoami:v9.19.0@sha256:{"7" * 64}',
     'versions:manifest-gateway-api': json.dumps(
         {
             'repository': 'example/gateway-api',
@@ -210,14 +219,19 @@ def source_file(pin: SourcePin, path: str) -> str:
 
 
 class Physical(Recorder):
-    """A `physical` whose StackReference hands out `published`."""
+    """A `physical` whose StackReference hands out `published`, beside a `dns` whose StackReference hands out `dns_published`."""
 
-    def __init__(self, published: dict[str, object] | None = None) -> None:
+    def __init__(
+        self, published: dict[str, object] | None = None, dns_published: dict[str, object] | None = None
+    ) -> None:
         super().__init__()
         self.published = PUBLISHED if published is None else published
+        self.dns_published = DNS_PUBLISHED if dns_published is None else dns_published
 
     def computed(self, args: pulumi.runtime.MockResourceArgs) -> dict[str, Any]:
         if args.typ == 'pulumi:pulumi:StackReference':
+            if args.name.endswith(f'/{conventions.STACK_NAMES.dns}'):
+                return {'outputs': self.dns_published}
             return {'outputs': self.published}
         return {}
 

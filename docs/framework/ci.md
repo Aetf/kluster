@@ -1526,8 +1526,9 @@ publishes its outputs. `k8s-base` and `apps` were first applied by the
 merge that committed the copy of the cluster credential into their
 configuration (operations.md §2.5), and every merge applies them since;
 `k8s-base` declares the platform of declarative/cluster-infra.md §1, and
-`apps` nothing beyond its providers, since no application's component
-is wired yet (sources-of-truth.md §3). `github` and `state-backend` have
+`apps` its providers and one component, the echo server of rfc-007
+§9.2, since no application of the legacy cluster's is wired yet
+(sources-of-truth.md §3). `github` and `state-backend` have
 resources behind them too, as operator stacks that no job runs
 (framework/pulumi.md §3.3). What follows is the one red that is a
 property of the phase rather than a fault to report, and how to tell it
