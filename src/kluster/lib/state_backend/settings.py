@@ -144,17 +144,21 @@ SHARED_BUFFERS_MIB = 128
 WRITE_MULTIPLE = 5.8
 BACKEND_BASELINE_MIB = 3
 
-#: The largest row in the state table, in bytes, as `state-backend census
-#: --ceiling` last read it, rounded up: a plain `backups/` copy of
-#: `physical`'s checkpoint. A row's size here is its value's, the size the
-#: ceiling reads: the bytes a client writes and reads, which is what each
-#: multiple below is per byte of, and not the smaller size TOAST's
-#: compression stores it at. A reading, not a forecast: it moves
-#: when the ceiling reads another largest row, and the ceiling fails naming
-#: any row over it, a row the cap was not derived for. Every row is one a
-#: statement through the pooler can touch -- a listing sizes each key it
-#: finds -- and one each dump reads, so the one value bounds all three.
-LARGEST_ROW_BYTES = 2_130_000
+#: The largest row the cap is derived for, in bytes: a bound the state
+#: table is held to, not a reading of it (state-backend.md §2). It is set
+#: as high as it goes while the cap still covers the most statements CI
+#: was measured to run at once, rounded clear of the value where the cap
+#: would fall, and its room over the largest value `state-backend census
+#: --ceiling` prints outlasts the month between two digest refreshes, so a
+#: new bound rides a replacement the box takes anyway. The ceiling fails
+#: naming any row over it, a row the cap was not derived for, and the bound
+#: is then set again by the same rule. A row's size here is its value's,
+#: the size the ceiling reads: the bytes a client writes and reads, which
+#: is what each multiple below is per byte of, and not the smaller size
+#: TOAST's compression stores it at. Every row is one a statement through
+#: the pooler can touch -- a listing sizes each key it finds -- and one
+#: each dump reads, so the one value bounds all three.
+LARGEST_ROW_BYTES = 3_000_000
 
 #: The nightly dump reaches Postgres on the box's local socket, around the
 #: pooler, so its memory is outside the cap: the peak of the Postgres
