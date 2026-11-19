@@ -135,6 +135,18 @@
     what architecture.md takes from §4.1 follow it. §8's bullet on the
     raw port goes: workloads.md §1 and §5 no longer state one, and take
     the raw port from §4.1 (§9).
+*   **Updated:** 2026-11-19. matrix moves in three merges (§5.3): the
+    land wires it with a receiver, a migration layer of its component's
+    own that runs in the server's place while the legacy claim is
+    streamed in, since the server's image has no `tar` and the server
+    started on an empty claim makes a database of its own there; a
+    second merge starts the server; then the cut, which deletes the
+    receiver. §3.2's two merges name hath and matrix as the exceptions;
+    §10.3's opening and slice 31's row say matrix lands in two pull
+    requests; slice 32's owned paths gain the component's module and its
+    tests, as slice 35's do hath's. §10.2's images with no numeric user
+    gain continuwuity's
+    ([Aetf/kluster#878](https://github.com/Aetf/kluster/pull/878)).
 *   **Authority:** AGENTS.md,
     [framework/dispatch.md](../framework/dispatch.md),
     [framework/rfc.md](../framework/rfc.md) and the style rules
@@ -328,7 +340,7 @@ ahead of the cluster:
 ### 3.2 Land, verify, cut
 
 An application then moves in two merges and one verification between
-them:
+them, save hath (§5.4) and matrix (§5.3), which move in three:
 
 1.  **Land.** The legacy application is stopped (§3.5) and its data
     moved (§5, by storage kind). The land pull request wires the
@@ -1874,6 +1886,12 @@ branch.
     cut.
 *   **matrix**: continuwuity on the cloud pool, its client from the
     census. **Data**: the claim by stream, after the server is stopped.
+    matrix moves in three merges. The land wires it with `receiver`,
+    the static site's pin, and the legacy claim is streamed into the
+    receiver. A second merge wires it without, which starts the server
+    on what was streamed, and the server is verified. Then the cut. The
+    receiver is a migration layer of the component's own: its boundary
+    is stated in the component, and it goes at the cut (slice 32).
     **Verified** by a client sign-in and by a federation check of the
     server name, which reads the delegation the blog serves, through the
     proxy; where federation does not survive it, the row goes `Direct`
@@ -2949,8 +2967,8 @@ not root, and the kubelet starts none it cannot show to be one: an image
 whose `USER` is unset runs as root, and one whose `USER` is a name
 cannot be checked. Such a container states a numeric `runAsUser`. As
 slice 2 pins them, those are the official `redis` (slices 11 and 21),
-the canary's `curl` (slice 11), `qbittorrent-nox` (slice 23) and
-`discosrv` (slice 16).
+the canary's `curl` (slice 11), `qbittorrent-nox` (slice 23),
+`discosrv` (slice 16) and continuwuity (slice 14).
 
 | Slice | Application | Wave | Size | Shared paths beyond its own | After |
 | --- | --- | --- | --- | --- | --- |
@@ -3147,7 +3165,8 @@ documents before it; slice 37 shares its paths and comes after it.
 
 Each window is a sequence of slices, in the order below within it;
 Wave B and hath overlap, and §5.9 gives the days. Each pull request is
-its own slice, and so is each step with none. A removal waits for its
+its own slice, save matrix's two in slice 31, and so is each step with
+none. A removal waits for its
 wave's soak (§3.5), so a head carries only the removals whose soak has
 ended, and slice 45 carries the rest.
 
@@ -3157,8 +3176,8 @@ ended, and slice 45 carries the rest.
 | 28 | A1 | **Land**: exim and authelia wired, `auth` held; the echo component, its row, its pin and its tests deleted | `src/kluster/stacks/apps.py`, `src/kluster/conventions/routes.py`, `docs/sources-of-truth.md`, the echo component's module, `tests/test_apps.py`, `Pulumi.yaml` |
 | 29 | A1 | **Cut**: `auth` | `src/kluster/conventions/routes.py`, `src/kluster/components/dns/legacy.py`, `docs/sources-of-truth.md` |
 | 30 | A2 | The head: A1's legacy authelia removed; Home Assistant's configured addresses read; both instances' devices and folders read, and each gap fixed on the device; the DNS-01 token minted for the co-host zone into the land's branch; kluster-code stops A2's applications | kluster-code |
-| 31 | A2 | **Land**: blog, splitpro, matrix, syncthing, stdiscosrv; stdiscosrv's row already stands in `EXPOSURES` (§3.1), so the land changes no `physical` plan for it | as slice 28, and `Pulumi.k8s-base.yaml` |
-| 32 | A2 | **Cut**: `split`, `matrix` with its SRV, `dav`, `sync`, `syncapi`, the web origin's served apex and both `www`; the `sync-nas` and `btsync` records deleted | as slice 29, and `src/kluster/components/dns/base.py` |
+| 31 | A2 | **Land**: blog, splitpro, matrix, syncthing, stdiscosrv; stdiscosrv's row already stands in `EXPOSURES` (§3.1), so the land changes no `physical` plan for it; matrix lands in two pull requests, its receiver's and then its server's (§5.3) | as slice 28, and `Pulumi.k8s-base.yaml` |
+| 32 | A2 | **Cut**: `split`, `matrix` with its SRV, `dav`, `sync`, `syncapi`, the web origin's served apex and both `www`; the `sync-nas` and `btsync` records deleted; matrix's receiver deleted | as slice 29, and `src/kluster/components/dns/base.py`, `src/kluster/components/apps/matrix/`, `tests/test_apps_matrix.py` |
 | 33 | after A2 | The head and the **stage**: A2's legacy applications removed; slice 25 applied; the tree on the NAS read as world-readable, or re-owned, since the source reads it as the export's anonymous user; hath wired with its client not started, and the copy pair; the warm copy | as slice 28; kluster-code |
 | 34 | after A2 | **Land**: kluster-code stops legacy hath; the final delta; the client started | as slice 28; kluster-code |
 | 35 | after A2 | **Cut**: the re-registration; the copy pair and the not-started parameter deleted | as slice 28, and `src/kluster/components/apps/hath/`, `tests/test_apps_hath.py` |

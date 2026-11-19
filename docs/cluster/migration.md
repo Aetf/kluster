@@ -41,7 +41,8 @@ owns sequencing, data movement, and teardown.
         row of `LEGACY_VHOSTS` — and takes the row out of the held
         state, so `apps` publishes the record and `dns` the rewrite.
         Verification needs something deployed, and a merge is what
-        deploys, so the land and the cut are two merges.
+        deploys, so the land and the cut are two merges; hath and matrix
+        take a third, below.
     -   **A window's applications land together and cut together.** One
         that does not verify is left out of the cut, and its land is
         reverted on its own. A home-only application publishes no record
@@ -291,8 +292,12 @@ spends its way back (rfc-008 §5.9).
     (small CNPG, its database by recovery from the legacy store, §3 —
     **prerequisite: the multi-arch pgcron image from the ported
     images.yml**, ci.md §4) → matrix (continuwuity, its claim streamed,
-    §3; its `.well-known` delegation rides the blog instance,
-    workloads.md §4, so it is already serving by this point) →
+    §3, in three merges: a land that wires it with a receiver in the
+    server's place, which the legacy claim is streamed into, a second
+    merge that starts the server on what was streamed, and the cut,
+    which deletes the receiver, rfc-008 §5.3; its `.well-known`
+    delegation rides the blog instance, workloads.md §4, so it is
+    already serving by this point) →
     **syncthing, with the WebDAV server beside it, on the worker**: no
     cloud replica moves, since its one role was an always-reachable
     port for roaming devices, and the balancer's peer port now reaches
