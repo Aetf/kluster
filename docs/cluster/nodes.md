@@ -813,20 +813,21 @@ by construction; Tier 0 remains the foundation everything else sits on:
 
 -   **Tier 0 — declarative rebuild + backups (the foundation)**: the
     cluster *is* the Pulumi program plus Talos machine configs. Survival
-    of permanent loss is designed to come from three legs, and none of
-    the three runs. Their destination — the bucket, with the etcd
-    leg's writer key — is declared by the `physical` stack
-    (declarative/physical.md §5, storage.md §4) and exists once that
-    stack is first applied (migration.md §1 step 2); nothing writes to
-    it. The legs: hourly etcd snapshots shipped to B2 (off-provider by
-    the storage.md §4 placement rule) — a CronJob in the cluster, on
-    the control planes (storage.md §5), which `k8s-base` declares and
-    which takes none until bring-up stage 6 seals its writer key; VolSync volume
+    of permanent loss is designed to come from three legs, and the etcd
+    snapshots are the one that runs. Their destination — the bucket,
+    with the etcd leg's keys — is declared by the `physical` stack
+    (declarative/physical.md §5, storage.md §4). The legs: hourly etcd
+    snapshots shipped to B2 (off-provider by the storage.md §4
+    placement rule) — a CronJob in the cluster, on the control planes
+    (storage.md §5), which `k8s-base` declares; VolSync volume
     backups and CNPG barman to the same bucket (storage.md §5) —
     whose operators the `k8s-base` stack declares, with no backup
     declared against either until the first database and the first
-    `claim` under a retention class, so neither runs; and periodically *drilled* restores — the drill program of
-    operations.md §4, none of which has run.
+    `claim` under a retention class, so neither runs; and periodically
+    *drilled* restores — the drill program of operations.md §4, of
+    which the etcd restore-verify runs, daily, restoring the newest
+    snapshot into a scratch etcd on the worker, and none of the others
+    has run.
     Target: RPO ≤ 1 h, RTO ~1–2 h hands-on. The **cold-standby drill**
     covers total-cloud-loss (tenancy termination included): bootstrap a
     temporary single-node CP on the homelab host (libvirt) from the

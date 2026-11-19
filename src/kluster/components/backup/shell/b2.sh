@@ -1,15 +1,18 @@
 # The backup bucket, read and written through B2's native API with `curl`.
-# Sourced by the scripts that run in the bucket's container, in the curl image
-# (`components.monitoring.stores`), for what `vmbackup` and `vmrestore` do not
-# do themselves: whether a prefix holds any file, and a small file read or
-# written beside a backup.
+# Sourced by the scripts that run in curl's image, or in one built on it, for
+# what their tools do not do themselves: the metrics stores' scripts
+# (`components.monitoring.stores`), for whether a prefix holds any file and a
+# small file read or written beside a backup, which `vmbackup` and `vmrestore`
+# do not do; and the etcd restore-verify (`components.backup.etcd`), for the
+# newest snapshot's name and its download.
 #
-# It authenticates with the writer key the store's backup runs under, from the
-# fields restic reads it from, `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`.
-# The key is restricted to one bucket, so the authorization answers with that
-# bucket's id and name.
+# It authenticates with the key its consumer runs under, from the fields
+# restic reads a key from, `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`: a
+# store's writer key, or the etcd snapshots' reader key. Each key is
+# restricted to one bucket, so the authorization answers with that bucket's
+# id, and with its name where B2 states one.
 #
-# **Every call is version 4 of the native API.** The writer key is restricted
+# **Every call is version 4 of the native API.** Each key is restricted
 # through `bucketIds`, which makes it what B2 calls a multi-bucket application
 # key, and B2 authorizes one of those on `b2_authorize_account` v4 alone,
 # answering an earlier version with an error. v4's answer keeps the key's
@@ -22,10 +25,17 @@
 # under it as under the version before ("Native API Versions",
 # https://www.backblaze.com/docs/cloud-storage-native-api-versions), and v4 is
 # the version their reference pages describe. Those pages describe
-# `b2_list_file_names` and `b2_get_upload_url` as GETs that still take a POST
-# whose JSON body carries the parameters, which is what is sent here;
-# `b2_upload_file` goes to the address `b2_get_upload_url` answers, and a
-# download by name to `downloadUrl` under no version at all.
+# `b2_list_file_names`, `b2_get_upload_url` and `b2_download_file_by_id` as
+# GETs that still take a POST whose JSON body carries the parameters, which is
+# what is sent here; a download by id goes to `downloadUrl`, the others to
+# `apiUrl`. `b2_upload_file` goes to the address `b2_get_upload_url` answers,
+# and a download by name to `downloadUrl` under no version at all.
+#
+# **The bucket's name is optional, its id is not.** The answer lists each
+# bucket's `name` beside its `id`, and B2's own example answers `null` for a
+# name without saying when it does. Every call here but the download by name
+# addresses the bucket by its id, so a key is refused only where its bucket has
+# no id, and `b2_cat`, the download by name, refuses where no name was given.
 #
 # **No credential is ever an argument.** A process's arguments are readable
 # by every process on the node that sees its PID, while its environment and the
@@ -48,6 +58,13 @@ json_field() {
 	tr -d '\n' | sed -n "s/.*\"$1\": *\"\([^\"]*\)\".*/\1/p"
 }
 
+# json_strings NAME: every string value under NAME in the JSON object on
+# stdin, one a line, in the order they occur. For a name that occurs once in
+# each entry of an array and nowhere else, whose values hold no quote.
+json_strings() {
+	tr -d '\n' | grep -o "\"$1\": *\"[^\"]*\"" | sed "s/^\"$1\": *\"\(.*\)\"\$/\1/"
+}
+
 # json_buckets: the entries of the `buckets` array in the JSON object on stdin,
 # one a line, each the text inside its braces, and nothing where the array is
 # empty, `null` or absent. An entry holds a bucket's `id` and `name` alone, each
@@ -68,14 +85,15 @@ b2_call() {
 	curl -sS --fail --max-time "$CALL_TIMEOUT" -H "@$headers" "$@" "$url"
 }
 
-# b2_authorize: authorize the writer key, setting B2_API_URL, B2_DOWNLOAD_URL,
-# B2_BUCKET_ID and B2_BUCKET_NAME, and writing the account's token into the
-# header file every later call reads.
+# b2_authorize: authorize the key, setting B2_API_URL, B2_DOWNLOAD_URL,
+# B2_BUCKET_ID and B2_BUCKET_NAME, the last empty where the answer names no
+# bucket, and writing the account's token into the header file every later
+# call reads.
 b2_authorize() {
 	basic=$(printf '%s:%s' "$AWS_ACCESS_KEY_ID" "$AWS_SECRET_ACCESS_KEY" | base64 | tr -d '\n')
 	printf 'Authorization: Basic %s\n' "$basic" >"$WORK/b2-key"
 	if ! answer=$(b2_call "$WORK/b2-key" "$B2_API/b2api/$B2_VERSION/b2_authorize_account"); then
-		echo "the backup bucket refused the writer key, or did not answer" >&2
+		echo "the backup bucket refused the key, or did not answer" >&2
 		return 1
 	fi
 	token=$(printf '%s' "$answer" | json_field authorizationToken)
@@ -90,19 +108,19 @@ b2_authorize() {
 	buckets=$(printf '%s' "$answer" | json_buckets)
 	case $buckets in
 	'')
-		echo "the backup bucket's authorization restricts the writer key to no bucket, where it is restricted to one" >&2
+		echo "the backup bucket's authorization restricts the key to no bucket, where it is restricted to one" >&2
 		return 1
 		;;
 	*'
 '*)
-		echo "the backup bucket's authorization restricts the writer key to more than one bucket, where it is restricted to one" >&2
+		echo "the backup bucket's authorization restricts the key to more than one bucket, where it is restricted to one" >&2
 		return 1
 		;;
 	esac
 	B2_BUCKET_ID=$(printf '%s' "$buckets" | json_field id)
 	B2_BUCKET_NAME=$(printf '%s' "$buckets" | json_field name)
-	if [ -z "$B2_BUCKET_ID" ] || [ -z "$B2_BUCKET_NAME" ]; then
-		echo "the backup bucket's authorization named no id or name for the writer key's bucket" >&2
+	if [ -z "$B2_BUCKET_ID" ]; then
+		echo "the backup bucket's authorization named no id for the key's bucket" >&2
 		return 1
 	fi
 	printf 'Authorization: %s\nContent-Type: application/json\n' "$token" >"$WORK/b2-account"
@@ -122,8 +140,45 @@ b2_listed() {
 	esac
 }
 
+# b2_newest PREFIX START: the id and the name of the last current file whose
+# name starts with PREFIX and sorts at START or after, separated by a space,
+# and nothing where there is none. B2 lists names in order and answers a page
+# at a time, naming where the next page starts, so the last name is the last
+# page's last.
+b2_newest() {
+	newest=
+	start=$2
+	while :; do
+		if ! answer=$(b2_call "$WORK/b2-account" "$B2_API_URL/b2api/$B2_VERSION/b2_list_file_names" \
+			--data "{\"bucketId\":\"$B2_BUCKET_ID\",\"prefix\":\"$1\",\"startFileName\":\"$start\",\"maxFileCount\":1000}"); then
+			echo "the backup bucket did not list $1 from $start" >&2
+			return 1
+		fi
+		name=$(printf '%s' "$answer" | json_strings fileName | tail -n 1)
+		if [ -n "$name" ]; then
+			newest="$(printf '%s' "$answer" | json_strings fileId | tail -n 1) $name"
+		fi
+		start=$(printf '%s' "$answer" | json_field nextFileName)
+		[ -n "$start" ] || break
+	done
+	[ -z "$newest" ] || printf '%s\n' "$newest"
+}
+
+# b2_fetch_id ID FILE: the contents of the file whose id is ID, written to FILE.
+b2_fetch_id() {
+	if ! b2_call "$WORK/b2-account" "$B2_DOWNLOAD_URL/b2api/$B2_VERSION/b2_download_file_by_id" \
+		--data "{\"fileId\":\"$1\"}" -o "$2"; then
+		echo "the backup bucket did not return the file $1" >&2
+		return 1
+	fi
+}
+
 # b2_cat NAME: the contents of the current file NAME.
 b2_cat() {
+	if [ -z "$B2_BUCKET_NAME" ]; then
+		echo "the backup bucket's authorization named no bucket, and $1 is read by its bucket's name" >&2
+		return 1
+	fi
 	if ! b2_call "$WORK/b2-account" "$B2_DOWNLOAD_URL/file/$B2_BUCKET_NAME/$1"; then
 		echo "the backup bucket did not return $1" >&2
 		return 1

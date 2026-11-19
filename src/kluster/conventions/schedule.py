@@ -134,6 +134,21 @@ ETCD_SNAPSHOT = ScheduledJob(
     playbook=Playbook('docs/operations.md', '7.1'),
 )
 
+#: The etcd snapshots' daily restore-verify (`components.backup.etcd`): the
+#: newest snapshot restored into a scratch etcd that has to serve it. A run
+#: downloads, decrypts and restores one snapshot in about a minute, so it is
+#: cut off at 20 minutes; a run the controller could not start within the hour
+#: is left to the next day's.
+ETCD_RESTORE_VERIFY = ScheduledJob(
+    alert='EtcdRestoreVerify',
+    namespace=ETCD_BACKUP_NAMESPACE,
+    cronjob='etcd-restore-verify',
+    period=dt.timedelta(days=1),
+    deadline=dt.timedelta(minutes=20),
+    starting_deadline=dt.timedelta(hours=1),
+    playbook=Playbook('docs/operations.md', '7.2'),
+)
+
 #: The state table's daily upkeep (`components.state_upkeep`): the census,
 #: the prune of the rows the retention rule expires and the ceiling, as the
 #: role `upkeep` (physical/state-backend.md §2). A run is a handful of
@@ -182,6 +197,7 @@ SCHEDULED_JOBS: Sequence[ScheduledJob] = (
     *METRICS_BACKUPS.values(),
     OCI_METRICS_PULL,
     ETCD_SNAPSHOT,
+    ETCD_RESTORE_VERIFY,
     STATE_UPKEEP,
     STATE_BACKEND_DUMPS,
     STATE_BACKEND_CERTIFICATE,

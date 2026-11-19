@@ -571,6 +571,8 @@ Per nodes.md §5, durability = declarative rebuild + backups + drills:
         encrypted with age to every escrowed backup generation in
         `src/kluster/lib/state_backend/machine/backup-recipients.txt`,
         the recipients the state backend's dumps are encrypted to, and
+        after them to the restore-verify's own recipient,
+        `src/kluster/conventions/etcd-drill-recipient.txt`, and
         uploaded. Every step's error ends the run non-zero, so a run that
         succeeded is an object uploaded.
     -   **The object**: `etcd/kluster-<RFC 3339 UTC>.snap.age`, such as
@@ -580,10 +582,29 @@ Per nodes.md §5, durability = declarative rebuild + backups + drills:
         recorded with it.
     -   **Liveness**: the scheduled-job rule family watches it
         (operations.md §4), and its playbook is operations.md §7.1.
-    -   **Status**: the job is declared, and takes no snapshot until
-        bring-up stage 6 seals `writer-etcd` (physical/bring-up.md);
-        until then `k8s-base` declares its namespace and its Talos
-        `ServiceAccount` alone (nodes.md §5 Tier 0).
+    -   **The restore-verify**: the CronJob `etcd-restore-verify`, in
+        the same namespace, reads the newest snapshot back daily, the way
+        a recovery would. It lists `etcd/` with `reader-etcd` from the
+        snapshot job's `max_age` ago, an hour and a half, so an empty
+        listing is a stale bucket read independently of the snapshot
+        job's own status; downloads the newest snapshot by its id;
+        decrypts it with an age identity of its own, `etcd-drill`, which
+        no escrow holds and which opens nothing the escrowed generations
+        do not; restores it with `etcdutl`, which checks etcd's hash; and
+        starts a scratch etcd on the restored member, listening on
+        `127.0.0.1` inside the pod, which has to answer healthy and hold
+        `/registry/namespaces/kube-system`. It runs off the control
+        planes, on the worker today, in the `etcd-age` image this
+        repository builds (`docker/etcd-age.conf`), with its working
+        directory in memory, so the decrypted snapshot never reaches a
+        disk. Its playbook is operations.md §7.2.
+    -   **Status**: both run. The snapshot job's key and the
+        restore-verify's two values are sealed into `k8s-base`, which
+        declares each CronJob only once its values are there
+        (physical/bring-up.md §1). Snapshots taken before the `k8s-base`
+        apply that added the restore-verify's recipient carry the
+        escrowed generations alone, and leave the listing within 14
+        days.
     Restore path is documented Talos `--recover-from-snapshot` bootstrap, to be drilled both in-place and
     onto a substitute node (the CP cold-standby path, nodes.md §5 Tier 0);
     neither form has run.

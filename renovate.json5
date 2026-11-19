@@ -605,6 +605,18 @@
       versioning: 'regex:^(?<major>\\d+)-[0-9a-f]{12}$',
     },
     {
+      // The etcd restore-verify's runtime, tagged with the etcd release it
+      // carries (`docker/etcd-age.conf`), a semantic version. A move of `age`
+      // or of a base is a rebuild under that version, which compares equal
+      // and is moved to by hand. Its patches stay under the global
+      // `patch: enabled: false`, as the conf's etcd patches do, so what
+      // reaches the pin is the minor the conf's approved bump has built.
+      matchDepNames: [
+        'ghcr.io/aetf/etcd-age',
+      ],
+      versioning: 'regex:^v(?<major>\\d+)\\.(?<minor>\\d+)\\.(?<patch>\\d+)-[0-9a-f]{12}$',
+    },
+    {
       // The patches of emailproxy, golinks and the OCI SDK runtime,
       // re-enabled: a release on emailproxy's calendar within a month, a
       // golinks commit within a month, an `oci` patch release. Each is a new

@@ -1441,10 +1441,11 @@ def etcd_drill_age_identity(*, sealer: sealing.Sealer, recipient_file: Path) -> 
     held to exist before anything is drawn, so a refusal costs nothing; the
     cluster's certificate was fetched in building `sealer`. The file is
     written only once the ciphertext is written and read back, since a
-    recipient on file whose private half was never sealed is, once the
-    snapshots read the file, a snapshot encrypted to a key nothing holds --
-    harmless to the data, a verify failure found a month later -- where a
-    seal with no file yet is repaired by running this again.
+    recipient on file whose private half was never sealed is, once
+    `k8s-base` reads the file, a snapshot encrypted to a key nothing holds --
+    harmless to the data, and the next daily restore-verify fails at its
+    decryption -- where a seal with no file yet is repaired by running this
+    again.
     """
     value = conventions.sealed.ETCD_DRILL_IDENTITY
     _ = sealer.stack(value)

@@ -52,9 +52,17 @@ config:
 
   # The hourly etcd snapshot, Sidero's `talos-backup`: it takes the snapshot
   # through the Talos API, encrypts it to the escrowed backup generations and
-  # uploads it to the backup bucket (cluster/storage.md §5). It runs on the
-  # control planes, which are arm64, so the digest is the image index's.
+  # the restore-verify's recipient, and uploads it to the backup bucket
+  # (cluster/storage.md §5). It runs on the control planes, which are arm64,
+  # so the digest is the image index's.
   versions:image-etcd-backup: ghcr.io/siderolabs/talos-backup:v0.1.0@sha256:3635df0be0862d71bba7a34dca3e7f7c790887f5c5d0129002191c4c2d92dd15
+  # The daily etcd restore-verify's runtime: curl's image with etcd, `etcdctl`
+  # and `etcdutl` at the cluster's etcd minor and `age`, built by this
+  # repository (`docker/etcd-age.conf`), with the script a ConfigMap of the
+  # etcd backup's component. The job runs on the worker, which is amd64 today;
+  # the digest is the image index's, which carries both architectures as
+  # framework/ci.md §4 requires of every image built here.
+  versions:image-etcd-verify: ghcr.io/aetf/etcd-age:v3.6.16-0a77c1b8eead@sha256:90e5ee5657b315474870e0af0a698a4df5b912005ceafeb9c1923c9b03c4ea2f
 
   # The monitoring component's own VictoriaMetrics images, beside the stack
   # chart's (declarative/cluster-infra.md §1 item 6): the history store, which

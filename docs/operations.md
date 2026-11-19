@@ -1270,15 +1270,15 @@ cluster's own have reported. Its alert job
 dispatches into the intake, whose handler is not built
 (`kluster-ops#715`), so a failing probe is a red run there and nothing
 more (the alert contract, below). The ops-repository row, the
-state-backend rebuild, has no workflow written (`kluster-ops#57`). No
-in-cluster row has its job written: not the etcd restore-verify, and
-not the two restores or the orphan-volume audit, whose recipe
-(storage.md §3.3) is not written either. `k8s-base` declares
-what they would stand on: the operators the two restores drive, the
-hourly etcd snapshot the restore-verify would read, which takes none
-until bring-up stage 6 seals its key (storage.md §5), and the alerting
-every in-cluster row reports into. None of it runs until the cluster's
-bring-up applies it (physical/bring-up.md).
+state-backend rebuild, has no workflow written (`kluster-ops#57`). Of
+the in-cluster rows, the etcd restore-verify alone has its job written:
+`k8s-base` declares it beside the hourly snapshot it reads, both in
+`etcd-backup` (storage.md §5), and it runs daily from the first
+`k8s-base` apply that declares it. The two restores and the
+orphan-volume audit are not written, nor is the audit's recipe
+(storage.md §3.3); `k8s-base` declares what they would stand on, the
+operators the two restores drive, and the alerting every in-cluster
+row reports into.
 The last column is the designed form, and where each scheduled job
 runs is the census below. Every row is an operator act today, and
 the only one written out as a procedure is the state-backend restore
@@ -1289,7 +1289,7 @@ every recovery path on this table an assumed-broken one.
 | --- | --- | --- |
 | CNPG restore (immich pattern, ported from legacy) | Monthly | In-cluster CronJob, alert on failure |
 | State-backend rebuild — scratch micro from Butane → restore latest dump (drill key) → verify → destroy (state-backend.md §7.3) | Quarterly | Ops-repo workflow, alert on failure |
-| etcd snapshot restore-verify — latest B2 snapshot into a scratch etcd, health + key sanity | Monthly | In-cluster CronJob in `etcd-backup`, alert on failure |
+| etcd snapshot restore-verify — newest B2 snapshot, decrypted with an identity of its own, restored into a scratch etcd, health + key sanity (§7.2) | Daily | In-cluster CronJob in `etcd-backup`, alert on failure |
 | VolSync spot-restore — rotating PVC into a scratch namespace, checksum, and for an embedded database the rule below, tear down | Monthly | In-cluster CronJob, alert on failure |
 | Metrics-history restore — both stores restore themselves on the rebuilt cluster, and the history's earliest sample and rows match the baseline (§3.5, pass condition 5) | Each whole-cluster rebuild (§3.5) | The rebuild drill's readings |
 | Orphan-volume audit, target zero (storage.md §3.3) | Quarterly | In-cluster CronJob, alert only on findings |
@@ -1396,7 +1396,7 @@ for its place. The last column says which run, as of 2026-11-17:
 | Job | Runs in, and why | Credentials there | Liveness to Home Assistant | Built |
 | --- | --- | --- | --- | --- |
 | etcd snapshot, hourly | The cluster: `siderolabs/talos-backup` as a CronJob in `etcd-backup`, on the control planes (storage.md §5) | A certificate Talos issues for `os:etcd:backup` and renews itself; the `etcd` writer key, sealed | The family's rules (§7.1), then the cluster's check-in | No: declared once bring-up stage 6 seals the `etcd` key (storage.md §5) |
-| Age of the newest object under `etcd/` | No job of its own: the snapshot job's stale rule stands in for it, since a run that succeeded is an object uploaded, and the monthly restore-verify reads the newest object's age as a second, independent reading | None | The snapshot job's rules | No, with the snapshot job |
+| Age of the newest object under `etcd/` | No job of its own: the snapshot job's stale rule stands in for it, since a run that succeeded is an object uploaded, and the daily restore-verify reads the newest object's age off the bucket as a second, independent reading | None | The snapshot job's rules, and the restore-verify's (§7.2) | Yes, with the restore-verify |
 | VolSync backups, one `ReplicationSource` per backed claim | The cluster: VolSync's own schedule, the claim's retention class (`conventions.backup.RETENTION_CLASSES`, storage.md §5) | The namespace's writer key and each repository's password, sealed | The backup-freshness family (declarative/workloads.md §3), then the cluster's check-in | No: none is declared until the first claim under a class lands |
 | CNPG barman backups, per database cluster | The cluster: the operator's own schedule, beside continuous WAL archiving (storage.md §5) | The namespace's writer key, sealed | The backup-freshness family, then the cluster's check-in | No: no database cluster is declared yet |
 | The metrics stores' backups, hourly | The cluster: a CronJob per store, in `monitoring` (storage.md §5) | The `vm` writer key, sealed | The family's rules (§6.2), then the cluster's check-in | No: declared once bring-up stage 6 seals the `vm` key (storage.md §5) |
@@ -1407,7 +1407,7 @@ for its place. The last column says which run, as of 2026-11-17:
 | State-backend server certificate's expiry, hourly | The cluster: the CronJob `state-backend-certificate` in `monitoring`, reading the leaf off a Postgres STARTTLS handshake with the appliance (state-backend.md §6) | None: the box sends its certificate before anything authenticates | The family's rules (state-backend.md §6), then the cluster's check-in | No: the first `up-k8s-base` after its merge declares it (`kluster-ops#832`); `probes.yml` reads it today |
 | The kubeconfig copies' expiry, `KubeconfigCopyExpiring` | The cluster: a rule vmalert evaluates against the expiry `k8s-base` reads off its own copy, `conventions.cluster.KUBECONFIG_ALERT_MARGIN` ahead of it. It holds no credential, and it watches a date in `k8s-base`'s configuration rather than the cluster it runs on (§2.5) | None: the date is the certificate's public half | The cluster's check-in | No: it runs from the first `k8s-base` apply that declares monitoring |
 | The other credential expiry tripwires | Each placed by the same rule. Two are checked in the cluster: the state backend's server certificate, by the CronJob above, and the kubeconfig copies' client certificate, by the rule above. The `ci` and `operator` client bundles report their expiry at their first `pulumi` command, and the `upkeep` bundle at the state table's upkeep's first run after it (state-backend.md §6); the destroy dates stay with the offline day | — | — | — |
-| etcd restore-verify, monthly | The cluster: a CronJob in `etcd-backup` | The `etcd` writer key, which lists and reads, and an age identity of its own, sealed | The family's rules, then the cluster's check-in | No (`kluster-ops#57`) |
+| etcd restore-verify, daily | The cluster: the CronJob `etcd-restore-verify` in `etcd-backup`, off the control planes (storage.md §5) | The snapshots' read-only key, `reader-etcd`, which lists and downloads and writes nothing, and an age identity of its own, `etcd-drill`, both sealed | The family's rules (§7.2), then the cluster's check-in | Yes: from the first `k8s-base` apply that declares it, its two values sealed in ahead of it |
 | CNPG restore, VolSync spot-restore, orphan-volume audit | The cluster (the drills above) | The writer keys of the backups they read, sealed; the audit needs none | The family's rules, then the cluster's check-in | No |
 | The state-backend appliance's dump, nightly (`state-dump.timer`) | The appliance itself: the job dumps the box's own database (state-backend.md §5) | The dump key, `writeFiles` alone, in the box's Ignition | The dump-age check above; the box's own failed-run notice reaches only a shell on it (state-backend.md §6) | Yes |
 | The state-backend appliance's OS updates, a weekly window (Zincati) | The appliance itself: they update the box's own OS (state-backend.md §1) | None beyond the box's own | None, deliberately (state-backend.md §6) | Yes |
@@ -1598,7 +1598,7 @@ Owning docs keep the content — the index only locates it.
 | Alert-channel failure (HA push down → meta-alert; GitHub leg down; a scheduled ops-repo workflow that stopped checking in) | architecture.md §4.3; the contract and the dead-man are §4 here |
 | CI alerts (a red `checks` or `images` run; a drift diff) | framework/ci.md §3.1 and §3.2 |
 | The metrics stores (rows a store ignores; a backup run that failed, a backup gone stale or refused, or a store that does not restore; a pull of OCI's block-volume series that failed or went stale; a scrape job that reports nothing, or no scrape job at all) | §6 here |
-| The etcd snapshot (a run that failed, or snapshots gone stale) | §7 here |
+| The etcd snapshots (a snapshot run that failed, or snapshots gone stale; a restore-verify that failed or went stale) | §7 here |
 | The control planes (etcd slow or stalled, its leader changed or gone, a control plane under CPU or I/O pressure, a boot volume throttled) | §8 here |
 
 vmalert rule families adopt this index as they are ported: an alert
@@ -1955,13 +1955,15 @@ claims for it and no other. A job that answers and is not claimed is
 one whose stopping would silence a rule: its claim goes into
 `scrape_jobs` in the pull request that brings the change.
 
-## 7. The etcd snapshot's playbooks
+## 7. The etcd snapshots' playbooks
 
-What to do when the hourly etcd snapshot reports on itself. The job is
-`siderolabs/talos-backup`, declared in `components.backup.etcd` as the
-CronJob `etcd-snapshot` in the `etcd-backup` namespace, on the control
-planes ([cluster/storage.md](cluster/storage.md) §5). The commands below
-run from the root of the checkout.
+What to do when the hourly etcd snapshot or its daily restore-verify
+reports on itself. Both are declared in `components.backup.etcd`, in the
+`etcd-backup` namespace ([cluster/storage.md](cluster/storage.md) §5):
+the snapshot is `siderolabs/talos-backup` as the CronJob
+`etcd-snapshot`, on the control planes, and the restore-verify the
+CronJob `etcd-restore-verify`, off them. The commands below run from the
+root of the checkout.
 
 ### 7.1 The etcd snapshot failed or is stale
 
@@ -2061,6 +2063,129 @@ nothing from the ones that failed.
    `Uploading <file> to bucket aetf-kluster-backup with key etcd/<file>`,
    its Job reads `Complete`, and both alerts resolve at the next
    evaluation after it.
+
+### 7.2 The etcd restore-verify failed or is stale
+
+**Trigger**: the scheduled-job family's two alerts on the CronJob
+`etcd-restore-verify`, both `actionable`
+(`conventions.schedule.ETCD_RESTORE_VERIFY`, the rule in §4).
+`EtcdRestoreVerifyFailed`: its last run, scheduled after its last
+success, has not succeeded within the 20 minutes a run is cut off at.
+`EtcdRestoreVerifyStale`: it has not succeeded for a day and a half,
+the one rule for stale over its daily period
+(`conventions.backup.max_age`), or has never succeeded since it was
+created that long ago. A run reads the newest snapshot under `etcd/`
+back the way a recovery would: it lists the prefix with the read-only
+key `reader-etcd`, downloads the newest snapshot, decrypts it with its
+own age identity `etcd-drill`, restores it with `etcdutl` and starts a
+scratch etcd on it, which has to answer healthy and hold
+`/registry/namespaces/kube-system` (storage.md §5). What it finds wrong
+is almost always wrong for every snapshot after it, so the failed alert
+is the time from which the snapshots in the bucket are not known to
+restore.
+
+**Gist**:
+
+1. **Which alert.** `EtcdRestoreVerifyFailed` is a run that failed, and
+   the steps from step 2 on find why. `EtcdRestoreVerifyStale` firing
+   without it is a job no run of which was scheduled after its last
+   success: read the CronJob as §6.2's first step does, in
+   `etcd-backup` and with `etcd-restore-verify` for the job. A run the
+   controller could not start within the hour after 04:40 is skipped
+   rather than run late, and leaves no Job. The CronJob runs on the
+   worker, so a worker that is down skips the day's run, and the
+   cluster's check-in reports that outage on its own.
+2. **Read the last run.**
+   `mise x -- kubectl -n etcd-backup get jobs --sort-by=.metadata.creationTimestamp`
+   lists the runs from the oldest, the verify's named
+   `etcd-restore-verify-<n>`, and
+   `mise x -- kubectl -n etcd-backup logs job/<run>` ends in the one
+   line a failed run writes, `FAILED <step>: …`, which names the object.
+   The steps below go by that step. A run that passed ends in
+   `ok: <object>, taken <n> minutes ago, at revision <r> with <k> keys, …`.
+3. **A pod that never started.** It waits on what it mounts or reads:
+   the reader key's Secret, `reader-etcd`, or the identity's,
+   `etcd-drill`, each of which a SealedSecret the controller cannot open
+   never creates, or the scripts' `ConfigMap`,
+   `etcd-restore-verify-shell`; or an image that does not pull.
+   `mise x -- kubectl -n etcd-backup describe pod` names which. The
+   sealing sitting of bring-up stage 6 (physical/bring-up.md §2) seals
+   both, and seals them again after a rebuild (§3.5): the key with
+   `credentials derived b2-reader seal`, the identity with
+   `credentials derived etcd-drill-age-identity generate`, which draws a
+   new identity and writes its recipient, the two committed together.
+4. **`FAILED authorize`.** B2 refused the reader key or did not answer.
+   A refused key is a key the cluster holds that differs from what
+   `physical` holds, `backup_keys['etcd-reader']`, which a `physical`
+   apply that replaced the key leaves behind: seal it again with
+   `credentials derived b2-reader seal`, commit `Pulumi.k8s-base.yaml`,
+   and apply `k8s-base` through the merge chain. A line above it that
+   names no bucket, or more than one, is a key restricted otherwise than
+   `physical` declares it.
+5. **`FAILED list`** is B2 not answering the listing; a run the next
+   day reads it again. **`FAILED stale`**: no snapshot under `etcd/` is
+   named for a time inside the snapshot job's own `max_age`, an hour and
+   a half. That is §7.1's finding read off the bucket, and its alerts
+   fire too; go there. A listing that is empty altogether reads the
+   same way, and §7.1 tells the two apart.
+6. **`FAILED name`.** The newest object under `etcd/` is not named
+   `etcd/kluster-<RFC 3339 UTC>.snap.age`. `talos-backup` changed how it
+   names its objects in a release, or something else wrote into the
+   prefix, which the snapshot job's key is the only one able to do. The
+   name is what storage.md §5 states and what a recovery takes the newest
+   snapshot by, so the release is held back until both read the new
+   form.
+7. **`FAILED download`.** The listed object did not download. A refused
+   download is the reader key's (step 4); a missing one is an object
+   hidden between the listing and the download, which the next run
+   passes.
+8. **`FAILED decrypt`.** The newest snapshot does not open with the
+   identity the cluster holds: it is not encrypted to `etcd-drill`'s
+   recipient. Either the snapshot job's `AGE_X25519_PUBLIC_KEY` lacks
+   the committed recipient, `src/kluster/conventions/etcd-drill-recipient.txt`,
+   which `k8s-base`'s plan reads, so the CronJob runs a configuration no
+   plan made and an apply of `k8s-base` through the merge chain puts it
+   back; or the sealed identity and the committed recipient are two
+   different draws. For the second, run
+   `credentials derived etcd-drill-age-identity generate`, commit both
+   files it writes, let the chain apply `k8s-base`, take a manual
+   snapshot,
+   `mise x -- kubectl -n etcd-backup create job --from=cronjob/etcd-snapshot etcd-snapshot-manual-<stamp>`,
+   and run the verify by hand (step 13). The snapshots taken before it
+   stay closed to the new identity, and every one of them still opens
+   with the escrowed backup generations.
+9. **`FAILED restore`.** `etcdutl` refused the decrypted snapshot,
+   usually its hash: the object is corrupt, after `talos-backup`'s own
+   check of the stream, in the upload, the bucket or the download. Take
+   a manual snapshot and verify again (step 13). A second failure means
+   the newest snapshots do not restore, and a recovery takes the newest,
+   so the issue is a `blocker`.
+10. **`FAILED start`.** The scratch etcd exited or did not answer
+   healthy within its bound; the lines above the failure are the end of
+   its log. Most likely the verify's etcd is a minor behind the
+   cluster's after a Talos release: the `ETCD` of
+   `docker/etcd-age.conf` moves to the cluster's minor, which renovate
+   offers behind the dependency dashboard (renovate.json5), and the
+   consumer pin `versions:image-etcd-verify` follows its build.
+11. **`FAILED key`.** The restored etcd holds no
+   `/registry/namespaces/kube-system`: the snapshot came from a member
+   that holds no Kubernetes state, a member reset or rejoined empty,
+   since the snapshot is taken from whichever control plane apid
+   answers on. Read §8.2 and the members' revisions, which say whether
+   a member of the cluster itself is the empty one.
+12. **A working directory that filled.** A line ending in `no space
+   left on device`, above any of these: the snapshot outgrew the
+   in-memory directory, `components.backup.etcd.VERIFY_WORK_SIZE`, which
+   holds the decrypted snapshot and the restored member at once. The
+   database's size is what grew, and the bound moves with the pod's
+   memory, `VERIFY_MEMORY`, above it. A run cut off at its deadline,
+   `DeadlineExceeded` in
+   `mise x -- kubectl -n etcd-backup describe job <run>`, is a step
+   that hung, and the log's last line names the step it was in.
+13. **Confirm**: a manual run,
+   `mise x -- kubectl -n etcd-backup create job --from=cronjob/etcd-restore-verify etcd-restore-verify-manual-<stamp>`,
+   reads `Complete` and its log ends in the `ok:` line, and both alerts
+   resolve at the next evaluation after the scheduled run that follows.
 
 ## 8. The control planes' playbooks
 

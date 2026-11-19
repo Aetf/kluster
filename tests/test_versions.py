@@ -606,6 +606,12 @@ SCHEMES = {
     'ghcr.io/aetf/postgres-client': Scheme(
         ('17-0123456789ab', '18-ba9876543210'), ('17-739e9b5d045b-amd64', '17-739e9b5d045b-arm64')
     ),
+    # The etcd restore-verify's runtime's tag is the etcd release it carries
+    # and the fingerprint of its build, beside a tag per architecture of each
+    # build.
+    'ghcr.io/aetf/etcd-age': Scheme(
+        ('v3.6.16-0123456789ab', 'v3.7.0-ba9876543210'), ('v3.6.16-0a77c1b8eead-amd64', 'v3.6.16-0a77c1b8eead-arm64')
+    ),
     'ghcr.io/aetf/golinks': Scheme(
         ('20261018-1c6080a-0123456789ab', '20261026-7d51de8-ba9876543210'),
         ('20260821-df12751', '20260821-df12751-e28925ffa30c-arm64'),

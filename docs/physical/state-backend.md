@@ -1367,7 +1367,13 @@ is the moment nobody can afford to find out later:
     `backup-age-<N+1>` and `backup-age-<N+2>` both generated, then a
     fresh dump; the objects written under N, the dumps and the etcd
     snapshots, are deleted from their buckets by hand, which no command
-    here does).
+    here does). The etcd snapshots are encrypted to one more recipient
+    beside the pair, the etcd restore-verify's identity
+    ([cluster/storage.md](../cluster/storage.md) §5), which this rotation
+    leaves as it is: it stands outside the generations, is escrowed
+    nowhere, so it has no destroy date, and turns over when
+    `credentials derived etcd-drill-age-identity generate` draws it again
+    (credentials.md §3).
 
 ### 7.3.1 Restore rehearsal
 

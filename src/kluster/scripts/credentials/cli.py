@@ -1418,7 +1418,7 @@ def build_parser() -> argparse.ArgumentParser:
     # for the etcd snapshots to be encrypted to (`derived.py`).
     etcd_drill_identity = rows.add_parser(
         derived.ETCD_DRILL_AGE_IDENTITY_ROW,
-        help='the age key the monthly etcd restore-verify opens the newest snapshot with',
+        help='the age key the daily etcd restore-verify opens the newest snapshot with',
         description=(
             "The age identity the cluster's etcd restore-verify holds. Its public half is committed for the etcd "
             'snapshots to be encrypted to, beside the escrowed backup generations; its private half is sealed to '

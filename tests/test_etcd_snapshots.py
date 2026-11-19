@@ -2,14 +2,19 @@
 
 The run is the whole `k8s-base` program, once with every sealed value the
 stack declares sealed in and once with none, which is the stack before the
-bring-up has sealed anything (physical/bring-up.md §1).
+bring-up has sealed anything (physical/bring-up.md §1), and once more with the
+restore-verify's recipient file in a directory of the module's, holding the
+recipient of an identity the module draws.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping
+from pathlib import Path
 from typing import Any
 
+import image_busybox
+import process_sessions
 import pulumi
 import pytest
 import pytest_asyncio
@@ -27,15 +32,26 @@ from kluster.components.backup.etcd import (
 )
 from kluster.components.cilium.bgp import CONTROL_PLANE_LABEL
 from kluster.conventions.schedule import ETCD_SNAPSHOT
+from kluster.lib import etcd_backup
 from kluster.lib.k8s import POD_SECURITY_ENFORCE_LABEL, PodSecurity
 from kluster.lib.state_backend import committed
 from kluster.lib.versions import ImagePin
+from kluster.scripts.credentials import age, derived
 
 CRONJOB = 'kubernetes:batch/v1:CronJob'
 NAMESPACE = 'kubernetes:core/v1:Namespace'
 SEALED_SECRET = 'crds:bitnami.com/v1alpha1:SealedSecret'
 TALOS_SERVICE_ACCOUNT_TYPE = f'kubernetes:{TALOS_SERVICE_ACCOUNT_API_VERSION}:{TALOS_SERVICE_ACCOUNT}'
-COMPONENT = 'kluster:backup:EtcdSnapshots'
+#: The components that declare in the snapshots' namespace: the snapshot's
+#: own, and its restore-verify's.
+COMPONENTS = ('kluster:backup:EtcdSnapshots', 'kluster:backup:EtcdRestoreVerify')
+
+#: The pin of the image whose `age` the restore-verify decrypts with, and where
+#: the image keeps it (`docker/etcd-age.Containerfile`).
+AGE_PIN = 'etcd-verify'
+AGE_BINARY = '/usr/local/bin/age'
+#: The bound on one `age` run, which encrypts or decrypts a line.
+AGE_TIMEOUT = 15
 
 KEY = conventions.sealed.ETCD_WRITER_KEY
 
@@ -58,6 +74,18 @@ async def absent() -> tuple[Run, list[str]]:
         patch.setattr(pulumi.log, 'warn', warn)
         run = await applied()
     return run, warned
+
+
+@pytest_asyncio.fixture(scope='module', loop_scope='module')
+async def drilled(tmp_path_factory: pytest.TempPathFactory) -> tuple[Run, age.Identity]:
+    """Every sealed value sealed in, and the restore-verify's recipient file holding the recipient of an identity drawn here."""
+    identity = age.generate()
+    recipient_file = tmp_path_factory.mktemp('etcd-drill') / 'recipient.txt'
+    _ = recipient_file.write_text(f'# the restore-verify, public half\n{identity.public}\n')
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(etcd_backup, 'ETCD_DRILL_RECIPIENT', recipient_file)
+        run = await applied(sealed=SEALED)
+    return run, identity
 
 
 def _named(run: Run, typ: str, name: str) -> list[dict[str, Any]]:
@@ -96,7 +124,7 @@ def test_the_namespace_is_restricted_and_holds_the_etcd_backups_objects_alone(se
         for it in sealed.monitor.declared
         if it.inputs.get('metadata', {}).get('namespace') == ETCD_SNAPSHOT.namespace
     }
-    children = {(typ, name) for typ, name, _ in sealed.children(COMPONENT)}
+    children = {(typ, name) for component in COMPONENTS for typ, name, _ in sealed.children(component)}
 
     assert namespace['metadata']['labels'][POD_SECURITY_ENFORCE_LABEL] == PodSecurity.RESTRICTED.value
     assert in_namespace, 'nothing declared in the namespace'
@@ -182,11 +210,81 @@ def test_every_directory_the_run_holds_in_memory_is_bounded(sealed: Run) -> None
         assert volume['emptyDir'].get('sizeLimit'), volume['name']
 
 
-def test_each_snapshot_is_encrypted_to_every_escrowed_generation_on_file(sealed: Run) -> None:
-    """The recipients are the committed file the state backend's dumps are encrypted to, so one rotation moves both."""
-    recipients = _environment(sealed)['AGE_X25519_PUBLIC_KEY'].split(',')
+def test_each_snapshot_is_encrypted_to_every_escrowed_generation_on_file_and_then_to_the_restore_verify(
+    sealed: Run,
+) -> None:
+    """The generations are the committed file the state backend's dumps are encrypted to, so one rotation moves both.
 
-    assert sorted(recipients) == sorted(committed.backup_recipients().values())
+    The restore-verify's recipient comes after them: it stands outside the
+    generations, and a reader of the list finds the generations where the
+    dumps' own list has them.
+    """
+    recipients = _environment(sealed)['AGE_X25519_PUBLIC_KEY'].split(',')
+    generations = list(committed.backup_recipients().values())
+
+    assert sorted(recipients[: len(generations)]) == sorted(generations)
+    assert recipients[len(generations) :] == [etcd_backup.drill_recipient()]
+
+
+def test_a_snapshot_encrypted_as_declared_opens_with_the_identity_whose_recipient_is_on_file(
+    request: pytest.FixtureRequest,
+    tmp_path_factory: pytest.TempPathFactory,
+    tmp_path: Path,
+    drilled: tuple[Run, age.Identity],
+) -> None:
+    """What `talos-backup` encrypts to opens with the restore-verify's identity, by the `age` the verify decrypts with.
+
+    The recipient file is the module's, holding an identity drawn here, so
+    the run reads it from where the program was pointed, not from the file
+    committed in the checkout, whose identity nobody here holds.
+    """
+    run, identity = drilled
+    cache = image_busybox.cache_directory(request.config, tmp_path_factory)
+    tool = str(image_busybox.copied(image_busybox.pinned(AGE_PIN), AGE_BINARY, cache))
+    recipients = _environment(run)['AGE_X25519_PUBLIC_KEY'].split(',')
+    plain, sealed_file, key = tmp_path / 'snapshot.db', tmp_path / 'snapshot.db.age', tmp_path / 'identity'
+    _ = plain.write_bytes(b'a snapshot of the keyspace')
+    _ = key.write_text(f'{identity.secret}\n')
+
+    _ = process_sessions.run(
+        [tool, *(arg for it in recipients for arg in ('-r', it)), '-o', str(sealed_file), str(plain)],
+        timeout=AGE_TIMEOUT,
+        check=True,
+    )
+    opened = process_sessions.run([tool, '-d', '-i', str(key), str(sealed_file)], timeout=AGE_TIMEOUT, check=True)
+
+    assert opened.stdout == plain.read_bytes()
+
+
+def test_an_absent_recipient_file_is_refused_naming_the_command_that_writes_it(tmp_path: Path) -> None:
+    with pytest.raises(
+        committed.Refused, match=f'`credentials derived {derived.ETCD_DRILL_AGE_IDENTITY_ROW} generate`'
+    ):
+        _ = etcd_backup.drill_recipient(tmp_path / 'absent.txt')
+
+
+@pytest.mark.parametrize('form', ['two recipients', 'the identity', 'a plugin recipient'])
+def test_a_recipient_file_its_writer_does_not_write_is_refused_without_quoting_it(tmp_path: Path, form: str) -> None:
+    """One native recipient is what the generator writes; anything else is refused, and the line never reaches the message."""
+    first, second = age.generate(), age.generate()
+    line = {
+        'two recipients': f'{first.public}\n{second.public}',
+        'the identity': first.secret,
+        'a plugin recipient': 'age1yubikey1qwertyuiopasdfghjklzxcvbnm',
+    }[form]
+    path = tmp_path / 'recipient.txt'
+    _ = path.write_text(f'# the restore-verify, public half\n{line}\n')
+
+    with pytest.raises(committed.Refused) as refused:
+        _ = etcd_backup.drill_recipient(path)
+
+    for written in line.splitlines():
+        assert written not in str(refused.value)
+
+
+def test_the_reader_names_the_row_the_command_tree_spells() -> None:
+    """The refusal names a command; the command tree is where it is spelled, and the reader cannot import a script."""
+    assert etcd_backup.DRILL_RECIPIENT_ROW == derived.ETCD_DRILL_AGE_IDENTITY_ROW
 
 
 def test_the_snapshot_runs_on_the_control_planes_and_not_on_the_worker(sealed: Run) -> None:

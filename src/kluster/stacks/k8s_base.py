@@ -3,8 +3,8 @@
 Gateway API CRDs, Cilium, sealed-secrets, cert-manager, CNPG and VolSync with
 the volume snapshot definitions it watches, VictoriaMetrics, NFD and the GPU
 plugin, the small standing set the legacy cluster proved, the hourly etcd
-snapshot and the state table's daily upkeep — in that dependency order, per
-docs/declarative/cluster-infra.md. The component list is closed: additions
+snapshot with its daily restore-verify and the state table's daily upkeep —
+in that dependency order, per docs/declarative/cluster-infra.md. The component list is closed: additions
 argue for themselves in writing first.
 
 Its components live in areas of `kluster/components/`, the way `physical`
@@ -47,7 +47,9 @@ reads them, and so that anything but a map of OCIDs stops the run
 (`kluster.lib.stack_volumes`). The age recipients the etcd snapshots are
 encrypted to are the escrowed backup generations' committed file, the one the
 state backend's dumps are encrypted to (`kluster.lib.state_backend.committed`),
-read so that a line that is no recipient stops the run. And the sealed values
+and after them the restore-verify's committed recipient
+(`kluster.lib.etcd_backup`), each read so that a line that is no recipient,
+or a file that is absent, stops the run. And the sealed values
 it declares are plain values of this stack's configuration, under the one key
 `conventions.sealed.CONFIG_KEY`, read out per value by the value's census row
 (`kluster.lib.k8s.sealed_ciphertext`) and handed to the component that
@@ -62,8 +64,8 @@ pin in `Pulumi.yaml`'s `config:` block, which renovate moves
 `versions:manifest-<name>` pin, the volume snapshot definitions a
 `versions:source-<name>` pin and the images a component runs beside a chart,
 local-path-provisioner's two, the monitoring stack's history store, backups,
-restores and OCI pull, the etcd snapshot and the state table's upkeep,
-`versions:image-<name>` pins; a component installs what the program reads
+restores and OCI pull, the etcd snapshot, its restore-verify and the state
+table's upkeep, `versions:image-<name>` pins; a component installs what the program reads
 through `kluster.lib.versions` and hands it. The custom resources are written
 against `sdks/crds`, which `mise x -- uv run update_crds` regenerates from the
 same pins, but for the VictoriaMetrics operator's, which that SDK cannot import
@@ -77,7 +79,7 @@ import pulumi_kubernetes as k8s
 import pulumi_random as random
 
 from kluster import conventions
-from kluster.components.backup.etcd import EtcdSnapshots
+from kluster.components.backup.etcd import EtcdRestoreVerify, EtcdSnapshots
 from kluster.components.backup.snapshots import SnapshotDefinitions
 from kluster.components.backup.volsync import VolSync
 from kluster.components.certificates import CertManager
@@ -90,7 +92,7 @@ from kluster.components.reloader import Reloader
 from kluster.components.sealing import SealedSecretsController
 from kluster.components.state_upkeep import StateUpkeep
 from kluster.conventions.backup import BackupFamily
-from kluster.lib import stack_addresses, stack_volumes
+from kluster.lib import etcd_backup, stack_addresses, stack_volumes
 from kluster.lib.k8s import KUBECONFIG_KEY, client_certificate_expiry, kubeconfig_from, sealed_ciphertext
 from kluster.lib.release_assets import fetch_manifest
 from kluster.lib.source_files import fetch_source_files
@@ -132,12 +134,13 @@ async def main() -> None:
 
     # cluster-infra.md §1's order. Nothing schedules before the CNI, so
     # everything is behind Cilium; cert-manager, the BGP session, monitoring,
-    # the etcd snapshot and the state table's upkeep are behind the sealing
-    # controller, because the credential cert-manager's solver uses, the
-    # session's password, the address alertmanager posts to and the key the
-    # metrics stores are backed up with, the key the snapshots are uploaded
-    # with and the bundle the upkeep reaches the state backend with are sealed
-    # values.
+    # the etcd snapshot, its restore-verify and the state table's upkeep are
+    # behind the sealing controller, because the credential cert-manager's
+    # solver uses, the session's password, the address alertmanager posts to
+    # and the key the metrics stores are backed up with, the keys the
+    # snapshots are uploaded and read back with, the identity they are
+    # decrypted with and the bundle the upkeep reaches the state backend with
+    # are sealed values.
     # A chart that declares objects another chart defines is behind that
     # chart: the database operator's backup plugin and the GPU plugin's
     # operator declare cert-manager's, and the GPU plugin declares NFD's.
@@ -207,12 +210,23 @@ async def main() -> None:
         opts=opts,
     )
     # Encrypted to the escrowed backup generations, the recipients the state
-    # backend's dumps are encrypted to, so one rotation moves both.
-    _ = EtcdSnapshots(
+    # backend's dumps are encrypted to, so one rotation moves both; and,
+    # after them, to the restore-verify's own recipient, which no rotation
+    # moves, so the identity the cluster holds opens each snapshot too.
+    etcd_snapshots = EtcdSnapshots(
         'etcd-snapshots',
         image=versions.image['etcd-backup'],
         writer_key=sealed_ciphertext(conventions.sealed.ETCD_WRITER_KEY, sealed),
-        recipients=tuple(committed.backup_recipients().values()),
+        recipients=(*committed.backup_recipients().values(), etcd_backup.drill_recipient()),
+        after=[cilium, sealing],
+        opts=opts,
+    )
+    _ = EtcdRestoreVerify(
+        'etcd-restore-verify',
+        namespace=etcd_snapshots.namespace,
+        image=versions.image['etcd-verify'],
+        reader_key=sealed_ciphertext(conventions.sealed.ETCD_READER_KEY, sealed),
+        identity=sealed_ciphertext(conventions.sealed.ETCD_DRILL_IDENTITY, sealed),
         after=[cilium, sealing],
         opts=opts,
     )
