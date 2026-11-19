@@ -54,8 +54,8 @@ FCOS_STREAM_URL = f'https://builds.coreos.fedoraproject.org/streams/{FCOS_STREAM
 #: compressed `oraclecloud` artifact, which the upload checks the download
 #: against. A bump imports a new image and replaces nothing else: Zincati
 #: keeps the running box current, and the image matters at the next launch.
-FCOS_RELEASE = '44.20260913.3.2'
-FCOS_ARTIFACT_SHA256 = '0906c9af259af314c2718fbb2384c2046c9a0b72cf1e1e14e9f3ed9dd016c2d3'
+FCOS_RELEASE = '44.20261023.3.1'
+FCOS_ARTIFACT_SHA256 = 'a82f4b6a5e5a7757cd2f6b3c4d3412cbacde889b86cf4dde5a7aac0bd8f5b79d'
 FCOS_ARTIFACT_URL = (
     f'https://builds.coreos.fedoraproject.org/prod/streams/{FCOS_STREAM}/builds/{FCOS_RELEASE}'
     f'/x86_64/fedora-coreos-{FCOS_RELEASE}-oraclecloud.x86_64.qcow2.xz'
