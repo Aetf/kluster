@@ -203,10 +203,10 @@ STATE_UPKEEP_BUNDLE = SealedValue(
 #: byte (credentials.md §3). `credentials derived b2-freshness-dumps mint`
 #: mints it from the B2 seed and seals it here for the dump-age check in the
 #: monitoring namespace, beside its push into the ops repository's secrets.
-#: Strict, because one Secret reads it under one name. Its data keys are the
-#: fields `components/monitoring/shell/b2.sh` authorizes a key from, which are
-#: a mover's (`WRITER_KEY_FIELDS`), so the check reads it as the metrics
-#: stores' bucket scripts read theirs.
+#: Strict, because one Secret reads it under one name. Its data keys are a
+#: mover's fields (`WRITER_KEY_FIELDS`), the key's id and the key, and the
+#: dump-age check (`components.monitoring.state_backend`) mounts the Secret and
+#: reads the two as files.
 B2_FRESHNESS_DUMPS = SealedValue(
     name='b2-freshness-dumps',
     namespace=MONITORING_NAMESPACE,

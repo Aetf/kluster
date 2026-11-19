@@ -227,6 +227,26 @@ classes its objects fall into (§1.2):
     `OciMetricsPullStale` (operations.md §6.3). Until
     the key is sealed in, neither the key's SealedSecret nor the pull
     is declared, and `volume_ids` is not read.
+    **The state backend is checked every hour**, each of its two checks
+    a CronJob of its own on the worker. Both run one program of this
+    repository, rendered into a `ConfigMap` beside the settings it
+    reads, in the same `oci-sdk`
+    image, whose Debian base carries the `openssl` one of them runs
+    (physical/state-backend.md §6). `state-backend-certificate` reads
+    the server certificate off a Postgres STARTTLS handshake with the
+    appliance and holds the leaf to the alert margin and the address;
+    it needs no credential and reads no CA. `state-backend-dumps` lists
+    the appliance's dump prefix in B2 with the freshness key, sealed in
+    the monitoring namespace (§1.1), which its pod alone mounts, and
+    holds the newest dump's age to the dumps' greatest age. Each prints
+    every finding with its playbook and fails the run on any, and each
+    is a row of the family: a failed run raises
+    `StateBackendCertificateFailed` or `StateBackendDumpsFailed`, and a
+    check that has not passed in an hour and a half the matching
+    `…Stale`, all into physical/state-backend.md §6, which routes the
+    finding the run's log names. A run is retried twice before it
+    fails, since both cross the internet. Until the freshness key is
+    sealed in, the dump check and its SealedSecret are not declared.
     **The control planes are read by readings defined once**
     (`lib/monitoring/readings.py`): each a name, a window, a
     PromQL expression over the history's series, a unit, and the budget

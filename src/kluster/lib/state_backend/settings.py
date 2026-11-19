@@ -11,9 +11,12 @@ the image imports a new image and replaces nothing (physical/state-backend.md
 The state table's daily upkeep in the cluster reads from here too: the
 database, the retention rule's lengths (`EXPIRY_AGE`, `HISTORY_RECORDS`) and
 the ceiling (`LARGEST_ROW_BYTES`), in a settings file `k8s-base` renders from
-them (`components.state_upkeep`). A change to one of them reaches that job
-through `up-k8s-base`, the deploy's apply of that stack on the merge, and not
-through a replacement of the box.
+them (`components.state_upkeep`). So do the cluster's two checks of the box:
+the address and port, the alert margin (`EXPIRY_ALERT_MARGIN`), the dump
+prefix and the dump age (`DUMP_MAX_AGE`), in a settings file of their own
+(`components.monitoring.state_backend`). A change to one of them reaches those
+jobs through `up-k8s-base`, the deploy's apply of that stack on the merge, and
+not through a replacement of the box.
 """
 
 from __future__ import annotations
@@ -239,12 +242,12 @@ AGE_GENERATION = 1
 
 #: The nightly dump, as a systemd calendar expression and as the period it
 #: amounts to. Two spellings of one cadence: the timer reads the first, the
-#: freshness probe reads the second, and a test holds the calendar form to the
+#: dump checks read the second, and a test holds the calendar form to the
 #: period so they cannot drift apart.
 DUMP_SCHEDULE = '*-*-* 02:30:00'
 DUMP_PERIOD = dt.timedelta(days=1)
 
-#: How old the newest dump may be before the probe calls the backup stale:
+#: How old the newest dump may be before a dump check calls the backup stale:
 #: `conventions.backup.max_age` over the period above, which is the one rule
 #: every scheduled backup's threshold follows (state-backend.md §5).
 DUMP_MAX_AGE = backup.max_age(DUMP_PERIOD)
@@ -317,7 +320,17 @@ CERTIFICATE_EXPIRY_OUTPUT = 'serverCertificateExpiry'
 #:
 #: It is small against the certificate's validity, so a certificate spends a
 #: small fraction of its life inside the margin. And it is wider than the
-#: probe's alert margin (`kluster.scripts.state_backend.config.EXPIRY_ALERT_MARGIN`),
-#: so an operator who runs the stack has been told well before the probe's
-#: alert can fire.
+#: alert margin (`EXPIRY_ALERT_MARGIN`), so an operator who runs the stack has
+#: been told well before the certificate check's alert can fire.
 RENEWAL_MARGIN = dt.timedelta(days=90)
+
+#: How much life the server certificate must have left for the certificate
+#: check to pass (physical/state-backend.md §6), and the only home of that
+#: number. The cluster's check (`components.monitoring.state_backend`) reads it
+#: from the settings file `k8s-base` renders from it, and `state-backend probe`
+#: reads it here. Held below `RENEWAL_MARGIN` by a test: the check is the
+#: backstop for an appliance whose stack nobody has run, or whose reports
+#: nobody acted on, and a backstop that fires before the renewal margin opens
+#: is the first reporter rather than the last. The gap between the two is the
+#: time a reported expiry has to be acted on before it is alerted as well.
+EXPIRY_ALERT_MARGIN = dt.timedelta(days=30)

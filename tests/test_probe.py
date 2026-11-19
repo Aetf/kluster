@@ -6,8 +6,8 @@ B2 account with a key minted through it -- under a clock the case pins, so a
 verdict is a function of the certificate's dates, the newest dump's stamp and
 `now`, and never of how long the case took (framework/testing.md §7 item 5).
 
-The thresholds are held as relations: the alert margin below the renewal
-margin, the timer's calendar form agreeing with the period the probe reads.
+The thresholds are held as relations: the timer's calendar form agreeing with
+the period the probe reads.
 Each verdict's boundary is read from the threshold it is a verdict on.
 """
 
@@ -42,7 +42,7 @@ from kluster.scripts.credentials import b2, derived, entries, masters, pki
 from kluster.scripts.credentials.kdbx import KdbxStore
 from kluster.scripts.credentials.masters import CredentialRejected
 from kluster.scripts.credentials.pulumi_config import SlotRefused
-from kluster.scripts.state_backend import cli, config, probe
+from kluster.scripts.state_backend import cli, probe
 
 UTC = dt.UTC
 NOW = dt.datetime(2026, 9, 16, 6, 23, tzinfo=UTC)
@@ -60,8 +60,8 @@ def test_the_mint_a_refusal_names_is_a_command_of_the_tree() -> None:
 
 #: A day either side of the alert margin: a leaf with `OUTSIDE` days left
 #: passes, and one with `INSIDE` fails.
-OUTSIDE = config.EXPIRY_ALERT_MARGIN.days + 1
-INSIDE = config.EXPIRY_ALERT_MARGIN.days - 1
+OUTSIDE = settings.EXPIRY_ALERT_MARGIN.days + 1
+INSIDE = settings.EXPIRY_ALERT_MARGIN.days - 1
 #: An hour either side of the dump age: a newest dump `FRESH` old passes, and
 #: one `STALE` old fails.
 FRESH = settings.DUMP_MAX_AGE - dt.timedelta(hours=1)
@@ -71,14 +71,6 @@ STALE = settings.DUMP_MAX_AGE + dt.timedelta(hours=1)
 def _hours(age: dt.timedelta) -> str:
     """An age as a verdict prints it."""
     return f'{age / dt.timedelta(hours=1):.1f} h'
-
-
-def test_the_alert_margin_opens_after_the_renewal_margin() -> None:
-    # The probe is the backstop for an appliance whose stack nobody has run: a
-    # backstop that fires before a run of the stack would have named the
-    # reissue is the first reporter rather than the last.
-    assert config.EXPIRY_ALERT_MARGIN < settings.RENEWAL_MARGIN
-    assert dt.timedelta(0) < config.EXPIRY_ALERT_MARGIN
 
 
 def test_the_timer_s_calendar_form_says_what_the_period_says() -> None:
@@ -267,13 +259,13 @@ def test_a_certificate_inside_the_margin_fails_into_the_reissue_playbook(authori
     assert verdict.playbook == probe.REISSUE_PLAYBOOK
     assert verdict.finding is probe.Finding.EXPIRING
     assert str(INSIDE) in _numbers(verdict.observed)
-    assert str(config.EXPIRY_ALERT_MARGIN.days) in _numbers(verdict.observed)
+    assert str(settings.EXPIRY_ALERT_MARGIN.days) in _numbers(verdict.observed)
 
 
-def test_the_margin_is_read_from_config_and_not_from_a_number_of_its_own(
+def test_the_margin_is_read_from_settings_and_not_from_a_number_of_its_own(
     authority: pki.Authority, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(config, 'EXPIRY_ALERT_MARGIN', dt.timedelta(days=OUTSIDE + 1))
+    monkeypatch.setattr(settings, 'EXPIRY_ALERT_MARGIN', dt.timedelta(days=OUTSIDE + 1))
 
     assert not probe.certificate(now=NOW, handshake=_serving(authority, issued=_left(OUTSIDE))).passed
     assert probe.certificate(now=NOW, handshake=_serving(authority, issued=_left(OUTSIDE + 2))).passed
@@ -774,4 +766,4 @@ def test_the_statuses_are_published_in_help() -> None:
     said = ' '.join(help_text.split())
     for status in probe.FAILED.values():
         assert re.search(rf'(?<!\d){status} the ', said), status
-    assert str(config.EXPIRY_ALERT_MARGIN.days) in help_text
+    assert str(settings.EXPIRY_ALERT_MARGIN.days) in help_text

@@ -12,7 +12,7 @@ answering, are the dump probe's verdicts too, rather than exceptions that
 would take the other probe's verdict down with them.
 
 The thresholds are not this module's: the certificate margin is
-`config.EXPIRY_ALERT_MARGIN`, the dump age is `settings.DUMP_MAX_AGE`, and
+`settings.EXPIRY_ALERT_MARGIN`, the dump age is `settings.DUMP_MAX_AGE`, and
 the address is `settings.ADDRESS`, so the workflow that runs this carries no
 number and no host of its own.
 
@@ -44,7 +44,6 @@ from kluster.lib.state_backend import settings
 from ..credentials import b2
 from ..credentials.masters import CredentialRejected
 from ..credentials.pulumi_config import SlotRefused
-from . import config
 
 log = logging.getLogger(__name__)
 
@@ -265,11 +264,11 @@ def certificate(
             REISSUE_PLAYBOOK,
             Finding.EXPIRED,
         )
-    if remaining < config.EXPIRY_ALERT_MARGIN:
+    if remaining < settings.EXPIRY_ALERT_MARGIN:
         return Verdict(
             CERTIFICATE,
             f'the server certificate expires on {expiry.date().isoformat()}, {remaining.days} day(s) from now and '
-            f'inside the {config.EXPIRY_ALERT_MARGIN.days}-day alert margin',
+            f'inside the {settings.EXPIRY_ALERT_MARGIN.days}-day alert margin',
             REISSUE_PLAYBOOK,
             Finding.EXPIRING,
         )
