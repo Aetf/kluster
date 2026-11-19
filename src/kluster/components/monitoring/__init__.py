@@ -1051,11 +1051,11 @@ def receiver_spec() -> dict[str, object]:
 
     The webhook's URL is read from `conventions.sealed.ALERT_WEBHOOK`'s
     Secret (`url_secret`), where its SealedSecret renders it around the
-    sealed id, so the id is in no rendered configuration. Resolved
-    alerts are not sent: Home Assistant pushes what fires, and a resolution
-    closes nothing on the phone. The check-in is repeated well inside the
-    timer it restarts: alertmanager sends a repeat on the first group interval
-    after the repeat interval has passed.
+    sealed id, so the id is in no rendered configuration. Resolved alerts
+    are sent as well as firing ones: Home Assistant withdraws an alert's
+    notification when it resolves (operations.md §4). The check-in is
+    repeated well inside the timer it restarts: alertmanager sends a repeat
+    on the first group interval after the repeat interval has passed.
     """
     webhook = conventions.sealed.ALERT_WEBHOOK
     return {
@@ -1063,7 +1063,7 @@ def receiver_spec() -> dict[str, object]:
             {
                 'name': RECEIVER,
                 'webhook_configs': [
-                    {'url_secret': {'name': webhook.name, 'key': WEBHOOK_URL_KEY}, 'send_resolved': False},
+                    {'url_secret': {'name': webhook.name, 'key': WEBHOOK_URL_KEY}, 'send_resolved': True},
                 ],
             }
         ],

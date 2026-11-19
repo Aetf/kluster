@@ -1389,12 +1389,11 @@ def test_the_receiver_reads_the_webhooks_url_from_its_sealed_secret(applied: Run
         assert webhook['url_secret']['name'] == WEBHOOK.name
 
 
-def test_the_receiver_sends_firing_alerts_alone(applied: Run) -> None:
-    """Home Assistant's automation pushes every alert it is sent, reading no status (operations.md §4).
+def test_the_receiver_sends_resolutions(applied: Run) -> None:
+    """Every webhook sends an alert's resolution, which withdraws its notification on the phone (operations.md §4).
 
-    A resolution sent there would push as a second alarm. Alertmanager sends
-    resolutions to a webhook unless told not to, so the field is stated on
-    every webhook rather than left to that default.
+    The field is stated on every webhook rather than left to a default, so
+    the rendered configuration itself says what reaches Home Assistant.
     """
     webhooks = [
         config for spec in _receiver(applied)['spec']['receivers'] for config in spec.get('webhook_configs', [])
@@ -1402,7 +1401,7 @@ def test_the_receiver_sends_firing_alerts_alone(applied: Run) -> None:
 
     assert webhooks
     for webhook in webhooks:
-        assert webhook.get('send_resolved') is False
+        assert webhook.get('send_resolved') is True
 
 
 def test_the_sealed_webhook_is_declared_where_the_receiver_reads_it(applied: Run) -> None:
