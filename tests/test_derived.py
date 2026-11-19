@@ -1604,6 +1604,25 @@ def test_the_oci_metrics_row_on_a_machine_with_no_bundle_mints_nothing(
 
 
 @needs_age
+def test_the_freshness_row_on_a_machine_with_no_bundle_mints_nothing(
+    b2_api_fake: b2_api.FakeApi, b2_kit: KdbxStore, tmp_path: Path
+) -> None:
+    """The dns01 row's case for the B2 row that seals: the declaring stack is asked for before the seed is read."""
+    open_stack, runners = _stacks_on(_with_no_bundle(b2_kit, tmp_path))
+    sealer = sealing.Sealer(certificate='', open_stack=open_stack, run=_never_sealed)
+    gh = RecordedGh()
+
+    with pytest.raises(pulumi_config.SlotRefused) as refused:
+        _ = derived.b2_freshness_dumps(b2_kit, Forge(token='admin-token', run=gh), sealer=sealer)
+
+    assert b2_api_fake.named(b2.FRESHNESS_DUMPS_NAME) == []
+    assert gh.invocations == []
+    assert runners, 'the row opened no stack, so nothing held it to its backend'
+    assert all(runner.invocations == [] for runner in runners.values())
+    _refused_for_its_backend(refused.value, open_stack(conventions.sealed.B2_FRESHNESS_DUMPS.stack), tmp_path)
+
+
+@needs_age
 def test_the_state_backend_rows_need_no_bundle(
     b2_api_fake: b2_api.FakeApi,
     b2_kit: KdbxStore,
@@ -1999,7 +2018,9 @@ def _b2_freshness_dumps(request: pytest.FixtureRequest) -> KdbxStore:
         'bucketType': 'allPrivate',
         'lifecycleRules': [],
     }
-    _ = derived.b2_freshness_dumps(kit, Forge(token='admin-token', run=RecordedGh()), seed_entry=ELSEWHERE_ENTRY)
+    _ = derived.b2_freshness_dumps(
+        kit, Forge(token='admin-token', run=RecordedGh()), sealer=_sealer_writing_nothing(), seed_entry=ELSEWHERE_ENTRY
+    )
     return kit
 
 

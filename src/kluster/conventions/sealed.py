@@ -52,6 +52,7 @@ from kluster.conventions.identity import STACK_NAMES
 __all__ = (
     'ALERT_WEBHOOK',
     'AUTHELIA_STORAGE_KEY',
+    'B2_FRESHNESS_DUMPS',
     'BGP_PASSWORD',
     'CONFIG_KEY',
     'DKIM_EXIM',
@@ -196,6 +197,22 @@ STATE_UPKEEP_BUNDLE = SealedValue(
     stack=STACK_NAMES.k8s_base,
 )
 
+#: The state backend's dump-freshness key: B2's `listFiles` on the dump prefix
+#: of the appliance's bucket and nothing more, names and stamps but never a
+#: byte (credentials.md §3). `credentials derived b2-freshness-dumps mint`
+#: mints it from the B2 seed and seals it here for the dump-age check in the
+#: monitoring namespace, beside its push into the ops repository's secrets.
+#: Strict, because one Secret reads it under one name. Its data keys are the
+#: fields `components/monitoring/shell/b2.sh` authorizes a key from, which are
+#: a mover's (`WRITER_KEY_FIELDS`), so the check reads it as the metrics
+#: stores' bucket scripts read theirs.
+B2_FRESHNESS_DUMPS = SealedValue(
+    name='b2-freshness-dumps',
+    namespace=MONITORING_NAMESPACE,
+    keys=tuple(sorted(WRITER_KEY_FIELDS)),
+    stack=STACK_NAMES.k8s_base,
+)
+
 #: The backup bucket's `etcd` writer key, which the hourly etcd snapshot
 #: uploads with (`components.backup.etcd`): `physical` mints it with the bucket,
 #: as the scope `ETCD_SCOPE` (`components.backup.etcd_scope`), and `credentials
@@ -307,6 +324,7 @@ VALUES: Mapping[str, SealedValue] = MappingProxyType(
             ALERT_WEBHOOK,
             OCI_METRICS,
             STATE_UPKEEP_BUNDLE,
+            B2_FRESHNESS_DUMPS,
             ETCD_WRITER_KEY,
             DKIM_EXIM,
             AUTHELIA_STORAGE_KEY,

@@ -1103,12 +1103,16 @@ ROWS: dict[str, Row] = {
     ),
     derived.B2_FRESHNESS_DUMPS_ROW: Row(
         register='B2 freshness key (state dumps)',
-        # The slots are the mint's own values, imported, and those are the
-        # probe's variable names: the register, the push and the reader
-        # spell one pair. Repository secrets rather than the `drill`
-        # Environment's, because the probe's job belongs to no Environment.
+        # Two consumers, one mint: the ops repository's probe and the
+        # cluster's dump-age check. The GitHub slots are the mint's own
+        # values, imported, and those are the probe's variable names: the
+        # register, the push and the reader spell one pair. Repository
+        # secrets rather than the `drill` Environment's, because the probe's
+        # job belongs to no Environment. The sealed copy is the census row's,
+        # written in the same run, and the mint retires its predecessor only
+        # once every target holds the new key.
         source=Minted(f'credentials derived {derived.B2_FRESHNESS_DUMPS_ROW} mint'),
-        targets=derived.B2_FRESHNESS_DUMPS_SLOTS,
+        targets=(*derived.B2_FRESHNESS_DUMPS_SLOTS, SealedSecret(conventions.sealed.B2_FRESHNESS_DUMPS)),
     ),
     'github-dispatch-key': Row(
         register='GitHub App key (dispatch)',

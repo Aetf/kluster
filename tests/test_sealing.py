@@ -33,6 +33,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal, cast
 
+import b2_api
 import oci_clock
 import pinned_tools
 import process_sessions
@@ -44,6 +45,7 @@ from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec, rsa
 from cryptography.x509.oid import NameOID
+from fake_gh import RecordedGh
 from fake_kubeseal import sealed_as_marked
 from fake_pulumi import RecordedPulumi, Unanswering
 from k8s_base_installation import SEALED, applied
@@ -59,6 +61,7 @@ from kluster.lib import bundle, pulumi_cli
 from kluster.lib.k8s import rendered_template
 from kluster.lib.state_backend import settings
 from kluster.scripts.credentials import (
+    b2,
     cli,
     cloudflare,
     derived,
@@ -71,6 +74,7 @@ from kluster.scripts.credentials import (
     sealing,
     workstation,
 )
+from kluster.scripts.credentials.github_secrets import Forge
 from kluster.scripts.credentials.kdbx import KdbxStore
 from kluster.scripts.credentials.pulumi_config import SlotRefused
 from kluster.stacks import physical
@@ -703,6 +707,103 @@ def test_rotating_the_metrics_reader_retires_the_key_it_replaces(
 
     (second,) = _reader_keys(tenancy)
     assert second != first
+
+
+# -- the dump freshness key's mint ----------------------------------------------
+
+FRESHNESS = conventions.sealed.B2_FRESHNESS_DUMPS
+
+
+@pytest.fixture
+def b2_account(monkeypatch: pytest.MonkeyPatch) -> b2_api.FakeApi:
+    """The fake B2 account as the one `conventions` records, holding the bucket the appliance dumps into.
+
+    The state an installation is in by the time the key is minted: the
+    `state-backend` stack has declared its bucket, which the mint looks up.
+    """
+    api = b2_api.FakeApi()
+    monkeypatch.setattr(b2.requests, 'get', api.get)
+    monkeypatch.setattr(b2.requests, 'post', api.post)
+    monkeypatch.setattr(
+        conventions,
+        'B2_ACCOUNT',
+        conventions.B2Account(region=conventions.B2_ACCOUNT.region, account_id=b2_api.ACCOUNT_ID),
+    )
+    api.buckets['bucket-dumps'] = {
+        'bucketId': 'bucket-dumps',
+        'bucketName': settings.B2_BUCKET,
+        'bucketType': 'allPrivate',
+        'lifecycleRules': [],
+    }
+    return api
+
+
+@pytest.fixture
+def b2_kit(b2_account: b2_api.FakeApi) -> KdbxStore:
+    """A kit holding the B2 seed, created the way a bring-up creates it."""
+    store = MemoryKit()
+    root = masters.Credential(
+        root=masters.ROOTS['b2'], values={'account-id': b2_account.master.key_id, 'key': b2_account.master.secret}
+    )
+    _ = b2.create_seed(root=root, seeds=store, seed_entry=derived.B2_SEED_ENTRY)
+    return store
+
+
+def _forge() -> Forge:
+    return Forge(token='admin-token', run=RecordedGh())
+
+
+def test_the_freshness_key_is_sealed_for_the_check_in_monitoring_as_the_minted_key(
+    b2_account: b2_api.FakeApi,
+    b2_kit: KdbxStore,
+    sealer: sealing.Sealer,
+    stacks: Stacks,
+    kubeseal: str,
+    key_pair: KeyPair,
+) -> None:
+    key_id = derived.b2_freshness_dumps(b2_kit, _forge(), sealer=sealer)
+
+    # Written into `k8s-base`'s configuration, the stack that declares the
+    # monitoring namespace's Secrets, and opening there under the row's name
+    # as the key the account now lists under the role: its two halves under
+    # the fields the bucket scripts authorize a key from.
+    assert written(stacks, FRESHNESS).keys() == set(FRESHNESS.keys)
+    opened = unseal(
+        kubeseal, key_pair, FRESHNESS, written(stacks, FRESHNESS), namespace=conventions.MONITORING_NAMESPACE
+    )
+    assert opened == {'AWS_ACCESS_KEY_ID': key_id, 'AWS_SECRET_ACCESS_KEY': b2_account.keys[key_id].secret}
+    assert b2_account.named(b2.FRESHNESS_DUMPS_NAME) == [key_id]
+
+
+def test_the_freshness_mint_refuses_a_missing_declaring_stack_before_anything_is_minted(
+    b2_account: b2_api.FakeApi, b2_kit: KdbxStore, sealer: sealing.Sealer, stacks: Stacks
+) -> None:
+    stacks.runner(K8S_BASE).stacks.clear()
+    gh = RecordedGh()
+
+    with pytest.raises(pulumi_config.StackMissing) as refused:
+        _ = derived.b2_freshness_dumps(b2_kit, Forge(token='admin-token', run=gh), sealer=sealer)
+    assert refused.value.stack == K8S_BASE
+    assert b2_account.named(b2.FRESHNESS_DUMPS_NAME) == []
+    assert gh.invocations == []
+
+
+def test_a_freshness_write_that_fails_leaves_the_key_both_consumers_hold_live(
+    b2_account: b2_api.FakeApi, b2_kit: KdbxStore, stacks: Stacks
+) -> None:
+    sealer = sealing.Sealer(certificate='', open_stack=stacks.open, run=sealed_as_marked)
+    live = derived.b2_freshness_dumps(b2_kit, _forge(), sealer=sealer)
+    stacks.runner(K8S_BASE).misreports = 'value'
+
+    with pytest.raises(pulumi_config.ReadBackRefused):
+        _ = derived.b2_freshness_dumps(b2_kit, _forge(), sealer=sealer)
+
+    # The ops repository took the new key, the stack did not: the key both
+    # consumers held is retired only once every target holds its successor,
+    # so it stands beside the new one.
+    held = b2_account.named(b2.FRESHNESS_DUMPS_NAME)
+    assert live in held
+    assert len(held) == 2
 
 
 # -- the rows made by hand ----------------------------------------------------

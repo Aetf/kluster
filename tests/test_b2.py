@@ -20,21 +20,23 @@ mid-mint of.
 from __future__ import annotations
 
 import re
-from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, override
 
 import pytest
 import requests
 from b2_api import ACCOUNT_ID, FakeApi
 from credentials_command_tree import named_commands
 from fake_gh import RecordedGh
+from fake_kubeseal import sealed_as_marked
+from fake_pulumi import RecordedPulumi
 from memory_kit import MemoryKit
 
 from kluster import conventions
 from kluster.lib.state_backend import settings as appliance_settings
-from kluster.scripts.credentials import b2, derived, entries, masters, payload
+from kluster.scripts.credentials import b2, derived, entries, masters, payload, pulumi_config, sealing
 from kluster.scripts.credentials.delivery import Delivery
 from kluster.scripts.credentials.github_secrets import Forge
 from kluster.scripts.credentials.kdbx import KdbxStore
@@ -826,9 +828,45 @@ def test_a_freshness_key_is_not_minted_in_another_account(
     assert not api.named(b2.FRESHNESS_DUMPS_NAME)
 
 
-# -- the freshness row: the mint above, delivered through the GitHub sink ------
+# -- the freshness row: the mint above, pushed through the GitHub sink and sealed
 
 OPS_REPOSITORY = conventions.forge.OPS.full_name
+FRESHNESS_SEALED = conventions.sealed.B2_FRESHNESS_DUMPS
+
+
+@dataclass(frozen=True)
+class RecordedSealer(sealing.Sealer):
+    """A sealer over stacks that all exist, which seals with the marking stand-in and records what it writes.
+
+    The write goes no further than `written`, by data key, and `events`
+    names each seal and write as it happens, so a case can place them among
+    the pushes and the retirement. How a value is sealed and where its
+    ciphertext lands in the stack is `test_sealing`'s.
+    """
+
+    written: dict[str, str] = field(default_factory=dict[str, str])
+    events: list[str] = field(default_factory=list[str])
+
+    @override
+    def seal(self, value: conventions.sealed.SealedValue, data: Mapping[str, str]) -> dict[str, str]:
+        self.events.append(f'seal {value.name}')
+        return super().seal(value, data)
+
+    @override
+    def write(self, value: conventions.sealed.SealedValue, sealed: Mapping[str, str]) -> None:
+        self.events.append(f'write {value.name}')
+        self.written.update(sealed)
+
+
+def _sealer(run: sealing.Kubeseal = sealed_as_marked) -> RecordedSealer:
+    environment = pulumi_config.BackendEnvironment(passphrase=lambda: 'the-stack-passphrase')
+
+    def open_stack(name: str) -> pulumi_config.Stack:
+        return pulumi_config.Stack(
+            name=name, directory=pulumi_config.project_dir(), environment=environment, run=RecordedPulumi(stacks=[name])
+        )
+
+    return RecordedSealer(certificate='', open_stack=open_stack, run=run)
 
 
 def _freshness_bucket(api: FakeApi, kit: KdbxStore) -> str:
@@ -837,14 +875,22 @@ def _freshness_bucket(api: FakeApi, kit: KdbxStore) -> str:
     return _dump_bucket(api, appliance_settings.B2_BUCKET)
 
 
-def test_the_freshness_row_pushes_both_halves_as_repository_secrets_of_the_ops_repository(
+def test_the_freshness_row_pushes_both_halves_as_repository_secrets_of_the_ops_repository_and_seals_them(
     api: FakeApi, kit: KdbxStore
 ) -> None:
     _ = _seeded(api, kit)
     bucket_id = _freshness_bucket(api, kit)
     gh = RecordedGh()
+    sealer = _sealer()
 
-    key_id = derived.b2_freshness_dumps(kit, Forge(token='admin-token', run=gh))
+    key_id = derived.b2_freshness_dumps(kit, Forge(token='admin-token', run=gh), sealer=sealer)
+
+    # The sealed copy is the same key, each half under the field the
+    # cluster's check authorizes it from.
+    assert sealer.written == {
+        'AWS_ACCESS_KEY_ID': sealed_as_marked([], stdin=key_id).strip(),
+        'AWS_SECRET_ACCESS_KEY': sealed_as_marked([], stdin=api.keys[key_id].secret).strip(),
+    }
 
     # The addresses are the slot map's own: two repository secrets of the ops
     # repository, no `--env`, holding the key the account now lists under the
@@ -865,14 +911,15 @@ def test_the_freshness_row_pushes_both_halves_as_repository_secrets_of_the_ops_r
     )
 
 
-def test_the_freshness_row_retires_its_predecessor_only_after_both_carriers_landed(
+def test_the_freshness_row_retires_its_predecessor_only_after_both_carriers_and_the_seal_landed(
     api: FakeApi, kit: KdbxStore
 ) -> None:
     _ = _seeded(api, kit)
     _ = _freshness_bucket(api, kit)
     gh = RecordedGh()
-    previous = derived.b2_freshness_dumps(kit, Forge(token='admin-token', run=gh))
-    order: list[str] = []
+    previous = derived.b2_freshness_dumps(kit, Forge(token='admin-token', run=gh), sealer=_sealer())
+    sealer = _sealer()
+    order = sealer.events
 
     def timed(args: Sequence[str], *, token: str, stdin: str | None) -> str:
         if list(args[:2]) == ['secret', 'set']:
@@ -887,14 +934,19 @@ def test_the_freshness_row_retires_its_predecessor_only_after_both_carriers_land
 
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr(b2.requests, 'post', timed_post)
-        current = derived.b2_freshness_dumps(kit, Forge(token='admin-token', run=timed))
+        current = derived.b2_freshness_dumps(kit, Forge(token='admin-token', run=timed), sealer=sealer)
 
-    # The order every mint in this package has, held across the sink: both
-    # pushes, in whichever order, then the deletion of the key the workflow
-    # held before.
-    pushes = {f'push {probe.KEY_ID_ENV}', f'push {probe.KEY_ENV}'}
-    assert len(order) == len(pushes) + 1
-    assert set(order[:-1]) == pushes
+    # The order every mint in this package has, held across both consumers:
+    # both pushes and the ciphertext's write, in whichever order, then the
+    # deletion of the key the workflow and the cluster held before.
+    delivered = {
+        f'seal {FRESHNESS_SEALED.name}',
+        f'push {probe.KEY_ID_ENV}',
+        f'push {probe.KEY_ENV}',
+        f'write {FRESHNESS_SEALED.name}',
+    }
+    assert len(order) == len(delivered) + 1
+    assert set(order[:-1]) == delivered
     assert order[-1] == 'retire'
     assert api.named(b2.FRESHNESS_DUMPS_NAME) == [current]
     assert previous not in api.keys
@@ -907,7 +959,7 @@ def test_the_freshness_row_refuses_before_minting_where_the_dump_bucket_does_not
     before = _mints(api)
 
     with pytest.raises(derived.BucketMissing) as refused:
-        _ = derived.b2_freshness_dumps(kit, Forge(token='admin-token', run=RecordedGh()))
+        _ = derived.b2_freshness_dumps(kit, Forge(token='admin-token', run=RecordedGh()), sealer=_sealer())
     assert refused.value.bucket == appliance_settings.B2_BUCKET
 
     assert _mints(api) == before
@@ -922,9 +974,31 @@ def test_the_freshness_row_mints_nothing_in_another_account(
     _elsewhere(monkeypatch)
 
     with pytest.raises(CredentialRejected, match=f'{ACCOUNT_ID}.*some-other-account'):
-        _ = derived.b2_freshness_dumps(kit, Forge(token='admin-token', run=RecordedGh()))
+        _ = derived.b2_freshness_dumps(kit, Forge(token='admin-token', run=RecordedGh()), sealer=_sealer())
 
     assert _mints(api) == before
+
+
+def _refusing(args: Sequence[str], *, stdin: str | None) -> str:
+    del args, stdin
+    raise pulumi_config.SlotRefused('kubeseal refused the value')
+
+
+def test_a_freshness_seal_that_fails_pushes_nothing_and_leaves_the_key_both_consumers_hold_live(
+    api: FakeApi, kit: KdbxStore
+) -> None:
+    _ = _seeded(api, kit)
+    _ = _freshness_bucket(api, kit)
+    previous = derived.b2_freshness_dumps(kit, Forge(token='admin-token', run=RecordedGh()), sealer=_sealer())
+    gh = RecordedGh()
+    sealer = _sealer(run=_refusing)
+
+    with pytest.raises(pulumi_config.SlotRefused, match='kubeseal refused'):
+        _ = derived.b2_freshness_dumps(kit, Forge(token='admin-token', run=gh), sealer=sealer)
+
+    assert not gh.values
+    assert not sealer.written
+    assert previous in api.named(b2.FRESHNESS_DUMPS_NAME)
 
 
 def test_an_account_larger_than_one_page_is_listed_whole(api: FakeApi, kit: KdbxStore) -> None:
