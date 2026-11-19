@@ -1,0 +1,125 @@
+# The cluster's mail relay: it accepts mail from the cluster's pods alone, signs
+# it with DKIM and hands it to the smarthost under the relay's account. Rendered
+# by `kluster.components.apps.exim`, whose docstring says why each choice is
+# the one it is.
+
+primary_hostname = {{ domain }}
+
+# Nothing is delivered here: every address is relayed.
+domainlist local_domains =
+# The cluster's pod ranges, both families; `<;` makes `;` the separator, since
+# an IPv6 range carries colons.
+hostlist relay_from_hosts = <; {{ relay_from | join(' ; ') }}
+
+acl_smtp_rcpt = acl_check_rcpt
+acl_smtp_data = acl_check_data
+
+daemon_smtp_ports = {{ port }}
+
+# The relay serves no certificate, so it offers no STARTTLS: its clients are
+# the cluster's pods, and speak to it in the clear.
+tls_advertise_hosts =
+
+# What the connection to the smarthost accepts.
+openssl_options = +no_sslv2 +no_sslv3 +no_tlsv1 +no_tlsv1_1 +no_ticket +single_dh_use
+
+prdr_enable = true
+
+log_selector = +smtp_protocol_error +smtp_syntax_error +tls_certificate_verified
+
+# The image links the main log to the container's output, and the root
+# filesystem is read-only, so a log file exim opens beside it cannot be
+# created; a failed open of the reject log ends the SMTP session with a 421
+# after the refusal it logs. Every rejection is in the main log as well. The
+# panic log has no switch: what fails to open it is a panic, which ends the
+# process anyway, and its message goes to the container's errors.
+write_rejectlog = false
+
+# A bounce that cannot be delivered is tried once more after two days and
+# dropped; any message frozen for a week is removed.
+ignore_bounce_errors_after = 2d
+timeout_frozen_after = 7d
+
+# The smarthost's credential, which the authenticators below read.
+keep_environment = {{ account }} : {{ password }}
+
+
+begin acl
+
+acl_check_rcpt:
+
+  # Local parts that try to route around the relay's rules.
+  deny    message       = Restricted characters in address
+          local_parts   = ^[./|] : ^.*[@%!] : ^.*/\\.\\./
+
+  # The cluster's pods are its senders: their mail is treated as a submission
+  # and keeps the sender it was given.
+  accept  hosts         = +relay_from_hosts
+          control       = submission/sender_retain
+          control       = dkim_disable_verify
+
+  deny    message       = relay not permitted
+
+
+acl_check_data:
+
+  deny    message    = maximum allowed line length is 998 octets, \
+                       got $max_received_linelength
+          condition  = ${if > {$max_received_linelength}{998}}
+
+  accept
+
+
+begin routers
+
+# Every address goes to the smarthost.
+smarthost:
+  driver = manualroute
+  transport = remote_smtp
+  route_data = {{ smarthost }}
+  ignore_target_hosts = <; 0.0.0.0 ; 127.0.0.0/8 ; ::1
+  no_more
+
+
+begin transports
+
+remote_smtp:
+  driver = smtp
+  # A message with a line longer than SMTP allows is refused rather than sent.
+  message_size_limit = ${if > {$max_received_linelength}{998} {1}{0}}
+  # The credential crosses an encrypted connection or none.
+  hosts_require_tls = *
+  hosts_require_auth = *
+  headers_remove = received
+  helo_data = {{ domain }}
+  dkim_domain = {{ domain }}
+  dkim_selector = {{ selector }}
+  dkim_private_key = {{ dkim_key }}
+  # A message that cannot be signed is deferred rather than sent unsigned.
+  dkim_strict = 1
+  dkim_timestamps = 864000
+
+
+begin retry
+
+# Every 15 minutes for 2 hours, then at intervals growing by half from an hour
+# up to 16 hours, then every 6 hours until 4 days have passed.
+*                      *           F,2h,15m; G,16h,1h,1.5; F,4d,6h
+
+
+begin rewrite
+
+
+begin authenticators
+
+{# `{{-` and `-}}` trim the spaces around a name inside exim's braces. -#}
+
+PLAIN:
+  driver           = plaintext
+  public_name      = PLAIN
+  client_send      = "^${env{ {{- account -}} }{$value}fail}^${env{ {{- password -}} }{$value}fail}"
+
+LOGIN:
+  driver           = plaintext
+  public_name      = LOGIN
+  client_send      = ": ${env{ {{- account -}} }{$value}fail} : ${env{ {{- password -}} }{$value}fail}"
