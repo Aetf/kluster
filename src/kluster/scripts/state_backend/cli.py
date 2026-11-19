@@ -220,7 +220,7 @@ def build_parser() -> argparse.ArgumentParser:
         description=(
             f'The two scheduled probes. `{probe.CERTIFICATE}` reads the server certificate off a TLS handshake '
             f'with {settings.ADDRESS}:{settings.PORT} and fails when it is not valid, has less than '
-            f'{config.EXPIRY_ALERT_MARGIN.days} days left, or does not name the address; `{probe.DUMPS}` lists '
+            f'{settings.EXPIRY_ALERT_MARGIN.days} days left, or does not name the address; `{probe.DUMPS}` lists '
             f'the dump prefix as the list-only key in {probe.KEY_ID_ENV} and {probe.KEY_ENV} and fails when the '
             f'newest dump is older than {probe.hours(settings.DUMP_MAX_AGE)} or there is none. Every verdict is printed, '
             'with the playbook a failure calls for.'

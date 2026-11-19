@@ -150,8 +150,39 @@ STATE_UPKEEP = ScheduledJob(
     playbook=Playbook('docs/physical/state-backend.md', '7.6'),
 )
 
+#: The state backend's two checks from the cluster
+#: (`components.monitoring.state_backend`): the age of its newest dump, and
+#: the server certificate it serves. Hourly, each a CronJob of its own, so a
+#: finding of one never hides a later finding of the other behind an alert
+#: already firing; a run retries a dropped connection twice and is cut off at a
+#: quarter of an hour. One playbook answers both: physical/state-backend.md §6
+#: routes each finding, which the run's log names, to its own.
+STATE_BACKEND_DUMPS = ScheduledJob(
+    alert='StateBackendDumps',
+    namespace=MONITORING_NAMESPACE,
+    cronjob='state-backend-dumps',
+    period=dt.timedelta(hours=1),
+    deadline=dt.timedelta(minutes=15),
+    playbook=Playbook('docs/physical/state-backend.md', '6'),
+)
+STATE_BACKEND_CERTIFICATE = ScheduledJob(
+    alert='StateBackendCertificate',
+    namespace=MONITORING_NAMESPACE,
+    cronjob='state-backend-certificate',
+    period=dt.timedelta(hours=1),
+    deadline=dt.timedelta(minutes=15),
+    playbook=Playbook('docs/physical/state-backend.md', '6'),
+)
+
 #: Every CronJob a stack program declares, as a row of the family:
 #: `components.monitoring.rules` derives the family's alerts from each row,
 #: and `tests/test_monitoring.py` holds every CronJob the programs declare to
 #: a row of it, and every row to a CronJob some program declares.
-SCHEDULED_JOBS: Sequence[ScheduledJob] = (*METRICS_BACKUPS.values(), OCI_METRICS_PULL, ETCD_SNAPSHOT, STATE_UPKEEP)
+SCHEDULED_JOBS: Sequence[ScheduledJob] = (
+    *METRICS_BACKUPS.values(),
+    OCI_METRICS_PULL,
+    ETCD_SNAPSHOT,
+    STATE_UPKEEP,
+    STATE_BACKEND_DUMPS,
+    STATE_BACKEND_CERTIFICATE,
+)

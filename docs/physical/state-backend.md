@@ -41,8 +41,9 @@ shape nor the domain, which reads like a permissions problem.
 > (`credentials derived drill-age-identity generate`), and its
 > committed public half is among the recipients the box encrypts to
 > (`committed.age_recipients`). The two scheduled probes of §6 — the server certificate's
-> expiry, and the age of the newest dump — are `state-backend probe`,
-> which the ops repository's `probes.yml` runs today (§6). Every key
+> expiry, and the age of the newest dump — run hourly in the cluster,
+> each a CronJob of its own, and daily as `state-backend probe`, which the ops
+> repository's `probes.yml` runs (§6). Every key
 > rotation this document describes is carried out with commands that exist and, for the age
 > identity, a pin edit (§7.4): a reissue into the stack's configuration
 > and the replacement that carries it for the server and host keys, a
@@ -229,8 +230,8 @@ oraclecloud`, x86_64), the qcow2 imports as a custom image
     names the reissue, `credentials derived state-backend-server issue`,
     and the `up --force` that carries it, and changes nothing. The
     margin is small against the certificate's validity
-    (`pki.LEAF_VALIDITY`), and wider than the expiry probe's alert
-    margin (`config.EXPIRY_ALERT_MARGIN`, §6), which makes that alert
+    (`pki.LEAF_VALIDITY`), and wider than the certificate check's alert
+    margin (`settings.EXPIRY_ALERT_MARGIN`, §6), which makes that alert
     the backstop for an appliance whose stack nobody has run rather than
     the trigger for the rotation; a test holds the two margins in that
     order.
@@ -778,15 +779,17 @@ oraclecloud`, x86_64), the qcow2 imports as a custom image
     reissue (§1) — so nobody has to be watching a date. What no run
     does is act: the reissue is a command, and carrying it to the box
     is the replacement `--force` asks for, so the certificate changes
-    when an operator says so and not before. The backstop is the expiry probe of §6:
-    `state-backend probe` reads the server certificate off an `openssl
-    s_client` handshake (no credentials needed) and fails once less
-    than `config.EXPIRY_ALERT_MARGIN` remains, and the ops
-    repository's `probes.yml` runs it today (§6), failing into the
-    unified alert channel (architecture.md §4.3). The renewal margin
-    opens earlier than the alert margin, so the probe fires only for an
-    appliance whose stack nobody has run — or whose reports nobody acted
-    on — in the interval between the two. Response: playbook §7.1.
+    when an operator says so and not before. The backstop is the certificate check of §6:
+    the cluster's hourly `state-backend-certificate` CronJob reads the
+    server certificate off an `openssl s_client` handshake (no
+    credentials needed) and fails once less than
+    `settings.EXPIRY_ALERT_MARGIN` remains, into the unified alert
+    channel (architecture.md §4.3), and `state-backend probe` runs the
+    same check daily from the ops repository's `probes.yml` (§6). The
+    renewal margin opens earlier than the alert margin, so the check
+    fires only for an appliance whose stack nobody has run — or whose
+    reports nobody acted on — in the interval between the two.
+    Response: playbook §7.1.
 
 ## 4. Network exposure
 
@@ -953,8 +956,8 @@ step 8).
     a timer that stopped firing, a box that is down — has no failure
     to report.
     Freshness is therefore asserted **from outside**, by the dump-age
-    probe of §6 (object-age on the prefix, which the ops
-    repository's `probes.yml` runs today), and the box's design is what makes that
+    probe of §6 (object-age on the prefix, which the cluster reads every
+    hour), and the box's design is what makes that
     probe load-bearing: a nightly that stopped in August looks exactly
     like one that ran, until a restore reaches for it. Reading the
     newest object's stamp is the assertion, and the probe is what
@@ -1069,75 +1072,107 @@ shell on it:
 -   Every CI job and local `pulumi` operation is an implicit
     5432 + TLS + auth probe — backend-down is discovered by the first
     thing that needs it, which is the only thing that cares.
--   **`state-backend probe`** is the two scheduled checks as they run
-    today: the ops repository's `probes.yml` runs it daily, from a
-    checkout of this repository at a pinned commit, alerting into the
-    unified alert channel (architecture.md §4.3). Both checks are the
-    cluster's under ci.md §3's rule, since neither gives an unmerged
-    ref's runs anything they do not already hold: the certificate is
-    to be read by `blackbox_exporter` probing the box's Postgres
-    STARTTLS, with vmalert rules over its metrics, and the dump age by
-    an hourly CronJob in `monitoring` that lists the prefix with the
-    same list-only key, sealed. Each keeps the verdicts and playbooks
-    below. Neither is built, and `probes.yml` and this command retire
-    together once both have reported a pass (operations.md §4).
-    One command runs both probes (`--only certificate|dumps` runs one),
-    prints each
-    verdict with what it measured as its probe answers, and exits with
-    one bit per failed probe — 4 for the certificate, 8 for the dumps,
-    their sum when both failed — so the workflow's log names which. 1
-    is a run that could not probe at all (an empty secret), which is a
-    different fact from a probe that did and failed; 2 is what the
-    parser and `uv run` answer when the command never ran, which is
-    why no probe's bit is 2. The workflow carries no threshold, no
-    prefix and no address: every number is this repository's.
+-   **The cluster checks the box every hour, twice.** Each check is a
+    CronJob of its own in `monitoring`, on the worker:
+    `state-backend-certificate` and `state-backend-dumps`. Both run one
+    program (`components.monitoring.state_backend_check`) in the
+    `oci-sdk` image. They are the cluster's under ci.md §3's rule,
+    since neither gives an unmerged ref's runs anything they do not
+    already hold. Each is a row of the
+    scheduled-job family (`conventions.schedule.STATE_BACKEND_CERTIFICATE`
+    and `STATE_BACKEND_DUMPS`, operations.md §4), so its two alerts,
+    both `actionable`, are the family's:
+    `StateBackendCertificateFailed` and `StateBackendDumpsFailed`, a run
+    scheduled after the last success that has not succeeded within the
+    deadline a run is cut off at, and `StateBackendCertificateStale` and
+    `StateBackendDumpsStale`, no success within the family's age over
+    the hourly period. Each names this section, and this section routes
+    the finding: the run's log, `mise x -- kubectl -n monitoring logs
+    job/<the Job>`, prints every verdict the run reached as a line of
+    its own, `<check>: FAILED — <what was measured>; playbook:
+    <document> §<section>`, or `<check>: ok — <what was measured>` for
+    a pass, and the playbooks are the ones below. Two jobs rather than
+    one, so that a finding of one check never hides a later finding of
+    the other behind an alert already firing; within one check an open
+    alert does hide a later finding, and the other check covers the
+    case that matters most, a box that stops answering, which stops
+    landing dumps. A run retries twice before its Job fails: both
+    checks cross the internet, a dropped connection is no finding, and
+    a finding repeats on every retry. Every threshold, the address and
+    the prefix are rendered from `settings` into the jobs' settings
+    file, so a change to one reaches the cluster with `up-k8s-base`.
     -   **Certificate.** `openssl s_client -connect <ADDRESS>:5432
         -starttls postgres -showcerts` — the same handshake the
         stack's readiness wait makes, credential-free because the
         box sends its certificate before anything authenticates — and
-        the **server leaf** is read off the transcript: the first
-        certificate of the chain. It fails when the leaf is not valid
-        now, when less than `config.EXPIRY_ALERT_MARGIN` remains, or
-        when its SAN does not carry `settings.ADDRESS`, each into
-        playbook §7.1; a box that does not complete the handshake is
-        unreachable, into §7.3 (there is no NSG allowlist to refresh —
-        §4). The leaf and only it: the CA is not what a handshake
-        proves, and each client certificate is held by its consumer,
-        whose first use after the certificate expires is its report —
-        the first `pulumi` command for `ci` and `operator`, the next run
-        of the state table's daily upkeep for `upkeep` — out of a
-        network probe's reach by design.
-    -   **Dumps.** Authorize as the list-only key (credentials.md §3,
-        `B2 freshness key (state dumps)`, read from the two secrets
-        `B2_FRESHNESS_DUMPS_KEY_ID` and `B2_FRESHNESS_DUMPS_KEY`), list
-        `pulumi-state/`, and take the newest object's stamp: older
-        than `settings.DUMP_MAX_AGE` (§5) is stale, into §7.3, whose
-        restore path doubles as the diagnosis start. A box replaced
-        and never restored reads as stale once that age has passed,
-        because its nightly refuses an archive holding no stack (§5);
-        each refused night brings the last object holding state a day
-        closer to the 30-day lifecycle rule, so the stale verdict is
-        the alarm and the 30 days are the deadline. **An empty prefix
-        is its own failure** — no dump holding state has landed within
-        the retention window: the box refuses to upload one holding no
-        stack (§5), as for a box replaced and not restored or a site
-        before its first `pulumi stack init`, or its timer never
-        fired — and so is an object under the prefix
-        that is not named like a dump, since nothing but the
-        appliance's uploader can write there. Names and their stamps
-        are the whole of what the key can see: never a byte of a dump.
-        A key B2 refuses, or one confined to no bucket, is this
-        probe's failure too, into the mint (credentials.md §4), named
-        by its variables and never by its id, which the workflow holds
-        as a secret. So is B2 not answering the listing at all, which
-        points back here rather than at a playbook: the outage is B2's
-        and not the box's, nothing is known about the dumps that run,
-        and the next scheduled run is the retry.
+        the **server leaf** is read off the transcript, the first
+        certificate of the chain, with the image's `openssl x509`. It
+        fails when the leaf is not valid now, when less than
+        `settings.EXPIRY_ALERT_MARGIN` remains, or when its SAN does
+        not carry `settings.ADDRESS`, each a finding of its own, into
+        playbook §7.1; a box that does not complete the handshake with
+        a certificate — no answer within the handshake's bound, a
+        refusal, or no certificate served — is unreachable, into §7.3
+        (there is no NSG allowlist to refresh — §4). The leaf and only
+        it: the CA is not what a handshake proves, and each client
+        certificate is held by its consumer, whose first use after the
+        certificate expires is its report — the first `pulumi` command
+        for `ci` and `operator`, the next run of the state table's
+        daily upkeep for `upkeep` — out of a network probe's reach by
+        design. This pod holds no credential.
+    -   **Dumps.** Authorize as the freshness key (credentials.md §3,
+        `B2 freshness key (state dumps)`, the Secret
+        `monitoring/b2-freshness-dumps`, which this pod alone mounts)
+        on B2's v3 API, which names the one bucket the key is confined
+        to, list `pulumi-state/` page by page, and take the newest
+        object's stamp: older than `settings.DUMP_MAX_AGE` (§5) is
+        stale, into §7.3, whose restore path doubles as the diagnosis
+        start. A box replaced and never restored reads as stale once
+        that age has passed, because its nightly refuses an archive
+        holding no stack (§5); each refused night brings the last
+        object holding state a day closer to the 30-day lifecycle
+        rule, so the stale verdict is the alarm and the 30 days are
+        the deadline. **No dump under the prefix is its own failure**
+        — no dump holding state has landed within the retention
+        window: the box refuses to upload one holding no stack (§5),
+        as for a box replaced and not restored or a site before its
+        first `pulumi stack init`, or its timer never fired — and so is
+        each object under the prefix that is not named like a dump,
+        by its name, since nothing but the appliance's uploader can
+        write there; all three go to §7.3. Names and their stamps are
+        the whole of what the key can see: never a byte of a dump. A
+        key B2 refuses, at the authorization or at the listing, or one
+        confined to no bucket, is a failure of its own, into the mint
+        (credentials.md §4), named by its Secret and never by its id.
+        So is B2 not answering at all, which points back here rather
+        than at a playbook: the outage is B2's and not the box's,
+        nothing is known about the dumps that run, and the next run is
+        the retry.
     -   The renewal margin of §1 narrows the certificate's gap — any
         run of the stack names the coming expiry without being asked,
         though the reissue itself is a command and its delivery waits
-        for `--force` — and the probe is the backstop behind it; for the
-        dump the probe is the only watcher.
+        for `--force` — and the certificate check is the backstop
+        behind it; for the dumps, their check is the only watcher.
+-   **`state-backend probe`** runs the same two checks daily from
+    outside the cluster: the ops repository's `probes.yml` runs it from
+    a checkout of this repository at a pinned commit, alerting into the
+    unified alert channel (architecture.md §4.3), and it retires, with
+    `probes.yml`, once both checks above have reported a pass from the cluster
+    (operations.md §4). Until then a real finding is reported by both.
+    Its findings and playbooks are the ones above, though it reports
+    only the first finding of each check, and its dump check
+    reads the freshness key from the two repository secrets
+    `B2_FRESHNESS_DUMPS_KEY_ID` and `B2_FRESHNESS_DUMPS_KEY`, naming
+    them, never the id, in a refusal. One command runs both checks
+    (`--only certificate|dumps` runs one), prints each verdict with
+    what it measured as its check answers, and exits with one bit per
+    failed check — 4 for the certificate, 8 for the dumps, their sum
+    when both failed — so the workflow's log names which. 1 is a run
+    that could not check at all (an empty secret), which is a
+    different fact from a check that did and failed; 2 is what the
+    parser and `uv run` answer when the command never ran, which is
+    why no check's bit is 2. The workflow carries no threshold, no
+    prefix and no address: every number is this repository's.
 -   **The state table's daily upkeep** (§2) watches the table from the
     cluster: each run reads the largest value against the ceiling after
     its prune, and fails naming a row over it or a row its delete passed
@@ -1160,9 +1195,9 @@ shell on it:
     scheduled the bound is Zincati alone. If either ever bites first, that is the signal to
     add the probe — not before.
 
-So between scheduled runs of the probe, what observes this box is the
+So between scheduled runs of the checks, what observes this box is the
 first bullet alone: something needed the backend, and either reached
-it or did not. The probe is what reports on an appliance nobody is
+it or did not. The checks are what report on an appliance nobody is
 using.
 
 ## 7. Playbooks

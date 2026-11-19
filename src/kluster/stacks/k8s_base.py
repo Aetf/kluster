@@ -203,6 +203,7 @@ async def main() -> None:
         if metrics_reader_key is not None
         else None,
         oci_sdk_image=versions.image['oci-sdk'],
+        freshness_key=sealed_ciphertext(conventions.sealed.B2_FRESHNESS_DUMPS, sealed),
         opts=opts,
     )
     # Encrypted to the escrowed backup generations, the recipients the state

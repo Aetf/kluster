@@ -80,6 +80,7 @@ from kluster.conventions.providers import OCI_BLOCKSTORE_METRICS
 from kluster.lib.k8s import KUBECONFIG_KEY
 from kluster.lib.monitoring import readings
 from kluster.lib.monitoring.selectors import JOB_LABEL, Selector, selectors
+from kluster.lib.state_backend import settings as backend_settings
 from kluster.lib.versions import ChartPin, versions
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -1925,8 +1926,9 @@ def test_without_the_writer_key_nothing_backs_up_or_restores_and_the_key_is_name
 ) -> None:
     """The bring-up's tolerance: the stores start empty and are copied nowhere until the key is sealed in."""
     run, warned = absent
+    backups = {job.cronjob for job in schedule.METRICS_BACKUPS.values()}
 
-    assert run.monitor.of_type(CRONJOB) == []
+    assert [it for it in run.monitor.of_type(CRONJOB) if it.inputs['metadata']['name'] in backups] == []
     assert _restores(run) == {'recent': [], 'history': []}
     assert [it for it in run.monitor.of_type(SEALED_SECRET) if it.inputs['metadata']['name'] == WRITER_KEY.name] == []
     assert [message for message in warned if repr(WRITER_KEY.name) in message]
@@ -3171,3 +3173,108 @@ def test_a_volume_physical_published_that_the_census_does_not_declare_is_not_pul
     )
 
     assert {(it.node, it.volume) for it in targets.values()} == _census()
+
+
+# -- The state backend's checks -------------------------------------------------------
+
+FRESHNESS_KEY = conventions.sealed.B2_FRESHNESS_DUMPS
+
+
+@pytest_asyncio.fixture(scope='module', loop_scope='module')
+async def without_freshness_key() -> Run:
+    """Every sealed value the stack declares sealed in but the freshness key."""
+    return await applied(sealed={name: value for name, value in SEALED.items() if name != FRESHNESS_KEY.name})
+
+
+def _check_pod(run: Run, row: schedule.ScheduledJob) -> dict[str, Any]:
+    """The pod spec of the check `row` is the row of."""
+    (job,) = _named(run, CRONJOB, row.cronjob)
+    return job['spec']['jobTemplate']['spec']['template']['spec']
+
+
+#: Each check, by its row.
+CHECKS = (schedule.STATE_BACKEND_DUMPS, schedule.STATE_BACKEND_CERTIFICATE)
+
+
+def test_the_freshness_key_adds_its_sealed_secret_and_the_dump_check(sealed: Run, without_freshness_key: Run) -> None:
+    """The preview the key's ciphertext shows: two objects created, and the rules already there."""
+    added = _monitoring_objects(sealed) - _monitoring_objects(without_freshness_key)
+
+    assert added == {(SEALED_SECRET, FRESHNESS_KEY.name), (CRONJOB, schedule.STATE_BACKEND_DUMPS.cronjob)}
+    assert _monitoring_objects(without_freshness_key) <= _monitoring_objects(sealed)
+    assert _rule_set(sealed) == _rule_set(without_freshness_key)
+
+
+def test_without_the_freshness_key_the_certificate_check_is_declared_and_the_dump_check_is_not(
+    absent: tuple[Run, list[str]], without_freshness_key: Run
+) -> None:
+    """The bring-up's tolerance: the certificate check holds no credential, so nothing it needs waits on one."""
+    from kluster.components.monitoring import state_backend
+
+    run, warned = absent
+    for declared in (run, without_freshness_key):
+        assert len(_named(declared, CRONJOB, schedule.STATE_BACKEND_CERTIFICATE.cronjob)) == 1
+        assert len(_named(declared, CONFIGMAP, state_backend.CHECKS_CONFIGMAP)) == 1
+        assert _named(declared, CRONJOB, schedule.STATE_BACKEND_DUMPS.cronjob) == []
+        assert _named(declared, SEALED_SECRET, FRESHNESS_KEY.name) == []
+    assert [message for message in warned if repr(FRESHNESS_KEY.name) in message]
+
+
+@pytest.mark.parametrize('row', CHECKS, ids=lambda row: row.cronjob)
+def test_each_check_runs_its_pin_on_the_program_and_settings_its_config_map_carries(
+    sealed: Run, tmp_path: Path, row: schedule.ScheduledJob
+) -> None:
+    """The image is the runtime alone; the program and the settings arrive as files of the mounted ConfigMap."""
+    from kluster.components.monitoring import state_backend, state_backend_check
+
+    pod = _check_pod(sealed, row)
+    (configmap,) = _named(sealed, CONFIGMAP, state_backend.CHECKS_CONFIGMAP)
+    (container,) = pod['containers']
+    (program_volume,) = [
+        it for it in pod['volumes'] if it.get('configMap', {}).get('name') == state_backend.CHECKS_CONFIGMAP
+    ]
+    (mount,) = [it for it in container['volumeMounts'] if it['name'] == program_volume['name']]
+    files = [arg for arg in container['command'] if arg.startswith(f'{mount["mountPath"]}/')]
+    path = tmp_path / state_backend.SETTINGS_FILE
+    path.write_text(configmap['data'][state_backend.SETTINGS_FILE])
+
+    assert container['image'] == VERSIONS_CONFIG['versions:image-oci-sdk']
+    assert [Path(it).name for it in files] == [state_backend.PROGRAM_FILE, state_backend.SETTINGS_FILE]
+    assert configmap['data'][state_backend.PROGRAM_FILE] == Path(state_backend_check.__file__).read_text()
+    assert state_backend_check.Settings.read(path).address == backend_settings.ADDRESS
+
+
+def test_the_dump_check_reads_the_key_its_row_seals_at_the_directory_its_command_passes(sealed: Run) -> None:
+    """The SealedSecret opens into the Secret the pod mounts, in the row's namespace, at the directory the program is told."""
+    (secret,) = _named(sealed, SEALED_SECRET, FRESHNESS_KEY.name)
+    pod = _check_pod(sealed, schedule.STATE_BACKEND_DUMPS)
+    (container,) = pod['containers']
+    (key_volume,) = [it for it in pod['volumes'] if it.get('secret', {}).get('secretName') == FRESHNESS_KEY.name]
+    (mount,) = [it for it in container['volumeMounts'] if it['name'] == key_volume['name']]
+
+    assert secret['metadata']['namespace'] == schedule.STATE_BACKEND_DUMPS.namespace
+    assert secret['spec']['encryptedData'] == SEALED[FRESHNESS_KEY.name]
+    assert container['command'][-1] == mount['mountPath']
+    assert not [arg for arg in container['command'] if 'AgB-sealed' in arg]
+
+
+def test_the_certificate_check_mounts_no_secret(sealed: Run) -> None:
+    """The handshake takes no credential, so the pod that makes it is handed none."""
+    pod = _check_pod(sealed, schedule.STATE_BACKEND_CERTIFICATE)
+
+    assert [it for it in pod['volumes'] if 'secret' in it or 'projected' in it] == []
+    assert pod['automountServiceAccountToken'] is False
+
+
+@pytest.mark.parametrize('row', CHECKS, ids=lambda row: row.cronjob)
+def test_each_check_can_schedule_on_the_worker_alone(sealed: Run, row: schedule.ScheduledJob) -> None:
+    """With the rest of the stack, off the cores the cloud nodes share with etcd."""
+    pod = _check_pod(sealed, row)
+
+    schedulable = {
+        name
+        for name, labels in _talos_nodes().items()
+        if _admits(labels, pod.get('nodeSelector', {}), pod.get('affinity', {}))
+    }
+
+    assert schedulable == {conventions.HOMELAB_NODE}

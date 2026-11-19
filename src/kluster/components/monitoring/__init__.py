@@ -43,6 +43,20 @@ of the scheduled-job family (`conventions.schedule.OCI_METRICS_PULL`): one older
 than its period allows raises `OciMetricsPullStale`, and one whose last run
 failed `OciMetricsPullFailed` (`rules`).
 
+**The state backend is checked from here every hour** (`state_backend`): two
+CronJobs run `state_backend_check`, a program of this repository rendered into
+a ConfigMap, in the same `oci-sdk` image. `state-backend-certificate` reads the
+server certificate off a handshake with the box and needs no credential, so it
+is always declared. `state-backend-dumps` lists the dump prefix with the
+freshness key, which `k8s-base` holds sealed
+(`conventions.sealed.B2_FRESHNESS_DUMPS`); while the stack's configuration
+holds no ciphertext for it, neither its SealedSecret nor that CronJob is
+declared. Each is a row of the scheduled-job family
+(`conventions.schedule.STATE_BACKEND_DUMPS`, `STATE_BACKEND_CERTIFICATE`):
+`StateBackendDumpsFailed` or `StateBackendCertificateFailed` for a run that
+failed, and the `…Stale` alerts for a check that has not passed in an hour
+and a half, all naming physical/state-backend.md §6.
+
 **What the chart would install that this cluster does not** is switched off
 (`stack_values`): the sync job, a Helm hook that fetches rules and dashboards
 off the upstream projects' default branches at install time, so that what a run
@@ -166,7 +180,7 @@ import pulumi_random as random
 from kluster import conventions
 from kluster.components.backup import s3_endpoint
 from kluster.components.cilium.bgp import CONTROL_PLANE_LABEL
-from kluster.components.monitoring import dashboard, memory, oci_metrics, rules, stores
+from kluster.components.monitoring import dashboard, memory, oci_metrics, rules, state_backend, stores
 from kluster.components.monitoring.operator_objects import operator_object
 from kluster.components.monitoring.stores import Store, stack_fullname
 from kluster.conventions import backup, schedule
@@ -669,7 +683,13 @@ class Monitoring(Component, pulumi_type='kluster:monitoring:Monitoring'):
     from, `None` while the configuration holds no ciphertext for the metrics
     reader's key; until it holds one, the pull is not declared. The `None` is
     the bring-up's tolerance, and goes with it (physical/bring-up.md §1).
-    `oci_sdk_image` is the pin it runs.
+    `oci_sdk_image` is the pin it runs, and the pin the state backend's checks
+    run.
+
+    `freshness_key` is the ciphertext the stack's configuration holds for
+    `conventions.sealed.B2_FRESHNESS_DUMPS`, `None` while it holds none; until
+    it holds one, the dump-age check is not declared, and the certificate
+    check is declared all the same.
     """
 
     def __init__(
@@ -688,6 +708,7 @@ class Monitoring(Component, pulumi_type='kluster:monitoring:Monitoring'):
         bucket_image: ImagePin,
         oci_pull: OciPull | None,
         oci_sdk_image: ImagePin,
+        freshness_key: Mapping[str, str] | None,
         opts: pulumi.ResourceOptions | None = None,
     ) -> None:
         super().__init__(name, opts=opts)
@@ -922,6 +943,48 @@ class Monitoring(Component, pulumi_type='kluster:monitoring:Monitoring'):
                     depends_on=[self.chart, self.history, self.oci_pull_program, self.metrics_reader_key]
                 ),
             )
+
+        self.state_backend_checks = k8s.core.v1.ConfigMap(
+            f'{name}-state-backend-checks',
+            metadata=k8s.meta.v1.ObjectMetaArgs(
+                name=state_backend.CHECKS_CONFIGMAP, namespace=self.namespace.metadata.name
+            ),
+            data={
+                state_backend.PROGRAM_FILE: state_backend.PROGRAM,
+                state_backend.SETTINGS_FILE: state_backend.settings(),
+            },
+            opts=self.child_opts(depends_on=[self.namespace]),
+        )
+        # Behind what its pod mounts.
+        self.state_backend_certificate = k8s.batch.v1.CronJob(
+            f'{name}-{schedule.STATE_BACKEND_CERTIFICATE.cronjob}',
+            metadata=k8s.meta.v1.ObjectMetaArgs(
+                name=schedule.STATE_BACKEND_CERTIFICATE.cronjob, namespace=self.namespace.metadata.name
+            ),
+            spec=state_backend.certificate_cronjob_spec(image=oci_sdk_image, affinity=_WORKER_AFFINITY_ARGS),
+            opts=self.child_opts(depends_on=[self.state_backend_checks]),
+        )
+        # Behind the sealing controller, whose chart defines the kind, and the
+        # namespace the key is sealed to.
+        self.freshness_key = sealed_value(
+            f'{name}-b2-freshness-dumps',
+            conventions.sealed.B2_FRESHNESS_DUMPS,
+            ciphertext=freshness_key,
+            opts=self.child_opts(depends_on=[*after, self.namespace]),
+        )
+        # Behind what its pod mounts: the program's ConfigMap and the key.
+        self.state_backend_dumps = (
+            k8s.batch.v1.CronJob(
+                f'{name}-{schedule.STATE_BACKEND_DUMPS.cronjob}',
+                metadata=k8s.meta.v1.ObjectMetaArgs(
+                    name=schedule.STATE_BACKEND_DUMPS.cronjob, namespace=self.namespace.metadata.name
+                ),
+                spec=state_backend.dumps_cronjob_spec(image=oci_sdk_image, affinity=_WORKER_AFFINITY_ARGS),
+                opts=self.child_opts(depends_on=[self.state_backend_checks, self.freshness_key]),
+            )
+            if self.freshness_key is not None
+            else None
+        )
 
         self.register_outputs({})
 

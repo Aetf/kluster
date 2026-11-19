@@ -39,11 +39,13 @@ chart sets its `GOMEMLIMIT` to the container's limit whenever one is set
 (grafana chart 12.7.3, `templates/_pod.tpl` L1482-1488), so under a query
 that needs more the runtime collects harder before the kernel stops it.
 
-**A job's container is no row.** The stores' backups and the pull of OCI's
-series run for minutes of each hour, and a line charged with them would hold
-the budget for memory the worker gives them only then. The backups declare no
-memory. The pull's is declared here (`OCI_PULL`): its request is what a run
-peaks at, so the scheduler places it where that fits.
+**A job's container is no row.** The stores' backups, the pull of OCI's
+series and the state backend's checks run for minutes of each hour, and a
+line charged with them would hold the budget for memory the worker gives them
+only then. The backups declare no memory. The pull's and the checks' are
+declared here (`OCI_PULL`, `STATE_BACKEND_DUMPS`, `STATE_BACKEND_CERTIFICATE`):
+each request is what a run peaks at, so the scheduler places it where that
+fits.
 """
 
 from __future__ import annotations
@@ -61,6 +63,8 @@ __all__ = (
     'METRICS_SERVER_CHART',
     'OCI_PULL',
     'STACK_CHART',
+    'STATE_BACKEND_CERTIFICATE',
+    'STATE_BACKEND_DUMPS',
     'WORKER_CONTAINERS',
     'Container',
     'Line',
@@ -156,6 +160,17 @@ HISTORY_STORE = Container(
 #: read in the image, and a run holds one day of one series at a time, which
 #: for four volumes is a few MiB of the SDK's objects on a workstation.
 OCI_PULL = Memory(request=96, limit=256)
+
+#: The state backend's dump-age check, a job's one container: the interpreter
+#: with `urllib` and `ssl` imported and a call to B2 made peaks at about 27 MiB
+#: resident, read in the image, and a listing is the few dozen names the
+#: retention window holds.
+STATE_BACKEND_DUMPS = Memory(request=32, limit=128)
+
+#: The state backend's certificate check, a job's one container: the
+#: interpreter, about 25 MiB resident, and the `openssl` it waits on beside it,
+#: about 11 MiB, read in the image.
+STATE_BACKEND_CERTIFICATE = Memory(request=40, limit=128)
 
 #: Every container the component runs on the worker for as long as the stack
 #: runs. The node exporter runs on every node, and its row is the worker's

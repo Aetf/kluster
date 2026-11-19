@@ -49,15 +49,6 @@ DRILL_RECIPIENT_FILE = Path(render.__file__).with_name(render.MACHINE) / DRILL_R
 #: `state-backend ssh` reads it, and nothing else may write it.
 KNOWN_HOSTS_FILE = 'known_hosts'
 
-#: How much life the server certificate must have left for `state-backend
-#: probe` to stay quiet (physical/state-backend.md §6), and the only home of
-#: that number. Held below `settings.RENEWAL_MARGIN` by a test: the probe is
-#: the backstop for an appliance whose stack nobody has run, or whose reports
-#: nobody acted on, and a backstop that fires before the margin opens is the
-#: first reporter rather than the last. The gap between the two is the time a
-#: reported expiry has to be acted on before it is alerted as well.
-EXPIRY_ALERT_MARGIN = dt.timedelta(days=30)
-
 
 def drill_recipient(path: Path) -> str | None:
     """The drill key's public half as `path` holds it, or None while no such file exists.
