@@ -51,9 +51,10 @@ the hourly etcd snapshot, behind its writer key
 
 **Stage 6 seals every value a stack program reads before the first
 wave**, today every value `k8s-base` reads, as one commit to the stack
-file, and no code changes with it. A value whose reader merges after
-stage 6 has run is sealed by its own command, on its own, before stage
-8's last step. The applications' writer keys wait for stage 9, since
+file, and no code changes with it. A value declared after stage 6 has
+run is sealed ahead of its reader's merge (credentials.md §1 rule 6), so
+the tolerance carries the values of stage 6 and no other. The
+applications' writer keys wait for stage 9, since
 nothing `apps` declares before the first wave reads one. Stage 8's last
 step is the pull request that deletes the tolerance, and from then on
 an absent value stops the run by name, as an unusable kubeconfig does,
