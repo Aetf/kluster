@@ -28,9 +28,21 @@ and operations.md §8.5 says so.
 **What an earlier import wrote is left out**: a line within `ROUND` of an
 earlier import's sample of its probe. So a second import of a file writes
 nothing, and an import cut off partway writes the rest when run again, but
-for at most a round where it stopped. A region's label depends only on the
-file and the cluster's own samples, so the rest of a region joins the series
-its first part was written to.
+for at most a round where it stopped, once the store has made the earlier
+import's writes searchable, which it does within seconds of taking them. A
+region's label depends only on the file and the cluster's own samples, so the
+rest of a region joins the series its first part was written to.
+
+**Every read of the store is one it has not answered before.** The store
+caches the series each selector found over each range of days, and drops
+those answers only on a periodic reset some seconds after new series become
+searchable, a reset `/internal/force_flush` does not bring forward once the
+store has flushed the new series on its own. Each import asks the same
+selectors as the import before it, which asked them before it wrote, so a
+second import run inside that interval would be answered that nothing is
+there and write the file again. A read therefore matches a label no series
+carries against a value of its own (`_UNCACHED`): a selector no earlier read
+asked, so the store looks it up in what it holds.
 
 **vmagent's queue is drained first.** A store that waited in `Init` has had
 its scrapes queued by vmagent meanwhile, and they reach it after it starts.
@@ -51,6 +63,7 @@ import datetime as dt
 import json
 import logging
 import urllib.parse
+import uuid
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -97,6 +110,10 @@ CHUNK = 20_000
 #: it is about to send of the last moments' scrapes. A store that waited in
 #: `Init` leaves far more queued than this.
 QUEUE_SLACK = 2**20
+
+#: A label no series carries, which every read of the store matches against a
+#: value of its own, so that no cached answer to an earlier read is reused.
+_UNCACHED = 'perf_import_read'
 
 #: The labels the VictoriaMetrics operator selects a VMAgent's pods and
 #: Service by, of which the namespace holds one.
@@ -163,7 +180,13 @@ def _ms(span: dt.timedelta) -> int:
 def _probed(api: Api, node: str, job: str, source: str, span: tuple[int, int]) -> list[int]:
     """The times, sorted, of the history's samples of `job`'s probe on `node` from `source` within `span`, widened."""
     margin = max(_ms(STRETCH_GAP), _ms(ROUND))
-    selector = series(PROBES[job], f'node="{node}"', f'{exposition.SOURCE_LABEL}="{source}"', job=job)
+    selector = series(
+        PROBES[job],
+        f'node="{node}"',
+        f'{exposition.SOURCE_LABEL}="{source}"',
+        f'{_UNCACHED}!="{uuid.uuid4().hex}"',
+        job=job,
+    )
     first, last = span
     query = urllib.parse.urlencode(
         {'match[]': selector, 'start': (first - margin) / 1000, 'end': (last + margin) / 1000}
