@@ -745,11 +745,24 @@ are the rules a node volume lives by:
     declares an ordinary `claim` of the class, and the pod that consumes
     it selects `conventions.NODE_VOLUME_LABEL`, because a claim that
     waits for its first consumer holds no pod anywhere by itself.
+-   **A consumer that does not select the volume's node is refused a
+    node.** Each class allows one topology, the node label with the
+    row's name, which only the volume's node carries. The scheduler holds
+    every candidate node of a pod against the allowed topologies of each
+    claim it still has to provision, as a selector over the node's
+    labels, so a pod without that selection cannot be scheduled and its
+    claim is never handed to the provisioner. Its `FailedScheduling`
+    event counts each node refused this way under `didn't find available
+    persistent volumes to bind`. The topology is the label rather than
+    `kubernetes.io/hostname` so that the class names no Kubernetes node:
+    a volume that moves to another node changes which node carries the
+    label and leaves the class as it is. The provisioner reads no
+    topology of its own; it provisions on the node the scheduler
+    selected and pins the volume there by hostname.
 -   **A volume that failed to mount still cannot take the data**, and
-    neither half needs a step of its own; a pod scheduled to any other
-    node meets the same refusal. Talos leaves the mount point behind on
-    the node's own disk once it has mounted a volume there, so what the
-    data meets is that plain directory:
+    neither half needs a step of its own. Talos leaves the mount point
+    behind on the node's own disk once it has mounted a volume there, so
+    what the data meets is that plain directory:
     -   **At provisioning.** The helper pod's `hostPath` asks for
         `DirectoryOrCreate`, but the kubelet's view of `/var/mnt` is
         read-only, and it can create nothing inside a plain directory

@@ -11,9 +11,11 @@ of `conventions.NODE_VOLUMES` gets a class of its own,
 `conventions.node_volume_class(row)`, whose pool is the row's mount, and the
 provisioner's configuration keys its pools by class. A pool is stated for
 every node rather than for the volume's: the node's name is Kubernetes', and a
-claim of the class lands where its first consumer is scheduled, which selects
-the volume's node label. Nothing mounts the volume on any other node, so a pod
-placed elsewhere meets what a pod on that node meets with the volume
+claim of the class lands where its first consumer is scheduled. The class
+confines that to the node carrying the volume by its allowed topology, the
+volume's node label, so a consumer that does not select the label is refused
+by the scheduler rather than placed on a node where nothing mounts the volume.
+The one node the scheduler accepts still refuses the data while its volume is
 unmounted: the helper's `DirectoryOrCreate` cannot create inside the kubelet's
 read-only `/var/mnt`, and the claim stays pending (physical.md §2).
 
@@ -107,6 +109,32 @@ def pools() -> dict[str, str]:
             for row in sorted(conventions.NODE_VOLUMES)
         },
     }
+
+
+def _carrying(row: str) -> k8s.core.v1.TopologySelectorTermArgs:
+    """The topology of the node volume `row`'s class: the node its machine configuration labels with the row.
+
+    The scheduler is what honors it. Its volume-binding filter holds a node
+    against the class's allowed topologies, as a selector over the node's
+    labels whatever their keys, before it selects the node for a claim that
+    waits for its first consumer (`checkVolumeProvisions` in kube-scheduler's
+    `pkg/scheduler/framework/plugins/volumebinding/binder.go`, through
+    `MatchTopologySelectorTerms`). A pod whose claims no node satisfies is
+    unschedulable, and the claim is never handed to the provisioner, which
+    reads nothing of the class's topology: only the node the scheduler
+    selected (`provisioner.go` at v0.0.37, `opts.SelectedNode`), whose
+    `kubernetes.io/hostname` it writes into the volume's node affinity.
+
+    The node label and not the hostname, because the label is the row's own
+    fact about the node (`conventions.NODE_VOLUME_LABEL`): it names no
+    Kubernetes node, and a volume that moves to another node changes which
+    node carries the label and leaves the class as it is.
+    """
+    return k8s.core.v1.TopologySelectorTermArgs(
+        match_label_expressions=[
+            k8s.core.v1.TopologySelectorLabelRequirementArgs(key=conventions.NODE_VOLUME_LABEL, values=[row])
+        ]
+    )
 
 
 class LocalPathProvisioner(Component, pulumi_type='kluster:local_path:LocalPathProvisioner'):
@@ -218,6 +246,7 @@ class LocalPathProvisioner(Component, pulumi_type='kluster:local_path:LocalPathP
                 parameters={'pathPattern': NODE_VOLUME_PATH_PATTERN},
                 reclaim_policy='Retain',
                 volume_binding_mode='WaitForFirstConsumer',
+                allowed_topologies=[_carrying(row)],
                 opts=behind,
             )
             for row in sorted(conventions.NODE_VOLUMES)
