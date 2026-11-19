@@ -18,8 +18,9 @@
 # with `zerotier-cli info` in its machine's mount namespace, a machine's port with
 # `ip link show` in its machine's network namespace and in the device's, the
 # BGP daemon with `vtysh -c 'show bgp neighbors <peer> json'`, a bridge's
-# addresses with `ip -6 -o addr show`, the PD lease with `awk`, and networkd's
-# state with `ip rule show`, `networkctl list` and `systemd-analyze cat-config`.
+# addresses with `ip -6 -o addr show`, the PD lease with `awk`, the dash package
+# with `dpkg-query -W`, and networkd's state with `ip rule show`,
+# `networkctl list` and `systemd-analyze cat-config`.
 #
 # A healthy device gives no output and exit status 0. Otherwise it prints one
 # line per finding, each naming its playbook in physical/gateway.md §3, and
@@ -369,16 +370,23 @@ if [ "$status" -ne 0 ]; then
 fi
 
 # The base under the firmware, read against the one the program is written for:
-# the Debian release, what `/bin/sh` resolves to, and which side of systemd
-# {{ systemd_release }} the device is on. The firmware's own release is not read, since one
-# that keeps the base moves nothing these facts decide, and a point release is
-# not compared either: the release is the major one `/etc/debian_version`
-# starts with. The paths are read under the tree's root, which is empty on the
-# device, and the shell `/bin/sh` resolves to is compared with that root taken
-# off its front.
+# the Debian release, the version of the dash package, what `/bin/sh` resolves
+# to, and which side of systemd {{ systemd_release }} the device is on. The firmware's own
+# release is not read, since one that keeps the base moves nothing these facts
+# decide, and a point release is not compared either: the release is the major
+# one `/etc/debian_version` starts with. The dash package is compared whole,
+# Debian revision included, because the suite runs the device's scripts under
+# that package's own build, and a revision can change what a script may say.
+# The paths are read under the tree's root, which is empty on the device, and
+# the shell `/bin/sh` resolves to is compared with that root taken off its
+# front.
 debian=$(cat {{ debian_version }} 2>/dev/null | oneline)
 [ "${debian%%.*}" = {{ debian_release }} ] ||
     finding /etc/debian_version "reads ${debian:-nothing}, not Debian "{{ debian_release }} {{ playbooks.base }}
+
+dash=$(dpkg-query -W -f '${Version}' dash 2>/dev/null)
+[ "$dash" = {{ dash_version }} ] ||
+    finding dash "dpkg-query gives ${dash:-no version}, not "{{ dash_version }} {{ playbooks.base }}
 
 shell=$(readlink -f {{ bin_sh }} 2>/dev/null)
 shell=${shell#{{ root }}}
