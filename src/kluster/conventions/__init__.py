@@ -19,16 +19,17 @@ says `conventions.X` and does not have to know which module owns `X`.
 
 **A module whose names need its own name beside them is read qualified
 instead** — `conventions.<module>.X`, never re-exported. Today that is
-`gateway`, `overlay`, `sealed`, `forge`, `routes` and `alert`, for one of two
-reasons. For `gateway`, `overlay` and `sealed` the module path carries what a
-prefix otherwise would (rfc-002 §3.1) — `conventions.overlay.ROSTER`,
+`gateway`, `overlay`, `sealed`, `forge`, `routes`, `alert` and `sso`, for one
+of two reasons. For `gateway`, `overlay` and `sealed` the module path carries
+what a prefix otherwise would (rfc-002 §3.1) — `conventions.overlay.ROSTER`,
 `conventions.gateway.SERVICES`, `conventions.sealed.DNS01_TOKEN` — and for the
 first two it is the distinction the naming rules care about most: which
 network a name belongs to is never a thing to guess.
-`forge`, `routes` and `alert` are qualified from the other side: their names
-are common nouns — `Repository`, `Environment`, `Account`; `Route`, `Port`,
-`Host`; `EVENT`, `Tier`, `FIELDS` — that mean one particular thing only while
-the forge, the census or the alert stands beside them.
+`forge`, `routes`, `alert` and `sso` are qualified from the other side: their
+names are common nouns — `Repository`, `Environment`, `Account`; `Route`,
+`Port`, `Host`; `EVENT`, `Tier`, `FIELDS`; `Client`, `Grant`, `Scope` — that
+mean one particular thing only while the forge, the census, the alert or the
+portal stands beside them.
 
 Glossary
 --------
@@ -200,7 +201,7 @@ CI
 
 from __future__ import annotations
 
-from kluster.conventions import alert, forge, gateway, overlay, routes, sealed
+from kluster.conventions import alert, forge, gateway, overlay, routes, sealed, sso
 from kluster.conventions.backup import (
     BACKUP_VERSION_RETENTION_DAYS,
     BUCKET_BACKUP,
@@ -491,6 +492,7 @@ __all__ = (
     'overlay',
     'routes',
     'sealed',
+    'sso',
     'subnet_id',
     'ula_subnet',
     'volsync_repo_path',

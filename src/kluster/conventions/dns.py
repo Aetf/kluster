@@ -21,8 +21,8 @@ PRIMARY_ONLY = (ZONE_PRIMARY,)
 #: apex record — the apex-and-`www` records reach `PARKED_ZONES` too, where the
 #: legacy VPS answers instead. The co-host serves that website and nothing else
 #: — it carries no application name and could not carry one, because every
-#: application here holds one SSO cookie domain, one portal URL and one
-#: registered redirect URI.
+#: application here holds one SSO cookie domain and one portal URL, and
+#: registers its redirect URIs against its own host names.
 WEB_ZONES = (ZONE_PRIMARY, 'unlimitedcodeworks.xyz')
 
 #: The two zones this installation holds and does not serve. What resolves in

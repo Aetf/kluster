@@ -305,9 +305,10 @@ BASE_RECORDS: tuple[Block, ...] = (
     # The website co-host's own records, in one block. The zone answers for a
     # website and stops there: it carries no application name and could not
     # carry one, because every application here holds one SSO cookie domain
-    # and one registered redirect URI. Everything else it carries is a shared
-    # block, or a name of its own the legacy VPS serves, which is that
-    # application's block in `legacy.py` and goes with its migration.
+    # and registers its redirect URIs against its own host names. Everything
+    # else it carries is a shared block, or a name of its own the legacy VPS
+    # serves, which is that application's block in `legacy.py` and goes with
+    # its migration.
     Block(
         ('unlimitedcodeworks.xyz',),
         (
