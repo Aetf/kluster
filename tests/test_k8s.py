@@ -1083,7 +1083,7 @@ def test_a_sealed_value_is_read_back_from_where_its_path_writes_it(value: conven
 
 
 def test_a_value_the_stack_does_not_hold_reads_as_absent() -> None:
-    """Absent from the stack, or the stack holding no sealed value at all: nothing has been sealed in yet."""
+    """The absent path: absent from the stack, or the stack holding no sealed value at all, nothing has been sealed in yet."""
     from kluster.lib.k8s import sealed_ciphertext
 
     value = conventions.sealed.DNS01_TOKEN
@@ -1169,7 +1169,7 @@ async def test_a_sealed_value_is_declared_as_its_row_says_under_its_callers_name
 
 @pytest.mark.asyncio
 async def test_an_absent_sealed_value_declares_nothing_and_warns_naming_it(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Until the bring-up's gate, a value not yet sealed in is no SealedSecret, and the run names it (bring-up.md §1)."""
+    """The absent path: until the bring-up's gate, a value not yet sealed in is no SealedSecret, and the run names it (bring-up.md §1)."""
     from kluster.lib.k8s import sealed_value
 
     value = conventions.sealed.DNS01_TOKEN

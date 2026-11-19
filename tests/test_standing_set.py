@@ -4,10 +4,11 @@ The program runs whole, against a `physical` that has published its addresses
 (`k8s_base_installation`), and the cases read what it handed the provider:
 the sealing controller, cert-manager, local-path-provisioner and reloader
 (rfc-007 §6.1, §8), the namespaces each creates, and the order they are
-installed in (declarative/cluster-infra.md §1). The rule every child's name
-keeps is held over the whole program twice: as the stack stands until its
-sealed values are sealed in, and with every one of them sealed in, since a
-SealedSecret is declared only in the second (physical/bring-up.md §1).
+installed in (declarative/cluster-infra.md §1). The run's configuration is
+what the stack file holds, every sealed value the stack declares sealed in.
+The rule every child's name keeps is held over that run, and over the absent
+path, which holds no sealed value and declares no SealedSecret
+(physical/bring-up.md §1).
 
 Literals written here are upstream contracts: the name and namespace
 `kubeseal` looks for the controller under, the charts' value names, the
@@ -28,7 +29,7 @@ from pathlib import Path
 import pytest
 import pytest_asyncio
 import yaml
-from k8s_base_installation import AUTONAME_SUFFIX, SEALED, Run, applied
+from k8s_base_installation import AUTONAME_SUFFIX, NOTHING_SEALED, Run, applied
 from mock_monitor import Recorder, declaring, run_with
 from renovate_text import as_python_spells_it, as_renovate_spells_it, listed, package_rules
 
@@ -109,14 +110,14 @@ def local_path_configuration(run: Run) -> dict[str, str]:
 
 @pytest_asyncio.fixture(scope='module', loop_scope='module', name='applied')
 async def applied_fixture() -> Run:
-    """The whole program against a `physical` that has published every output."""
+    """The whole program against a `physical` that has published every output, with what the stack file holds."""
     return await applied()
 
 
-@pytest_asyncio.fixture(scope='module', loop_scope='module', name='sealed')
-async def sealed_fixture() -> Run:
-    """The same program with every sealed value the stack declares sealed in."""
-    return await applied(sealed=SEALED)
+@pytest_asyncio.fixture(scope='module', loop_scope='module', name='absent')
+async def absent_fixture() -> Run:
+    """The absent path: the same program with no sealed value in the stack."""
+    return await applied(sealed=NOTHING_SEALED)
 
 
 # -- Each chart, from its pin -------------------------------------------------
@@ -408,13 +409,14 @@ def test_the_provisioner_is_created_behind_each_of_its_bindings(applied: Run, bi
 
 
 def test_every_child_carries_its_components_name(applied: Run) -> None:
+    """The SealedSecrets are children too."""
+    assert applied.monitor.of_type(SEALED_SECRET)
     assert applied.monitor.children_not_named_for_their_component() == {}
 
 
-def test_every_child_carries_its_components_name_with_every_sealed_value_sealed_in(sealed: Run) -> None:
-    """The SealedSecrets are children too, and are declared only in this run."""
-    assert sealed.monitor.of_type(SEALED_SECRET)
-    assert sealed.monitor.children_not_named_for_their_component() == {}
+def test_every_child_carries_its_components_name_on_the_absent_path(absent: Run) -> None:
+    """The absent path, which declares no SealedSecret: every child it declares keeps the rule too."""
+    assert absent.monitor.children_not_named_for_their_component() == {}
 
 
 # -- The namespace helper ------------------------------------------------------

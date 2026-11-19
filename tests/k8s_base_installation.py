@@ -6,11 +6,16 @@ zone identifiers `dns` publishes as well, so they are here rather than in any on
 of those suites (framework/testing.md §2): `test_stack_programs.py` runs it for
 its providers, `test_cilium.py` for what Cilium declares, and every suite that
 takes an `applied` fixture for what the other components install. `applied`
-is that run, and `Run` reads what it registered. `applied(sealed=SEALED)` is
-the same run with every sealed value the stack declares sealed in, which the
-stack holds only once the bring-up has sealed them (physical/bring-up.md §1).
-`sealed_values` builds those values for any stack, and `test_stack_programs.py`
-seals in each of its programs' values through it.
+is that run, and `Run` reads what it registered. Its configuration holds what
+the committed stack file holds: every sealed value the stack declares, sealed
+in (`SEALED`). `sealed_values` builds those values for any stack, and
+`test_stack_programs.py` seals in each of its programs' values through it.
+
+A run on the absent path -- the stack holding no ciphertext for a value it
+declares, which the bring-up's tolerance declares nothing for
+(physical/bring-up.md §1) -- is asked for by name, with `NOTHING_SEALED` or
+`sealed_without`, and every case that reads one says it reads the absent
+path.
 
 Every value is invented. The addresses are documentation and private ranges
 of the families each output carries, and each output holds addresses no other
@@ -343,21 +348,33 @@ def sealed_values(stack: str) -> dict[str, object]:
     }
 
 
-#: Every sealed value `k8s-base` declares, sealed in (`sealed_values`).
+#: Every sealed value `k8s-base` declares, sealed in (`sealed_values`): what
+#: the committed stack file holds.
 SEALED: dict[str, object] = sealed_values(conventions.STACK_NAMES.k8s_base)
 
+#: The absent path whole: a stack holding no ciphertext for any value it
+#: declares.
+NOTHING_SEALED: dict[str, object] = {}
 
-async def declare(physical: Physical, *, preview: bool = False, sealed: dict[str, object] | None = None) -> Run:
+
+def sealed_without(*values: conventions.sealed.SealedValue) -> dict[str, object]:
+    """`SEALED` with no ciphertext for any of `values`: the absent path of those values alone."""
+    names = {value.name for value in values}
+    return {name: held for name, held in SEALED.items() if name not in names}
+
+
+async def declare(physical: Physical, *, preview: bool = False, sealed: dict[str, object] = SEALED) -> Run:
     """The whole program against `physical`, a refusal caught and every registration settled.
 
-    `sealed` is what the stack holds under its sealed key, which is nothing
-    when it is `None`.
+    `sealed` is what the stack holds under its sealed key: what the committed
+    stack file holds unless given.
     """
     from kluster.stacks import k8s_base
 
-    config = {f'kluster:{KUBECONFIG_KEY}': KUBECONFIG}
-    if sealed is not None:
-        config[f'kluster:{conventions.sealed.CONFIG_KEY}'] = json.dumps(sealed)
+    config = {
+        f'kluster:{KUBECONFIG_KEY}': KUBECONFIG,
+        f'kluster:{conventions.sealed.CONFIG_KEY}': json.dumps(sealed),
+    }
     pulumi.runtime.set_all_config(config | VERSIONS_CONFIG, secret_keys=[f'kluster:{KUBECONFIG_KEY}'])
     monitor = await run_under_backstop(physical, stack=conventions.STACK_NAMES.k8s_base, preview=preview)
     refused = None
@@ -370,7 +387,7 @@ async def declare(physical: Physical, *, preview: bool = False, sealed: dict[str
     return Run(monitor, fetched, refused)
 
 
-async def applied(*, sealed: dict[str, object] | None = None) -> Run:
+async def applied(*, sealed: dict[str, object] = SEALED) -> Run:
     """The whole program against a `physical` that has published every output, which no refusal stops.
 
     A suite's `applied` fixture is this, once per module. The fixture itself
