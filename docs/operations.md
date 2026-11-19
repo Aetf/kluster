@@ -115,6 +115,23 @@ at those maps, the bump's review reads the chart's changelog between the
 two versions for each key the program sets, and says on the pull
 request what it found for each.
 
+**Beside the keys, the same review reads the changelog for every CronJob
+and Job the new version renders or stops rendering.** The scheduled-job
+rule family watches a CronJob through its row in `conventions.schedule`
+(§4), and `tests/test_monitoring.py` holds every CronJob the `k8s-base`
+and `apps` programs declare to a row, and every row to one of them. A
+CronJob a chart renders is none of those: it has no row, a run of it
+that fails or stops raises nothing, and no check turns red when a bump
+brings one in. For each one the new version renders, the pull request
+names it, says what it runs, and says whether a run of it failing or
+stopping would go unnoticed in a way that matters. One that needs
+watching is filed as an issue of its own in `kluster-ops` and linked
+from the pull request; the bump adds no row. A Job is outside the
+family, which reads a CronJob's series alone, so for each Job the pull
+request says what it runs. One the new version stops rendering is named
+as well. The pull request says what the review found, including that the
+chart renders none.
+
 **A `pulumi` bump's review reads the changelog for every resource option
 and hook a declaration under `src/` sets**, beyond `parent`, `provider`
 and `providers`, a regression in which every preview shows: a URN that

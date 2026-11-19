@@ -32,7 +32,9 @@ and the alert's tier and playbook are its own (operations.md §8).
 family**: each row of `conventions.schedule.SCHEDULED_JOBS` gives a *stale*
 alert (`stale`) and a *failed* one (`failed`), read off kube-state-metrics'
 series for that CronJob, both `actionable` and both naming the row's playbook
-(operations.md §4).
+(operations.md §4). A CronJob a chart renders is not a stack program's and has
+no row: whether one a chart bump brings in needs watching is the bump's review
+to say (operations.md §1).
 
 **Every scrape job some alerting rule reads is watched by the scrape-target
 family** (`rule_groups`): a rule that reads no series evaluates over none and
