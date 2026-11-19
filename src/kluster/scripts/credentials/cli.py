@@ -421,9 +421,10 @@ def _add_bundle_dir(command: argparse.ArgumentParser) -> None:
     needs it: a config command selects its stack in the backend, so writing
     a stack's configuration, reading it back, or reading its state means
     reaching the backend, which is this bundle plus the stack's passphrase:
-    the stack passphrase or `physical`'s, each recovered with the kit, or,
-    for an operator stack, the operator passphrase the acquisition chain
-    finds. A stack whose state is committed, as the `state-backend` stack's
+    the stack passphrase or `physical`'s, each read from its workstation slot
+    or, where the slot holds none, recovered with the kit, or, for an
+    operator stack, the operator passphrase the acquisition chain finds. A
+    stack whose state is committed, as the `state-backend` stack's
     is, needs no bundle, and a run without one refuses only the stacks in the
     backend (`pulumi_config.Stack.require_backend`).
     """
@@ -1747,10 +1748,11 @@ def _stack(args: argparse.Namespace, store: KdbxStore, name: str, registry: escr
 
     Opened with the same two variables a `pulumi` run needs, found here rather
     than expected in the environment (`lifecycle.environment`): the stack
-    passphrase recovered with the kit, which is unlocked for it only when a
-    stack under it is opened, the operator passphrase through the acquisition
-    chain. One command is one credential
-    delivered, not a shell that has to be prepared first.
+    passphrase from its workstation slot, or recovered with the kit where the
+    slot holds none and only when a stack under it is opened; the operator
+    passphrase through the acquisition chain. One
+    command is one credential delivered, not a shell that has to be prepared
+    first.
 
     The stack is named by the caller rather than read off `args`: no row takes
     a stack on its command line. A row whose credential is named after its

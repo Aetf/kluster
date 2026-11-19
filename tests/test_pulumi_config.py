@@ -991,6 +991,118 @@ def test_a_move_that_did_not_take_is_refused(physical_project: tuple[Path, str])
         _ = moving.re_encrypt(former=[FORMER])
 
 
+#: What an environment says of the slot holding a passphrase `pulumi` refused; a value no stack holds.
+SLOT_REMEDY = 'the slot gave it; `credentials derived physical-passphrase recover` writes the newest generation'
+
+
+@real_cli
+def test_the_real_clis_refusal_of_a_passphrase_a_slot_holds_carries_what_is_said_of_that_slot(
+    physical_project: tuple[Path, str],
+) -> None:
+    """`pulumi`'s own `incorrect passphrase`, for a run under the stack's own passphrase that a slot holds.
+
+    The move's probes under every other passphrase still read the same text
+    as their answer: the stack is moved from the one that opens it, past one
+    that does not, with the same environment saying the same of every slot.
+    """
+    project, url = physical_project
+    _ = _applied_under_former(project, url)
+    stale = pulumi_config.Stack(
+        name=pulumi_config.PHYSICAL,
+        directory=project,
+        environment=pulumi_config.BackendEnvironment(
+            url=url, physical=lambda: OWN, slot_holding=lambda passphrase: SLOT_REMEDY if passphrase == OWN else None
+        ),
+    )
+
+    with pytest.raises(pulumi_config.MachineRefused) as refused:
+        _ = stale.get(QUALIFIED_KEY)
+
+    assert 'incorrect passphrase' in str(refused.value)
+    assert SLOT_REMEDY in str(refused.value)
+    moving = pulumi_config.Stack(
+        name=pulumi_config.PHYSICAL,
+        directory=project,
+        environment=pulumi_config.BackendEnvironment(
+            url=url, physical=lambda: OWN, slot_holding=lambda _passphrase: SLOT_REMEDY
+        ),
+    )
+    assert moving.re_encrypt(former=['opens-nothing', FORMER]) is True
+    assert moving.get(QUALIFIED_KEY) == SECRET
+
+
+@real_cli
+def test_the_real_cli_holds_the_passphrase_found_to_the_stack_files_salt_before_anything_runs(
+    physical_project: tuple[Path, str], tmp_path: Path
+) -> None:
+    """`require_passphrase`: one that opens the stack passes, one that does not is refused, naming its slot.
+
+    A backend that holds no stack of that name is not asked about its salt,
+    though the checkout holds the stack file: the run that creates it makes
+    it under that salt.
+    """
+    project, url = physical_project
+    _ = _applied_under_former(project, url)
+
+    _physical_under(project, url, FORMER).require_passphrase()
+    stale = pulumi_config.Stack(
+        name=pulumi_config.PHYSICAL,
+        directory=project,
+        environment=pulumi_config.BackendEnvironment(
+            url=url, physical=lambda: OWN, slot_holding=lambda passphrase: SLOT_REMEDY if passphrase == OWN else None
+        ),
+    )
+    with pytest.raises(pulumi_config.MachineRefused) as refused:
+        stale.require_passphrase()
+    assert SLOT_REMEDY in str(refused.value)
+
+    elsewhere = tmp_path / 'another-backend'
+    elsewhere.mkdir()
+    _physical_under(project, elsewhere.as_uri(), OWN).require_passphrase()
+
+
+def test_a_move_refused_under_a_passphrase_a_slot_holds_is_not_put_down_to_that_slot(tmp_path: Path) -> None:
+    """A run handed a passphrase (`re_encrypt`'s move) took it from no slot, though a slot holds the same value.
+
+    The move starts under the former passphrase, which this machine's stack
+    passphrase slot also holds, and `pulumi` refuses it: the refusal is the
+    move's, with nothing said of the slot, whose `recover` would be advice
+    for the wrong row.
+    """
+    _ = (tmp_path / f'Pulumi.{pulumi_config.PHYSICAL}.yaml').write_text('encryptionsalt: v1:c2FsdA==:v1:a:b\n')
+    remedy = '.credentials/pulumi.passphrase gave the stack this passphrase'
+
+    def refusing_the_move(args: Sequence[str], *, cwd: Path, env: Mapping[str, str], stdin: str | None) -> str:
+        _ = cwd, env, stdin
+        match list(args):
+            case ['stack', 'ls', '--json']:
+                return json.dumps([{'name': pulumi_config.PHYSICAL}])
+            case ['config', 'set', _, '--secret', '--config-file', _, '--stack', _]:
+                return ''
+            case ['stack', 'change-secrets-provider', *_]:
+                raise pulumi_config.SlotRefused(
+                    '`pulumi stack change-secrets-provider` failed: error: incorrect passphrase'
+                )
+            case unknown:  # pragma: no cover - the move makes no other run before it is refused
+                raise AssertionError(f'unexpected pulumi invocation {unknown}')
+
+    moving = pulumi_config.Stack(
+        name=pulumi_config.PHYSICAL,
+        directory=tmp_path,
+        environment=pulumi_config.BackendEnvironment(
+            physical=lambda: OWN, slot_holding=lambda passphrase: remedy if passphrase == FORMER else None
+        ),
+        run=refusing_the_move,
+    )
+
+    with pytest.raises(pulumi_config.SlotRefused) as refused:
+        _ = moving.re_encrypt(former=[FORMER])
+
+    assert 'incorrect passphrase' in str(refused.value)
+    assert remedy not in str(refused.value)
+    assert not isinstance(refused.value, pulumi_config.MachineRefused)
+
+
 @real_cli
 def test_a_stack_already_under_its_own_passphrase_is_left_alone(physical_project: tuple[Path, str]) -> None:
     project, url = physical_project

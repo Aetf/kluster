@@ -318,21 +318,29 @@ def _stack_in_reach(stack: pulumi_config.Stack) -> None:
 
     The environment looks for a stack's passphrase only when that stack is
     first asked for (`lifecycle.environment`), so whatever it refuses for that
-    stack (today, a kit with no recovery key, a label with nothing filed under
-    it, or a machine that cannot give the operator passphrase) is refused
-    there. For a row that mints and then writes its stack, that is after the
-    mint, with the new credential live at its provider and in no slot. Asked
-    first, every such refusal fires before anything is minted, and a
-    successful run finds the passphrase once: the environment keeps what it
-    found for the run. The backend is held the same way
-    (`pulumi_config.Stack.require_backend`): on a machine with no client
-    bundle a stack whose state is in the state backend has none, and every
-    `pulumi` run against it is refused, the fill's included, which comes
-    after the mint. Nothing here reaches the state backend, so a stack the
-    row's first mint creates is not refused for being absent.
+    stack is refused there: today, a workstation slot that cannot be read, a
+    kit with no recovery key, a label with nothing filed under it, or a
+    machine that cannot give the operator passphrase. For a row that mints
+    and then writes its stack, that is after the mint, with the new
+    credential live at its provider and in no slot. Asked first, every such
+    refusal fires before anything is minted, and a successful run finds the
+    passphrase once: the environment keeps what it found for the run. The
+    backend is held the same way (`pulumi_config.Stack.require_backend`): on
+    a machine with no client bundle a stack whose state is in the state
+    backend has none, and every `pulumi` run against it is refused, the
+    fill's included, which comes after the mint.
+
+    A passphrase found is not yet one that opens the stack: a workstation
+    slot written before a rotation filed on another workstation gives the
+    earlier generation, which the fill would meet as `incorrect passphrase`.
+    So the passphrase is held to the stack file's salt as well
+    (`pulumi_config.Stack.require_passphrase`), which asks the backend
+    whether it holds the stack and nothing of a stack it does not, so a stack
+    the row's first mint creates is not refused for being absent.
     """
     log.info('finding the passphrase and the backend the %s stack is opened with', stack.name)
     stack.require_backend()
+    stack.require_passphrase()
 
 
 def _deliverable(stack: pulumi_config.Stack, *, own: str) -> None:

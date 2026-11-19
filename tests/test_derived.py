@@ -69,6 +69,7 @@ from kluster.scripts.credentials import (
     pki,
     pulumi_config,
     sealing,
+    workstation,
 )
 
 # Aliased: `slots` is the name a fixture below gives the workstation's
@@ -1361,6 +1362,50 @@ def test_the_physical_b2_row_with_no_physical_passphrase_filed_mints_nothing(
     assert b2_api_fake.named(b2.MANAGEMENT.name) == []
     assert runner.invocations == []
     _refused_as_its_stack_is(refused.value, slot)
+
+
+def test_the_physical_b2_row_under_a_slot_its_stack_file_does_not_verify_mints_nothing(
+    b2_api_fake: b2_api.FakeApi, b2_kit: KdbxStore, tmp_path: Path, credential_files: Path
+) -> None:
+    """`physical`'s slot holds a generation from before a rotation filed elsewhere: refused before the seed is read.
+
+    The stack file's salt was made under the newest, which this machine's
+    slot does not hold, so the fill after a mint would meet `incorrect
+    passphrase` with the new key live at B2. The refusal names the slot's
+    `recover`, and once the slot holds the newest the same command mints.
+    """
+    slot = credential_files / workstation.PHYSICAL_PASSPHRASE
+    credential_files.mkdir(parents=True)
+    _ = slot.write_text('an-earlier-generation\n')
+    bundle = tmp_path / 'bundle'
+    bundle.mkdir()
+    _ = (bundle / 'backend-url').write_text('postgres://operator@192.0.2.10:5432/pulumi_state\n')
+    runner = RecordedPulumi(stacks=[derived.PHYSICAL_STACK], salted_under='the-newest-generation')
+    stack = pulumi_config.Stack(
+        name=derived.PHYSICAL_STACK,
+        directory=pulumi_config.project_dir(),
+        environment=lifecycle.environment(b2_kit, bundle, escrow.Registry.open(tmp_path / 'escrow')),
+        run=runner,
+    )
+
+    with pytest.raises(pulumi_config.MachineRefused) as refused:
+        _ = derived.b2_management(b2_kit, stack=stack)
+
+    assert b2_api_fake.named(b2.MANAGEMENT.name) == []
+    assert runner.config == {}
+    assert named_leaves(str(refused.value)) == [('derived', pulumi_config.PHYSICAL_ROW, 'recover')]
+
+    _ = slot.write_text('the-newest-generation\n')
+    renewed = pulumi_config.Stack(
+        name=derived.PHYSICAL_STACK,
+        directory=pulumi_config.project_dir(),
+        environment=lifecycle.environment(b2_kit, bundle, escrow.Registry.open(tmp_path / 'escrow')),
+        run=runner,
+    )
+    key_id = derived.b2_management(b2_kit, stack=renewed)
+
+    assert b2_api_fake.named(b2.MANAGEMENT.name) == [key_id]
+    assert runner.config[derived.B2_KEY_ID_KEY] == key_id
 
 
 def test_the_appliance_oci_row_with_no_operator_passphrase_mints_nothing(

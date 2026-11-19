@@ -266,19 +266,22 @@ def environment(
 ) -> pulumi_config.BackendEnvironment:
     """What a Pulumi run needs here, recovered and read rather than stored.
 
-    The stack passphrase is recovered from the escrow with the kit's recovery
-    key (§2.2), so the one place it exists outside its consumers is a
-    committed ciphertext nobody can open without the kit. `physical`'s own
-    passphrase is read from its workstation slot, which is written from the
-    escrow (`_physical_passphrase`), and is recovered from the escrow only on
-    a machine whose slot is absent or empty. Each is found
-    only when a stack under it is asked for, and the environment unlocks the
-    kit then and not before: a command that recovers neither, such as one
-    that writes only an operator stack, or one that reads only `physical` on
-    a machine holding its slot, is asked for no master password. On a
-    machine with no slot, a kit with nothing filed under `physical`'s label
-    refuses the commands that reach `physical` by naming the command that
-    files one, and no other. The operator passphrase is found the way the
+    The stack passphrase and `physical`'s own are each escrowed to the kit's
+    recovery key (§2.2), so the one place either exists outside its consumers
+    and this machine is a committed ciphertext nobody can open without the
+    kit. Each is read from its workstation slot, which is written from the
+    escrow (`_SLOTS`), and is recovered with the kit only on a machine whose
+    slot is absent or empty. Each is found only when a stack under it is
+    asked for, and the environment unlocks the kit then and not before: a
+    command that recovers neither, such as one that writes only an operator
+    stack, or one that reaches only stacks whose slots this machine holds --
+    a seal that reads `physical` and writes `k8s-base`, say -- is asked for
+    no master password. On a machine with no slot for `physical`, a kit with
+    nothing filed under its label refuses the commands that reach `physical`
+    by naming the command that files one, and no other. A run whose
+    passphrase `pulumi` refuses as incorrect is told which slot gave it, and
+    the command that writes the newest generation there (`_slot_holding`).
+    The operator passphrase is found the way the
     `operator-stack` driver finds it, through the acquisition chain
     (`stack_environment.operator_passphrase`), only when an operator stack is
     asked for, and at most once for this environment; the escrow is its
@@ -300,7 +303,7 @@ def environment(
     vault = functools.cache(lambda: escrow.Vault.open(kit, registry))
     url, no_backend = backend(bundle_dir)
     return pulumi_config.BackendEnvironment(
-        passphrase=functools.cache(lambda: vault().recover(escrow.PASSPHRASE)),
+        passphrase=functools.cache(functools.partial(_stack_passphrase, vault)),
         url=url,
         no_backend=no_backend,
         bundle_dir=bundle_dir,
@@ -309,6 +312,7 @@ def environment(
         # at a prompt would ask on each of them.
         operator=functools.cache(_operator_passphrase),
         physical=functools.cache(functools.partial(_physical_passphrase, vault)),
+        slot_holding=_slot_holding,
     )
 
 
@@ -339,18 +343,42 @@ def backend(bundle_dir: Path) -> tuple[str | None, str | None]:
     return url, no_backend
 
 
-def _physical_passphrase(vault: Callable[[], escrow.Vault]) -> str:
-    """`physical`'s passphrase: its workstation slot's, else the newest generation recovered with the kit.
+#: The escrowed passphrases a `credentials` run reads from a workstation slot
+#: ahead of the kit: by label, the slot's reader and its path. Each slot is
+#: written from the escrow -- by `<row> generate`, in the same act as the
+#: generation it files, and by `<row> recover`, with the newest unless
+#: `--generation` names another -- so a machine holding it opens the stacks
+#: under it with no kit.
+_SLOTS: dict[str, tuple[Callable[[], str | None], Callable[[], Path]]] = {
+    escrow.PASSPHRASE: (workstation.stack_passphrase, workstation.passphrase_path),
+    escrow.PHYSICAL_PASSPHRASE: (workstation.physical_passphrase, workstation.physical_passphrase_path),
+}
 
-    The slot is written from the escrow: by `physical-passphrase generate`, in
-    the same act as the generation it files, and by `recover`, with the newest
-    unless `--generation` names another. So a machine holding it reads
-    `physical` with no kit. A slot that is there and unreadable is refused,
-    not passed over for the kit. Only a slot absent or empty opens the vault,
-    and a label with nothing filed is then refused by its fill command. The
-    vault is opened outside the label's lookup, so a kit with no recovery key
-    is refused here as it is for a stack under the stack passphrase, rather
-    than as a passphrase this machine cannot give.
+
+def _stack_passphrase(vault: Callable[[], escrow.Vault]) -> str:
+    """The stack passphrase: its workstation slot's (`_SLOTS`), else the newest generation recovered with the kit.
+
+    A slot that is there and unreadable is refused as this machine's, not
+    passed over for the kit. Only a slot absent or empty opens the vault, and
+    the escrow's own refusals -- no recovery key, nothing filed -- are then
+    raised as they are.
+    """
+    try:
+        found = workstation.stack_passphrase()
+    except stack_environment.EnvironmentRefused as exc:
+        raise pulumi_config.MachineRefused(str(exc)) from exc
+    return found if found is not None else vault().recover(escrow.PASSPHRASE)
+
+
+def _physical_passphrase(vault: Callable[[], escrow.Vault]) -> str:
+    """`physical`'s passphrase: its workstation slot's (`_SLOTS`), else the newest generation recovered with the kit.
+
+    A slot that is there and unreadable is refused, not passed over for the
+    kit. Only a slot absent or empty opens the vault, and a label with
+    nothing filed is then refused by its fill command. The vault is opened
+    outside the label's lookup, so a kit with no recovery key is refused here
+    as it is for a stack under the stack passphrase, rather than as a
+    passphrase this machine cannot give.
     """
     found = workstation.physical_passphrase()
     if found is not None:
@@ -375,44 +403,73 @@ def re_encrypt_physical(kit: KdbxStore, bundle_dir: Path, registry: escrow.Regis
     """
     opened = environment(kit, bundle_dir, registry)
     vault = escrow.Vault.open(kit, registry)
-    _require_newest(opened, vault)
-    earlier = _earlier_generations(vault, escrow.PHYSICAL_PASSPHRASE)
-    former = [passphrase for passphrase in (opened.stack_passphrase(), *earlier) if passphrase is not None]
+    _require_newest(
+        opened.variables(pulumi_config.PHYSICAL)[pulumi_config.PASSPHRASE_ENV], vault, escrow.PHYSICAL_PASSPHRASE
+    )
+    former = [vault.recover(escrow.PASSPHRASE), *_earlier_generations(vault, escrow.PHYSICAL_PASSPHRASE)]
     stack = pulumi_config.Stack(name=pulumi_config.PHYSICAL, directory=pulumi_config.project_dir(), environment=opened)
     return stack.re_encrypt(former=former)
 
 
-def _require_newest(opened: pulumi_config.BackendEnvironment, vault: escrow.Vault) -> None:
-    """Refuse an environment that gives `physical` anything but the escrow's newest generation.
+def _require_newest(given: str | None, vault: escrow.Vault, label: str) -> None:
+    """Refuse a passphrase the environment gives that is not the escrow's newest generation of `label`.
 
-    The environment reads the workstation slot ahead of the kit, and a slot
-    holding another generation -- one written before a rotation filed on
-    another workstation -- would have `re-encrypt` move the stack onto that
-    generation rather than onto the newest, which `derived sync` pushes into
-    `physical`'s Environments. The kit is open here in any case, so the slot
-    is held to it rather than trusted, and refused naming the command that
-    writes the newest into it. Nothing has run when it refuses.
+    The environment reads the label's workstation slot ahead of the kit
+    (`_SLOTS`), and a slot holding another generation -- one written before a
+    rotation filed on another workstation -- would have `re-encrypt` move the
+    stacks under it onto that generation rather than onto the newest, which
+    `derived sync` pushes into the Environments. The kit is open here in any
+    case, so the slot is held to it rather than trusted, and refused naming
+    the command that writes the newest into it. Nothing has run when it
+    refuses.
     """
-    given = opened.variables(pulumi_config.PHYSICAL)[pulumi_config.PASSPHRASE_ENV]
-    if given != vault.recover(escrow.PHYSICAL_PASSPHRASE):
+    if given != vault.recover(label):
+        _, path = _SLOTS[label]
         raise pulumi_config.MachineRefused(
-            f'{workstation.physical_passphrase_path()} holds a passphrase other than the newest generation '
-            f'escrowed as {escrow.PHYSICAL_PASSPHRASE}, so the {pulumi_config.PHYSICAL} stack would be moved onto '
-            f'the wrong one; `credentials derived {pulumi_config.PHYSICAL_ROW} recover` writes the newest into it'
+            f'{path()} holds a passphrase other than the newest generation escrowed as {label}, so a stack '
+            f'under it would be moved onto the wrong one; `credentials derived {escrow.row_name(label)} recover` '
+            'writes the newest into it'
         )
+
+
+def _slot_holding(passphrase: str) -> str | None:
+    """Which slot of `_SLOTS` holds `passphrase`, and the command that writes its newest generation there.
+
+    Asked with a stack's own passphrase once it has been refused, by `pulumi`
+    or by the stack file's salt (`pulumi_config.BackendEnvironment.slot_holding`),
+    and never for a run handed another passphrase, so the slots are read again
+    then rather than remembered: a slot that holds a stack's own passphrase is
+    the one the environment took it from, since a slot is read ahead of the
+    kit. One that cannot be read holds nothing to compare.
+    """
+    for label, (read, path) in _SLOTS.items():
+        try:
+            held = read()
+        except stack_environment.EnvironmentRefused:
+            continue
+        if held is not None and held == passphrase:
+            return (
+                f'{path()} gave the stack this passphrase; where a rotation filed on another workstation has '
+                f'moved the stack since, `credentials derived {escrow.row_name(label)} recover` writes the newest '
+                'generation into it'
+            )
+    return None
 
 
 def re_encrypt_stacks(kit: KdbxStore, bundle_dir: Path, registry: escrow.Registry | None = None) -> list[str]:
     """Move every stack under the stack passphrase onto its newest generation (`pulumi_config.ON_STACK_PASSPHRASE`).
 
-    The newest generation is what the environment hands those stacks, and
-    every earlier one, newest first, is what each may still be under; all of
-    them come out of the kit, the way `re_encrypt_physical`'s do. The stacks
-    are the census's, never a list kept here, and each is moved and proven by
+    The newest generation is what the environment hands those stacks, held
+    to the escrow's newest before anything runs (`_require_newest`), and
+    every earlier one, newest first, is what each may still be under, out of
+    the kit, the way `re_encrypt_physical`'s are. The stacks are the
+    census's, never a list kept here, and each is moved and proven by
     `pulumi_config.Stack.re_encrypt`. Returns the stacks that moved.
     """
     opened = environment(kit, bundle_dir, registry)
-    former = _earlier_generations(escrow.Vault.open(kit, registry), escrow.PASSPHRASE)
+    vault = escrow.Vault.open(kit, registry)
+    _require_newest(opened.stack_passphrase(), vault, escrow.PASSPHRASE)
+    former = _earlier_generations(vault, escrow.PASSPHRASE)
     return pulumi_config.re_encrypt_on_stack_passphrase(opened, former=former)
 
 

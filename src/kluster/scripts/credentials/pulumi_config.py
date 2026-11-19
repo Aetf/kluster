@@ -217,8 +217,9 @@ class BackendEnvironment:
     """
 
     #: Where the stack passphrase is found, for every stack but `physical` and
-    #: the operator stacks: the kit's escrow, for a `credentials` run, while a
-    #: caller that already holds it hands a function answering it. A
+    #: the operator stacks: its workstation slot, or the kit's escrow where the
+    #: slot holds none, for a `credentials` run (`lifecycle.environment`),
+    #: while a caller that already holds it hands a function answering it. A
     #: function for the reason `operator` and `physical` are: it is called
     #: only for a stack under the stack passphrase, so a command that points
     #: at none never has it looked for, nor the kit unlocked for it. The
@@ -245,13 +246,23 @@ class BackendEnvironment:
     #: once per command. None looks nowhere, and such a stack is refused.
     #: Marked for `passphrase`'s reason.
     operator: Annotated[Callable[[], str] | None, Secret] = field(default=None, repr=False, compare=False)
-    #: Where `physical`'s passphrase is found, for that stack and no other: the
-    #: kit's escrow, for a `credentials` run. A function for the reason
+    #: Where `physical`'s passphrase is found, for that stack and no other: its
+    #: workstation slot, or the kit's escrow where the slot holds none, for a
+    #: `credentials` run (`lifecycle.environment`). A function for the reason
     #: `operator` is one -- a command that never points at `physical` never
-    #: opens the label, and a kit with nothing filed under it refuses only the
+    #: looks for it, and a kit with nothing filed under it refuses only the
     #: commands that do. None looks nowhere, and `physical` is refused.
     #: Marked for `passphrase`'s reason.
     physical: Annotated[Callable[[], str] | None, Secret] = field(default=None, repr=False, compare=False)
+    #: Which workstation slot holds a passphrase, asked with the stack's own
+    #: passphrase once it has been refused -- by `pulumi`, as incorrect, for a
+    #: run under it (`Stack._pulumi`), or by the stack file's salt
+    #: (`Stack.require_passphrase`): what to say about that slot, naming the
+    #: command that writes the newest generation into it, or None for a
+    #: passphrase no slot holds. A slot written before a rotation filed on
+    #: another workstation is the case it exists for, and nothing but such a
+    #: refusal asks it. None says no more than the refusal did.
+    slot_holding: Callable[[str], str | None] | None = field(default=None, repr=False, compare=False)
 
     #: The client bundle directory `url` was read from, whose three files a
     #: run against an operator stack in the estate's backend is handed
@@ -319,8 +330,8 @@ class BackendEnvironment:
     def _physical(self, stack: str) -> str:
         """`physical`'s own passphrase, from `physical`; `PassphraseMissing` where it finds none."""
         reason = (
-            f'nothing here looks for it: a `credentials` run recovers it with the kit, and `credentials derived '
-            f'{PHYSICAL_ROW} generate` files the first'
+            f'nothing here looks for it: a `credentials` run reads its workstation slot, or recovers it with the '
+            f'kit where the slot holds none, and `credentials derived {PHYSICAL_ROW} generate` files the first'
         )
         if self.physical is not None:
             try:
@@ -412,11 +423,68 @@ class Stack:
         a shell exports. A run against any other stack is laid over the
         caller's environment, from which it takes the compression `mise.toml`
         sets and, for a stack in the estate's backend, the bundle's files.
+
+        A run under the stack's own passphrase that `pulumi` refuses with
+        `incorrect passphrase` is refused as this machine's (`MachineRefused`)
+        where a workstation slot holds that passphrase, saying which slot and the command that writes
+        the newest generation into it (`BackendEnvironment.slot_holding`): the
+        case it exists for is a slot written before a rotation filed on
+        another workstation.
         """
         env = self._started_with(passphrase)
         if stack_environment.home(self.name) is not None:
             env = stack_environment.process(os.environ, env)
-        return self.run([*args], cwd=self.directory, env=env, stdin=stdin)
+        try:
+            return self.run([*args], cwd=self.directory, env=env, stdin=stdin)
+        except SlotRefused as exc:
+            # A run under another passphrase than the stack's own (a probe or
+            # a move, `re_encrypt`) was handed one no slot gave it, whatever
+            # a slot happens to hold.
+            if passphrase is not None or 'incorrect passphrase' not in str(exc):
+                raise
+            held = self._slot_holding(env)
+            if held is None:
+                raise
+            # `pulumi`'s text is kept whole beside what is said of the slot.
+            raise MachineRefused(f'{exc}; {held}') from exc
+
+    def _slot_holding(self, env: Mapping[str, str]) -> str | None:
+        """What the environment says of the workstation slot holding the passphrase in `env`, if one holds it."""
+        given = env.get(PASSPHRASE_ENV)
+        if given is None or self.environment.slot_holding is None:
+            return None
+        return self.environment.slot_holding(given)
+
+    def require_passphrase(self) -> None:
+        """Refuse this stack where the passphrase this machine gives it does not verify its committed salt.
+
+        Asked by a caller that has to refuse before an act that is no `pulumi`
+        run, such as a mint, as `require_backend` is: a passphrase that opens
+        nothing is otherwise met by the fill after the mint, with the new
+        credential live at its provider. The salt is the verifier
+        (`_salt_verifies`), so one scratch-copy run answers whatever the
+        configuration holds, and a slot holding the passphrase is named in the
+        refusal as it is in a run's (`BackendEnvironment.slot_holding`).
+        Nothing is asked of a stack with no `Pulumi.<stack>.yaml`, which has
+        no salt to verify, or of one the backend does not hold, which the run
+        that creates it makes under that salt; nor of a stack given no
+        passphrase.
+        """
+        env = self._started_with()
+        given = env.get(PASSPHRASE_ENV)
+        if given is None or not (self.directory / f'Pulumi.{self.name}.yaml').is_file():
+            return
+        if not self.exists():
+            return
+        log.info('checking that the passphrase found for the %s stack verifies its stack file', self.name)
+        if self._salt_verifies(given):
+            return
+        held = self._slot_holding(env)
+        raise MachineRefused(
+            f"Pulumi.{self.name}.yaml's encryptionsalt does not verify the passphrase this machine gives the "
+            f'{self.name} stack, so every run against it would end in `incorrect passphrase`'
+            + (f'; {held}' if held is not None else '')
+        )
 
     def exists(self) -> bool:
         return self.name in self._stack_names(self._pulumi('stack', 'ls', '--json'))

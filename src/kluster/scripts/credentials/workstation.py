@@ -12,9 +12,10 @@ template that cannot prompt, cannot unlock a keyring and cannot fail
 gracefully, so a file is the shape that fits. `physical`'s passphrase is a
 file for the same reason, though no template reads it: a `pulumi` run by hand
 against `physical` names the file to `pulumi` (`PULUMI_CONFIG_PASSPHRASE_FILE`,
-credentials.md §4.4), which a store entry could not be, and a `credentials`
-command that reaches `physical` reads it (`physical_passphrase`), so that
-opening that stack takes no kit. The operator passphrase is read
+credentials.md §4.4), which a store entry could not be. A `credentials`
+command reads both passphrase slots too (`stack_passphrase`,
+`physical_passphrase`), so that opening a stack under either takes no kit.
+The operator passphrase is read
 by the `operator-stack` driver instead, through the acquisition chain
 (`kluster.lib.acquisition`), so its slot is the chain's file layer, below the
 store in the chain's order: where it lives on a machine whose store does not
@@ -54,6 +55,7 @@ __all__ = (
     'repo_root',
     'root_path',
     'secret_dir',
+    'stack_passphrase',
     'write',
 )
 
@@ -72,7 +74,8 @@ write = lib_workstation.write
 KIT = 'kit.kdbx'
 
 #: The Pulumi stack passphrase, recovered from the escrow (§2.2) and cached
-#: here so a local `pulumi preview` needs neither the kit nor an eval.
+#: here so a local `pulumi preview`, and a `credentials` command, needs
+#: neither the kit nor an eval.
 PASSPHRASE = 'pulumi.passphrase'
 
 #: The operator passphrase (§2.2), which encrypts the operator stacks and
@@ -111,16 +114,26 @@ def physical_passphrase_path() -> Path:
     return directory() / PHYSICAL_PASSPHRASE
 
 
-def physical_passphrase() -> str | None:
-    """`physical`'s passphrase as its slot holds it; None where the slot is absent or holds nothing.
+def stack_passphrase() -> str | None:
+    """The stack passphrase as its slot holds it; None where the slot is absent or holds nothing (`_passphrase`)."""
+    return _passphrase(passphrase_path())
 
-    The one reader of the slot: each caller decides what None means to it --
-    a fall back to the kit (`lifecycle.environment`), or a refusal naming the
-    command that writes the slot (`oci_recovery.slot_passphrase`). A slot that
-    is there and cannot be read is refused rather than taken for absent, so a
-    caller never falls back past a slot the operator meant it to use.
+
+def physical_passphrase() -> str | None:
+    """`physical`'s passphrase as its slot holds it; None where the slot is absent or holds nothing (`_passphrase`)."""
+    return _passphrase(physical_passphrase_path())
+
+
+def _passphrase(slot: Path) -> str | None:
+    """The passphrase a slot holds; None where it is absent or holds nothing.
+
+    The one reader of the passphrase slots a `credentials` command reads:
+    each caller decides what None means to it -- a fall back to the kit
+    (`lifecycle.environment`), or a refusal naming the command that writes
+    the slot (`oci_recovery.slot_passphrase`). A slot that is there and
+    cannot be read is refused rather than taken for absent, so a caller never
+    falls back past a slot the operator meant it to use.
     """
-    slot = physical_passphrase_path()
     try:
         return slot.read_text().strip() or None
     # A level above it that is a file, rather than a directory, leaves no
