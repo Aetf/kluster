@@ -57,6 +57,7 @@ from kluster.scripts.credentials import (
     oci_iam,
     pulumi_config,
     sealing,
+    workstation,
 )
 from kluster.scripts.credentials import slots as slot_map
 from kluster.scripts.credentials.kdbx import KdbxStore
@@ -1143,12 +1144,47 @@ def _physical_state(given: list[str]) -> pulumi_cli.Runner:
     return run
 
 
-def _write_physical_slot(slots: Path, content: str | None) -> None:
-    """`physical`'s workstation slot holding `content`; None leaves it absent."""
+def _write_slot(slots: Path, name: str, content: str | None) -> None:
+    """The workstation slot `name` holding `content`; None leaves it absent."""
     if content is None:
         return
     slots.mkdir(parents=True, exist_ok=True)
-    _ = (slots / stack_environment.PHYSICAL_PASSPHRASE_SLOT).write_text(content)
+    _ = (slots / name).write_text(content)
+
+
+@dataclass(frozen=True)
+class Slotted:
+    """An escrowed passphrase a `credentials` run reads from its workstation slot ahead of the kit."""
+
+    label: str
+    #: The slot's name under `.credentials/`.
+    slot: str
+    #: A stack whose runs are given it, its state in the backend.
+    stack: str
+    #: The command that moves the stacks under it onto its newest generation.
+    re_encrypt: Callable[[KdbxStore, Path, escrow.Registry], object]
+
+
+SLOTTED = [
+    Slotted(escrow.PASSPHRASE, workstation.PASSPHRASE, conventions.STACK_NAMES.k8s_base, lifecycle.re_encrypt_stacks),
+    Slotted(
+        escrow.PHYSICAL_PASSPHRASE,
+        workstation.PHYSICAL_PASSPHRASE,
+        pulumi_config.PHYSICAL,
+        lifecycle.re_encrypt_physical,
+    ),
+]
+SLOTTED_IDS = [escrow.row_name(slotted.label) for slotted in SLOTTED]
+
+
+def _file_every_passphrase(kit: KdbxStore, registry: escrow.Registry, label: str) -> tuple[str, str]:
+    """The recovery key, a generation of every slotted label, and a second of `label`: its earlier and newest."""
+    _ = lifecycle.bootstrap(kit, prompt=_refuse, only='recovery', registry=registry)
+    vault = escrow.Vault.open(kit, registry)
+    for other in SLOTTED:
+        if other.label != label:
+            _ = escrow.generate(vault, other.label)
+    return escrow.generate(vault, label), escrow.generate(vault, label)
 
 
 @needs_age
@@ -1164,7 +1200,7 @@ def test_physical_is_read_under_its_workstation_slot_and_the_kit_is_never_unlock
     """
     _ = lifecycle.bootstrap(kit, prompt=_refuse, only='recovery', registry=registry)
     escrowed = escrow.generate(escrow.Vault.open(kit, registry), escrow.PHYSICAL_PASSPHRASE)
-    _write_physical_slot(slots, 'from-the-slot\n')
+    _write_slot(slots, workstation.PHYSICAL_PASSPHRASE, 'from-the-slot\n')
     _unasked(monkeypatch)
     given: list[str] = []
     found = lifecycle.environment(KdbxStore(path=kit.path), _with_a_bundle(tmp_path), registry)
@@ -1178,20 +1214,40 @@ def test_physical_is_read_under_its_workstation_slot_and_the_kit_is_never_unlock
 
 
 @needs_age
+def test_every_stack_under_the_stack_passphrase_is_given_its_workstation_slot_and_the_kit_is_never_unlocked(
+    kit: KdbxStore, registry: escrow.Registry, tmp_path: Path, slots: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The stack passphrase from its slot, as `physical`'s is: the kit handed in locked, and every prompt failing the case.
+
+    The escrow holds a generation of its own, different from the slot's.
+    """
+    _ = lifecycle.bootstrap(kit, prompt=_refuse, only='recovery', registry=registry)
+    escrowed = escrow.generate(escrow.Vault.open(kit, registry), escrow.PASSPHRASE)
+    _write_slot(slots, workstation.PASSPHRASE, 'from-the-slot\n')
+    _unasked(monkeypatch)
+
+    found = lifecycle.environment(KdbxStore(path=kit.path), tmp_path / 'absent', registry)
+
+    for name in pulumi_config.ON_STACK_PASSPHRASE:
+        assert found.variables(name)[pulumi_config.PASSPHRASE_ENV] == 'from-the-slot', name
+    assert escrowed != 'from-the-slot'
+
+
+@needs_age
+@pytest.mark.parametrize('slotted', SLOTTED, ids=SLOTTED_IDS)
 @pytest.mark.parametrize('slot', [None, '', ' \n'], ids=['absent', 'empty', 'blank'])
-def test_physical_is_read_under_the_newest_generation_where_its_slot_holds_none(
+def test_a_slot_holding_no_passphrase_gives_way_to_the_newest_generation_recovered_with_the_kit(
     kit: KdbxStore,
     registry: escrow.Registry,
     tmp_path: Path,
     slots: Path,
     monkeypatch: pytest.MonkeyPatch,
+    slotted: Slotted,
     slot: str | None,
 ) -> None:
-    """The same step on a machine whose slot holds no passphrase: the kit is unlocked once, and the newest generation opens it."""
-    _ = lifecycle.bootstrap(kit, prompt=_refuse, only='recovery', registry=registry)
-    _ = escrow.generate(escrow.Vault.open(kit, registry), escrow.PHYSICAL_PASSPHRASE)
-    newest = escrow.generate(escrow.Vault.open(kit, registry), escrow.PHYSICAL_PASSPHRASE)
-    _write_physical_slot(slots, slot)
+    """On a machine whose slot holds no passphrase the kit is unlocked once, and the newest generation is given."""
+    _, newest = _file_every_passphrase(kit, registry, slotted.label)
+    _write_slot(slots, slotted.slot, slot)
     asked: list[str] = []
 
     def getpass(prompt: str = '') -> str:
@@ -1199,29 +1255,31 @@ def test_physical_is_read_under_the_newest_generation_where_its_slot_holds_none(
         return PASSWORD
 
     monkeypatch.setattr('getpass.getpass', getpass)
-    given: list[str] = []
-    found = lifecycle.environment(KdbxStore(path=kit.path), _with_a_bundle(tmp_path), registry)
-    physical = pulumi_config.Stack(
-        name=pulumi_config.PHYSICAL, directory=tmp_path, environment=found, run=_physical_state(given)
-    )
 
-    assert sealing.cluster_kubeconfig(physical) == KUBECONFIG
-    assert given and set(given) == {newest}
+    found = lifecycle.environment(KdbxStore(path=kit.path), tmp_path / 'absent', registry)
+
+    assert [found.variables(slotted.stack)[pulumi_config.PASSPHRASE_ENV] for _ in range(2)] == [newest] * 2
     assert len(asked) == 1
 
 
-def test_a_physical_slot_that_cannot_be_read_is_refused_rather_than_passed_over_for_the_kit(
-    kit: KdbxStore, registry: escrow.Registry, tmp_path: Path, slots: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize('slotted', SLOTTED, ids=SLOTTED_IDS)
+def test_a_slot_that_cannot_be_read_is_refused_rather_than_passed_over_for_the_kit(
+    kit: KdbxStore,
+    registry: escrow.Registry,
+    tmp_path: Path,
+    slots: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    slotted: Slotted,
 ) -> None:
-    """A slot that is there is the one meant: one that cannot be read refuses `physical` by its path, and asks for nothing."""
-    unreadable = slots / stack_environment.PHYSICAL_PASSPHRASE_SLOT
+    """A slot that is there is the one meant: one that cannot be read refuses its stacks by its path, and asks for nothing."""
+    unreadable = slots / slotted.slot
     unreadable.mkdir(parents=True)
     _unasked(monkeypatch)
 
     found = lifecycle.environment(KdbxStore(path=kit.path), tmp_path / 'absent', registry)
 
-    with pytest.raises(pulumi_config.PassphraseMissing) as refused:
-        _ = found.variables(pulumi_config.PHYSICAL)
+    with pytest.raises(pulumi_config.MachineRefused) as refused:
+        _ = found.variables(slotted.stack)
     assert str(unreadable) in str(refused.value)
 
 
@@ -1245,7 +1303,7 @@ def test_physical_is_moved_from_the_stack_passphrase_or_an_earlier_generation_of
     first, second, newest = (
         escrow.generate(escrow.Vault.open(kit, registry), escrow.PHYSICAL_PASSPHRASE) for _ in range(3)
     )
-    _write_physical_slot(slots, newest if slot_holds_newest else None)
+    _write_slot(slots, workstation.PHYSICAL_PASSPHRASE, newest if slot_holds_newest else None)
     seen: list[tuple[str, Sequence[str], str]] = []
 
     def moved(stack: pulumi_config.Stack, *, former: Sequence[str]) -> bool:
@@ -1260,40 +1318,103 @@ def test_physical_is_moved_from_the_stack_passphrase_or_an_earlier_generation_of
 
 
 @needs_age
-def test_re_encrypting_physical_under_a_slot_behind_the_escrow_is_refused_naming_recover(
-    kit: KdbxStore, registry: escrow.Registry, tmp_path: Path, slots: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize('slotted', SLOTTED, ids=SLOTTED_IDS)
+def test_re_encrypting_under_a_slot_behind_the_escrow_is_refused_naming_recover(
+    kit: KdbxStore,
+    registry: escrow.Registry,
+    tmp_path: Path,
+    slots: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    slotted: Slotted,
 ) -> None:
     """A slot holding an earlier generation, as one left behind by a rotation filed elsewhere does: nothing is moved.
 
-    Moved under it, the stack would land on that generation while `derived
-    sync` pushes the newest into `physical`'s Environments.
+    Moved under it, the stacks would land on that generation while `derived
+    sync` pushes the newest into their Environments.
     """
-    _ = lifecycle.bootstrap(kit, prompt=_refuse, only='recovery', registry=registry)
-    _ = escrow.generate(escrow.Vault.open(kit, registry), escrow.PASSPHRASE)
-    earlier = escrow.generate(escrow.Vault.open(kit, registry), escrow.PHYSICAL_PASSPHRASE)
-    _ = escrow.generate(escrow.Vault.open(kit, registry), escrow.PHYSICAL_PASSPHRASE)
-    _write_physical_slot(slots, earlier)
+    earlier, _ = _file_every_passphrase(kit, registry, slotted.label)
+    _write_slot(slots, slotted.slot, earlier)
     started = _recording_pulumi(monkeypatch)
 
     with pytest.raises(pulumi_config.MachineRefused) as refused:
-        _ = lifecycle.re_encrypt_physical(kit, _with_a_bundle(tmp_path), registry)
+        _ = slotted.re_encrypt(kit, _with_a_bundle(tmp_path), registry)
 
-    assert ('derived', pulumi_config.PHYSICAL_ROW, 'recover') in named_leaves(str(refused.value))
+    assert ('derived', escrow.row_name(slotted.label), 'recover') in named_leaves(str(refused.value))
     assert started == []
 
 
+def _incorrect_passphrase(args: Sequence[str], *, cwd: Path, env: Mapping[str, str], stdin: str | None) -> str:
+    """A `pulumi` refusing every run as the real one refuses a passphrase the stack file's salt does not verify."""
+    _ = cwd, env, stdin
+    raise pulumi_config.SlotRefused(f'`pulumi {" ".join(args)}` failed: error: incorrect passphrase')
+
+
+@pytest.mark.parametrize('slotted', SLOTTED, ids=SLOTTED_IDS)
+def test_a_passphrase_from_a_slot_that_pulumi_refuses_names_the_command_that_writes_the_newest(
+    kit: KdbxStore,
+    registry: escrow.Registry,
+    tmp_path: Path,
+    slots: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    slotted: Slotted,
+) -> None:
+    """A slot written before a rotation filed elsewhere: the run is refused as this machine's, naming the slot and `recover`."""
+    for other in SLOTTED:
+        _write_slot(slots, other.slot, f'{other.slot}-held-here\n')
+    _unasked(monkeypatch)
+    found = lifecycle.environment(KdbxStore(path=kit.path), _with_a_bundle(tmp_path), registry)
+    stack = pulumi_config.Stack(name=slotted.stack, directory=tmp_path, environment=found, run=_incorrect_passphrase)
+
+    with pytest.raises(pulumi_config.MachineRefused) as refused:
+        _ = stack.get('aKey')
+
+    assert 'incorrect passphrase' in str(refused.value)
+    assert str(slots / slotted.slot) in str(refused.value)
+    assert named_leaves(str(refused.value)) == [('derived', escrow.row_name(slotted.label), 'recover')]
+
+
 @needs_age
+@pytest.mark.parametrize('slotted', SLOTTED, ids=SLOTTED_IDS)
+def test_a_passphrase_recovered_with_the_kit_that_pulumi_refuses_is_refused_as_pulumi_said(
+    kit: KdbxStore,
+    registry: escrow.Registry,
+    tmp_path: Path,
+    slots: Path,
+    slotted: Slotted,
+) -> None:
+    """No slot gave it, so no slot's command is named: the refusal is `pulumi`'s own."""
+    _ = _file_every_passphrase(kit, registry, slotted.label)
+    assert not slots.exists()
+    found = lifecycle.environment(kit, _with_a_bundle(tmp_path), registry)
+    stack = pulumi_config.Stack(name=slotted.stack, directory=tmp_path, environment=found, run=_incorrect_passphrase)
+
+    with pytest.raises(pulumi_config.SlotRefused) as refused:
+        _ = stack.get('aKey')
+
+    assert not isinstance(refused.value, pulumi_config.MachineRefused)
+    assert named_leaves(str(refused.value)) == []
+
+
+@needs_age
+@pytest.mark.parametrize('slot_holds_newest', [False, True], ids=['no-slot', 'slot'])
 def test_the_stacks_under_the_stack_passphrase_are_moved_from_its_earlier_generations(
-    kit: KdbxStore, registry: escrow.Registry, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    kit: KdbxStore,
+    registry: escrow.Registry,
+    tmp_path: Path,
+    slots: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    slot_holds_newest: bool,
 ) -> None:
     """What `pulumi-passphrase re-encrypt` hands the move: the newest generation, and every earlier one, newest first.
 
-    The newest is what the environment gives the stacks, so it is never among
-    the passphrases a stack may be moved from, and `physical`'s own
-    passphrase is not among them either.
+    The newest is what the environment gives the stacks, whether the
+    workstation slot gives it or the kit does, so it is never among the
+    passphrases a stack may be moved from, and `physical`'s own passphrase is
+    not among them either.
     """
     _ = lifecycle.bootstrap(kit, prompt=_refuse, only='recovery', registry=registry)
     first, second, newest = (escrow.generate(escrow.Vault.open(kit, registry), escrow.PASSPHRASE) for _ in range(3))
+    _write_slot(slots, workstation.PASSPHRASE, newest if slot_holds_newest else None)
     seen: list[tuple[str | None, Sequence[str]]] = []
 
     def moving(environment: pulumi_config.BackendEnvironment, *, former: Sequence[str]) -> list[str]:

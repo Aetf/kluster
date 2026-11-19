@@ -1379,8 +1379,9 @@ nothing but its own findings. One calendar act is left to the
 operator, the yearly offline day, because its steps need the offline
 kit and physical custody, which no job holds (the table above). The
 copy of the kubeconfig into `k8s-base`'s and `apps`'s configuration is
-an operator act too, since it opens the kit, but it is no calendar
-act: `KubeconfigCopyExpiring` asks for it, ahead of the expiry of the
+an operator act too, since it reads `physical`'s state under
+`physical`'s passphrase, which no job but `physical`'s own holds, but it
+is no calendar act: `KubeconfigCopyExpiring` asks for it, ahead of the expiry of the
 client certificate the copy carries (§2.5, credentials.md §3).
 
 **What runs on a clock, and where.** Every job the installation

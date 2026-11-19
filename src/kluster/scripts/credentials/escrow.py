@@ -539,7 +539,8 @@ def register() -> dict[str, Label]:
             'the Pulumi stack passphrase, for every stack not encrypted apart',
             Generated(_token),
             # Read on every `pulumi` run by a `mise.toml` template that can
-            # neither prompt nor open a kit (credentials.md §4.4).
+            # neither prompt nor open a kit, and by a `credentials` run ahead
+            # of the kit (credentials.md §4.4).
             slot=WorkstationSlot(
                 path=workstation.passphrase_path,
                 read_by='mise.toml reads it from there on every pulumi run',
@@ -562,8 +563,8 @@ def register() -> dict[str, Label]:
             PHYSICAL_PASSPHRASE,
             "the physical stack's passphrase, which only physical's own Environments hold",
             Generated(_token),
-            # Read by no template: a `credentials` run recovers it with the
-            # kit, and a `pulumi` run by hand names this file to `pulumi`
+            # Read by no template: a `credentials` run reads it, and a
+            # `pulumi` run by hand names this file to `pulumi`
             # (credentials.md §4.4).
             slot=WorkstationSlot(
                 path=workstation.physical_passphrase_path,

@@ -28,7 +28,7 @@ import io
 import json
 import logging
 import os
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal, cast
@@ -57,7 +57,18 @@ from kluster import conventions
 from kluster.conventions.backup import BACKED_NAMESPACES, ETCD_SCOPE, writer_scope
 from kluster.lib import pulumi_cli
 from kluster.lib.k8s import rendered_template
-from kluster.scripts.credentials import cloudflare, derived, devices, escrow, masters, oci_iam, pulumi_config, sealing
+from kluster.scripts.credentials import (
+    cli,
+    cloudflare,
+    derived,
+    devices,
+    escrow,
+    masters,
+    oci_iam,
+    pulumi_config,
+    sealing,
+    workstation,
+)
 from kluster.scripts.credentials.kdbx import KdbxStore
 from kluster.scripts.credentials.pulumi_config import SlotRefused
 from kluster.stacks import physical
@@ -1494,6 +1505,99 @@ def test_a_writer_key_seal_into_a_stack_that_does_not_exist_reads_nothing_of_phy
 
     assert refused.value.stack == stack
     assert not [args for args in backed.runner(PHYSICAL).invocations if args[:2] == ['stack', 'output']]
+
+
+@dataclass
+class UnderOwnPassphrases:
+    """Every stack's recorded `pulumi` behind the one runner a `credentials` command starts.
+
+    A run against a stack is refused with `incorrect passphrase` unless it is
+    given that stack's own, as its stack file's salt refuses it. Listing the
+    stacks decrypts nothing and is answered under any passphrase.
+    """
+
+    runners: dict[str, PathPulumi]
+    passphrases: dict[str, str]
+
+    def __call__(
+        self, args: Sequence[str], *, cwd: Path, env: Mapping[str, str], stdin: str | None, timeout: float | None = None
+    ) -> str:
+        _ = timeout
+        if list(args) == ['stack', 'ls', '--json']:
+            return json.dumps([{'name': name} for name in self.runners])
+        stack = args[list(args).index('--stack') + 1]
+        if env.get(pulumi_config.PASSPHRASE_ENV) != self.passphrases[stack]:
+            raise pulumi_cli.PulumiRefused(f'`pulumi {" ".join(args)}` failed: error: incorrect passphrase')
+        return self.runners[stack](args, cwd=cwd, env=env, stdin=stdin)
+
+
+def test_the_writer_seal_needs_no_kit_on_a_machine_holding_both_passphrase_slots(
+    tmp_path: Path, credential_files: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`credentials derived b2-writer seal --only writer-etcd`, the command as the operator runs it.
+
+    It reads `physical`'s state under that stack's passphrase and writes into
+    `k8s-base` under the stack passphrase, each from its workstation slot.
+    The kit is a real one, locked, every prompt fails the case, and the
+    escrow holds nothing, so a run that reached for either would stop. Only
+    the certificate fetch is stood in for, which reads the kubeconfig as the
+    command does and asks `kubeseal` nothing.
+    """
+    credential_files.mkdir(parents=True)
+    _ = (credential_files / workstation.PASSPHRASE).write_text('the-stack-passphrase\n')
+    _ = (credential_files / workstation.PHYSICAL_PASSPHRASE).write_text('the-physical-passphrase\n')
+    kit = KdbxStore.create(tmp_path / 'kit.kdbx', 'kit-password')
+    bundle = tmp_path / 'bundle'
+    bundle.mkdir()
+    _ = (bundle / 'backend-url').write_text('postgres://operator@192.0.2.10:5432/pulumi_state\n')
+
+    def unasked(prompt: str = '') -> str:
+        raise AssertionError(f'the run prompted: {prompt}')
+
+    monkeypatch.setattr('getpass.getpass', unasked)
+    row = conventions.sealed.ETCD_WRITER_KEY
+    physical_state: dict[str, object] = {
+        conventions.PHYSICAL_OUTPUTS.kubeconfig: KUBECONFIG,
+        BACKUP_KEYS: {ETCD_SCOPE: EXPORTED[ETCD_SCOPE]},
+    }
+    backend = UnderOwnPassphrases(
+        runners={PHYSICAL: PathPulumi(outputs=physical_state), row.stack: PathPulumi()},
+        passphrases={PHYSICAL: 'the-physical-passphrase', row.stack: 'the-stack-passphrase'},
+    )
+    monkeypatch.setattr(pulumi_cli, 'run_pulumi', backend)
+
+    def certificate_unfetched(
+        physical: pulumi_config.Stack,
+        *,
+        open_stack: Callable[[str], pulumi_config.Stack],
+        run: sealing.Kubeseal = sealed_as_marked,
+    ) -> sealing.Sealer:
+        _ = run, sealing.cluster_kubeconfig(physical)
+        return sealing.Sealer(certificate='', open_stack=open_stack, run=sealed_as_marked)
+
+    monkeypatch.setattr(sealing, 'cluster_sealer', certificate_unfetched)
+
+    status = cli.main(
+        [
+            '--kdbx',
+            str(kit.path),
+            '--escrow',
+            str(tmp_path / 'escrow'),
+            'derived',
+            derived.B2_WRITER_ROW,
+            'seal',
+            '--only',
+            row.name,
+            '--bundle-dir',
+            str(bundle),
+        ]
+    )
+
+    assert status == 0
+    assert backend.runners[row.stack].plain == {
+        row.path('AWS_ACCESS_KEY_ID'): f'AgB-sealed-{ETCD_SCOPE}-id',
+        row.path('AWS_SECRET_ACCESS_KEY'): f'AgB-sealed-{ETCD_SCOPE}-secret',
+    }
 
 
 # -- what the stack files hold ------------------------------------------------

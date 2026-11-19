@@ -12,7 +12,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from kluster.scripts.credentials.pulumi_config import SlotRefused
+from kluster.scripts.credentials.pulumi_config import PASSPHRASE_ENV, SlotRefused
 
 
 @dataclass
@@ -32,6 +32,10 @@ class RecordedPulumi:
     #: secret read under a passphrase that does not open it. Listed all the
     #: same: the listing decrypts nothing.
     undecryptable: set[str] = field(default_factory=set[str])
+    #: The passphrase the stack file's salt was made under, which the salt
+    #: probe (`Stack.require_passphrase`) is answered against; None verifies
+    #: any.
+    salted_under: str | None = None
 
     def __call__(self, args: Sequence[str], *, cwd: Path, env: Mapping[str, str], stdin: str | None) -> str:
         self.invocations.append(list(args))
@@ -40,6 +44,10 @@ class RecordedPulumi:
                 return json.dumps([{'name': name} for name in self.stacks])
             case ['stack', 'init', name, '--no-select']:
                 self.stacks.append(name)
+                return ''
+            case ['config', 'set', _, '--secret', '--config-file', _, '--stack', _]:
+                if self.salted_under is not None and env.get(PASSPHRASE_ENV) != self.salted_under:
+                    raise SlotRefused('`pulumi config set` failed: error: incorrect passphrase')
                 return ''
             case ['config', 'set', key, '--secret', '--stack', _]:
                 assert stdin is not None, 'a secret was passed as an argument rather than on standard input'
