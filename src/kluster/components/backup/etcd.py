@@ -30,10 +30,7 @@ carries its definition and it is declared untyped.
 mints with the bucket (`etcd_scope`) and `credentials derived b2-writer seal`
 seals into `k8s-base` (`conventions.sealed.ETCD_WRITER_KEY`). The key writes
 under the prefix and does nothing else: it cannot list, read or delete, and an
-upload asks for nothing more. Until its ciphertext is in the configuration, nothing is declared but
-the namespace and the `ServiceAccount`: no CronJob, and so no series for the
-family's rules to read (`kluster.lib.k8s.sealed_value`, physical/bring-up.md
-§1).
+upload asks for nothing more.
 
 **It runs on the control planes.** The snapshots then go on through an outage
 of the home site, the bucket traffic leaves from the cloud, and the stream does
@@ -327,9 +324,7 @@ class EtcdSnapshots(Component, pulumi_type='kluster:backup:EtcdSnapshots'):
     """The snapshot's namespace, its Talos `ServiceAccount`, its writer key and its CronJob.
 
     `writer_key` is the ciphertext the stack's configuration holds for
-    `conventions.sealed.ETCD_WRITER_KEY`, `None` while it holds none; until it
-    holds one, neither the key nor the CronJob is declared. The `None` is the
-    bring-up's tolerance, and goes with it (physical/bring-up.md §1).
+    `conventions.sealed.ETCD_WRITER_KEY` (`kluster.lib.k8s.sealed_ciphertext`).
     `recipients` are the age recipients each snapshot is encrypted to, and
     `image` the pin the CronJob runs.
 
@@ -345,7 +340,7 @@ class EtcdSnapshots(Component, pulumi_type='kluster:backup:EtcdSnapshots'):
         name: str,
         *,
         image: ImagePin,
-        writer_key: Mapping[str, str] | None,
+        writer_key: Mapping[str, str],
         recipients: Sequence[str],
         after: Sequence[pulumi.Resource],
         opts: pulumi.ResourceOptions | None = None,
@@ -377,15 +372,11 @@ class EtcdSnapshots(Component, pulumi_type='kluster:backup:EtcdSnapshots'):
         )
         # Behind what its pod mounts and reads: the talosconfig's Secret, which
         # Talos writes for the `ServiceAccount`, and the key's.
-        self.cronjob = (
-            k8s.batch.v1.CronJob(
-                f'{name}-{ETCD_SNAPSHOT.cronjob}',
-                metadata=k8s.meta.v1.ObjectMetaArgs(name=ETCD_SNAPSHOT.cronjob, namespace=self.namespace.metadata.name),
-                spec=cronjob_spec(image=image, recipients=recipients),
-                opts=self.child_opts(depends_on=[self.service_account, self.writer_key]),
-            )
-            if self.writer_key is not None
-            else None
+        self.cronjob = k8s.batch.v1.CronJob(
+            f'{name}-{ETCD_SNAPSHOT.cronjob}',
+            metadata=k8s.meta.v1.ObjectMetaArgs(name=ETCD_SNAPSHOT.cronjob, namespace=self.namespace.metadata.name),
+            spec=cronjob_spec(image=image, recipients=recipients),
+            opts=self.child_opts(depends_on=[self.service_account, self.writer_key]),
         )
 
         self.register_outputs({})
@@ -519,11 +510,9 @@ class EtcdRestoreVerify(Component, pulumi_type='kluster:backup:EtcdRestoreVerify
 
     `reader_key` and `identity` are the ciphertexts the stack's configuration
     holds for `conventions.sealed.ETCD_READER_KEY` and
-    `conventions.sealed.ETCD_DRILL_IDENTITY`, each `None` while it holds
-    none; the CronJob is declared only once both are there, the bring-up's
-    tolerance, which goes with it (physical/bring-up.md §1). `namespace` is
-    the snapshots' (`EtcdSnapshots.namespace`), and `image` the pin the
-    CronJob runs.
+    `conventions.sealed.ETCD_DRILL_IDENTITY`
+    (`kluster.lib.k8s.sealed_ciphertext`). `namespace` is the snapshots'
+    (`EtcdSnapshots.namespace`), and `image` the pin the CronJob runs.
 
     `after` is what it is installed behind: Cilium, since nothing schedules
     before the CNI, and the sealing controller, whose chart defines the
@@ -537,8 +526,8 @@ class EtcdRestoreVerify(Component, pulumi_type='kluster:backup:EtcdRestoreVerify
         *,
         namespace: k8s.core.v1.Namespace,
         image: ImagePin,
-        reader_key: Mapping[str, str] | None,
-        identity: Mapping[str, str] | None,
+        reader_key: Mapping[str, str],
+        identity: Mapping[str, str],
         after: Sequence[pulumi.Resource],
         opts: pulumi.ResourceOptions | None = None,
     ) -> None:
@@ -565,17 +554,11 @@ class EtcdRestoreVerify(Component, pulumi_type='kluster:backup:EtcdRestoreVerify
             opts=self.child_opts(depends_on=[namespace]),
         )
         # Behind what its pod mounts and reads.
-        self.cronjob = (
-            k8s.batch.v1.CronJob(
-                f'{name}-{ETCD_RESTORE_VERIFY.cronjob}',
-                metadata=k8s.meta.v1.ObjectMetaArgs(
-                    name=ETCD_RESTORE_VERIFY.cronjob, namespace=namespace.metadata.name
-                ),
-                spec=verify_cronjob_spec(image=image),
-                opts=self.child_opts(depends_on=[*after, self.shell, self.reader_key, self.identity]),
-            )
-            if self.reader_key is not None and self.identity is not None
-            else None
+        self.cronjob = k8s.batch.v1.CronJob(
+            f'{name}-{ETCD_RESTORE_VERIFY.cronjob}',
+            metadata=k8s.meta.v1.ObjectMetaArgs(name=ETCD_RESTORE_VERIFY.cronjob, namespace=namespace.metadata.name),
+            spec=verify_cronjob_spec(image=image),
+            opts=self.child_opts(depends_on=[*after, self.shell, self.reader_key, self.identity]),
         )
 
         self.register_outputs({})

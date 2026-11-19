@@ -1,9 +1,8 @@
 """The hourly etcd snapshot `k8s-base` declares: its Talos grant, its writer key, its recipients and its CronJob.
 
 The run is the whole `k8s-base` program, once with what the stack file holds,
-every sealed value the stack declares sealed in, once on the absent path, with
-none (physical/bring-up.md §1), and once more with the restore-verify's
-recipient file in a directory of the module's, holding the recipient of an
+every sealed value the stack declares sealed in, and once more with the
+restore-verify's recipient file in a directory of the module's, holding the recipient of an
 identity the module draws.
 """
 
@@ -18,7 +17,7 @@ import process_sessions
 import pulumi
 import pytest
 import pytest_asyncio
-from k8s_base_installation import NOTHING_SEALED, Run, applied
+from k8s_base_installation import Run, applied
 
 from kluster import conventions
 from kluster.components import talos
@@ -60,20 +59,6 @@ KEY = conventions.sealed.ETCD_WRITER_KEY
 async def applied_fixture() -> Run:
     """The stack as its file holds it: every sealed value it declares, sealed in."""
     return await applied()
-
-
-@pytest_asyncio.fixture(scope='module', loop_scope='module')
-async def absent() -> tuple[Run, list[str]]:
-    """The absent path: no sealed value at all, and the warnings the run logged."""
-    warned: list[str] = []
-
-    def warn(message: str, *_: object, **__: object) -> None:
-        warned.append(message)
-
-    with pytest.MonkeyPatch.context() as patch:
-        patch.setattr(pulumi.log, 'warn', warn)
-        run = await applied(sealed=NOTHING_SEALED)
-    return run, warned
 
 
 @pytest_asyncio.fixture(scope='module', loop_scope='module')
@@ -129,19 +114,6 @@ def test_the_namespace_is_restricted_and_holds_the_etcd_backups_objects_alone(ap
     assert namespace['metadata']['labels'][POD_SECURITY_ENFORCE_LABEL] == PodSecurity.RESTRICTED.value
     assert in_namespace, 'nothing declared in the namespace'
     assert in_namespace <= children
-
-
-def test_without_the_writer_key_nothing_but_the_namespace_and_the_grant_is_declared_and_the_key_is_named(
-    absent: tuple[Run, list[str]],
-) -> None:
-    """The absent path: no CronJob, so no series for the family's rules to read, until the key is sealed in."""
-    run, warnings = absent
-
-    assert _named(run, NAMESPACE, ETCD_SNAPSHOT.namespace)
-    assert _named(run, TALOS_SERVICE_ACCOUNT_TYPE, SERVICE_ACCOUNT)
-    assert not _named(run, CRONJOB, ETCD_SNAPSHOT.cronjob)
-    assert not _named(run, SEALED_SECRET, KEY.name)
-    assert [it for it in warnings if repr(KEY.name) in it and KEY.namespace in it]
 
 
 def test_the_pod_reads_the_talosconfig_talos_writes_for_its_service_account(applied: Run) -> None:
@@ -312,7 +284,7 @@ def test_an_empty_recipient_list_is_refused() -> None:
         _ = EtcdSnapshots(
             'etcd-snapshots',
             image=ImagePin('registry.example.invalid/talos-backup', 'v1', f'sha256:{"0" * 64}'),
-            writer_key=None,
+            writer_key=dict.fromkeys(conventions.sealed.ETCD_WRITER_KEY.keys, 'AgB-sealed'),
             recipients=(),
             after=[],
             opts=pulumi.ResourceOptions(),

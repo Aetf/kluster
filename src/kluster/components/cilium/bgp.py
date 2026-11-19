@@ -31,12 +31,7 @@ Cilium's BGPv2 control plane, in its three objects
     nothing else (`components.gateway.routing`).
 
 The password is the sealed value `conventions.sealed.BGP_PASSWORD`, a Secret in
-the namespace Cilium reads BGP secrets from, under the key Cilium reads. While
-it is absent from the stack's configuration, no SealedSecret is declared for
-it and the three objects are declared all the same: Cilium then opens the
-session with an empty password, which the gateway refuses, so the session
-stays down until the value is sealed in (`kluster.lib.k8s.sealed_value`,
-physical/bring-up.md §1).
+the namespace Cilium reads BGP secrets from, under the key Cilium reads.
 """
 
 from __future__ import annotations
@@ -86,8 +81,7 @@ class BgpSession(Component, pulumi_type='kluster:cilium:BgpSession'):
     to a component's children.
 
     `password` is the ciphertext the stack's configuration holds for
-    `conventions.sealed.BGP_PASSWORD`, `None` while it holds none; the `None`
-    is the bring-up's tolerance, and goes with it (physical/bring-up.md §1).
+    `conventions.sealed.BGP_PASSWORD` (`kluster.lib.k8s.sealed_ciphertext`).
     """
 
     def __init__(
@@ -95,7 +89,7 @@ class BgpSession(Component, pulumi_type='kluster:cilium:BgpSession'):
         name: str,
         *,
         after: Sequence[pulumi.Resource],
-        password: Mapping[str, str] | None,
+        password: Mapping[str, str],
         opts: pulumi.ResourceOptions | None = None,
     ) -> None:
         super().__init__(name, opts=opts)

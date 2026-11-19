@@ -813,21 +813,19 @@ preview with `denydefaultprovider not registered`.
     no object outside the cluster names, and the sealing key, which the
     new controller draws.
 
-    **Where it applies as written: before bring-up stage 6.** No sealed
-    value exists there. The tolerance of physical/bring-up.md §1
-    declares nothing for an absent value, so the new sealing key leaves
-    nothing to seal again; the BGP session holds no password on the
-    worker's side and is not up, so no `lan` route is installed on the
-    gateway to withdraw. A rebuild after stage 6 also takes stage 6's
-    sealing sitting again, with `bgp seal` and never `bgp record`, which
-    would draw a new password and rewrite the gateway's BGP
-    configuration; after stage 9 that sitting seals every writer key
-    with the bare `credentials derived b2-writer seal`, the
-    applications' keys with the rest. Either way it seals the etcd
-    snapshots' read-only key, `reader-etcd`, with
-    `credentials derived b2-reader seal`, which no form of
-    `b2-writer seal` covers. Until that sitting, both metrics stores wait in `Init` for
-    the monitoring namespace's writer key. Once it has run, each store
+    **The rebuild takes bring-up stage 6's sealing sitting again.**
+    Every stack file holds a ciphertext for every value its program
+    reads, sealed to the key of the controller the loss takes with it,
+    so the rebuilt cluster declares each SealedSecret over ciphertext
+    the new controller cannot open, and whatever reads one waits for the
+    sitting. It runs `bgp seal` and never `bgp record`, which would draw
+    a new password and rewrite the gateway's BGP configuration; after
+    stage 9 it seals every writer key with the bare
+    `credentials derived b2-writer seal`, the applications' keys with
+    the rest. It seals the etcd snapshots' read-only key, `reader-etcd`,
+    with `credentials derived b2-reader seal`, which no form of
+    `b2-writer seal` covers. Until that sitting, both metrics stores
+    wait in `Init` for the monitoring namespace's writer key. Once it has run, each store
     restores itself from the backup bucket before it starts
     (storage.md §5), and the readings below hold the history to its
     baseline. Once an application holds data, its data comes back
@@ -841,8 +839,8 @@ preview with `denydefaultprovider not registered`.
     §3.1). The quotas admit the whole fleet at once, since they hold
     exactly the fleet (cluster/nodes.md §3.2), once OCI has released
     the terminated instances, which §3.1 lists as not established.
-    Before stage 6 a hunt costs calendar
-    time and no money, the half-built fleet billing what the fleet
+    A hunt costs calendar time and no
+    money, the half-built fleet billing what the fleet
     bills. So a deliberate run goes only on a day when §3.4's capacity
     reading, taken in the hour before the termination for every AD of
     the region at the declared size, passes in each; and the
@@ -928,8 +926,7 @@ preview with `denydefaultprovider not registered`.
         for o in cluster_endpoint cluster_endpoint_v6 vip1 worker_gua; do echo "$o $(physical stack output "$o")"; done > "$D/outputs"
         wc -l < "$D/protected"; cat "$D/outside" "$D/anchors" "$D/ids" "$D/metrics" "$D/outputs"; grep -c 'BEGIN CERTIFICATE' "$D/sealing.pem"
 
-    After bring-up stage 6, the history is backed up once more after its
-    baseline is read, so the backup a rebuild restores holds at least the
+    The history is backed up once more after its baseline is read, so the backup a rebuild restores holds at least the
     baseline's rows. Both backup schedules are suspended first, and the
     drill's own job is created only once no backup job is running: a
     job created from a CronJob runs beside the CronJob's own, which
@@ -941,8 +938,7 @@ preview with `denydefaultprovider not registered`.
     success. Both schedules go with etcd at step 3, and the rebuilt
     cluster declares them anew, running; a run that does not go resumes
     them, beside enabling `deploy.yml` again, with the same `patch`
-    and `"suspend":false`. Before stage 6 there is no backup job, and the
-    `kubectl` lines are left out.
+    and `"suspend":false`.
 
     **The last line shows every baseline, and the go needs each one
     whole.** The `protected` count is not zero, and `outside` is a
@@ -950,8 +946,8 @@ preview with `denydefaultprovider not registered`.
     but `vip1.hosts AAAA`, a name that is IPv4 only, and none says `no
     reading`. `ids` prints `1 found` and the partition's line, whose
     `uuid` may print `null` on the boot that provisioned the volume
-    (physical/gateway-cutover.md §8.1). After
-    stage 6, `metrics` prints a `rows` line and an `earliest` line. Each
+    (physical/gateway-cutover.md §8.1). `metrics` prints a `rows` line
+    and an `earliest` line. Each
     of the four outputs has a value, and the certificate count is `1`.
     A baseline that is not whole is taken again before the go, because
     every later comparison against it reads as a pass where the reading
@@ -1136,9 +1132,8 @@ preview with `denydefaultprovider not registered`.
     `up-apps` are both stacks' first `up` on an empty cluster.
 
     **Step 9:** bring-up stage 5's gate on the rebuilt cluster, the
-    sealing certificate differing from `$D/sealing.pem`. Where the run
-    is after bring-up stage 6, the sealing sitting of the paragraph on
-    stage 6 above follows, and its pull request commits
+    sealing certificate differing from `$D/sealing.pem`. The sealing
+    sitting of the paragraph on stage 6 above follows, and its pull request commits
     `Pulumi.k8s-base.yaml`, and after stage 9 `Pulumi.apps.yaml` with
     it. Once its merge has
     applied `k8s-base`, both stores leave `Init`, and `metrics` prints
@@ -1151,9 +1146,7 @@ preview with `denydefaultprovider not registered`.
 
         mise x uv -- uv run perf import "$D/peaks"
 
-    Before bring-up stage 6, the history store started empty with
-    `k8s-base`'s apply, and the import writes the run there all the
-    same. Then the pass readings.
+    Then the pass readings.
 
     **It passes when each of these holds:**
 
@@ -1175,14 +1168,12 @@ preview with `denydefaultprovider not registered`.
             --stack dns` exits 0, the four outputs equal `$D/outputs`,
             and `anchors` prints what `$D/anchors` holds;
         -   every plan read during the run passed the scope check.
-    5.  **The metrics history came back**, where the run is after bring-up
-        stage 6: `metrics` prints the earliest sample `$D/metrics` holds,
+    5.  **The metrics history came back**: `metrics` prints the earliest sample `$D/metrics` holds,
         and no fewer rows, and the history's backup job succeeds on its
         next run (§6.2). `metrics` counts the rows only over a read that
         succeeded, so a failed read prints no `rows` line rather than
         `rows 0`, and a `metrics`, at step 0 or here, that prints none
-        is no reading. Before stage 6, no key backs the stores up, and
-        both start empty.
+        is no reading.
     6.  `deploy.yml` is enabled again, and `.claude/drill/` is deleted.
 
     **What a failure leaves running.** Through step 2, the old cluster,
@@ -1365,14 +1356,13 @@ scheduled-job rule family (the rule below) and, behind the family, the
 cluster's check-in, and the daily check by the homelab host's check-in
 (both in the alert contract). The family is
 declared with the rest of the cluster's rules in `k8s-base`, and it reads
-a CronJob only once the CronJob is declared: a job that waits for its
-sealed value, as the metrics stores' backups, the pull of OCI's
-block-volume series, the etcd snapshot and the state table's upkeep do,
-reports nothing until the value is sealed in. Bring-up stage 6 seals every value `k8s-base`
-reads, each of those keys among them, and reads each job's first run;
-what bounds a value it missed is the pull request of stage 8 that
-deletes the sealed tolerance, from which an absent value stops the run
-by name (physical/bring-up.md §1). The dead-man
+a CronJob only once the CronJob is declared. A job that reads a sealed
+value, as the metrics stores' backups, the pull of OCI's block-volume
+series, the etcd snapshot and the state table's upkeep do, is declared
+with it: a value lands ahead of its reader (credentials.md §1 rule 6),
+and a stack file that does not hold one stops the run at its read,
+naming the value and the command that seals it, so no such job is
+left undeclared and unwatched. The dead-man
 timers do not exist yet, and until they do, an ops-repository workflow
 that stops running reports nothing. A device's own jobs are
 watched as the census below says: the gateway's by its daily check,

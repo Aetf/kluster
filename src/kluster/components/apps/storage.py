@@ -158,7 +158,7 @@ def claim(
     *,
     namespace: str,
     uid: int,
-    writer_key: Mapping[str, pulumi.Input[str]] | None,
+    writer_key: Mapping[str, pulumi.Input[str]],
     generation: int = 0,
     moving_to: Mapping[str, str] | None = None,
     stopped: pulumi.Resource | None = None,
@@ -189,8 +189,7 @@ def claim(
         and its volumes' group take the same number.
     :param writer_key: The ciphertext of the namespace's sealed writer key, as
         the program read it, sealed namespace-wide so that it opens under the
-        repository Secret's name; `None` while it is absent, in which case no
-        Secret is declared until it is sealed in (physical/bring-up.md §1).
+        repository Secret's name (`kluster.lib.k8s.sealed_ciphertext`).
     :param generation: The claim's generation, raised by one for each move.
     :param moving_to: The node labels the new generation's claim is made on,
         which the destination's mover selects; set for the copy alone.
@@ -209,7 +208,7 @@ def claim(
     if size < 1:
         raise ValueError(f'{resource_name}: a claim is at least 1 GiB, and {name!r} asks for {size}')
     copy = _copy(resource_name, name, generation, moving_to, stopped)
-    if writer_key is not None and frozenset(writer_key) != WRITER_KEY_FIELDS:
+    if frozenset(writer_key) != WRITER_KEY_FIELDS:
         raise ValueError(
             f'{resource_name}: the writer key of {namespace!r} holds {sorted(writer_key)}, '
             f'and a repository Secret carries {sorted(WRITER_KEY_FIELDS)}'
@@ -361,20 +360,14 @@ def _repository(
     *,
     namespace: str,
     password: random.RandomPassword,
-    writer_key: Mapping[str, pulumi.Input[str]] | None,
+    writer_key: Mapping[str, pulumi.Input[str]],
     opts: pulumi.ResourceOptions | None,
-) -> crds.bitnami.v1alpha1.SealedSecret | None:
-    """The repository Secret: the namespace's writer key, sealed, with the repository and its password in the template."""
-    if writer_key is None:
-        # The tolerance `kluster.lib.k8s.sealed_value` keeps for an absent
-        # sealed value, which retires with it at the bring-up's gate: this
-        # Secret is named for the claim rather than for the value's row, so it
-        # is declared here rather than through that helper, and warns the same.
-        pulumi.log.warn(
-            f'the sealed writer key of {namespace!r} is absent from this stack, so no repository Secret is '
-            f'declared for {name!r} and its source stays pending until it is sealed in (physical/bring-up.md §1)'
-        )
-        return None
+) -> crds.bitnami.v1alpha1.SealedSecret:
+    """The repository Secret: the namespace's writer key, sealed, with the repository and its password in the template.
+
+    Named for the claim rather than for the value's row, so it is declared
+    here rather than through `kluster.lib.k8s.sealed_value`.
+    """
     return sealed_secret(
         f'{resource_name}-restic',
         name=name,

@@ -177,6 +177,12 @@
     port's `Host` publishes one with no route. The echo row is
     `Route('echo', internet=Direct(…))`, in the primary, as §9.2 has it,
     and its image is `traefik/whoami`.
+*   **Updated:** 2026-11-19 — §3.2 and §14 slice 13, as
+    [Aetf/kluster-ops#774](https://github.com/Aetf/kluster-ops/issues/774)
+    built it: the tolerance is retired. An absent sealed value stops the
+    run at `kluster.lib.k8s.sealed_ciphertext` with `AbsentSealedValue`,
+    naming the value, its namespace and the command that seals it, which
+    its census row carries (`conventions.sealed.SealedValue.sealed_by`).
 *   **Authority:** AGENTS.md,
     [framework/dispatch.md](../framework/dispatch.md),
     [framework/rfc.md](../framework/rfc.md) and the style rules
@@ -404,8 +410,10 @@ no code changes with it
 tolerance is a dated exception to the rule that a value a program cannot
 run without stops the run at the read ([style/pulumi.md](../style/pulumi.md),
 "Layering"): slice 9 builds it, in `kluster.lib.k8s.sealed_value`, with
-a test of the absent path, and the pull request that ends bring-up.md's
-stage 8 deletes it, after which an absent value stops the run by name.
+a test of the absent path, and slice 13's pull request, which ends
+bring-up.md's stage 8, deletes it. From then on an absent value stops
+the run at `kluster.lib.k8s.sealed_ciphertext`, naming the value, its
+namespace and the command that seals it, which the census row carries.
 
 ### 3.3 What a green preview needs
 
@@ -2022,8 +2030,9 @@ whose merge applies them and so follows slice 9's certificate.
     and a request answers through it with the client's address in the
     echoed headers.
 
-**Slice 13: the M2 bootstrap gate.** Live; no pull request unless an
-item fails. **After** slices 10, 11 and 12.
+**Slice 13: the M2 bootstrap gate.** Live, and one pull request, which
+deletes §3.2's tolerance; another only where an item fails. **After**
+slices 10, 11 and 12.
 
 *   **Done means**: migration.md §1's verification gate run for the
     items that need Cilium, and the items slice 2 adds to physical.md
@@ -2046,7 +2055,10 @@ item fails. **After** slices 10, 11 and 12.
     alert raised through alertmanager reaches the phone, and stopping
     vmalert pushes the missed check-in (§7.3). A transcript per item on
     the ops issue; an item that fails is its own issue, and a fallback it
-    flips lands in the document that records it.
+    flips lands in the document that records it. Then the pull request
+    that deletes §3.2's tolerance: an absent sealed value stops the run
+    at its read, naming the command that seals it, and no component
+    takes a ciphertext that may be absent.
 
 **Slice 14: Home Assistant's side.** Operator, in Home Assistant; no pull
 request. **After** nothing; the sealing sitting that seals slice 11's

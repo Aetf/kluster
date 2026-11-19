@@ -2,7 +2,7 @@
 
 The program runs whole, against a `physical` that has published its addresses
 (`k8s_base_installation`), with what the stack file holds -- every sealed
-value the stack declares sealed in, the DNS-01 token among them -- three times
+value the stack declares sealed in, the DNS-01 token among them -- twice
 (rfc-007 §5.1, §5.2):
 
 -   **as the installation stands**;
@@ -11,11 +11,7 @@ value the stack declares sealed in, the DNS-01 token among them -- three times
     of its own** -- an apex and a bare name -- so that a listener built from
     a fixed port, a certificate built from a fixed zone list, two zones'
     certificates crossed, or a listener derived from anything but the rows
-    that ask for it, reads differently from what the census asks;
--   **on the absent path**, holding no sealed value, which declares no
-    SealedSecret for the token and says so, while the issuer and the
-    certificates are declared all the same and wait for it
-    (physical/bring-up.md §1).
+    that ask for it, reads differently from what the census asks.
 
 Literals written here are the upstream projects' contracts: the Gateway API's
 address type and listener protocols, cert-manager's issuer kind.
@@ -23,31 +19,23 @@ address type and listener protocols, cert-manager's issuer kind.
 
 from __future__ import annotations
 
-import json
 from collections.abc import Generator
 from contextlib import contextmanager
 from typing import Any, cast
 
-import pulumi
 import pytest
 import pytest_asyncio
-from client_kubeconfig import KUBECONFIG
 from k8s_base_installation import (
     CHART,
-    NOTHING_SEALED,
     OUTPUTS,
     PUBLISHED,
     SEALED,
-    VERSIONS_CONFIG,
-    Autonaming,
     Run,
     applied,
-    release_assets,
 )
-from mock_monitor import declaring, run_under_backstop
 
 from kluster import conventions
-from kluster.lib.k8s import KUBECONFIG_KEY, PassthroughRefused
+from kluster.lib.k8s import PassthroughRefused
 
 GATEWAY = 'crds:gateway.networking.k8s.io/v1:Gateway'
 HTTP_ROUTE = 'crds:gateway.networking.k8s.io/v1:HTTPRoute'
@@ -99,28 +87,6 @@ def moved_census() -> Generator[None]:
         yield
 
 
-async def declare(*, sealed: dict[str, object] = SEALED) -> tuple[Run, list[str]]:
-    """The whole program with `sealed` as its sealed values, the stack file's unless given, and every warning it logged."""
-    from kluster.stacks import k8s_base
-
-    config = {
-        f'kluster:{KUBECONFIG_KEY}': KUBECONFIG,
-        f'kluster:{conventions.sealed.CONFIG_KEY}': json.dumps(sealed),
-    }
-    pulumi.runtime.set_all_config(config | VERSIONS_CONFIG, secret_keys=[f'kluster:{KUBECONFIG_KEY}'])
-    monitor = await run_under_backstop(Autonaming(), stack=conventions.STACK_NAMES.k8s_base)
-    warned: list[str] = []
-
-    def warn(message: str, *_: object, **__: object) -> None:
-        warned.append(message)
-
-    with release_assets() as fetched, pytest.MonkeyPatch.context() as patch:
-        patch.setattr(pulumi.log, 'warn', warn)
-        async with declaring():
-            await k8s_base.main()
-    return Run(monitor, fetched), warned
-
-
 @pytest_asyncio.fixture(scope='module', loop_scope='module', name='applied')
 async def applied_fixture() -> Run:
     """The program as the installation stands."""
@@ -131,14 +97,7 @@ async def applied_fixture() -> Run:
 async def moved() -> Run:
     """The Gateways' rows moved and a second zone served."""
     with moved_census():
-        run, _ = await declare()
-    return run
-
-
-@pytest_asyncio.fixture(scope='module', loop_scope='module')
-async def absent() -> tuple[Run, list[str]]:
-    """The absent path: the stack holding no sealed value, the token among them, and every warning the run logged."""
-    return await declare(sealed=NOTHING_SEALED)
+        return await applied()
 
 
 def _gateways(run: Run) -> dict[str, dict[str, Any]]:
@@ -222,20 +181,6 @@ def test_the_issuer_answers_dns01_with_the_sealed_token(moved: Run) -> None:
     assert secret['spec']['template']['metadata']['name'] == reference['name']
     assert secret['metadata']['namespace'] == moved.inputs(CHART, 'cert-manager')['namespace']
     assert secret['metadata']['annotations'] == {f'sealedsecrets.bitnami.com/{TOKEN.scope.value}': 'true'}
-
-
-def test_an_absent_token_declares_no_sealed_secret_and_warns_naming_it(absent: tuple[Run, list[str]]) -> None:
-    """The absent path: nothing is declared for the token, and the run says which value it is waiting for.
-
-    The issuer and the certificates are declared all the same: they read the
-    Secret by name, and stay pending until it exists.
-    """
-    run, warned = absent
-
-    assert [it for it in run.monitor.of_type(SEALED_SECRET) if it.inputs['metadata']['name'] == TOKEN.name] == []
-    assert [message for message in warned if repr(TOKEN.name) in message]
-    assert run.monitor.of_type(CLUSTER_ISSUER)
-    assert _certificates(run)
 
 
 # -- The Gateways ------------------------------------------------------------------
@@ -423,7 +368,7 @@ async def test_a_census_holding_a_passthrough_is_refused_naming_it() -> None:
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr(conventions.routes, 'EXPOSURES', census)
         with pytest.raises(PassthroughRefused, match=r"'tunnel'.*kluster-ops#723"):
-            _ = await declare()
+            _ = await applied()
 
 
 def test_a_bare_listener_exists_on_lan_gw_exactly_for_each_bare_row(moved: Run) -> None:

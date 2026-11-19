@@ -32,9 +32,9 @@ that speaks the k8s API, consumed by `apps`.
     anything but an address of its family stops the run naming the
     output (`kluster.lib.stack_addresses`). And the OCID of each cloud
     node's volume (`volume_ids`), which the pull of OCI's block-volume
-    series names its series by (§1 item 6), read only once that pull's
-    key is sealed in, and so that anything but a map from each node's
-    volumes to an OCID each stops the run (`kluster.lib.stack_volumes`).
+    series names its series by (§1 item 6), read so that anything but a
+    map from each node's volumes to an OCID each stops the run
+    (`kluster.lib.stack_volumes`).
     A stack holding no
     copy of the kubeconfig, or a blank one, stops at the read and names
     that command (`kluster.lib.k8s.kubeconfig_from`). The program builds
@@ -193,9 +193,7 @@ classes its objects fall into (§1.2):
     sees of these pods is their commands: the scripts' paths, the store's
     address and the bucket's, and the variable `vmbackup` expands into
     the snapshot address, none of them secret.
-    Until the key is sealed in, neither the backups nor the restores are
-    declared, and the stores start empty (physical/bring-up.md §1). Each
-    backup job is a row of the scheduled-job family below: a failed run
+    Each backup job is a row of the scheduled-job family below: a failed run
     raises `MetricsBackupFailed`, and a backup older than an hour and a
     half `MetricsBackupStale` ([operations.md](../operations.md) §6.2),
     and the whole-cluster rebuild is the history's restore drill
@@ -224,9 +222,7 @@ classes its objects fall into (§1.2):
     with a series that names no volume, or where a declared volume got
     no sample. The pull is a row of the family too: a failed run raises
     `OciMetricsPullFailed`, and a pull older than an hour and a half
-    `OciMetricsPullStale` (operations.md §6.3). Until
-    the key is sealed in, neither the key's SealedSecret nor the pull
-    is declared, and `volume_ids` is not read.
+    `OciMetricsPullStale` (operations.md §6.3).
     **The state backend is checked every hour**, each of its two checks
     a CronJob of its own on the worker. Both run one program of this
     repository, rendered into a `ConfigMap` beside the settings it
@@ -245,8 +241,7 @@ classes its objects fall into (§1.2):
     check that has not passed in an hour and a half the matching
     `…Stale`, all into physical/state-backend.md §6, which routes the
     finding the run's log names. A run is retried twice before it
-    fails, since both cross the internet. Until the freshness key is
-    sealed in, the dump check and its SealedSecret are not declared.
+    fails, since both cross the internet.
     **The control planes are read by readings defined once**
     (`lib/monitoring/readings.py`): each a name, a window, a
     PromQL expression over the history's series, a unit, and the budget
@@ -406,9 +401,8 @@ classes its objects fall into (§1.2):
     alert-webhook row, §1.1); the SealedSecret renders the URL in the
     cluster from `conventions.HOME_ASSISTANT`'s address and the id, and
     the receiver reads it through the operator's `url_secret`, so the
-    whole URL appears in no rendered configuration (rfc-007 §7.3); until
-    the id is sealed in, the receiver is skipped and alerts end at the chart's
-    `blackhole` receiver (physical/bring-up.md §1). **The cluster
+    whole URL appears in no rendered configuration (rfc-007 §7.3).
+    **The cluster
     checks in**: a rule that always fires, in the `heartbeat` tier,
     which the receiver repeats to Home Assistant, whose timer for it is
     the dead-man of operations.md §4. Alertmanager holds **no GitHub
@@ -452,9 +446,7 @@ classes its objects fall into (§1.2):
     (credentials.md §1, rule 3), and uploads with the `etcd` scope's
     writer key, sealed strict as `writer-etcd` (§1.1). It is behind
     Cilium and the sealing controller, whose chart defines the
-    SealedSecret. Until `writer-etcd` is sealed in, the namespace and
-    the `ServiceAccount` are all it declares: the CronJob waits for
-    bring-up stage 6's seal (physical/bring-up.md). Each snapshot is
+    SealedSecret. Each snapshot is
     encrypted to the escrowed backup generations and to the
     restore-verify's recipient. Beside it, the **daily restore-verify**
     is the CronJob `etcd-restore-verify` in the same namespace, off the
@@ -463,8 +455,7 @@ classes its objects fall into (§1.2):
     it (cluster/storage.md §5). It lists and downloads with the
     snapshots' read-only key, sealed strict as `reader-etcd`, and
     decrypts with an age identity of its own, sealed strict as
-    `etcd-drill` (§1.1), and holds no Kubernetes or Talos grant. Until
-    both are sealed in, its scripts' `ConfigMap` is all it declares.
+    `etcd-drill` (§1.1), and holds no Kubernetes or Talos grant.
 10. **The state table's daily upkeep** — the CronJob `state-upkeep` in a
     namespace of its own, `state-upkeep`, at `restricted`, on the control
     planes (`components.state_upkeep`, physical/state-backend.md §2). It
@@ -476,8 +467,7 @@ classes its objects fall into (§1.2):
     reaches the state backend as the role `upkeep`, with that role's
     client bundle sealed strict as `state-backend-upkeep` (§1.1), and
     holds no Kubernetes grant. It is behind Cilium and the sealing
-    controller, which defines the SealedSecret. Until the bundle is
-    sealed in, the namespace and the `ConfigMap` are all it declares.
+    controller, which defines the SealedSecret.
 
 Every chart this list installs is pinned in `Pulumi.yaml`'s `versions:`
 block as `versions:chart-<name>`, the Gateway API definitions as
@@ -539,12 +529,16 @@ Two channels, chosen by who consumes the secret:
         secrets; the stack program reads it and hands each component
         the ciphertext of the values it declares, and the component
         declares the SealedSecret through `kluster.lib.k8s.sealed_secret`.
+        A value the stack does not hold stops the run at its read,
+        naming the value, its namespace and the command that seals it
+        (`kluster.lib.k8s.sealed_ciphertext`).
     -   **The sealed values are a census**, `conventions.sealed`,
         because two programs agree on each one: the `credentials`
         command seals and writes it, and a stack declares it. Each row
         names the Secret the value becomes, its namespace, the keys of
-        its data, the scope it is sealed at and the stack that declares
-        it, and the configuration path follows from the row. A value
+        its data, the scope it is sealed at, the stack that declares it
+        and the `credentials` command that seals it, and the
+        configuration path follows from the row. A value
         `credentials` seals is sealed strict — name and namespace bound
         into the ciphertext, `kubeseal`'s own default — since nothing
         about it will be renamed ([credentials.md](../credentials.md)
@@ -888,11 +882,7 @@ All decided behavior from architecture.md §3, expressed as config:
     state from the same convention rather than inherit — and, on the
     UDM side, a line of the site's BGP configuration, which is a secret
     in `physical`'s state and rests in the controller's site
-    configuration. While the password is absent from the
-    stack's configuration (rfc-007 §3.2), no SealedSecret is
-    declared and the session is declared all the same: Cilium then
-    opens it with an empty password, which the UDM refuses, so it stays
-    down until the operator's sealing sitting adds the value. The UDM's
+    configuration. The UDM's
     FRR configuration applies an inbound **prefix-list** (`192.168.71.0/24
     le 32` + the ULA /64 `le 128`, deny the rest) plus a
     `maximum-prefix` cap, and on the IPv6 family the route-map that
@@ -990,10 +980,7 @@ All decided behavior from architecture.md §3, expressed as config:
     preview that shows the row. A renewal reaches Envoy with nothing
     restarted: the operator copies a referenced TLS Secret into Cilium's
     secrets namespace whenever it changes, and the agent pushes it to
-    Envoy over SDS. Until the token is sealed into the stack, which
-    needs the running controller, no SealedSecret is declared for it,
-    the run warns naming it, and the issuer and the certificates stay
-    pending ([physical/bring-up.md](../physical/bring-up.md) §1).
+    Envoy over SDS.
 -   **Egress Gateway**: not enabled. It refuses to start without BPF
     masquerading, which on this platform brings the legacy host-routing
     switch with it (Datapath, above). Only hath would use it, for the

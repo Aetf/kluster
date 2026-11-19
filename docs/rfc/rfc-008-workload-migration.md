@@ -97,6 +97,11 @@
     ([Aetf/kluster-ops#772](https://github.com/Aetf/kluster-ops/issues/772)).
     §10's record and §5.5's are `public_records` on the application base,
     which `expose` calls, rather than `route`'s (rfc-007 §9.1).
+*   **Updated:** 2026-11-19. §10's sealed-value paragraph and §9's
+    row for physical/bring-up.md: rfc-007 slice 13's pull request has
+    deleted the dated exception for an absent sealed value, and an absent
+    one stops the run at its read, naming the command that seals it
+    ([Aetf/kluster-ops#774](https://github.com/Aetf/kluster-ops/issues/774)).
 *   **Authority:** AGENTS.md,
     [framework/dispatch.md](../framework/dispatch.md),
     [framework/rfc.md](../framework/rfc.md) and the style rules
@@ -2452,7 +2457,7 @@ worker has given the memory back. **New rule**, landing in migration.md
 | [operations.md](../operations.md) | operations.md §4: the handler's post to Home Assistant over the overlay, and the sentence that the intake accepts `POST` from the internet, from §4.1; the database restore drill and the authentication canary built, from §4.3 and §5.2; its paragraph dated 2026-09-25 corrected by slice 11, which edits that section: the reason it gives for no drill running, that no job in the operations repository starts until the Actions billing of Aetf/kluster-ops#393 is restored, ended when that issue closed on 2026-10-26, and the paragraph says what runs and what is not built as of the slice's merge |
 | [physical/gateway.md](../physical/gateway.md) | gateway.md §1 and §1.5: the UPS card's and thread-dashboard's rows leave `LEGACY_VHOSTS` at Wave B's cut for device rows, and the proxy answers the gateway's own names alone once that census is empty, from §4.1 and §5.5. gateway.md §2.1, §2.3 and §2.6: the operations handler's member, its confinement to Home Assistant's port, and its concurrency group, from §4.1. gateway.md §4.2: Home Assistant's allow, "a single host as a literal" narrowed to destinations, the peer rows read the census, and the names the media VIP answers as the rows on `media`, `haos` among them, from §4.1. gateway.md §4.3: the sentences that call a television the sole IoT-originated flow, from §4.1 |
 | [physical/homelab-host.md](../physical/homelab-host.md) | homelab-host.md §2: the host's leg on the cluster VLAN answering the worker on thread-dashboard's port, and the heard relay as a unit of the host whose command is its row's port, group and VIP, under a task ceiling and a restart, from §4.1 and §5.6. homelab-host.md §3: the A380's bind in Wave C's window, with the growth, from §5.6 and §6.2 |
-| [physical/bring-up.md](../physical/bring-up.md) | The runbook is written beside this RFC by a pull request of its own (Aetf/kluster#663), and no slice here creates it. It states: the dated exception that an absent sealed value warns and declares no SealedSecret, and its retirement at rfc-007 slice 13's gate, from §10. The sealed values arriving as one commit to the stack file, from §10. The uplink's MTU read, and UDP through the balancer tried at the gate, from §4.1. The volume's size read, from §4.2. The last stage carrying the legacy sealing key and sealing the writer keys, from §4.6 |
+| [physical/bring-up.md](../physical/bring-up.md) | The runbook is written beside this RFC by a pull request of its own (Aetf/kluster#663), and no slice here creates it. It states: an absent sealed value stops the run at its read, the values sealed at its stage 6, from §10. The sealed values arriving as one commit to the stack file, from §10. The uplink's MTU read, and UDP through the balancer tried at the gate, from §4.1. The volume's size read, from §4.2. The last stage carrying the legacy sealing key and sealing the writer keys, from §4.6 |
 | [threat-model.md](../threat-model.md) | threat-model.md §2.10 and §4: which members the program generates and the flow rules confine, with the operations handler's identity and the one port it reaches, from §4.1 |
 | [cluster/security-audit.md](../cluster/security-audit.md) | The worker's address and Cloudflare's ranges in place of the gateway pod range in Home Assistant's trusted proxies, the home side adding none, `haos` answering on the IoT VLAN at the media VIP, the client Home Assistant sees on each path, what it sees where the balancer does not preserve the source, and the residuals that a pod on the worker, or a sender inside Cloudflare's ranges, can assert a client address, from §4.1. The restic password in clear in each repository SealedSecret and in the etcd snapshots, with its actor and why it opens nothing, from §4.2 |
 | [style/pulumi.md](../style/pulumi.md) | "Data": the composed declaration in place of `Exposure` as its example, from §4.1. "Layering": the StackReference uses `apps` and `k8s-base` gain, from §4.1 and §5.5 |
@@ -2499,12 +2504,14 @@ monitoring on the worker, the one node with a route to Home Assistant
 that fails when alertmanager can schedule elsewhere, and edits rfc-007
 §7.1 in place to add the reason, as rfc.md §5.2 provides.
 
-**Until rfc-007 slice 13's gate has passed, an absent sealed value warns
-at the run and declares no SealedSecret.** It is a dated exception to
-style/pulumi.md's rule that absence stops the run at the read. **New
-rule**, landing in physical/bring-up.md, where it retires. rfc-007 slice
-9 builds it, with a test of the absent path, and the last step of slice
-13 deletes it, with a test of the refusal that replaces it.
+**An absent sealed value stops the run at its read**, as
+style/pulumi.md's rule has it, naming the value, its namespace and the
+command that seals it (`kluster.lib.k8s.AbsentSealedValue`). Until
+rfc-007 slice 13's gate had passed, a dated exception declared no
+SealedSecret for an absent value and warned at the run instead: rfc-007
+slice 9 built it, with a test of the absent path, and the last step of
+slice 13 deleted it, with a test of the refusal that replaced it.
+physical/bring-up.md §1 states where the values are sealed.
 
 **Slice 12 is cut.** Its application base — the namespace at `restricted`,
 the route label, the default-deny policy and the admission of the

@@ -24,10 +24,6 @@ reaches the listeners with nothing restarted: Cilium's operator copies the
 Secret into its own namespace and the agent pushes it to Envoy over SDS
 (cluster-infra.md §2).
 
-While the token is absent from the stack's configuration, no SealedSecret is
-declared for it, and the issuer and the certificates are declared all the same
-and stay pending until it is sealed in (`kluster.lib.k8s.sealed_value`).
-
 Its namespace is `restricted`: the chart's own security contexts meet it.
 """
 
@@ -70,8 +66,7 @@ class CertManager(Component, pulumi_type='kluster:certificates:CertManager'):
     Pulumi does not push down to a component's children.
 
     `dns01_token` is the ciphertext the stack's configuration holds for
-    `conventions.sealed.DNS01_TOKEN`, `None` while it holds none; the `None`
-    is the bring-up's tolerance, and goes with it (physical/bring-up.md §1).
+    `conventions.sealed.DNS01_TOKEN` (`kluster.lib.k8s.sealed_ciphertext`).
     `certificates` names, per served zone, the Secret the Gateways' listeners
     read that zone's certificate from, in `certificates_namespace`.
     """
@@ -82,7 +77,7 @@ class CertManager(Component, pulumi_type='kluster:certificates:CertManager'):
         *,
         chart: ChartPin,
         after: Sequence[pulumi.Resource],
-        dns01_token: Mapping[str, str] | None,
+        dns01_token: Mapping[str, str],
         certificates: Mapping[str, str],
         certificates_namespace: pulumi.Input[str],
         opts: pulumi.ResourceOptions | None = None,

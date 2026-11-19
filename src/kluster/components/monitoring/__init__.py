@@ -23,10 +23,7 @@ reach both stores the same way. Grafana reads the history as a datasource of
 its own. Each store's volume is `local-path`, on the worker. **Each store is
 backed up hourly to the backup bucket and restores itself before it starts**
 (`stores`), under the monitoring namespace's writer key on the bucket
-(`conventions.sealed.writer_key`), which `k8s-base` holds sealed. While the
-stack's configuration holds no ciphertext for it, no SealedSecret is declared
-for it, and neither the backup jobs nor the restore are declared: the stores
-then start empty and are copied nowhere (physical/bring-up.md §1). Each
+(`conventions.sealed.writer_key`), which `k8s-base` holds sealed. Each
 backup is a row of the scheduled-job family
 (`conventions.schedule.METRICS_BACKUPS`): one older than its period allows
 raises `MetricsBackupStale`, and one whose last run failed
@@ -37,8 +34,7 @@ raises `MetricsBackupStale`, and one whose last run failed
 rendered into a ConfigMap, in the `oci-sdk` image, under the metrics reader's
 key, which `k8s-base` holds sealed (`conventions.sealed.OCI_METRICS`). Its
 targets are the volumes the census declares, by the OCIDs `physical`
-publishes for them. While the stack's configuration holds no ciphertext for
-the key, neither the SealedSecret nor the pull is declared. The pull is a row
+publishes for them. The pull is a row
 of the scheduled-job family (`conventions.schedule.OCI_METRICS_PULL`): one older
 than its period allows raises `OciMetricsPullStale`, and one whose last run
 failed `OciMetricsPullFailed` (`rules`).
@@ -46,12 +42,10 @@ failed `OciMetricsPullFailed` (`rules`).
 **The state backend is checked from here every hour** (`state_backend`): two
 CronJobs run `state_backend_check`, a program of this repository rendered into
 a ConfigMap, in the same `oci-sdk` image. `state-backend-certificate` reads the
-server certificate off a handshake with the box and needs no credential, so it
-is always declared. `state-backend-dumps` lists the dump prefix with the
-freshness key, which `k8s-base` holds sealed
-(`conventions.sealed.B2_FRESHNESS_DUMPS`); while the stack's configuration
-holds no ciphertext for it, neither its SealedSecret nor that CronJob is
-declared. Each is a row of the scheduled-job family
+server certificate off a handshake with the box and needs no credential.
+`state-backend-dumps` lists the dump prefix with the freshness key, which
+`k8s-base` holds sealed (`conventions.sealed.B2_FRESHNESS_DUMPS`). Each is a
+row of the scheduled-job family
 (`conventions.schedule.STATE_BACKEND_DUMPS`, `STATE_BACKEND_CERTIFICATE`):
 `StateBackendDumpsFailed` or `StateBackendCertificateFailed` for a run that
 failed, and the `…Stale` alerts for a check that has not passed in an hour
@@ -141,11 +135,7 @@ is sealed, `conventions.sealed.ALERT_WEBHOOK`; its SealedSecret renders the URL
 around it, Home Assistant's own address from `conventions.HOME_ASSISTANT` with
 its port and webhook path (`webhook_url`), and the receiver reads that URL
 through the operator's `url_secret`, so the id is in no rendered
-configuration. While the id is absent from the stack's configuration, no
-SealedSecret is declared for it; the operator then skips the receiver's
-configuration, and every alert ends at the chart's `blackhole` receiver until
-the value is sealed in (`kluster.lib.k8s.sealed_value`,
-physical/bring-up.md §1). The rules are `rules.rule_groups`, among them the
+configuration. The rules are `rules.rule_groups`, among them the
 cluster's check-in, which the receiver repeats on a short interval, and the
 scrape-target family over every job the other alerts read, which reads each
 job by the `job` label `scrape_jobs` gives it. Beside them, in a rule object
@@ -461,23 +451,19 @@ def _store_keys() -> dict[str, object]:
     }
 
 
-def _restore(restore: Sequence[Mapping[str, Any]] | None) -> dict[str, object]:
-    """A vmsingle's restore: its init containers, and the volumes they mount beside its data; nothing where it has none."""
-    if restore is None:
-        return {}
+def _restore(restore: Sequence[Mapping[str, Any]]) -> dict[str, object]:
+    """A vmsingle's restore: its init containers, and the volumes they mount beside its data."""
     return {'initContainers': [dict(it) for it in restore], 'volumes': stores.restore_volumes()}
 
 
-def stack_values(
-    release: str, chart: ChartPin, *, restore: Sequence[Mapping[str, Any]] | None = None
-) -> dict[str, object]:
+def stack_values(release: str, chart: ChartPin, *, restore: Sequence[Mapping[str, Any]]) -> dict[str, object]:
     """The VictoriaMetrics stack chart's values, installed as `release` from `chart`.
 
     Placed on the worker, the chart's extras off, Grafana's admin given, every
     container's memory from `memory.WORKER_CONTAINERS`, Grafana trimmed to fit
     it, the recent store's retention and keys, and the history store written
-    to and read. `restore` holds the recent store's restore containers, `None`
-    while the writer key is not sealed in. The last value is the digest of
+    to and read. `restore` holds the recent store's restore containers. The
+    last value is the digest of
     everything else and the chart, on Grafana's container, since the
     datasources it reads at start are rendered from them.
     """
@@ -487,7 +473,7 @@ def stack_values(
     return memory.merged(values, {'grafana': {'env': {DATASOURCES_DIGEST_ENV: digest}}})
 
 
-def _stack_values(release: str, chart: ChartPin, restore: Sequence[Mapping[str, Any]] | None) -> dict[str, object]:
+def _stack_values(release: str, chart: ChartPin, restore: Sequence[Mapping[str, Any]]) -> dict[str, object]:
     _, history = stores.stores(release, chart.name)
     return {
         # Fetches rules and dashboards at install time, and is a hook.
@@ -645,7 +631,7 @@ CILIUM_SCRAPES: tuple[CiliumScrape, ...] = (
 
 @dataclass(frozen=True)
 class OciPull:
-    """What the pull of OCI's block-volume series is declared from, once the metrics reader's key is sealed in."""
+    """What the pull of OCI's block-volume series is declared from."""
 
     ciphertext: Mapping[str, str]
     """The ciphertext the stack's configuration holds for `conventions.sealed.OCI_METRICS`."""
@@ -660,9 +646,7 @@ class Monitoring(Component, pulumi_type='kluster:monitoring:Monitoring'):
     beside the stack, declared ahead of it, since each vmsingle mounts it.
 
     `writer_key` is the ciphertext the stack's configuration holds for the
-    namespace's writer key on the backup bucket, `None` while it holds none;
-    until it holds one, neither the stores' backups nor their restores are
-    declared. `history_image`, `backup_image`, `restore_image` and
+    namespace's writer key on the backup bucket. `history_image`, `backup_image`, `restore_image` and
     `bucket_image` are the pins the history store, `vmbackup`, `vmrestore`
     and the bucket's client run.
 
@@ -672,24 +656,18 @@ class Monitoring(Component, pulumi_type='kluster:monitoring:Monitoring'):
     which Pulumi does not push down to a component's children.
 
     `alert_webhook` is the ciphertext the stack's configuration holds for
-    `conventions.sealed.ALERT_WEBHOOK`, `None` while it holds none; the `None`
-    is the bring-up's tolerance, and goes with it (physical/bring-up.md §1).
+    `conventions.sealed.ALERT_WEBHOOK`.
 
     `kubeconfig_expiry` is the `NotAfter` of the client certificate in the
     stack's copy of the cluster-admin kubeconfig, declassified, from which
     `KubeconfigCopyExpiring` is built (`rules.kubeconfig_copy`).
 
     `oci_pull` is what the pull of OCI's block-volume series is declared
-    from, `None` while the configuration holds no ciphertext for the metrics
-    reader's key; until it holds one, the pull is not declared. The `None` is
-    the bring-up's tolerance, and goes with it (physical/bring-up.md §1).
-    `oci_sdk_image` is the pin it runs, and the pin the state backend's checks
+    from. `oci_sdk_image` is the pin it runs, and the pin the state backend's checks
     run.
 
     `freshness_key` is the ciphertext the stack's configuration holds for
-    `conventions.sealed.B2_FRESHNESS_DUMPS`, `None` while it holds none; until
-    it holds one, the dump-age check is not declared, and the certificate
-    check is declared all the same.
+    `conventions.sealed.B2_FRESHNESS_DUMPS`, which the dump-age check reads.
     """
 
     def __init__(
@@ -699,16 +677,16 @@ class Monitoring(Component, pulumi_type='kluster:monitoring:Monitoring'):
         stack_chart: ChartPin,
         metrics_server_chart: ChartPin,
         after: Sequence[pulumi.Resource],
-        alert_webhook: Mapping[str, str] | None,
+        alert_webhook: Mapping[str, str],
         kubeconfig_expiry: pulumi.Output[dt.datetime],
-        writer_key: Mapping[str, str] | None,
+        writer_key: Mapping[str, str],
         history_image: ImagePin,
         backup_image: ImagePin,
         restore_image: ImagePin,
         bucket_image: ImagePin,
-        oci_pull: OciPull | None,
+        oci_pull: OciPull,
         oci_sdk_image: ImagePin,
-        freshness_key: Mapping[str, str] | None,
+        freshness_key: Mapping[str, str],
         opts: pulumi.ResourceOptions | None = None,
     ) -> None:
         super().__init__(name, opts=opts)
@@ -757,42 +735,32 @@ class Monitoring(Component, pulumi_type='kluster:monitoring:Monitoring'):
             ciphertext=writer_key,
             opts=self.child_opts(depends_on=[*after, self.namespace]),
         )
-        backups = (
-            _Backups(
-                images=stores.Images(backup=str(backup_image), restore=str(restore_image), bucket=str(bucket_image)),
-                bucket=stores.Bucket(
-                    # The SealedSecret's name is the row's, and so is the Secret's.
-                    writer_secret=writer.name,
-                    endpoint=s3_endpoint(conventions.B2_ACCOUNT.region),
-                    region=conventions.B2_ACCOUNT.region,
-                ),
-            )
-            if self.writer_key is not None
-            else None
+        backups = _Backups(
+            images=stores.Images(backup=str(backup_image), restore=str(restore_image), bucket=str(bucket_image)),
+            bucket=stores.Bucket(
+                # The SealedSecret's name is the row's, and so is the Secret's.
+                writer_secret=writer.name,
+                endpoint=s3_endpoint(conventions.B2_ACCOUNT.region),
+                region=conventions.B2_ACCOUNT.region,
+            ),
         )
-        self.shell = (
-            k8s.core.v1.ConfigMap(
-                f'{name}-backup-shell',
-                metadata=k8s.meta.v1.ObjectMetaArgs(
-                    name=stores.SHELL_CONFIGMAP, namespace=self.namespace.metadata.name
-                ),
-                data=dict(stores.SHELL),
-                opts=self.child_opts(depends_on=[self.namespace]),
-            )
-            if backups is not None
-            else None
+        self.shell = k8s.core.v1.ConfigMap(
+            f'{name}-backup-shell',
+            metadata=k8s.meta.v1.ObjectMetaArgs(name=stores.SHELL_CONFIGMAP, namespace=self.namespace.metadata.name),
+            data=dict(stores.SHELL),
+            opts=self.child_opts(depends_on=[self.namespace]),
         )
         # What a store's pod mounts or reads before it starts: the restore's
-        # scripts and key, where it has a restore.
-        restored = [it for it in (self.shell, self.writer_key) if it is not None]
+        # scripts and key.
+        restored = [self.shell, self.writer_key]
         self.chart = helm_chart(
             name,
             pin=stack_chart,
             namespace=self.namespace.metadata.name,
-            values=stack_values(name, stack_chart, restore=backups.restore(recent) if backups is not None else None),
+            values=stack_values(name, stack_chart, restore=backups.restore(recent)),
             # Behind Grafana's Secret, which its pod reads at start, and the
             # stores' keys, which vmsingle mounts and does not start without, and
-            # the recent store's restore, where it has one.
+            # the recent store's restore.
             opts=self.child_opts(depends_on=[*after, self.grafana_admin, self.auth_keys, *restored]),
         )
         self.metrics_server = helm_chart(
@@ -877,72 +845,59 @@ class Monitoring(Component, pulumi_type='kluster:monitoring:Monitoring'):
             # Named, since vmagent's remote write and Grafana's datasource
             # address the Service the operator names after it.
             metadata=k8s.meta.v1.ObjectMetaArgs(name=history.vmsingle, namespace=self.namespace.metadata.name),
-            spec=history_store_spec(
-                image=history_image, restore=backups.restore(history) if backups is not None else None
-            ),
+            spec=history_store_spec(image=history_image, restore=backups.restore(history)),
             opts=self.child_opts(depends_on=[self.chart, self.auth_keys, *restored]),
         )
-        self.backups = (
-            [
-                k8s.batch.v1.CronJob(
-                    f'{name}-{store.backup.cronjob}',
-                    metadata=k8s.meta.v1.ObjectMetaArgs(
-                        name=store.backup.cronjob, namespace=self.namespace.metadata.name
-                    ),
-                    spec=backups.cronjob(store),
-                    opts=self.child_opts(depends_on=[self.chart, self.history, *restored]),
-                )
-                for store in (recent, history)
-            ]
-            if backups is not None
-            else []
-        )
+        self.backups = [
+            k8s.batch.v1.CronJob(
+                f'{name}-{store.backup.cronjob}',
+                metadata=k8s.meta.v1.ObjectMetaArgs(name=store.backup.cronjob, namespace=self.namespace.metadata.name),
+                spec=backups.cronjob(store),
+                opts=self.child_opts(depends_on=[self.chart, self.history, *restored]),
+            )
+            for store in (recent, history)
+        ]
 
         # Behind the sealing controller, whose chart defines the kind, and the
         # namespace the key is sealed to.
         self.metrics_reader_key = sealed_value(
             f'{name}-oci-metrics',
             conventions.sealed.OCI_METRICS,
-            ciphertext=oci_pull.ciphertext if oci_pull is not None else None,
+            ciphertext=oci_pull.ciphertext,
             opts=self.child_opts(depends_on=[*after, self.namespace]),
         )
-        self.oci_pull_program = None
-        self.oci_pull = None
-        if oci_pull is not None and self.metrics_reader_key is not None:
-            compartment = conventions.OCI_TENANCY.compartments[conventions.PHYSICAL].require()
-            importer = stores.vmagent_url(name, stack_chart.name)
-            settings = oci_pull.volume_ids.apply(
-                lambda ids: oci_metrics.settings(
-                    oci_metrics.targets(
-                        ids,
-                        nodes=conventions.CLOUD_NODES,
-                        boot_volume=BOOT_VOLUME,
-                        node_volumes=conventions.NODE_VOLUMES,
-                    ),
-                    compartment=compartment,
-                    history=history.url,
-                    importer=importer,
-                )
-            )
-            self.oci_pull_program = k8s.core.v1.ConfigMap(
-                f'{name}-oci-pull',
-                metadata=k8s.meta.v1.ObjectMetaArgs(
-                    name=oci_metrics.PULL_CONFIGMAP, namespace=self.namespace.metadata.name
+        compartment = conventions.OCI_TENANCY.compartments[conventions.PHYSICAL].require()
+        importer = stores.vmagent_url(name, stack_chart.name)
+        settings = oci_pull.volume_ids.apply(
+            lambda ids: oci_metrics.settings(
+                oci_metrics.targets(
+                    ids,
+                    nodes=conventions.CLOUD_NODES,
+                    boot_volume=BOOT_VOLUME,
+                    node_volumes=conventions.NODE_VOLUMES,
                 ),
-                data={oci_metrics.PROGRAM_FILE: oci_metrics.PROGRAM, oci_metrics.SETTINGS_FILE: settings},
-                opts=self.child_opts(depends_on=[self.namespace]),
+                compartment=compartment,
+                history=history.url,
+                importer=importer,
             )
-            # Behind the stores it writes to, and what its pod mounts.
-            self.oci_pull = k8s.batch.v1.CronJob(
-                f'{name}-{schedule.OCI_METRICS_PULL.cronjob}',
-                metadata=k8s.meta.v1.ObjectMetaArgs(
-                    name=schedule.OCI_METRICS_PULL.cronjob, namespace=self.namespace.metadata.name
-                ),
-                spec=oci_metrics.cronjob_spec(image=oci_sdk_image, affinity=_WORKER_AFFINITY_ARGS),
-                opts=self.child_opts(
-                    depends_on=[self.chart, self.history, self.oci_pull_program, self.metrics_reader_key]
-                ),
-            )
+        )
+        self.oci_pull_program = k8s.core.v1.ConfigMap(
+            f'{name}-oci-pull',
+            metadata=k8s.meta.v1.ObjectMetaArgs(
+                name=oci_metrics.PULL_CONFIGMAP, namespace=self.namespace.metadata.name
+            ),
+            data={oci_metrics.PROGRAM_FILE: oci_metrics.PROGRAM, oci_metrics.SETTINGS_FILE: settings},
+            opts=self.child_opts(depends_on=[self.namespace]),
+        )
+        # Behind the stores it writes to, and what its pod mounts.
+        self.oci_pull = k8s.batch.v1.CronJob(
+            f'{name}-{schedule.OCI_METRICS_PULL.cronjob}',
+            metadata=k8s.meta.v1.ObjectMetaArgs(
+                name=schedule.OCI_METRICS_PULL.cronjob, namespace=self.namespace.metadata.name
+            ),
+            spec=oci_metrics.cronjob_spec(image=oci_sdk_image, affinity=_WORKER_AFFINITY_ARGS),
+            opts=self.child_opts(depends_on=[self.chart, self.history, self.oci_pull_program, self.metrics_reader_key]),
+        )
 
         self.state_backend_checks = k8s.core.v1.ConfigMap(
             f'{name}-state-backend-checks',
@@ -973,17 +928,13 @@ class Monitoring(Component, pulumi_type='kluster:monitoring:Monitoring'):
             opts=self.child_opts(depends_on=[*after, self.namespace]),
         )
         # Behind what its pod mounts: the program's ConfigMap and the key.
-        self.state_backend_dumps = (
-            k8s.batch.v1.CronJob(
-                f'{name}-{schedule.STATE_BACKEND_DUMPS.cronjob}',
-                metadata=k8s.meta.v1.ObjectMetaArgs(
-                    name=schedule.STATE_BACKEND_DUMPS.cronjob, namespace=self.namespace.metadata.name
-                ),
-                spec=state_backend.dumps_cronjob_spec(image=oci_sdk_image, affinity=_WORKER_AFFINITY_ARGS),
-                opts=self.child_opts(depends_on=[self.state_backend_checks, self.freshness_key]),
-            )
-            if self.freshness_key is not None
-            else None
+        self.state_backend_dumps = k8s.batch.v1.CronJob(
+            f'{name}-{schedule.STATE_BACKEND_DUMPS.cronjob}',
+            metadata=k8s.meta.v1.ObjectMetaArgs(
+                name=schedule.STATE_BACKEND_DUMPS.cronjob, namespace=self.namespace.metadata.name
+            ),
+            spec=state_backend.dumps_cronjob_spec(image=oci_sdk_image, affinity=_WORKER_AFFINITY_ARGS),
+            opts=self.child_opts(depends_on=[self.state_backend_checks, self.freshness_key]),
         )
 
         self.register_outputs({})
@@ -991,7 +942,7 @@ class Monitoring(Component, pulumi_type='kluster:monitoring:Monitoring'):
 
 @dataclass(frozen=True)
 class _Backups:
-    """What the stores' backups and restores are declared from, once the writer key is sealed in."""
+    """What the stores' backups and restores are declared from: the images they run and the bucket they reach."""
 
     images: stores.Images
     bucket: stores.Bucket
@@ -1026,15 +977,14 @@ class _Backups:
         )
 
 
-def history_store_spec(*, image: ImagePin, restore: Sequence[Mapping[str, Any]] | None) -> dict[str, object]:
+def history_store_spec(*, image: ImagePin, restore: Sequence[Mapping[str, Any]]) -> dict[str, object]:
     """The history store's vmsingle: its pinned release, for good, on the worker, its own memory and claim, the keys.
 
     The release is pinned by the component, since the operator otherwise runs
     a vmsingle at its own default rather than at the chart's; a tag carrying
     the digest is pulled as tag and digest (`Image.Reference`,
     `api/operator/v1beta1/vmextra_types.go` L1738-1743 at operator v0.74.0).
-    `restore` holds its restore containers, `None` while the writer key is not
-    sealed in.
+    `restore` holds its restore containers.
     """
     return {
         'image': {'repository': image.repository, 'tag': f'{image.tag}@{image.digest}'},

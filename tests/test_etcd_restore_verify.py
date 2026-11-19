@@ -1,10 +1,9 @@
 """The daily etcd restore-verify `k8s-base` declares, and its script run on real snapshots under its image's own bytes.
 
-The declaration is read off the whole `k8s-base` program, once with what the
-stack file holds, every sealed value the stack declares sealed in, and once on
-the absent path, with none (physical/bring-up.md §1). The script runs as the declared CronJob's
-container says: its command, its environment and its mounts, each path
-mapped to a directory of the case's. Its `/bin/sh` and every applet it calls
+The declaration is read off the whole `k8s-base` program, with what the stack
+file holds, every sealed value the stack declares sealed in. The script runs
+as the declared CronJob's container says: its command, its environment and its
+mounts, each path mapped to a directory of the case's. Its `/bin/sh` and every applet it calls
 are the busybox of the image the pin names (`image_busybox`), and `etcd`,
 `etcdctl`, `etcdutl` and `age` are the image's own binaries, read out of it.
 B2 is the fake bucket behind a fake `curl` (`fake_b2_shell`). The ports are
@@ -35,11 +34,10 @@ from typing import Any
 import fake_b2_shell
 import image_busybox
 import process_sessions
-import pulumi
 import pytest
 import pytest_asyncio
 from fake_b2_shell import AUTHORIZATION_V4, BUCKET, FAKE_KEY
-from k8s_base_installation import NOTHING_SEALED, Run, applied
+from k8s_base_installation import Run, applied
 
 from kluster import conventions
 from kluster.components.backup.etcd import (
@@ -90,20 +88,6 @@ async def applied_fixture() -> Run:
     return await applied()
 
 
-@pytest_asyncio.fixture(scope='module', loop_scope='module')
-async def absent() -> tuple[Run, list[str]]:
-    """The absent path: no sealed value at all, and the warnings the run logged."""
-    warned: list[str] = []
-
-    def warn(message: str, *_: object, **__: object) -> None:
-        warned.append(message)
-
-    with pytest.MonkeyPatch.context() as patch:
-        patch.setattr(pulumi.log, 'warn', warn)
-        run = await applied(sealed=NOTHING_SEALED)
-    return run, warned
-
-
 def _named(run: Run, typ: str, name: str) -> list[dict[str, Any]]:
     return [it.inputs for it in run.monitor.of_type(typ) if it.inputs.get('metadata', {}).get('name') == name]
 
@@ -135,18 +119,6 @@ def _mib(quantity: str) -> int:
 
 
 # -- The declaration -----------------------------------------------------------------------
-
-
-def test_without_its_two_values_no_cronjob_is_declared_and_each_value_is_named(
-    absent: tuple[Run, list[str]],
-) -> None:
-    """The absent path: no CronJob, so no series for the family's rules to read, until the key and the identity are sealed in."""
-    run, warnings = absent
-
-    assert not _named(run, CRONJOB, ETCD_RESTORE_VERIFY.cronjob)
-    for value in (READER, IDENTITY):
-        assert not _named(run, SEALED_SECRET, value.name)
-        assert [it for it in warnings if repr(value.name) in it and value.namespace in it], value.name
 
 
 def test_the_pod_reads_the_reader_key_from_the_secret_its_sealed_secret_becomes(applied: Run) -> None:

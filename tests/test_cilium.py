@@ -6,8 +6,7 @@ chart's values, the Gateway API definitions, the Gateways' class and its
 configuration, the three address pools, the baseline policy and the BGP session
 to the gateway (rfc-007 §4, §5.1). Its configuration is what the stack file
 holds, every sealed value the stack declares sealed in, the session's password
-among them. The session's absent path runs it once more, with no sealed value
-(physical/bring-up.md §1).
+among them.
 
 Literals written here are the upstream projects' contracts: the values both
 guides for Cilium on Talos prescribe and the Gateway API switches Talos' guide
@@ -30,26 +29,20 @@ import re
 from collections.abc import Mapping
 from typing import Any, cast
 
-import pulumi
 import pytest
 import pytest_asyncio
-from client_kubeconfig import KUBECONFIG
 from k8s_base_installation import (
     CHART,
     GATEWAY_API_DEFINITIONS,
-    NOTHING_SEALED,
     OUTPUTS,
     PUBLISHED,
     SEALED,
-    VERSIONS_CONFIG,
-    Autonaming,
     Physical,
     Run,
     applied,
     declare,
-    release_assets,
 )
-from mock_monitor import Declaration, declaring, run_under_backstop
+from mock_monitor import Declaration
 from pulumi.output import UNKNOWN
 from referenced_stack import reading_back
 
@@ -57,7 +50,6 @@ from kluster import conventions
 from kluster.components import talos
 from kluster.components.gateway import routing
 from kluster.conventions.cluster import POOL_WORKER
-from kluster.lib.k8s import KUBECONFIG_KEY
 from kluster.lib.stack_addresses import Held
 from kluster.lib.versions import versions
 
@@ -488,34 +480,6 @@ CILIUM_PASSWORD_KEY = 'password'
 UNPRIVILEGED_PORT_FLOOR = 1024
 
 
-async def _declared(*, sealed: dict[str, object]) -> tuple[Run, list[str]]:
-    """The whole program with `sealed` as its sealed values, and every warning it logged."""
-    from kluster.stacks import k8s_base
-
-    config = {
-        f'kluster:{KUBECONFIG_KEY}': KUBECONFIG,
-        f'kluster:{conventions.sealed.CONFIG_KEY}': json.dumps(sealed),
-    }
-    pulumi.runtime.set_all_config(config | VERSIONS_CONFIG, secret_keys=[f'kluster:{KUBECONFIG_KEY}'])
-    monitor = await run_under_backstop(Autonaming(), stack=conventions.STACK_NAMES.k8s_base)
-    warned: list[str] = []
-
-    def warn(message: str, *_: object, **__: object) -> None:
-        warned.append(message)
-
-    with release_assets() as fetched, pytest.MonkeyPatch.context() as patch:
-        patch.setattr(pulumi.log, 'warn', warn)
-        async with declaring():
-            await k8s_base.main()
-    return Run(monitor, fetched), warned
-
-
-@pytest_asyncio.fixture(scope='module', loop_scope='module', name='unsealed')
-async def unsealed_fixture() -> tuple[Run, list[str]]:
-    """The absent path: the stack holding no sealed value, the session's password among them."""
-    return await _declared(sealed=NOTHING_SEALED)
-
-
 def _one(run: Run, kind: str) -> dict[str, Any]:
     (declared,) = [it.inputs for it in run.monitor.of_type(kind)]
     return declared
@@ -688,18 +652,6 @@ def test_the_advertisement_selects_the_lan_pools_services(applied: Run) -> None:
     assert announced == {name for name, labels in services.items() if _matches(lan_pool, labels)}
     assert announced
     assert announced != set(services)
-
-
-def test_an_absent_password_declares_no_sealed_secret_warns_naming_it_and_leaves_the_session_declared(
-    unsealed: tuple[Run, list[str]],
-) -> None:
-    """The absent path: nothing is declared for the password, the run says so, and the session waits for it."""
-    run, warned = unsealed
-
-    assert [it for it in run.monitor.of_type(SEALED_SECRET) if it.inputs['metadata']['name'] == PASSWORD.name] == []
-    assert [message for message in warned if repr(PASSWORD.name) in message]
-    assert _one(run, BGP_PEER)['spec']['authSecretRef'] == PASSWORD.name
-    assert run.monitor.of_type(BGP_CLUSTER)
 
 
 def test_the_password_waits_for_the_sealing_controller(applied: Run) -> None:

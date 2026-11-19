@@ -110,7 +110,8 @@ be preserved (see the worked example).
     the workload runs as, which every mover of the claim runs as too, so
     that it reads and writes the data as the workload does.
     `writer_key` is the ciphertext of the namespace's sealed writer key
-    as the program read it, `None` while it is not sealed in (§3). The
+    as the program read it, which a stack that does not hold it stops at
+    (§3, `kluster.lib.k8s.sealed_ciphertext`). The
     generation, `moving_to` and `stopped`, the workload the copy's
     source is applied after, are how the claim moves (storage.md §3.1).
     `protect` protects the claim, for precious data and for a node

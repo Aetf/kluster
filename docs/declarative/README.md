@@ -82,9 +82,8 @@ the `physical` stack's outputs, enumerated in
 addresses; `k8s-base` and `apps` read the addresses the pools are made
 of, each read so that anything but an address stops the run, `k8s-base`
 to declare the pools and `apps` to hand a raw port's Service the
-addresses of its front (rfc-008 §4.1); and `k8s-base` reads, once the
-OCI pull's key is sealed in, the OCID of each cloud node's volume
-([cluster-infra.md](cluster-infra.md) §0). The exception is `dns`'s
+addresses of its front (rfc-008 §4.1); and `k8s-base` reads the OCID
+of each cloud node's volume ([cluster-infra.md](cluster-infra.md) §0). The exception is `dns`'s
 zone IDs, which it exports for the records declared beside each
 application ([dns.md](dns.md) §1); `apps` reads them, and a zone a
 record is in that the mapping lacks stops the run naming it

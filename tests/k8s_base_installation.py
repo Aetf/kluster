@@ -11,11 +11,8 @@ the committed stack file holds: every sealed value the stack declares, sealed
 in (`SEALED`). `sealed_values` builds those values for any stack, and
 `test_stack_programs.py` seals in each of its programs' values through it.
 
-A run on the absent path -- the stack holding no ciphertext for a value it
-declares, which the bring-up's tolerance declares nothing for
-(physical/bring-up.md §1) -- is asked for by name, with `NOTHING_SEALED` or
-`sealed_without`, and every case that reads one says it reads the absent
-path.
+`sealed_without` is that configuration less the values it names: a stack
+file missing a value its program reads, which stops the run at that read.
 
 Every value is invented. The addresses are documentation and private ranges
 of the families each output carries, and each output holds addresses no other
@@ -352,13 +349,9 @@ def sealed_values(stack: str) -> dict[str, object]:
 #: the committed stack file holds.
 SEALED: dict[str, object] = sealed_values(conventions.STACK_NAMES.k8s_base)
 
-#: The absent path whole: a stack holding no ciphertext for any value it
-#: declares.
-NOTHING_SEALED: dict[str, object] = {}
-
 
 def sealed_without(*values: conventions.sealed.SealedValue) -> dict[str, object]:
-    """`SEALED` with no ciphertext for any of `values`: the absent path of those values alone."""
+    """`SEALED` with no ciphertext for any of `values`."""
     names = {value.name for value in values}
     return {name: held for name, held in SEALED.items() if name not in names}
 
