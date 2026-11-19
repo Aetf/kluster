@@ -1,8 +1,8 @@
 """The daily etcd restore-verify `k8s-base` declares, and its script run on real snapshots under its image's own bytes.
 
-The declaration is read off the whole `k8s-base` program, once with every
-sealed value the stack declares sealed in and once with none
-(physical/bring-up.md §1). The script runs as the declared CronJob's
+The declaration is read off the whole `k8s-base` program, once with what the
+stack file holds, every sealed value the stack declares sealed in, and once on
+the absent path, with none (physical/bring-up.md §1). The script runs as the declared CronJob's
 container says: its command, its environment and its mounts, each path
 mapped to a directory of the case's. Its `/bin/sh` and every applet it calls
 are the busybox of the image the pin names (`image_busybox`), and `etcd`,
@@ -39,7 +39,7 @@ import pulumi
 import pytest
 import pytest_asyncio
 from fake_b2_shell import AUTHORIZATION_V4, BUCKET, FAKE_KEY
-from k8s_base_installation import SEALED, Run, applied
+from k8s_base_installation import NOTHING_SEALED, Run, applied
 
 from kluster import conventions
 from kluster.components.backup.etcd import (
@@ -84,15 +84,15 @@ START_TIMEOUT = 20.0
 MARGIN = dt.timedelta(minutes=10)
 
 
-@pytest_asyncio.fixture(scope='module', loop_scope='module')
-async def sealed() -> Run:
-    """Every sealed value the stack declares, sealed in."""
-    return await applied(sealed=SEALED)
+@pytest_asyncio.fixture(scope='module', loop_scope='module', name='applied')
+async def applied_fixture() -> Run:
+    """The stack as its file holds it: every sealed value it declares, sealed in."""
+    return await applied()
 
 
 @pytest_asyncio.fixture(scope='module', loop_scope='module')
 async def absent() -> tuple[Run, list[str]]:
-    """No sealed value at all, and the warnings the run logged."""
+    """The absent path: no sealed value at all, and the warnings the run logged."""
     warned: list[str] = []
 
     def warn(message: str, *_: object, **__: object) -> None:
@@ -100,7 +100,7 @@ async def absent() -> tuple[Run, list[str]]:
 
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr(pulumi.log, 'warn', warn)
-        run = await applied()
+        run = await applied(sealed=NOTHING_SEALED)
     return run, warned
 
 
@@ -140,7 +140,7 @@ def _mib(quantity: str) -> int:
 def test_without_its_two_values_no_cronjob_is_declared_and_each_value_is_named(
     absent: tuple[Run, list[str]],
 ) -> None:
-    """No CronJob, so no series for the family's rules to read, until both the key and the identity are sealed in."""
+    """The absent path: no CronJob, so no series for the family's rules to read, until the key and the identity are sealed in."""
     run, warnings = absent
 
     assert not _named(run, CRONJOB, ETCD_RESTORE_VERIFY.cronjob)
@@ -149,9 +149,9 @@ def test_without_its_two_values_no_cronjob_is_declared_and_each_value_is_named(
         assert [it for it in warnings if repr(value.name) in it and value.namespace in it], value.name
 
 
-def test_the_pod_reads_the_reader_key_from_the_secret_its_sealed_secret_becomes(sealed: Run) -> None:
-    (key,) = _named(sealed, SEALED_SECRET, READER.name)
-    environment = _environment(_container(sealed))
+def test_the_pod_reads_the_reader_key_from_the_secret_its_sealed_secret_becomes(applied: Run) -> None:
+    (key,) = _named(applied, SEALED_SECRET, READER.name)
+    environment = _environment(_container(applied))
     secret = key['spec']['template']['metadata']['name']
 
     assert key['metadata']['namespace'] == ETCD_RESTORE_VERIFY.namespace
@@ -160,10 +160,10 @@ def test_the_pod_reads_the_reader_key_from_the_secret_its_sealed_secret_becomes(
         assert environment[field] == {'secretKeyRef': {'name': secret, 'key': field}}, field
 
 
-def test_the_identity_the_script_reads_is_the_key_of_the_secret_its_sealed_secret_becomes(sealed: Run) -> None:
-    (sealed_identity,) = _named(sealed, SEALED_SECRET, IDENTITY.name)
-    pod = _pod(sealed)
-    container = _container(sealed)
+def test_the_identity_the_script_reads_is_the_key_of_the_secret_its_sealed_secret_becomes(applied: Run) -> None:
+    (sealed_identity,) = _named(applied, SEALED_SECRET, IDENTITY.name)
+    pod = _pod(applied)
+    container = _container(applied)
     path = _environment(container)['IDENTITY']
     directory, _, key = path.rpartition('/')
     volume = _volume(pod, container, directory)
@@ -173,10 +173,10 @@ def test_the_identity_the_script_reads_is_the_key_of_the_secret_its_sealed_secre
     assert key in sealed_identity['spec']['encryptedData']
 
 
-def test_the_script_and_its_bucket_client_are_the_config_map_the_command_runs_from(sealed: Run) -> None:
-    pod = _pod(sealed)
-    container = _container(sealed)
-    (shell,) = _named(sealed, CONFIGMAP, VERIFY_SHELL_CONFIGMAP)
+def test_the_script_and_its_bucket_client_are_the_config_map_the_command_runs_from(applied: Run) -> None:
+    pod = _pod(applied)
+    container = _container(applied)
+    (shell,) = _named(applied, CONFIGMAP, VERIFY_SHELL_CONFIGMAP)
     script = container['command'][-1]
     directory, _, name = script.rpartition('/')
     volume = _volume(pod, container, directory)
@@ -189,18 +189,18 @@ def test_the_script_and_its_bucket_client_are_the_config_map_the_command_runs_fr
     assert 'b2.sh' in shell['data']
 
 
-def test_the_pod_holds_no_kubernetes_or_talos_credential(sealed: Run) -> None:
+def test_the_pod_holds_no_kubernetes_or_talos_credential(applied: Run) -> None:
     """It speaks B2 and its own loopback: no service account token, and nothing of Talos' Secret."""
-    pod = _pod(sealed)
+    pod = _pod(applied)
     secrets = {it['secret']['secretName'] for it in pod['volumes'] if 'secret' in it}
 
     assert pod['automountServiceAccountToken'] is False
     assert secrets == {IDENTITY.name}
 
 
-def test_the_verify_runs_off_the_control_planes(sealed: Run) -> None:
+def test_the_verify_runs_off_the_control_planes(applied: Run) -> None:
     """On the worker today, never on a node etcd's own memory budget is kept on."""
-    required = _pod(sealed)['affinity']['nodeAffinity']['requiredDuringSchedulingIgnoredDuringExecution']
+    required = _pod(applied)['affinity']['nodeAffinity']['requiredDuringSchedulingIgnoredDuringExecution']
     # As Talos labels the nodes: every cloud node is a control plane, the
     # worker is not.
     nodes: dict[str, dict[str, str]] = {
@@ -217,15 +217,15 @@ def test_the_verify_runs_off_the_control_planes(sealed: Run) -> None:
     assert {node for node, labels in nodes.items() if admits(labels)} == {conventions.HOMELAB_NODE}
 
 
-def test_the_working_directory_is_in_memory_and_fills_before_the_pods_memory_does(sealed: Run) -> None:
+def test_the_working_directory_is_in_memory_and_fills_before_the_pods_memory_does(applied: Run) -> None:
     """The plaintext keyspace never reaches a disk, and a database that outgrows the directory fails naming the directory.
 
     A memory-backed directory is charged to the pod, so a limit at or under
     its bound would end an outgrown run as an out-of-memory kill, which names
     nothing, rather than as `no space left on device`.
     """
-    pod = _pod(sealed)
-    container = _container(sealed)
+    pod = _pod(applied)
+    container = _container(applied)
     work = _volume(pod, container, _environment(container)['WORK'])['emptyDir']
     resources = container['resources']
 
@@ -413,9 +413,9 @@ class Verify:
 
 @pytest.fixture(name='verify')
 def verify_fixture(
-    sealed: Run, image: Image, tmp_path: Path, identities: tuple[age.Identity, age.Identity]
+    applied: Run, image: Image, tmp_path: Path, identities: tuple[age.Identity, age.Identity]
 ) -> Iterator[Verify]:
-    yield Verify(sealed, image, tmp_path, identities[0], buckets=[BUCKET])
+    yield Verify(applied, image, tmp_path, identities[0], buckets=[BUCKET])
 
 
 def _now() -> dt.datetime:
@@ -563,14 +563,14 @@ def test_a_key_b2_refuses_fails_at_the_authorization(
 
 
 def test_a_bucket_b2_names_null_still_downloads_by_its_id(
-    sealed: Run,
+    applied: Run,
     image: Image,
     tmp_path: Path,
     snapshots: Mapping[str, Path],
     identities: tuple[age.Identity, age.Identity],
 ) -> None:
     """B2's own example answers a bucket's name as `null`, and the verify needs only its id."""
-    verify = Verify(sealed, image, tmp_path, identities[0], buckets=[{'id': BUCKET['id'], 'name': None}])
+    verify = Verify(applied, image, tmp_path, identities[0], buckets=[{'id': BUCKET['id'], 'name': None}])
     name = verify.upload(snapshots['whole'], _now() - dt.timedelta(minutes=5), [identities[0].public])
 
     _ok(verify.run(), name)

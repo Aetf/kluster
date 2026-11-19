@@ -1,10 +1,10 @@
 """The hourly etcd snapshot `k8s-base` declares: its Talos grant, its writer key, its recipients and its CronJob.
 
-The run is the whole `k8s-base` program, once with every sealed value the
-stack declares sealed in and once with none, which is the stack before the
-bring-up has sealed anything (physical/bring-up.md §1), and once more with the
-restore-verify's recipient file in a directory of the module's, holding the
-recipient of an identity the module draws.
+The run is the whole `k8s-base` program, once with what the stack file holds,
+every sealed value the stack declares sealed in, once on the absent path, with
+none (physical/bring-up.md §1), and once more with the restore-verify's
+recipient file in a directory of the module's, holding the recipient of an
+identity the module draws.
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ import process_sessions
 import pulumi
 import pytest
 import pytest_asyncio
-from k8s_base_installation import SEALED, Run, applied
+from k8s_base_installation import NOTHING_SEALED, Run, applied
 
 from kluster import conventions
 from kluster.components import talos
@@ -56,15 +56,15 @@ AGE_TIMEOUT = 15
 KEY = conventions.sealed.ETCD_WRITER_KEY
 
 
-@pytest_asyncio.fixture(scope='module', loop_scope='module')
-async def sealed() -> Run:
-    """Every sealed value the stack declares, sealed in."""
-    return await applied(sealed=SEALED)
+@pytest_asyncio.fixture(scope='module', loop_scope='module', name='applied')
+async def applied_fixture() -> Run:
+    """The stack as its file holds it: every sealed value it declares, sealed in."""
+    return await applied()
 
 
 @pytest_asyncio.fixture(scope='module', loop_scope='module')
 async def absent() -> tuple[Run, list[str]]:
-    """No sealed value at all, and the warnings the run logged."""
+    """The absent path: no sealed value at all, and the warnings the run logged."""
     warned: list[str] = []
 
     def warn(message: str, *_: object, **__: object) -> None:
@@ -72,7 +72,7 @@ async def absent() -> tuple[Run, list[str]]:
 
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr(pulumi.log, 'warn', warn)
-        run = await applied()
+        run = await applied(sealed=NOTHING_SEALED)
     return run, warned
 
 
@@ -84,7 +84,7 @@ async def drilled(tmp_path_factory: pytest.TempPathFactory) -> tuple[Run, age.Id
     _ = recipient_file.write_text(f'# the restore-verify, public half\n{identity.public}\n')
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr(etcd_backup, 'ETCD_DRILL_RECIPIENT', recipient_file)
-        run = await applied(sealed=SEALED)
+        run = await applied()
     return run, identity
 
 
@@ -102,29 +102,29 @@ def _environment(run: Run) -> dict[str, Any]:
     return {it['name']: it.get('value', it.get('valueFrom')) for it in container['env']}
 
 
-def test_the_service_account_asks_for_the_grant_the_control_planes_configuration_allows(sealed: Run) -> None:
+def test_the_service_account_asks_for_the_grant_the_control_planes_configuration_allows(applied: Run) -> None:
     """Talos refuses a role, or a namespace, the machine configuration does not list, and writes the pod no talosconfig.
 
     The two sides are two programs: `physical` renders the control planes'
     configuration, and `k8s-base` declares the `ServiceAccount`.
     """
     allowed = talos.control_plane_patch(cert_sans=['203.0.113.10'])['machine']['features']['kubernetesTalosAPIAccess']
-    (account,) = _named(sealed, TALOS_SERVICE_ACCOUNT_TYPE, SERVICE_ACCOUNT)
+    (account,) = _named(applied, TALOS_SERVICE_ACCOUNT_TYPE, SERVICE_ACCOUNT)
 
     assert allowed['enabled'] is True
     assert account['metadata']['namespace'] in allowed['allowedKubernetesNamespaces']
     assert set(account['spec']['roles']) <= set(allowed['allowedRoles'])
 
 
-def test_the_namespace_is_restricted_and_holds_the_etcd_backups_objects_alone(sealed: Run) -> None:
+def test_the_namespace_is_restricted_and_holds_the_etcd_backups_objects_alone(applied: Run) -> None:
     """The grant reaches every pod of its namespace, so nothing but the etcd backup's own component declares there."""
-    (namespace,) = _named(sealed, NAMESPACE, ETCD_SNAPSHOT.namespace)
+    (namespace,) = _named(applied, NAMESPACE, ETCD_SNAPSHOT.namespace)
     in_namespace = {
         (it.typ, it.name)
-        for it in sealed.monitor.declared
+        for it in applied.monitor.declared
         if it.inputs.get('metadata', {}).get('namespace') == ETCD_SNAPSHOT.namespace
     }
-    children = {(typ, name) for component in COMPONENTS for typ, name, _ in sealed.children(component)}
+    children = {(typ, name) for component in COMPONENTS for typ, name, _ in applied.children(component)}
 
     assert namespace['metadata']['labels'][POD_SECURITY_ENFORCE_LABEL] == PodSecurity.RESTRICTED.value
     assert in_namespace, 'nothing declared in the namespace'
@@ -134,7 +134,7 @@ def test_the_namespace_is_restricted_and_holds_the_etcd_backups_objects_alone(se
 def test_without_the_writer_key_nothing_but_the_namespace_and_the_grant_is_declared_and_the_key_is_named(
     absent: tuple[Run, list[str]],
 ) -> None:
-    """No CronJob, so no series for the family's rules to read, until the key is sealed in."""
+    """The absent path: no CronJob, so no series for the family's rules to read, until the key is sealed in."""
     run, warnings = absent
 
     assert _named(run, NAMESPACE, ETCD_SNAPSHOT.namespace)
@@ -144,8 +144,8 @@ def test_without_the_writer_key_nothing_but_the_namespace_and_the_grant_is_decla
     assert [it for it in warnings if repr(KEY.name) in it and KEY.namespace in it]
 
 
-def test_the_pod_reads_the_talosconfig_talos_writes_for_its_service_account(sealed: Run) -> None:
-    pod = _pod(sealed)
+def test_the_pod_reads_the_talosconfig_talos_writes_for_its_service_account(applied: Run) -> None:
+    pod = _pod(applied)
     (container,) = pod['containers']
     (mount,) = [it for it in container['volumeMounts'] if it['mountPath'] == TALOS_SECRET_DIR]
     (volume,) = [it for it in pod['volumes'] if it['name'] == mount['name']]
@@ -153,12 +153,12 @@ def test_the_pod_reads_the_talosconfig_talos_writes_for_its_service_account(seal
     # Talos writes the talosconfig into a Secret named after the
     # `ServiceAccount`, beside it.
     assert volume['secret']['secretName'] == SERVICE_ACCOUNT
-    assert _named(sealed, TALOS_SERVICE_ACCOUNT_TYPE, volume['secret']['secretName'])
+    assert _named(applied, TALOS_SERVICE_ACCOUNT_TYPE, volume['secret']['secretName'])
 
 
-def test_the_pod_reads_the_writer_key_from_the_secret_its_sealed_secret_becomes(sealed: Run) -> None:
-    (key,) = _named(sealed, SEALED_SECRET, KEY.name)
-    environment = _environment(sealed)
+def test_the_pod_reads_the_writer_key_from_the_secret_its_sealed_secret_becomes(applied: Run) -> None:
+    (key,) = _named(applied, SEALED_SECRET, KEY.name)
+    environment = _environment(applied)
     secret = key['spec']['template']['metadata']['name']
 
     assert key['metadata']['namespace'] == ETCD_SNAPSHOT.namespace
@@ -167,13 +167,13 @@ def test_the_pod_reads_the_writer_key_from_the_secret_its_sealed_secret_becomes(
         assert environment[field] == {'secretKeyRef': {'name': secret, 'key': field}}, field
 
 
-def test_each_snapshot_is_written_directly_under_the_etcd_scopes_prefix(sealed: Run) -> None:
+def test_each_snapshot_is_written_directly_under_the_etcd_scopes_prefix(applied: Run) -> None:
     """The object's key is `<S3_PREFIX>/<file>` in `BUCKET`: under the prefix the scope's key writes, with nothing between.
 
     A key inside the prefix but a level below it, `etcd//<file>`, would still
     upload, and would be a layout neither storage.md nor `fetch` reads.
     """
-    environment = _environment(sealed)
+    environment = _environment(applied)
     scope = etcd_scope()
 
     assert environment['BUCKET'] == conventions.BUCKET_BACKUP
@@ -186,13 +186,13 @@ def test_each_snapshot_is_written_directly_under_the_etcd_scopes_prefix(sealed: 
     assert '/' not in name.removeprefix(scope.prefix)
 
 
-def test_the_run_writes_into_a_writable_directory_of_its_own_pod(sealed: Run) -> None:
+def test_the_run_writes_into_a_writable_directory_of_its_own_pod(applied: Run) -> None:
     """`talos-backup` writes the snapshot and its ciphertext into its working directory; the image's is `/`, which the run's user cannot write.
 
     The root filesystem is read-only besides, so the working directory is
     the one place the run can write them.
     """
-    pod = _pod(sealed)
+    pod = _pod(applied)
     (container,) = pod['containers']
     (mount,) = [it for it in container['volumeMounts'] if it['mountPath'] == container.get('workingDir')]
     (volume,) = [it for it in pod['volumes'] if it['name'] == mount['name']]
@@ -201,9 +201,9 @@ def test_the_run_writes_into_a_writable_directory_of_its_own_pod(sealed: Run) ->
     assert container['securityContext']['readOnlyRootFilesystem'] is True
 
 
-def test_every_directory_the_run_holds_in_memory_is_bounded(sealed: Run) -> None:
+def test_every_directory_the_run_holds_in_memory_is_bounded(applied: Run) -> None:
     """A memory-backed directory is memory of the node it runs on, a control plane, until the pod is gone."""
-    in_memory = [it for it in _pod(sealed)['volumes'] if it.get('emptyDir', {}).get('medium') == 'Memory']
+    in_memory = [it for it in _pod(applied)['volumes'] if it.get('emptyDir', {}).get('medium') == 'Memory']
 
     assert in_memory
     for volume in in_memory:
@@ -211,7 +211,7 @@ def test_every_directory_the_run_holds_in_memory_is_bounded(sealed: Run) -> None
 
 
 def test_each_snapshot_is_encrypted_to_every_escrowed_generation_on_file_and_then_to_the_restore_verify(
-    sealed: Run,
+    applied: Run,
 ) -> None:
     """The generations are the committed file the state backend's dumps are encrypted to, so one rotation moves both.
 
@@ -219,7 +219,7 @@ def test_each_snapshot_is_encrypted_to_every_escrowed_generation_on_file_and_the
     generations, and a reader of the list finds the generations where the
     dumps' own list has them.
     """
-    recipients = _environment(sealed)['AGE_X25519_PUBLIC_KEY'].split(',')
+    recipients = _environment(applied)['AGE_X25519_PUBLIC_KEY'].split(',')
     generations = list(committed.backup_recipients().values())
 
     assert sorted(recipients[: len(generations)]) == sorted(generations)
@@ -287,9 +287,9 @@ def test_the_reader_names_the_row_the_command_tree_spells() -> None:
     assert etcd_backup.DRILL_RECIPIENT_ROW == derived.ETCD_DRILL_AGE_IDENTITY_ROW
 
 
-def test_the_snapshot_runs_on_the_control_planes_and_not_on_the_worker(sealed: Run) -> None:
+def test_the_snapshot_runs_on_the_control_planes_and_not_on_the_worker(applied: Run) -> None:
     """The snapshots go on through an outage of the home site, and the stream stays off the mesh to the worker."""
-    required = _pod(sealed)['affinity']['nodeAffinity']['requiredDuringSchedulingIgnoredDuringExecution']
+    required = _pod(applied)['affinity']['nodeAffinity']['requiredDuringSchedulingIgnoredDuringExecution']
     # As Talos labels the nodes: every cloud node is a control plane, the
     # worker is not.
     nodes: dict[str, dict[str, str]] = {

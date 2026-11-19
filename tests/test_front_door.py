@@ -1,19 +1,21 @@
 """The front door in the `k8s-base` program, declared against mocks: the issuer, the certificates and the Gateways.
 
 The program runs whole, against a `physical` that has published its addresses
-(`k8s_base_installation`), twice (rfc-007 §5.1, §5.2):
+(`k8s_base_installation`), with what the stack file holds -- every sealed
+value the stack declares sealed in, the DNS-01 token among them -- three times
+(rfc-007 §5.1, §5.2):
 
--   **as the stack stands until the operator seals the DNS-01 token in**,
-    holding no sealed value, which declares no SealedSecret for it and says
-    so, while the issuer and the certificates are declared all the same and
-    wait for it (physical/bring-up.md §1);
--   **with the token sealed in, a census whose Gateway rows sit on other
-    ports, a route in a second zone, and a row of each shape that asks a
-    Gateway for a listener of its own** -- an apex and a bare name -- so
-    that a listener built from a fixed port, a certificate built
-    from a fixed zone list, two zones' certificates crossed, or a listener
-    derived from anything but the rows that ask for it, reads differently
-    from what the census asks.
+-   **as the installation stands**;
+-   **with a census whose Gateway rows sit on other ports, a route in a
+    second zone, and a row of each shape that asks a Gateway for a listener
+    of its own** -- an apex and a bare name -- so that a listener built from
+    a fixed port, a certificate built from a fixed zone list, two zones'
+    certificates crossed, or a listener derived from anything but the rows
+    that ask for it, reads differently from what the census asks;
+-   **on the absent path**, holding no sealed value, which declares no
+    SealedSecret for the token and says so, while the issuer and the
+    certificates are declared all the same and wait for it
+    (physical/bring-up.md §1).
 
 Literals written here are the upstream projects' contracts: the Gateway API's
 address type and listener protocols, cert-manager's issuer kind.
@@ -32,11 +34,14 @@ import pytest_asyncio
 from client_kubeconfig import KUBECONFIG
 from k8s_base_installation import (
     CHART,
+    NOTHING_SEALED,
     OUTPUTS,
     PUBLISHED,
+    SEALED,
     VERSIONS_CONFIG,
     Autonaming,
     Run,
+    applied,
     release_assets,
 )
 from mock_monitor import declaring, run_under_backstop
@@ -54,20 +59,20 @@ POOL = 'crds:cilium.io/v2:CiliumLoadBalancerIPPool'
 
 TOKEN = conventions.sealed.DNS01_TOKEN
 
-#: The ciphertext the sealed run's configuration holds for the DNS-01 token,
-#: under its row's name and data key, as `credentials` writes it.
-SEALED_TOKEN = 'AgB-the-sealed-dns01-token'
+#: The ciphertext the stack file holds for the DNS-01 token, under its row's
+#: name and its one data key, as `credentials` writes it.
+(SEALED_TOKEN,) = cast('dict[str, str]', SEALED[TOKEN.name]).values()
 
-#: The second zone the sealed run's census routes a name in.
+#: The second zone the moved run's census routes a name in.
 SECOND_ZONE = 'second.example'
 
-#: The ports the sealed run moves the Gateways' two ports to.
+#: The ports the moved run moves the Gateways' two ports to.
 MOVED_PORTS = conventions.GatewayPorts(http=10080, https=10443)
 
-#: The label of the sealed run's bare name.
+#: The label of the moved run's bare name.
 BARE_LABEL = 'short'
 
-#: The sealed run's census: the installation's, one route in a second zone,
+#: The moved run's census: the installation's, one route in a second zone,
 #: on `internet` and rewritten on `lan`, with an apex there, and a bare name.
 PROBE = {
     **conventions.routes.EXPOSURES,
@@ -94,13 +99,14 @@ def moved_census() -> Generator[None]:
         yield
 
 
-async def declare(*, sealed: dict[str, object] | None) -> tuple[Run, list[str]]:
-    """The whole program with `sealed` as its sealed values, and every warning it logged."""
+async def declare(*, sealed: dict[str, object] = SEALED) -> tuple[Run, list[str]]:
+    """The whole program with `sealed` as its sealed values, the stack file's unless given, and every warning it logged."""
     from kluster.stacks import k8s_base
 
-    config = {f'kluster:{KUBECONFIG_KEY}': KUBECONFIG}
-    if sealed is not None:
-        config[f'kluster:{conventions.sealed.CONFIG_KEY}'] = json.dumps(sealed)
+    config = {
+        f'kluster:{KUBECONFIG_KEY}': KUBECONFIG,
+        f'kluster:{conventions.sealed.CONFIG_KEY}': json.dumps(sealed),
+    }
     pulumi.runtime.set_all_config(config | VERSIONS_CONFIG, secret_keys=[f'kluster:{KUBECONFIG_KEY}'])
     monitor = await run_under_backstop(Autonaming(), stack=conventions.STACK_NAMES.k8s_base)
     warned: list[str] = []
@@ -115,18 +121,24 @@ async def declare(*, sealed: dict[str, object] | None) -> tuple[Run, list[str]]:
     return Run(monitor, fetched), warned
 
 
+@pytest_asyncio.fixture(scope='module', loop_scope='module', name='applied')
+async def applied_fixture() -> Run:
+    """The program as the installation stands."""
+    return await applied()
+
+
+@pytest_asyncio.fixture(scope='module', loop_scope='module')
+async def moved() -> Run:
+    """The Gateways' rows moved and a second zone served."""
+    with moved_census():
+        run, _ = await declare()
+    return run
+
+
 @pytest_asyncio.fixture(scope='module', loop_scope='module')
 async def absent() -> tuple[Run, list[str]]:
-    """The stack as it stands before the token is sealed in."""
-    return await declare(sealed=None)
-
-
-@pytest_asyncio.fixture(scope='module', loop_scope='module')
-async def sealed() -> Run:
-    """The token sealed in, the Gateways' rows moved and a second zone served."""
-    with moved_census():
-        run, _ = await declare(sealed={TOKEN.name: dict.fromkeys(TOKEN.keys, SEALED_TOKEN)})
-    return run
+    """The absent path: the stack holding no sealed value, the token among them, and every warning the run logged."""
+    return await declare(sealed=NOTHING_SEALED)
 
 
 def _gateways(run: Run) -> dict[str, dict[str, Any]]:
@@ -173,17 +185,17 @@ def _bare(gateway: dict[str, Any]) -> list[dict[str, Any]]:
 # -- The certificates ------------------------------------------------------------
 
 
-def test_a_certificate_per_served_zone_for_the_apex_and_the_wildcard(sealed: Run) -> None:
+def test_a_certificate_per_served_zone_for_the_apex_and_the_wildcard(moved: Run) -> None:
     """The primary, served by definition, and the zone a route names; each certificate covers both names of its zone."""
-    names = sorted(sorted(certificate['spec']['dnsNames']) for certificate in _certificates(sealed))
+    names = sorted(sorted(certificate['spec']['dnsNames']) for certificate in _certificates(moved))
 
     assert names == sorted([sorted([zone, f'*.{zone}']) for zone in (conventions.ZONE_PRIMARY, SECOND_ZONE)])
 
 
-def test_every_certificate_is_issued_by_the_one_issuer(sealed: Run) -> None:
-    (issuer,) = [it.inputs for it in sealed.monitor.of_type(CLUSTER_ISSUER)]
+def test_every_certificate_is_issued_by_the_one_issuer(moved: Run) -> None:
+    (issuer,) = [it.inputs for it in moved.monitor.of_type(CLUSTER_ISSUER)]
 
-    for certificate in _certificates(sealed):
+    for certificate in _certificates(moved):
         assert certificate['spec']['issuerRef'] == {
             'name': issuer['metadata']['name'],
             'kind': 'ClusterIssuer',
@@ -191,7 +203,7 @@ def test_every_certificate_is_issued_by_the_one_issuer(sealed: Run) -> None:
         }
 
 
-def test_the_issuer_answers_dns01_with_the_sealed_token(sealed: Run) -> None:
+def test_the_issuer_answers_dns01_with_the_sealed_token(moved: Run) -> None:
     """The issuer's Cloudflare token is the Secret the SealedSecret yields, which holds the stack's ciphertext.
 
     The ciphertext is the stack's configuration's, under the row's name and
@@ -199,21 +211,21 @@ def test_the_issuer_answers_dns01_with_the_sealed_token(sealed: Run) -> None:
     is what the ciphertext is sealed to; the issuer reads the same name and key
     from the namespace cert-manager's chart is installed in.
     """
-    (issuer,) = [it.inputs for it in sealed.monitor.of_type(CLUSTER_ISSUER)]
+    (issuer,) = [it.inputs for it in moved.monitor.of_type(CLUSTER_ISSUER)]
     (secret,) = [
-        it.inputs for it in sealed.monitor.of_type(SEALED_SECRET) if it.inputs['metadata']['name'] == TOKEN.name
+        it.inputs for it in moved.monitor.of_type(SEALED_SECRET) if it.inputs['metadata']['name'] == TOKEN.name
     ]
     (solver,) = issuer['spec']['acme']['solvers']
     reference = solver['dns01']['cloudflare']['apiTokenSecretRef']
 
     assert secret['spec']['encryptedData'] == {reference['key']: SEALED_TOKEN}
     assert secret['spec']['template']['metadata']['name'] == reference['name']
-    assert secret['metadata']['namespace'] == sealed.inputs(CHART, 'cert-manager')['namespace']
+    assert secret['metadata']['namespace'] == moved.inputs(CHART, 'cert-manager')['namespace']
     assert secret['metadata']['annotations'] == {f'sealedsecrets.bitnami.com/{TOKEN.scope.value}': 'true'}
 
 
 def test_an_absent_token_declares_no_sealed_secret_and_warns_naming_it(absent: tuple[Run, list[str]]) -> None:
-    """Until the token is sealed in, nothing is declared for it, and the run says which value it is waiting for.
+    """The absent path: nothing is declared for the token, and the run says which value it is waiting for.
 
     The issuer and the certificates are declared all the same: they read the
     Secret by name, and stay pending until it exists.
@@ -229,14 +241,13 @@ def test_an_absent_token_declares_no_sealed_secret_and_warns_naming_it(absent: t
 # -- The Gateways ------------------------------------------------------------------
 
 
-def test_each_gateways_addresses_are_its_pools(absent: tuple[Run, list[str]]) -> None:
+def test_each_gateways_addresses_are_its_pools(applied: Run) -> None:
     """`internet-gw` asks for the node members and the balancer's two; `lan-gw` and `media-gw` for their VIPs.
 
     Each asks from the pool its Service is labeled into, and `internet-gw`
     never for the dedicated VIP, which is hath's alone.
     """
-    run, _ = absent
-    gateways = _gateways(run)
+    gateways = _gateways(applied)
     lan = conventions.LAN_POOL
     expected = {
         conventions.GATEWAY_INTERNET: (
@@ -260,20 +271,19 @@ def test_each_gateways_addresses_are_its_pools(absent: tuple[Run, list[str]]) ->
         assert spec['infrastructure']['labels'] == {conventions.LB_POOL_LABEL: pool}, name
 
 
-def test_internet_gws_addresses_are_all_in_its_pool(absent: tuple[Run, list[str]]) -> None:
+def test_internet_gws_addresses_are_all_in_its_pool(applied: Run) -> None:
     """An address the pool does not hold is one LB IPAM never allocates, and the Service then holds none."""
-    run, _ = absent
     (pool,) = [
-        it.inputs for it in run.monitor.of_type(POOL) if it.inputs['metadata']['name'] == conventions.POOL_INTERNET
+        it.inputs for it in applied.monitor.of_type(POOL) if it.inputs['metadata']['name'] == conventions.POOL_INTERNET
     ]
     blocks = {block['cidr'].split('/')[0] for block in pool['spec']['blocks']}
-    asked = {address['value'] for address in _gateways(run)[conventions.GATEWAY_INTERNET]['spec']['addresses']}
+    asked = {address['value'] for address in _gateways(applied)[conventions.GATEWAY_INTERNET]['spec']['addresses']}
 
     assert asked < blocks
 
 
 def test_each_gateway_shares_its_addresses_with_other_namespaces_under_a_key_of_its_own(
-    absent: tuple[Run, list[str]],
+    applied: Run,
 ) -> None:
     """The census's raw Services hold each Gateway's addresses from their own namespaces (rfc-007 §4.4, rfc-008 §4.1).
 
@@ -283,8 +293,7 @@ def test_each_gateway_shares_its_addresses_with_other_namespaces_under_a_key_of_
     one VIP each out of one pool, so their keys differ: a shared key would let
     a raw port at one VIP be allocated the other.
     """
-    run, _ = absent
-    gateways = _gateways(run)
+    gateways = _gateways(applied)
     keys: dict[str, str] = {}
     for name, gateway in gateways.items():
         annotations = gateway['spec']['infrastructure']['annotations']
@@ -295,19 +304,19 @@ def test_each_gateway_shares_its_addresses_with_other_namespaces_under_a_key_of_
     assert keys[conventions.GATEWAY_LAN] != keys[conventions.GATEWAY_MEDIA]
 
 
-def test_the_listeners_ports_are_the_gateway_ports(sealed: Run) -> None:
+def test_the_listeners_ports_are_the_gateway_ports(moved: Run) -> None:
     """Every Gateway listens on `GATEWAY_PORTS`, which are the ports the node firewall opens to Envoy and the balancer forwards.
 
     The run moves both ports, so a listener that kept a number of its own
     would differ from them.
     """
-    for name, gateway in _gateways(sealed).items():
+    for name, gateway in _gateways(moved).items():
         assert {listener['port'] for listener in _protocol(gateway, 'HTTPS')} == {MOVED_PORTS.https}, name
         assert _protocol(gateway, 'TLS') == [], name
         assert {listener['port'] for listener in _protocol(gateway, 'HTTP')} == {MOVED_PORTS.http}, name
 
 
-def test_each_https_listener_serves_its_own_zones_certificate(sealed: Run) -> None:
+def test_each_https_listener_serves_its_own_zones_certificate(moved: Run) -> None:
     """One HTTPS listener per served zone, on the zone's wildcard, terminating with that zone's certificate.
 
     The certificate is found by the names it covers, and it is in the
@@ -315,12 +324,12 @@ def test_each_https_listener_serves_its_own_zones_certificate(sealed: Run) -> No
     """
     by_wildcard = {
         name: certificate
-        for certificate in _certificates(sealed)
+        for certificate in _certificates(moved)
         for name in certificate['spec']['dnsNames']
         if name.startswith('*.')
     }
 
-    for name, gateway in _gateways(sealed).items():
+    for name, gateway in _gateways(moved).items():
         listeners = _https(gateway)
         assert sorted(listener['hostname'] for listener in listeners) == sorted(by_wildcard), name
         for listener in listeners:
@@ -330,9 +339,9 @@ def test_each_https_listener_serves_its_own_zones_certificate(sealed: Run) -> No
             assert certificate['metadata']['namespace'] == gateway['metadata']['namespace']
 
 
-def test_a_route_attaches_to_the_https_listeners_only_from_a_namespace_carrying_the_route_label(sealed: Run) -> None:
+def test_a_route_attaches_to_the_https_listeners_only_from_a_namespace_carrying_the_route_label(moved: Run) -> None:
     """Every listener an application's route attaches to: the zones', the apexes' and the bare names'."""
-    for name, gateway in _gateways(sealed).items():
+    for name, gateway in _gateways(moved).items():
         for listener in [*_protocol(gateway, 'HTTPS'), *_bare(gateway)]:
             assert listener['allowedRoutes']['namespaces'] == {
                 'from': 'Selector',
@@ -340,18 +349,17 @@ def test_a_route_attaches_to_the_https_listeners_only_from_a_namespace_carrying_
             }, name
 
 
-def test_plain_http_is_answered_with_a_redirect_to_https_alone(absent: tuple[Run, list[str]]) -> None:
+def test_plain_http_is_answered_with_a_redirect_to_https_alone(applied: Run) -> None:
     """The HTTP listener admits routes from the Gateways' own namespace, and the one route there redirects.
 
     The namespace carries no route label, so the redirect attaches to no HTTPS
     listener, and an application's route, in a namespace of its own, attaches
     to no HTTP listener.
     """
-    run, _ = absent
-    gateways = _gateways(run)
-    (route,) = [it.inputs for it in run.monitor.of_type(HTTP_ROUTE)]
+    gateways = _gateways(applied)
+    (route,) = [it.inputs for it in applied.monitor.of_type(HTTP_ROUTE)]
     namespaces = {
-        it.inputs['metadata']['name']: it.inputs for it in run.monitor.of_type('kubernetes:core/v1:Namespace')
+        it.inputs['metadata']['name']: it.inputs for it in applied.monitor.of_type('kubernetes:core/v1:Namespace')
     }
 
     assert route['metadata']['namespace'] == conventions.GATEWAY_NAMESPACE
@@ -370,17 +378,17 @@ def test_plain_http_is_answered_with_a_redirect_to_https_alone(absent: tuple[Run
 # -- The listeners the rows ask for --------------------------------------------
 
 
-def test_an_apex_listener_exists_exactly_for_each_zone_an_apex_names(sealed: Run) -> None:
+def test_an_apex_listener_exists_exactly_for_each_zone_an_apex_names(moved: Run) -> None:
     """On `internet-gw` alone, on the zone's own name, with the zone's certificate, which covers the apex.
 
     The primary is served too, and no `Apex` names it, so it has none.
     """
     secrets = {
         name: certificate['spec']['secretName']
-        for certificate in _certificates(sealed)
+        for certificate in _certificates(moved)
         for name in certificate['spec']['dnsNames']
     }
-    gateways = _gateways(sealed)
+    gateways = _gateways(moved)
 
     apexes = _apexes(gateways[conventions.GATEWAY_INTERNET])
     assert [listener['hostname'] for listener in apexes] == [SECOND_ZONE]
@@ -415,17 +423,17 @@ async def test_a_census_holding_a_passthrough_is_refused_naming_it() -> None:
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr(conventions.routes, 'EXPOSURES', census)
         with pytest.raises(PassthroughRefused, match=r"'tunnel'.*kluster-ops#723"):
-            _ = await declare(sealed=None)
+            _ = await declare()
 
 
-def test_a_bare_listener_exists_on_lan_gw_exactly_for_each_bare_row(sealed: Run) -> None:
+def test_a_bare_listener_exists_on_lan_gw_exactly_for_each_bare_row(moved: Run) -> None:
     """Plain HTTP on the label, where the bare name arrives, on `lan-gw` alone.
 
     The IoT VLAN reaches only 443, and a bare name is a value of `lan` alone,
     so neither other Gateway has one; a `Route` whose `lan` is a plain
     rewrite asks for none either.
     """
-    gateways = _gateways(sealed)
+    gateways = _gateways(moved)
 
     assert [listener['hostname'] for listener in _bare(gateways[conventions.GATEWAY_LAN])] == [BARE_LABEL]
     for name in (conventions.GATEWAY_INTERNET, conventions.GATEWAY_MEDIA):
@@ -447,19 +455,19 @@ def test_a_bare_listener_exists_on_lan_gw_exactly_for_each_bare_row(sealed: Run)
     ids=['gateway', 'http-route', 'issuer', 'certificate', 'sealed-secret'],
 )
 def test_each_object_waits_for_what_installs_its_definition(
-    sealed: Run, kind: str, definitions: tuple[str, str]
+    moved: Run, kind: str, definitions: tuple[str, str]
 ) -> None:
     """The provider waits for workloads, not for a definition to register, so each kind is declared behind its source.
 
     Held through the chain of declared dependencies, since an object can wait
     for its definition by way of another object that does.
     """
-    source = sealed.urn(*definitions)
-    instances = sealed.monitor.of_type(kind)
+    source = moved.urn(*definitions)
+    instances = moved.monitor.of_type(kind)
 
     assert instances
     for instance in instances:
-        assert source in _behind(sealed, sealed.urn(kind, instance.name)), instance.name
+        assert source in _behind(moved, moved.urn(kind, instance.name)), instance.name
 
 
 def _behind(run: Run, urn: str) -> set[str]:

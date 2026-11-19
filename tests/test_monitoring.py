@@ -1,9 +1,11 @@
 """Monitoring, declared against mocks: the stack's settings, its placement, the rules and alertmanager's receiver.
 
 The program runs whole, against a `physical` that has published its addresses
-(`k8s_base_installation`), twice: as it stands before alertmanager's webhook is
-sealed in, and with it sealed in (rfc-007 §7, physical/bring-up.md §1). Before,
-the random provider's password is answered as it would be generated into state.
+(`k8s_base_installation`), with what the stack file holds: every sealed value
+the stack declares sealed in (rfc-007 §7). The random provider's password is
+answered as it would be generated into state. The cases of the absent path run
+it again with no sealed value, and with every one but the metrics reader's key
+or the freshness key (physical/bring-up.md §1).
 
 Literals written here are upstream contracts: the charts' value names, the
 label Talos puts on a control plane node, Kubernetes' node-affinity and Pod
@@ -38,14 +40,15 @@ from client_kubeconfig import KUBECONFIG, NOT_AFTER
 from fake_b2_shell import AUTHORIZATION_V4, BUCKET, FAKE_KEY, FAKE_TOKENS, authorization, fake_env
 from fences import prose
 from k8s_base_installation import (
+    NOTHING_SEALED,
     PUBLISHED,
     SEALED,
     VERSIONS_CONFIG,
     Autonaming,
     Physical,
     Run,
-    applied,
     release_assets,
+    sealed_without,
 )
 from mock_monitor import Recorder, declaring, run_under_backstop
 from renovate_text import effective, package_rules, scalar
@@ -138,13 +141,14 @@ class Generating(Autonaming):
         return outputs | {'result': self.generated(args.name)} if args.typ == PASSWORD else outputs
 
 
-async def declare(*, sealed: dict[str, object] | None) -> tuple[Run, list[str]]:
-    """The whole program with `sealed` as its sealed values, and every warning it logged."""
+async def declare(*, sealed: dict[str, object] = SEALED) -> tuple[Run, list[str]]:
+    """The whole program with `sealed` as its sealed values, the stack file's unless given, and every warning it logged."""
     from kluster.stacks import k8s_base
 
-    config = {f'kluster:{KUBECONFIG_KEY}': KUBECONFIG}
-    if sealed is not None:
-        config[f'kluster:{conventions.sealed.CONFIG_KEY}'] = json.dumps(sealed)
+    config = {
+        f'kluster:{KUBECONFIG_KEY}': KUBECONFIG,
+        f'kluster:{conventions.sealed.CONFIG_KEY}': json.dumps(sealed),
+    }
     pulumi.runtime.set_all_config(config | VERSIONS_CONFIG, secret_keys=[f'kluster:{KUBECONFIG_KEY}'])
     monitor = await run_under_backstop(Generating(), stack=conventions.STACK_NAMES.k8s_base)
     warned: list[str] = []
@@ -159,16 +163,17 @@ async def declare(*, sealed: dict[str, object] | None) -> tuple[Run, list[str]]:
     return Run(monitor, fetched), warned
 
 
+@pytest_asyncio.fixture(scope='module', loop_scope='module', name='applied')
+async def applied_fixture() -> Run:
+    """The stack as its file holds it: every sealed value it declares sealed in, the webhook among them."""
+    run, _ = await declare()
+    return run
+
+
 @pytest_asyncio.fixture(scope='module', loop_scope='module')
 async def absent() -> tuple[Run, list[str]]:
-    """The stack as it stands before the webhook is sealed in."""
-    return await declare(sealed=None)
-
-
-@pytest_asyncio.fixture(scope='module', loop_scope='module')
-async def sealed() -> Run:
-    """Every sealed value the stack declares sealed in, the webhook among them."""
-    return await applied(sealed=SEALED)
+    """The absent path: the stack holding no sealed value, and every warning the run logged."""
+    return await declare(sealed=NOTHING_SEALED)
 
 
 def _values(run: Run) -> dict[str, Any]:
@@ -203,11 +208,10 @@ def _receiver(run: Run) -> dict[str, Any]:
 
 
 @pytest.mark.parametrize('chart', [STACK, METRICS_SERVER])
-def test_each_chart_is_installed_from_its_pin(absent: tuple[Run, list[str]], chart: str) -> None:
+def test_each_chart_is_installed_from_its_pin(applied: Run, chart: str) -> None:
     """The reference and the version are the pin's; an HTTP repository's address is passed beside the name."""
-    run, _ = absent
     pin = versions.chart[{STACK: 'victoria-metrics-k8s-stack', METRICS_SERVER: 'metrics-server'}[chart]]
-    inputs = run.inputs(CHART, chart)
+    inputs = applied.inputs(CHART, chart)
 
     assert (inputs['chart'], inputs['version']) == (pin.reference, pin.version)
     assert inputs.get('repositoryOpts', {}).get('repo') == (None if pin.oci else pin.repository)
@@ -226,26 +230,22 @@ def test_each_chart_is_installed_from_its_pin(absent: tuple[Run, list[str]], cha
     ],
     ids='.'.join,
 )
-def test_what_the_chart_would_fetch_hook_or_scrape_for_nothing_is_off(
-    absent: tuple[Run, list[str]], path: tuple[str, ...]
-) -> None:
+def test_what_the_chart_would_fetch_hook_or_scrape_for_nothing_is_off(applied: Run, path: tuple[str, ...]) -> None:
     """The sync job and the operator's cleanup are hooks, the defaults are downloads, and the three jobs scrape nothing.
 
     Each is on at the chart's own values (rfc-007 §7.1, cluster-infra.md §1.2),
     so each has to be stated off.
     """
-    run, _ = absent
-    value: Any = _values(run)
+    value: Any = _values(applied)
     for key in path:
         value = value[key]
 
     assert value is False
 
 
-def test_the_namespace_is_privileged_for_the_node_exporter(absent: tuple[Run, list[str]]) -> None:
+def test_the_namespace_is_privileged_for_the_node_exporter(applied: Run) -> None:
     """Talos enforces `baseline`, which refuses the node exporter's host network, PID namespace and paths."""
-    run, _ = absent
-    namespaces = run.monitor.by_name(NAMESPACE)
+    namespaces = applied.monitor.by_name(NAMESPACE)
 
     (labels,) = [
         ns['metadata']['labels']
@@ -253,7 +253,7 @@ def test_the_namespace_is_privileged_for_the_node_exporter(absent: tuple[Run, li
         if ns['metadata']['name'] == conventions.MONITORING_NAMESPACE
     ]
     assert labels['pod-security.kubernetes.io/enforce'] == 'privileged'
-    assert run.inputs(CHART, STACK)['namespace'] == conventions.MONITORING_NAMESPACE
+    assert applied.inputs(CHART, STACK)['namespace'] == conventions.MONITORING_NAMESPACE
 
 
 def _admits(node: Mapping[str, str], selector: Mapping[str, str], affinity: Mapping[str, Any]) -> bool:
@@ -289,7 +289,7 @@ def _talos_nodes() -> dict[str, dict[str, str]]:
 
 
 @pytest.mark.parametrize('workload', ['alertmanager', 'vmagent'])
-def test_the_workload_can_schedule_on_the_worker_alone(absent: tuple[Run, list[str]], workload: str) -> None:
+def test_the_workload_can_schedule_on_the_worker_alone(applied: Run, workload: str) -> None:
     """Each holds a condition that only the worker meets.
 
     Alertmanager posts to Home Assistant at an address only the worker
@@ -298,8 +298,7 @@ def test_the_workload_can_schedule_on_the_worker_alone(absent: tuple[Run, list[s
     control plane, its call to its own node's listener would arrive from a
     pod address, which no opening admits (`components.talos.HOST_OPENINGS`).
     """
-    run, _ = absent
-    spec = _values(run)[workload]['spec']
+    spec = _values(applied)[workload]['spec']
 
     schedulable = {
         name
@@ -323,7 +322,7 @@ def _grafana_admin(run: Run) -> tuple[dict[str, Any], dict[str, Any]]:
 
 
 def test_grafanas_admin_is_a_secret_the_program_declares_with_a_password_generated_in_state(
-    absent: tuple[Run, list[str]],
+    applied: Run,
 ) -> None:
     """The chart is handed Grafana's credentials, so no render draws a password or hashes one.
 
@@ -337,26 +336,26 @@ def test_grafanas_admin_is_a_secret_the_program_declares_with_a_password_generat
     and its pod reads the two keys `userKey` and `passwordKey` name from that
     Secret, in the release's namespace (`templates/_pod.tpl` L1420-1433).
     """
-    run, _ = absent
-    admin, secret = _grafana_admin(run)
+    admin, secret = _grafana_admin(applied)
     data = secret['stringData']
 
-    assert secret['metadata']['namespace'] == run.inputs(CHART, STACK)['namespace']
+    assert secret['metadata']['namespace'] == applied.inputs(CHART, STACK)['namespace']
     # The password reaches the engine as a secret, and so state as one.
     assert {key: data[key] for key in SECRET_ENVELOPE} == SECRET_ENVELOPE
     assert admin['userKey'] in data['value']
     assert data['value'][admin['passwordKey']] in {
-        Generating.generated(it.name) for it in run.monitor.of_type(PASSWORD)
+        Generating.generated(it.name) for it in applied.monitor.of_type(PASSWORD)
     }
 
 
-def test_the_chart_is_installed_behind_grafanas_secret(absent: tuple[Run, list[str]]) -> None:
+def test_the_chart_is_installed_behind_grafanas_secret(applied: Run) -> None:
     """Grafana's pod reads the Secret when it starts, and pulumi-kubernetes waits for the pod to be ready."""
-    run, _ = absent
-    admin, _ = _grafana_admin(run)
-    (declared,) = [it for it in run.monitor.of_type(SECRET) if it.inputs['metadata']['name'] == admin['existingSecret']]
+    admin, _ = _grafana_admin(applied)
+    (declared,) = [
+        it for it in applied.monitor.of_type(SECRET) if it.inputs['metadata']['name'] == admin['existingSecret']
+    ]
 
-    assert run.urn(SECRET, declared.name) in run.dependencies(CHART, STACK)
+    assert applied.urn(SECRET, declared.name) in applied.dependencies(CHART, STACK)
 
 
 # -- What vmagent scrapes ------------------------------------------------------------
@@ -553,11 +552,10 @@ def _scraped(
     return relabeled, _relabel(series, spec.get('metricRelabelConfigs', []))
 
 
-def test_no_kubelet_scrape_maps_the_nodes_labels_onto_its_series(absent: tuple[Run, list[str]]) -> None:
+def test_no_kubelet_scrape_maps_the_nodes_labels_onto_its_series(applied: Run) -> None:
     """A node's labels are many and grow with what runs there; copied onto every series, they cost the series."""
-    run, _ = absent
     node_label = '__meta_kubernetes_node_label_feature_node_kubernetes_io_cpu_model_vendor_id'
-    scrapes = _kubelet_scrapes(run)
+    scrapes = _kubelet_scrapes(applied)
 
     assert {'kubelet', 'cadvisor'} <= set(scrapes)
     for name, spec in scrapes.items():
@@ -567,21 +565,22 @@ def test_no_kubelet_scrape_maps_the_nodes_labels_onto_its_series(absent: tuple[R
 
 
 def test_a_series_from_a_node_with_more_labels_than_the_store_accepts_is_stored_labeled_by_its_node(
-    absent: tuple[Run, list[str]],
+    applied: Run,
 ) -> None:
     """Every kubelet scrape of a node carrying twice the store's limit in labels yields a series the store keeps.
 
     The series still names its node, the one node label a reading groups by.
     """
-    run, _ = absent
-    limit = int(_values(run)['vmsingle']['spec'].get('extraArgs', {}).get('maxLabelsPerTimeseries', STORE_LABEL_LIMIT))
+    limit = int(
+        _values(applied)['vmsingle']['spec'].get('extraArgs', {}).get('maxLabelsPerTimeseries', STORE_LABEL_LIMIT)
+    )
     node = conventions.HOMELAB_NODE
     labels = {
         HOSTNAME_LABEL: node,
         **{f'feature.node.kubernetes.io/feature-{i}': 'true' for i in range(2 * STORE_LABEL_LIMIT)},
     }
 
-    for name, spec in _kubelet_scrapes(run).items():
+    for name, spec in _kubelet_scrapes(applied).items():
         scraped = _scraped({**spec, 'selector': {}}, name, node, labels, CADVISOR_SAMPLE)
         assert scraped is not None, name
         _, series = scraped
@@ -590,14 +589,13 @@ def test_a_series_from_a_node_with_more_labels_than_the_store_accepts_is_stored_
         assert series['node'] == node, name
 
 
-def test_etcd_is_scraped_on_every_control_plane_and_nowhere_else(absent: tuple[Run, list[str]]) -> None:
+def test_etcd_is_scraped_on_every_control_plane_and_nowhere_else(applied: Run) -> None:
     """On its metrics listener, over plain HTTP, under one `job` whatever name the object is given.
 
     Talos gives the control plane label an empty value, and the worker none: a
     selector the operator reads as "the label's value is empty" keeps both.
     """
-    run, _ = absent
-    (scrape,) = run.monitor.of_type(VM_NODE_SCRAPE)
+    (scrape,) = applied.monitor.of_type(VM_NODE_SCRAPE)
     spec = scrape.inputs['spec']
     sample = {'__name__': 'etcd_disk_wal_fsync_duration_seconds_bucket', 'le': '0.008'}
 
@@ -633,11 +631,10 @@ def test_etcd_is_scraped_on_every_control_plane_and_nowhere_else(absent: tuple[R
     ],
 )
 def test_etcds_scrape_drops_the_grpc_and_debugging_families_and_keeps_the_rest(
-    absent: tuple[Run, list[str]], metric: str, kept: bool
+    applied: Run, metric: str, kept: bool
 ) -> None:
     """etcd's per-method gRPC series and its debugging series are most of a member's; what a reading reads stays."""
-    run, _ = absent
-    (scrape,) = run.monitor.of_type(VM_NODE_SCRAPE)
+    (scrape,) = applied.monitor.of_type(VM_NODE_SCRAPE)
 
     series = _relabel({'__name__': metric}, scrape.inputs['spec'].get('metricRelabelConfigs', []))
 
@@ -645,13 +642,12 @@ def test_etcds_scrape_drops_the_grpc_and_debugging_families_and_keeps_the_rest(
 
 
 def test_the_api_servers_dropped_histograms_lose_their_buckets_and_keep_their_count_and_sum(
-    absent: tuple[Run, list[str]],
+    applied: Run,
 ) -> None:
     """The buckets are the series; the count and the sum still answer a rate and a mean, and the endpoint is the chart's."""
     from kluster.components.monitoring import APISERVER_DROPPED_HISTOGRAMS
 
-    run, _ = absent
-    (endpoint,) = _values(run)['kubeApiServer']['vmScrape']['spec']['endpoints']
+    (endpoint,) = _values(applied)['kubeApiServer']['vmScrape']['spec']['endpoints']
     configs = endpoint.get('metricRelabelConfigs', [])
 
     assert {key: endpoint.get(key) for key in CHART_APISERVER_ENDPOINT} == dict(CHART_APISERVER_ENDPOINT)
@@ -668,13 +664,12 @@ def test_the_api_servers_dropped_histograms_lose_their_buckets_and_keep_their_co
         assert _relabel({'__name__': other}, configs) is not None, other
 
 
-def test_every_scrape_runs_at_vmagents_one_interval(absent: tuple[Run, list[str]]) -> None:
+def test_every_scrape_runs_at_vmagents_one_interval(applied: Run) -> None:
     """A rate over a window then reads the same number of samples from every source."""
-    run, _ = absent
-    interval = _values(run)['vmagent']['spec'].get('scrapeInterval', CHART_SCRAPE_INTERVAL)
-    declared = [it.inputs['spec'] for typ in (VM_NODE_SCRAPE, VM_POD_SCRAPE) for it in run.monitor.of_type(typ)]
+    interval = _values(applied)['vmagent']['spec'].get('scrapeInterval', CHART_SCRAPE_INTERVAL)
+    declared = [it.inputs['spec'] for typ in (VM_NODE_SCRAPE, VM_POD_SCRAPE) for it in applied.monitor.of_type(typ)]
     intervals = {
-        **{f'kubelet {name}': spec.get('interval') for name, spec in _kubelet_scrapes(run).items()},
+        **{f'kubelet {name}': spec.get('interval') for name, spec in _kubelet_scrapes(applied).items()},
         **{f'declared {i}': spec.get('interval') for i, spec in enumerate(declared)},
         **{
             f'declared {i} endpoint': endpoint.get('interval')
@@ -699,20 +694,20 @@ OPERATOR_SECRETS_DIR = '/etc/vm/secrets'
 
 
 def test_each_mutating_endpoint_of_the_store_takes_a_generated_key_no_rendered_object_carries(
-    absent: tuple[Run, list[str]],
+    applied: Run,
 ) -> None:
     """Each flag names a file of a Secret vmsingle mounts, holding a password of its own generated into state.
 
     The chart is installed behind the Secret, since vmsingle does not start
     without what it mounts.
     """
-    run, _ = absent
-    spec = _values(run)['vmsingle']['spec']
+    spec = _values(applied)['vmsingle']['spec']
     mounted = set(spec.get('secrets', []))
     secrets = {
-        (it.inputs['metadata']['namespace'], it.inputs['metadata']['name']): it for it in run.monitor.of_type(SECRET)
+        (it.inputs['metadata']['namespace'], it.inputs['metadata']['name']): it
+        for it in applied.monitor.of_type(SECRET)
     }
-    generated = {Generating.generated(it.name) for it in run.monitor.of_type(PASSWORD)}
+    generated = {Generating.generated(it.name) for it in applied.monitor.of_type(PASSWORD)}
     keys: list[str] = []
 
     for flag in MUTATING_ENDPOINT_FLAGS:
@@ -726,7 +721,7 @@ def test_each_mutating_endpoint_of_the_store_takes_a_generated_key_no_rendered_o
         value = secret.inputs['stringData']['value'][key]
         assert value in generated, flag
         keys.append(value)
-        assert run.urn(SECRET, secret.name) in run.dependencies(CHART, STACK)
+        assert applied.urn(SECRET, secret.name) in applied.dependencies(CHART, STACK)
     assert len(set(keys)) == len(keys), 'two endpoints share a key'
 
 
@@ -770,7 +765,7 @@ def _installed_memory(
     return found
 
 
-def test_the_memory_requests_on_the_worker_fit_monitorings_budget(absent: tuple[Run, list[str]]) -> None:
+def test_the_memory_requests_on_the_worker_fit_monitorings_budget(applied: Run) -> None:
     """What the scheduler reserves for monitoring on the worker is within nodes.md §4.4's budget, rfc-008 §6.1's request.
 
     The requests are those of the containers charged to monitoring's line of
@@ -778,26 +773,24 @@ def test_the_memory_requests_on_the_worker_fit_monitorings_budget(absent: tuple[
     path that chart reads each container's memory from. metrics-server is
     charged to the line for the rest of kube-system.
     """
-    run, _ = absent
     charged = memory.charged_to(memory.Line.MONITORING)
-    requested = {name: _mib(it['requests']['memory']) for name, it in _installed_memory(run, charged).items()}
+    requested = {name: _mib(it['requests']['memory']) for name, it in _installed_memory(applied, charged).items()}
 
     assert sum(requested.values()) <= memory.BUDGET_MIB, requested
 
 
-def test_the_history_stores_request_is_its_own_line_beside_monitorings(absent: tuple[Run, list[str]]) -> None:
+def test_the_history_stores_request_is_its_own_line_beside_monitorings(applied: Run) -> None:
     """The history store is charged to a line of its own, as the operator ruled (Aetf/kluster-ops#790, option A).
 
     Its request is read where the declared store reads it, so monitoring's
     worker memory is the two lines together: the stack's containers within
     `BUDGET_MIB`, the history store within `HISTORY_BUDGET_MIB`.
     """
-    run, _ = absent
     charged = memory.charged_to(memory.Line.HISTORY)
-    requested = {name: _mib(it['requests']['memory']) for name, it in _installed_memory(run, charged).items()}
+    requested = {name: _mib(it['requests']['memory']) for name, it in _installed_memory(applied, charged).items()}
     monitoring = {
         name: _mib(it['requests']['memory'])
-        for name, it in _installed_memory(run, memory.charged_to(memory.Line.MONITORING)).items()
+        for name, it in _installed_memory(applied, memory.charged_to(memory.Line.MONITORING)).items()
     }
 
     assert requested
@@ -805,15 +798,14 @@ def test_the_history_stores_request_is_its_own_line_beside_monitorings(absent: t
     assert sum(requested.values()) + sum(monitoring.values()) <= memory.BUDGET_MIB + memory.HISTORY_BUDGET_MIB
 
 
-def test_every_memory_limit_is_at_least_its_request(absent: tuple[Run, list[str]]) -> None:
+def test_every_memory_limit_is_at_least_its_request(applied: Run) -> None:
     """A limit under its request is refused by the API server, for the pod, at apply."""
-    run, _ = absent
-    for name, resources in _installed_memory(run).items():
+    for name, resources in _installed_memory(applied).items():
         if 'limits' in resources:
             assert _mib(resources['limits']['memory']) >= _mib(resources['requests']['memory']), name
 
 
-def test_every_memory_value_leaves_cpu_to_the_charts_defaults(absent: tuple[Run, list[str]]) -> None:
+def test_every_memory_value_leaves_cpu_to_the_charts_defaults(applied: Run) -> None:
     """Only memory is set, so each chart and the operator keep the CPU they would give a container.
 
     The operator fills each resource it finds unset from its defaults, CPU
@@ -821,13 +813,12 @@ def test_every_memory_value_leaves_cpu_to_the_charts_defaults(absent: tuple[Run,
     L97-142 at operator v0.74.0); a chart merges the values handed to it
     over its own.
     """
-    run, _ = absent
-    for name, resources in _installed_memory(run).items():
+    for name, resources in _installed_memory(applied).items():
         assert {key for side in resources.values() for key in side} == {'memory'}, name
 
 
 def test_grafana_reads_the_stacks_datasources_from_a_mount_rather_than_a_sidecar(
-    absent: tuple[Run, list[str]],
+    applied: Run,
 ) -> None:
     """The datasource sidecar is off, the stack still renders its ConfigMap, and Grafana mounts it where it provisions.
 
@@ -835,8 +826,7 @@ def test_grafana_reads_the_stacks_datasources_from_a_mount_rather_than_a_sidecar
     under `forceDeployDatasource` (`templates/grafana/datasource.yaml` L1 at
     0.91.2).
     """
-    run, _ = absent
-    grafana = _values(run)['grafana']
+    grafana = _values(applied)['grafana']
 
     assert grafana['sidecar']['datasources']['enabled'] is False
     assert grafana['forceDeployDatasource'] is True
@@ -845,14 +835,13 @@ def test_grafana_reads_the_stacks_datasources_from_a_mount_rather_than_a_sidecar
     assert 'subPath' not in mount
 
 
-def test_grafana_installs_no_plugin_at_start(absent: tuple[Run, list[str]]) -> None:
+def test_grafana_installs_no_plugin_at_start(applied: Run) -> None:
     """Grafana's preinstall, its download of a plugin set on every start, is off, and no plugin is listed to install.
 
     `GF_PLUGINS_PREINSTALL_DISABLED` is Grafana's environment form of
     `[plugins] preinstall_disabled`; the chart installs what `plugins` lists.
     """
-    run, _ = absent
-    grafana = _values(run)['grafana']
+    grafana = _values(applied)['grafana']
 
     assert grafana['env']['GF_PLUGINS_PREINSTALL_DISABLED'] == 'true'
     assert not grafana.get('plugins')
@@ -899,7 +888,7 @@ def test_grafanas_pod_changes_when_what_renders_its_datasources_changes(monkeypa
 
 
 def test_every_declared_rule_carries_a_census_tier_a_summary_and_a_playbook_that_resolves(
-    absent: tuple[Run, list[str]],
+    applied: Run,
 ) -> None:
     """The playbook rule as a gate: an alert whose response procedure is not written down is not shipped.
 
@@ -908,8 +897,7 @@ def test_every_declared_rule_carries_a_census_tier_a_summary_and_a_playbook_that
     is a line, and its playbook names a document of this repository and a
     section that document has (architecture.md §4.3, operations.md §5).
     """
-    run, _ = absent
-    declared = _declared_rules(run)
+    declared = _declared_rules(applied)
     tiers = {tier.value for tier in Tier}
 
     assert declared, 'the program declared no rule'
@@ -932,27 +920,25 @@ def test_every_declared_rule_carries_a_census_tier_a_summary_and_a_playbook_that
 IGNORED_ROWS = 'vm_rows_ignored_total'
 
 
-def test_a_row_the_store_ignores_for_any_reason_raises_an_alert(absent: tuple[Run, list[str]]) -> None:
+def test_a_row_the_store_ignores_for_any_reason_raises_an_alert(applied: Run) -> None:
     """A series the store ignores is lost whole and silently, so some rule reads the counter for every reason.
 
     A matcher on the counter would narrow the rule to the reasons it names,
     and a reason the store adds later would go unseen.
     """
-    run, _ = absent
     reading = re.compile(rf'\b{IGNORED_ROWS}\b(?!\s*\{{)')
 
-    assert [rule['alert'] for rule in _declared_rules(run) if reading.search(rule['expr'])]
+    assert [rule['alert'] for rule in _declared_rules(applied) if reading.search(rule['expr'])]
 
 
-def test_the_rules_are_declared_behind_the_chart_that_defines_them(absent: tuple[Run, list[str]]) -> None:
+def test_the_rules_are_declared_behind_the_chart_that_defines_them(applied: Run) -> None:
     """pulumi-kubernetes waits for workloads, not for a definition's registration, so the order is declared."""
-    run, _ = absent
-    chart = run.urn(CHART, STACK)
-    objects = [(typ, declared.name) for typ in OPERATOR_KINDS for declared in run.monitor.of_type(typ)]
+    chart = applied.urn(CHART, STACK)
+    objects = [(typ, declared.name) for typ in OPERATOR_KINDS for declared in applied.monitor.of_type(typ)]
 
     assert objects
     for typ, name in objects:
-        assert chart in run.dependencies(typ, name), name
+        assert chart in applied.dependencies(typ, name), name
 
 
 # -- The readings, their records, their alerts and the dashboard ---------------------
@@ -988,14 +974,13 @@ def _equalities(selector: Any) -> set[tuple[str, str]]:
     return {(m.name, m.value) for m in selector.matchers.matchers if m.op == promql_parser.MatchOp.Equal}
 
 
-def test_the_node_exporters_series_are_labeled_with_the_node_they_are_read_on(absent: tuple[Run, list[str]]) -> None:
+def test_the_node_exporters_series_are_labeled_with_the_node_they_are_read_on(applied: Run) -> None:
     """A reading of a node groups by `node`, which the operator gives a pod's target no other way.
 
     The endpoint is stated whole, so the chart's own drop of the kubelet's pod
     mounts is held too.
     """
-    run, _ = absent
-    (endpoint,) = _values(run)['prometheus-node-exporter']['vmScrape']['spec']['endpoints']
+    (endpoint,) = _values(applied)['prometheus-node-exporter']['vmScrape']['spec']['endpoints']
     target = {'__meta_kubernetes_pod_node_name': 'cp2', 'pod': 'node-exporter-x', 'namespace': STACK}
     mounted = {'__name__': 'node_filesystem_avail_bytes', 'mountpoint': '/var/lib/kubelet/pods/0/volumes/v'}
 
@@ -1005,11 +990,10 @@ def test_the_node_exporters_series_are_labeled_with_the_node_they_are_read_on(ab
 
 
 def test_each_reading_is_recorded_once_under_its_name_and_the_window_it_computes_over(
-    absent: tuple[Run, list[str]],
+    applied: Run,
 ) -> None:
     """The window a record's name carries is the range of every range selector of its expression."""
-    run, _ = absent
-    records = _declared_records(run)
+    records = _declared_records(applied)
 
     assert records == {reading.record: reading.expr for reading in readings.READINGS}
     for reading in readings.READINGS:
@@ -1017,14 +1001,13 @@ def test_each_reading_is_recorded_once_under_its_name_and_the_window_it_computes
         assert _ranges(reading.expr) == {reading.window}, reading.record
 
 
-def test_every_reading_selects_this_clusters_series_of_one_job(absent: tuple[Run, list[str]]) -> None:
+def test_every_reading_selects_this_clusters_series_of_one_job(applied: Run) -> None:
     """The history holds the legacy cluster's series beside this one's, under `cluster="legacy"`.
 
     A sum by node, pod or namespace over both adds the two together, so every
     selector names this cluster, and every scraped one its job.
     """
-    run, _ = absent
-    for record, expr in _declared_records(run).items():
+    for record, expr in _declared_records(applied).items():
         for selector in _vector_selectors(expr):
             assert (readings.CLUSTER_LABEL, '') in _equalities(selector), f'{record}: {selector}'
             scraped = not re.fullmatch(rules.IMPORTED, selector.name or '')
@@ -1032,14 +1015,13 @@ def test_every_reading_selects_this_clusters_series_of_one_job(absent: tuple[Run
             assert not scraped or named, f'{record}: {selector}'
 
 
-def test_every_reading_reads_series_the_history_keeps_and_its_record_is_kept(absent: tuple[Run, list[str]]) -> None:
+def test_every_reading_reads_series_the_history_keeps_and_its_record_is_kept(applied: Run) -> None:
     """A reading is computed again over every period on record, which the history holds only of the class it keeps.
 
     The one reading whose inputs the history does not keep says so, and its
     record is kept all the same.
     """
-    run, _ = absent
-    relabeling = _history_write(run)['inlineUrlRelabelConfig']
+    relabeling = _history_write(applied)['inlineUrlRelabelConfig']
 
     for reading in readings.READINGS:
         kept = [
@@ -1053,18 +1035,17 @@ def test_every_reading_reads_series_the_history_keeps_and_its_record_is_kept(abs
         assert _relabel({'__name__': reading.record}, relabeling) is not None, reading.record
 
 
-def test_every_recorded_series_an_alert_or_the_dashboard_reads_is_declared(absent: tuple[Run, list[str]]) -> None:
-    run, _ = absent
-    records = _declared_records(run)
+def test_every_recorded_series_an_alert_or_the_dashboard_reads_is_declared(applied: Run) -> None:
+    records = _declared_records(applied)
     prefix = f'{readings.RECORD_PREFIX}:'
     read = [
         selector.metric
-        for rule in _declared_rules(run)
+        for rule in _declared_rules(applied)
         for selector in selectors(rule['expr'])
         if selector.metric.startswith(prefix)
     ] + [
         selector.metric
-        for panel in _dashboard(run)['panels']
+        for panel in _dashboard(applied)['panels']
         for target in panel.get('targets', [])
         for selector in selectors(_offset(target['expr']))
         if selector.metric.startswith(prefix)
@@ -1079,12 +1060,11 @@ def test_every_recorded_series_an_alert_or_the_dashboard_reads_is_declared(absen
 _SLO = re.compile(r'^(?P<record>[\w:]+)\{(?P<scope>[^}]*)\} (?P<bound>[<>]) (?P<limit>\S+)$')
 
 
-def test_each_slo_alert_fires_where_its_reading_leaves_its_budget(absent: tuple[Run, list[str]]) -> None:
+def test_each_slo_alert_fires_where_its_reading_leaves_its_budget(applied: Run) -> None:
     """The threshold of an alert over a reading is the reading's budget, on the series the budget binds."""
-    run, _ = absent
     by_record = {reading.record: reading for reading in readings.READINGS}
     prefix = f'{readings.RECORD_PREFIX}:'
-    over_readings = [rule for rule in _declared_rules(run) if rule['expr'].startswith(prefix)]
+    over_readings = [rule for rule in _declared_rules(applied) if rule['expr'].startswith(prefix)]
 
     assert over_readings
     for rule in over_readings:
@@ -1129,13 +1109,13 @@ def _limit(stated: str) -> float:
     return float(match['number']) * _BUDGET_UNITS[match['unit'] or 's']
 
 
-def test_each_budget_is_the_one_its_source_states(absent: tuple[Run, list[str]]) -> None:
+def test_each_budget_is_the_one_its_source_states(applied: Run) -> None:
     """A budget's limit is the number of the canon's phrase, and the phrase stands in the section it names.
 
     Where the phrase states the window the budget holds over, that is the
     reading's window.
     """
-    _ = absent
+    _ = applied
     budgeted = [reading for reading in readings.READINGS if reading.budget is not None]
 
     assert budgeted
@@ -1162,9 +1142,9 @@ def _namespaces(run: Run) -> set[str]:
     return found
 
 
-def test_the_platforms_namespaces_are_the_ones_k8s_base_declares_objects_in(sealed: Run) -> None:
+def test_the_platforms_namespaces_are_the_ones_k8s_base_declares_objects_in(applied: Run) -> None:
     """A pod in a namespace `k8s-base` uses is the platform's, so a namespace it adds is never read as a workload's."""
-    assert set(readings.PLATFORM_NAMESPACES) == _namespaces(sealed)
+    assert set(readings.PLATFORM_NAMESPACES) == _namespaces(applied)
 
 
 def _dashboard(run: Run) -> dict[str, Any]:
@@ -1179,25 +1159,24 @@ def _offset(expr: str) -> str:
     return expr.replace('$__interval', '1m').replace(f'${dashboard.OFFSET_VARIABLE}', '1d')
 
 
-def test_the_dashboard_is_a_configmap_the_charts_sidecar_hands_to_grafana(absent: tuple[Run, list[str]]) -> None:
+def test_the_dashboard_is_a_configmap_the_charts_sidecar_hands_to_grafana(applied: Run) -> None:
     """The stack's sidecar collects a `ConfigMap` labeled `grafana_dashboard: "1"` in the namespace it runs in.
 
     `values.yaml`, `grafana.sidecar.dashboards`, at stack chart 0.91.2, with
     the grafana chart's `searchNamespace` left unset (12.7.3).
     """
-    run, _ = absent
     (declared,) = [
-        it for it in run.monitor.of_type(CONFIGMAP) if it.inputs['metadata'].get('name') == dashboard.CONFIGMAP
+        it for it in applied.monitor.of_type(CONFIGMAP) if it.inputs['metadata'].get('name') == dashboard.CONFIGMAP
     ]
     metadata = declared.inputs['metadata']
 
     assert metadata['labels'] == {'grafana_dashboard': '1'}
     assert metadata['namespace'] == conventions.MONITORING_NAMESPACE
-    assert 'dashboards' not in _values(run)['grafana'].get('sidecar', {})
+    assert 'dashboards' not in _values(applied)['grafana'].get('sidecar', {})
 
 
 def test_every_reading_has_a_panel_computing_it_and_an_earlier_period_from_the_history(
-    absent: tuple[Run, list[str]],
+    applied: Run,
 ) -> None:
     """Each panel computes its reading from the history's series, and draws the same query as of an earlier time.
 
@@ -1205,9 +1184,10 @@ def test_every_reading_has_a_panel_computing_it_and_an_earlier_period_from_the_h
     those, and the record only where the history keeps no input. A reading
     per node is drawn for the control planes.
     """
-    run, _ = absent
-    model = _dashboard(run)
-    (history,) = [it['uid'] for it in _values(run)['defaultDatasources']['extra'] if it['url'] == _history_service(run)]
+    model = _dashboard(applied)
+    (history,) = [
+        it['uid'] for it in _values(applied)['defaultDatasources']['extra'] if it['url'] == _history_service(applied)
+    ]
     variables = {it['name'] for it in model['templating']['list']}
     panels = [panel for panel in model['panels'] if panel['type'] != 'row']
 
@@ -1340,7 +1320,7 @@ def test_an_imported_series_is_read_from_no_scrape_job() -> None:
 
 
 def test_every_job_an_alerting_rule_reads_has_a_target_alert_and_no_other_job_has_one(
-    absent: tuple[Run, list[str]],
+    applied: Run,
 ) -> None:
     """The family is a definition: the jobs whose series the declared rules read, each watched once.
 
@@ -1348,10 +1328,9 @@ def test_every_job_an_alerting_rule_reads_has_a_target_alert_and_no_other_job_ha
     reader, the declared recording rules and the scrape jobs' exports,
     against the job each target alert is labeled with and reads.
     """
-    run, _ = absent
-    watching, reading = _family(_declared_rules(run))
+    watching, reading = _family(_declared_rules(applied))
     jobs = _scrape_jobs()
-    records = _declared_records(run)
+    records = _declared_records(applied)
     read = {job for rule in reading for job in inputs(rule['expr'], jobs, records)}
     watched = [rule['labels'][JOB_LABEL] for rule in watching if rule['alert'] == TARGET_DOWN]
 
@@ -1363,17 +1342,16 @@ def test_every_job_an_alerting_rule_reads_has_a_target_alert_and_no_other_job_ha
             assert named == {frozenset({rule['labels'][JOB_LABEL]})}, rule['expr']
 
 
-def test_the_family_waits_out_two_scrapes_and_an_evaluation_and_is_actionable(absent: tuple[Run, list[str]]) -> None:
+def test_the_family_waits_out_two_scrapes_and_an_evaluation_and_is_actionable(applied: Run) -> None:
     """A single failed scrape, a restart, or the stagger of jobs going stale as vmagent stops, reports nothing.
 
     Both intervals are read off what the program declares, as the
     scheduled-job family's lag is.
     """
-    run, _ = absent
-    values = _values(run)
+    values = _values(applied)
     scrape = _duration(values['vmagent']['spec']['scrapeInterval'])
     evaluation = _duration(values['vmalert']['spec']['evaluationInterval'])
-    watching, _ = _family(_declared_rules(run))
+    watching, _ = _family(_declared_rules(applied))
 
     assert watching
     for rule in watching:
@@ -1381,7 +1359,7 @@ def test_the_family_waits_out_two_scrapes_and_an_evaluation_and_is_actionable(ab
         assert rule['labels'][TIER_LABEL] == Tier.ACTIONABLE.value, rule['alert']
 
 
-def test_the_scrapes_the_job_names_follow_keep_the_job_they_are_derived_from(absent: tuple[Run, list[str]]) -> None:
+def test_the_scrapes_the_job_names_follow_keep_the_job_they_are_derived_from(applied: Run) -> None:
     """`scrape_jobs` derives each job from a default the declared objects leave in place.
 
     The operator's scrape of its own objects takes the job from the Service's
@@ -1391,9 +1369,8 @@ def test_the_scrapes_the_job_names_follow_keep_the_job_they_are_derived_from(abs
     values leave to the chart, as no endpoint they state relabels `job`. That the live series carry the names is the recent
     store's to show (operations.md §6.4).
     """
-    run, _ = absent
-    values = _values(run)
-    history = _history(run)
+    values = _values(applied)
+    history = _history(applied)
     specs = {name: values[name]['spec'] for name in ('vmsingle', 'vmagent', 'alertmanager')} | {
         'history': history['spec']
     }
@@ -1410,15 +1387,14 @@ def test_the_scrapes_the_job_names_follow_keep_the_job_they_are_derived_from(abs
 # -- alertmanager's receiver ----------------------------------------------------------
 
 
-def test_the_receiver_reads_the_webhooks_url_from_its_sealed_secret(absent: tuple[Run, list[str]]) -> None:
+def test_the_receiver_reads_the_webhooks_url_from_its_sealed_secret(applied: Run) -> None:
     """The URL is in no rendered configuration: every webhook names the sealed value's Secret, in its namespace.
 
     The operator reads `url_secret` from the receiver object's own namespace
     (`vmalertmanagerconfig_types.go` L533-563 at operator v0.74.0), which is
     therefore the namespace the value is sealed to.
     """
-    run, _ = absent
-    receiver = _receiver(run)
+    receiver = _receiver(applied)
     webhooks = [config for spec in receiver['spec']['receivers'] for config in spec.get('webhook_configs', [])]
 
     assert receiver['metadata']['namespace'] == WEBHOOK.namespace
@@ -1428,31 +1404,32 @@ def test_the_receiver_reads_the_webhooks_url_from_its_sealed_secret(absent: tupl
         assert webhook['url_secret']['name'] == WEBHOOK.name
 
 
-def test_the_receiver_sends_firing_alerts_alone(absent: tuple[Run, list[str]]) -> None:
+def test_the_receiver_sends_firing_alerts_alone(applied: Run) -> None:
     """Home Assistant's automation pushes every alert it is sent, reading no status (operations.md §4).
 
     A resolution sent there would push as a second alarm. Alertmanager sends
     resolutions to a webhook unless told not to, so the field is stated on
     every webhook rather than left to that default.
     """
-    run, _ = absent
-    webhooks = [config for spec in _receiver(run)['spec']['receivers'] for config in spec.get('webhook_configs', [])]
+    webhooks = [
+        config for spec in _receiver(applied)['spec']['receivers'] for config in spec.get('webhook_configs', [])
+    ]
 
     assert webhooks
     for webhook in webhooks:
         assert webhook.get('send_resolved') is False
 
 
-def test_the_sealed_webhook_is_declared_where_the_receiver_reads_it(sealed: Run) -> None:
+def test_the_sealed_webhook_is_declared_where_the_receiver_reads_it(applied: Run) -> None:
     """Sealed in, the value becomes the Secret the receiver names, at the scope the census row seals it.
 
     The key the receiver reads is one the SealedSecret renders rather than
     the sealed id, and it renders a URL at Home Assistant's own address
     around the id; `test_sealing` opens it as the controller does.
     """
-    receiver = _receiver(sealed)
+    receiver = _receiver(applied)
     (secret,) = [
-        it.inputs for it in sealed.monitor.of_type(SEALED_SECRET) if it.inputs['metadata']['name'] == WEBHOOK.name
+        it.inputs for it in applied.monitor.of_type(SEALED_SECRET) if it.inputs['metadata']['name'] == WEBHOOK.name
     ]
     keys = {config['url_secret']['key'] for spec in receiver['spec']['receivers'] for config in spec['webhook_configs']}
     rendered = secret['spec']['template']['data']
@@ -1472,7 +1449,7 @@ def test_the_sealed_webhook_is_declared_where_the_receiver_reads_it(sealed: Run)
 
 
 def test_an_absent_webhook_declares_no_sealed_secret_and_warns_naming_it(absent: tuple[Run, list[str]]) -> None:
-    """Until it is sealed in, nothing is declared for it; the receiver is declared all the same, and stays pending."""
+    """The absent path: nothing is declared for the webhook; the receiver is declared all the same, and stays pending."""
     run, warned = absent
 
     assert [it for it in run.monitor.of_type(SEALED_SECRET) if it.inputs['metadata']['name'] == WEBHOOK.name] == []
@@ -1524,7 +1501,7 @@ def _top_route(run: Run) -> Mapping[str, Any]:
 
 
 def test_every_rule_reaches_home_assistant_and_the_check_in_repeats_inside_its_timer(
-    absent: tuple[Run, list[str]],
+    applied: Run,
 ) -> None:
     """Each declared rule's alert, carrying its own labels alone, ends on Home Assistant's receiver.
 
@@ -1533,9 +1510,8 @@ def test_every_rule_reaches_home_assistant_and_the_check_in_repeats_inside_its_t
     interval after the repeat interval, which is inside the timer it restarts
     (rfc-007 §7.3).
     """
-    run, _ = absent
-    top = _top_route(run)
-    declared = _declared_rules(run)
+    top = _top_route(applied)
+    declared = _declared_rules(applied)
 
     for rule in declared:
         labels = cast('Mapping[str, str]', rule['labels'])
@@ -1558,7 +1534,7 @@ def _kubeconfig_copy(run: Run) -> Mapping[str, Any]:
 
 
 def test_the_kubeconfig_copys_rule_fires_from_the_margin_before_its_certificate_expires(
-    absent: tuple[Run, list[str]],
+    applied: Run,
 ) -> None:
     """The threshold is read off the copy the program is configured with: its certificate's `NotAfter`, less the margin.
 
@@ -1567,8 +1543,7 @@ def test_the_kubeconfig_copys_rule_fires_from_the_margin_before_its_certificate_
     epoch. It reaches the engine in the clear, so a preview shows the date
     move when a new copy is committed.
     """
-    run, _ = absent
-    rule = _kubeconfig_copy(run)
+    rule = _kubeconfig_copy(applied)
     tree = promql_parser.parse(rule['expr'])
 
     assert isinstance(tree, promql_parser.BinaryExpr), rule['expr']
@@ -1665,14 +1640,13 @@ def spec_schemas_fixture() -> dict[tuple[str, str], Mapping[str, Any]]:
 
 
 def test_every_untyped_operator_object_is_spelled_as_its_definition_declares(
-    absent: tuple[Run, list[str]], spec_schemas: dict[tuple[str, str], Mapping[str, Any]]
+    applied: Run, spec_schemas: dict[tuple[str, str], Mapping[str, Any]]
 ) -> None:
     """The check the SDK's typed `Args` would make, while the layer declares the operator's kinds untyped.
 
     It goes with `components.monitoring.operator_objects` (Aetf/kluster-ops#720).
     """
-    run, _ = absent
-    declared = [it for typ in OPERATOR_KINDS for it in run.monitor.of_type(typ)]
+    declared = [it for typ in OPERATOR_KINDS for it in applied.monitor.of_type(typ)]
 
     assert declared
     for it in declared:
@@ -1711,10 +1685,9 @@ def _history_service(run: Run) -> str:
     return f'http://vmsingle-{metadata["name"]}.{metadata["namespace"]}.svc:8428'
 
 
-def test_the_history_store_runs_on_the_worker_alone(absent: tuple[Run, list[str]]) -> None:
+def test_the_history_store_runs_on_the_worker_alone(applied: Run) -> None:
     """It is a second vmsingle beside the chart's, on the worker's local disk, as every store of the stack is."""
-    run, _ = absent
-    spec = _history(run)['spec']
+    spec = _history(applied)['spec']
 
     schedulable = {
         name
@@ -1726,11 +1699,10 @@ def test_the_history_store_runs_on_the_worker_alone(absent: tuple[Run, list[str]
     assert spec['storage']['storageClassName'] == conventions.SC_LOCAL_PATH
 
 
-def test_the_history_stores_mutating_endpoints_take_the_stacks_keys(absent: tuple[Run, list[str]]) -> None:
+def test_the_history_stores_mutating_endpoints_take_the_stacks_keys(applied: Run) -> None:
     """Deleting the history is behind a key, as deleting the recent store's series is."""
-    run, _ = absent
-    spec = _history(run)['spec']
-    recent = _values(run)['vmsingle']['spec']
+    spec = _history(applied)['spec']
+    recent = _values(applied)['vmsingle']['spec']
 
     assert {flag: spec['extraArgs'].get(flag) for flag in MUTATING_ENDPOINT_FLAGS} == {
         flag: recent['extraArgs'][flag] for flag in MUTATING_ENDPOINT_FLAGS
@@ -1747,11 +1719,10 @@ def _history_write(run: Run) -> dict[str, Any]:
     return write
 
 
-def test_vmagent_writes_to_the_history_stores_service(absent: tuple[Run, list[str]]) -> None:
+def test_vmagent_writes_to_the_history_stores_service(applied: Run) -> None:
     """On its write path, where vmsingle takes Prometheus remote write (`/api/v1/write`)."""
-    run, _ = absent
 
-    assert _history_write(run)['url'] == f'{_history_service(run)}/api/v1/write'
+    assert _history_write(applied)['url'] == f'{_history_service(applied)}/api/v1/write'
 
 
 @pytest.mark.parametrize(
@@ -1778,35 +1749,32 @@ def test_vmagent_writes_to_the_history_stores_service(absent: tuple[Run, list[st
     ids=lambda it: it if isinstance(it, bool) else f'{it.get("job", "")}:{it["__name__"]}',
 )
 def test_the_history_store_is_written_the_class_it_keeps_and_nothing_else(
-    absent: tuple[Run, list[str]], series: dict[str, str], kept: bool
+    applied: Run, series: dict[str, str], kept: bool
 ) -> None:
     """What a node, etcd or a container consumes and how long the control plane takes; etcd's process, not another's.
 
     The class of Aetf/kluster-ops#790's design, §2, read through the remote
     write's relabeling as vmagent applies it to a series it sends.
     """
-    run, _ = absent
 
-    assert (_relabel(series, _history_write(run)['inlineUrlRelabelConfig']) is not None) is kept
+    assert (_relabel(series, _history_write(applied)['inlineUrlRelabelConfig']) is not None) is kept
 
 
-def test_vmalerts_recording_rules_reach_the_stores_through_vmagent(absent: tuple[Run, list[str]]) -> None:
+def test_vmalerts_recording_rules_reach_the_stores_through_vmagent(applied: Run) -> None:
     """Written to vmagent, a rule's series takes the history's relabeling as a scraped one does.
 
     The chart points vmalert's remote write at vmagent under this value, and at
     the recent store otherwise (`templates/_helpers.tpl` L79-83 at 0.91.2).
     """
-    run, _ = absent
 
-    assert _values(run)['vmalert'].get('remoteWriteVMAgent') is True
+    assert _values(applied)['vmalert'].get('remoteWriteVMAgent') is True
 
 
-def test_grafana_reads_the_history_store(absent: tuple[Run, list[str]]) -> None:
+def test_grafana_reads_the_history_store(applied: Run) -> None:
     """A datasource of its own, at the address vmagent writes the history to, beside the chart's default."""
-    run, _ = absent
-    extra = _values(run)['defaultDatasources']['extra']
+    extra = _values(applied)['defaultDatasources']['extra']
 
-    assert [it['url'] for it in extra if it['type'] == 'prometheus'] == [_history_service(run)]
+    assert [it['url'] for it in extra if it['type'] == 'prometheus'] == [_history_service(applied)]
     assert not any(it.get('isDefault') for it in extra)
 
 
@@ -1926,7 +1894,7 @@ def _restores(run: Run) -> dict[str, list[dict[str, Any]]]:
 def test_without_the_writer_key_nothing_backs_up_or_restores_and_the_key_is_named(
     absent: tuple[Run, list[str]],
 ) -> None:
-    """The bring-up's tolerance: the stores start empty and are copied nowhere until the key is sealed in."""
+    """The absent path: the stores start empty and are copied nowhere until the key is sealed in."""
     run, warned = absent
     backups = {job.cronjob for job in schedule.METRICS_BACKUPS.values()}
 
@@ -1949,14 +1917,14 @@ def _backup_jobs(run: Run) -> dict[str, dict[str, Any]]:
     return jobs
 
 
-def test_each_store_is_backed_up_hourly_from_its_own_claim_read_only(sealed: Run) -> None:
+def test_each_store_is_backed_up_hourly_from_its_own_claim_read_only(applied: Run) -> None:
     """The operator's claim of each store (`vmsingle-<object>`, `factory/vmsingle/vmsingle.go` L59-62), at two minutes.
 
     Mounted read-only, so the job's pod lands on the store's node with the
     claim and can write nothing there.
     """
-    jobs = _backup_jobs(sealed)
-    (history,) = sealed.monitor.of_type(VM_SINGLE)
+    jobs = _backup_jobs(applied)
+    (history,) = applied.monitor.of_type(VM_SINGLE)
     chart_store = f'vmsingle-{conventions.MONITORING_NAMESPACE}-victoria-metrics-k8s-stack'
 
     assert set(jobs) == {f'vmsingle-{history.inputs["metadata"]["name"]}', chart_store}
@@ -1977,11 +1945,11 @@ def _pod_containers(job: Mapping[str, Any]) -> list[dict[str, Any]]:
     return [*pod.get('initContainers', []), *pod['containers']]
 
 
-def test_a_snapshot_a_cut_off_backup_leaves_is_deleted_well_after_any_run_ends(sealed: Run) -> None:
+def test_a_snapshot_a_cut_off_backup_leaves_is_deleted_well_after_any_run_ends(applied: Run) -> None:
     """Its hard links would keep every part merged away since on disk; no run loses the snapshot it copies."""
     longest = max(job.deadline for job in schedule.METRICS_BACKUPS.values())
 
-    for spec in (_values(sealed)['vmsingle']['spec'], _history(sealed)['spec']):
+    for spec in (_values(applied)['vmsingle']['spec'], _history(applied)['spec']):
         assert _duration(spec['extraArgs']['snapshotsMaxAge']) > longest
 
 
@@ -1989,14 +1957,14 @@ def _env(container: Mapping[str, Any]) -> dict[str, Any]:
     return {it['name']: it.get('value', it.get('valueFrom')) for it in container['env']}
 
 
-def test_the_writer_key_is_declared_where_the_backups_and_restores_read_it(sealed: Run) -> None:
+def test_the_writer_key_is_declared_where_the_backups_and_restores_read_it(applied: Run) -> None:
     """Sealed in, the key becomes the Secret every backup and restore container reads both halves from."""
     (secret,) = [
-        it.inputs for it in sealed.monitor.of_type(SEALED_SECRET) if it.inputs['metadata']['name'] == WRITER_KEY.name
+        it.inputs for it in applied.monitor.of_type(SEALED_SECRET) if it.inputs['metadata']['name'] == WRITER_KEY.name
     ]
     containers = [
-        *[container for job in _backup_jobs(sealed).values() for container in _pod_containers(job)],
-        *[container for restores in _restores(sealed).values() for container in restores],
+        *[container for job in _backup_jobs(applied).values() for container in _pod_containers(job)],
+        *[container for restores in _restores(applied).values() for container in restores],
     ]
 
     assert secret['metadata']['namespace'] == conventions.MONITORING_NAMESPACE
@@ -2061,7 +2029,7 @@ def shells_fixture(request: pytest.FixtureRequest, tmp_path_factory: pytest.Temp
 
 @pytest.mark.parametrize('kind', ['restore', 'backup'])
 def test_each_script_runs_under_the_busybox_of_its_containers_own_image(
-    sealed: Run, tmp_path: Path, shells: Mapping[str, Path], kind: str
+    applied: Run, tmp_path: Path, shells: Mapping[str, Path], kind: str
 ) -> None:
     """The `/bin/sh` a container runs a script under is its image's `/bin/busybox` and the loader it names, byte for byte.
 
@@ -2069,7 +2037,7 @@ def test_each_script_runs_under_the_busybox_of_its_containers_own_image(
     and the sums are the ones the container's own pinned image computes
     itself, so they are read apart from the copy the suite runs.
     """
-    pod = (_restore_pod if kind == 'restore' else _backup_pod)(sealed, 'history', tmp_path, shells)
+    pod = (_restore_pod if kind == 'restore' else _backup_pod)(applied, 'history', tmp_path, shells)
     scripted = [it for it in pod.containers if SHELL in it['command']]
     assert scripted, f'the {kind} pod runs no script'
 
@@ -2345,10 +2313,10 @@ def test_a_bucket_b2_names_null_authorizes_and_only_a_read_by_name_is_refused(
 
 @pytest.mark.parametrize('store', ['recent', 'history'])
 def test_an_empty_store_with_a_backup_is_restored(
-    sealed: Run, tmp_path: Path, shells: Mapping[str, Path], store: str
+    applied: Run, tmp_path: Path, shells: Mapping[str, Path], store: str
 ) -> None:
     """From its own prefix, by the `vmrestore` command the container declares, into the store's data directory."""
-    pod = _restore_pod(sealed, store, tmp_path, shells)
+    pod = _restore_pod(applied, store, tmp_path, shells)
     _backed_up(pod, _prefix(pod))
 
     assert pod.succeeded(), pod.stderr
@@ -2359,9 +2327,9 @@ def test_an_empty_store_with_a_backup_is_restored(
     assert (pod.data / 'restored-part').exists()
 
 
-def test_an_empty_store_with_no_backup_starts_empty(sealed: Run, tmp_path: Path, shells: Mapping[str, Path]) -> None:
+def test_an_empty_store_with_no_backup_starts_empty(applied: Run, tmp_path: Path, shells: Mapping[str, Path]) -> None:
     """The first install: nothing at the store's prefix, whatever another store's prefix holds."""
-    pod = _restore_pod(sealed, 'history', tmp_path, shells)
+    pod = _restore_pod(applied, 'history', tmp_path, shells)
     _backed_up(pod, 'vm/monitoring/recent/')
 
     assert pod.succeeded(), pod.stderr
@@ -2370,10 +2338,10 @@ def test_an_empty_store_with_no_backup_starts_empty(sealed: Run, tmp_path: Path,
 
 
 def test_a_store_holding_data_starts_on_it_without_reading_the_bucket(
-    sealed: Run, tmp_path: Path, shells: Mapping[str, Path]
+    applied: Run, tmp_path: Path, shells: Mapping[str, Path]
 ) -> None:
     """A restarted store keeps what it holds, with the bucket unreachable all the while."""
-    pod = _restore_pod(sealed, 'history', tmp_path, shells)
+    pod = _restore_pod(applied, 'history', tmp_path, shells)
     _backed_up(pod, _prefix(pod))
     (pod.data / 'flock.lock').write_text('')
     (pod.state / 'down').write_text('')
@@ -2384,7 +2352,7 @@ def test_a_store_holding_data_starts_on_it_without_reading_the_bucket(
 
 @pytest.mark.parametrize('failure', ['bucket down', 'key refused', 'listing fails', 'restore fails', 'data unreadable'])
 def test_a_backup_that_cannot_be_read_keeps_the_store_from_starting(
-    sealed: Run, tmp_path: Path, shells: Mapping[str, Path], failure: str
+    applied: Run, tmp_path: Path, shells: Mapping[str, Path], failure: str
 ) -> None:
     """Whatever stops the read -- the bucket, the key, its listing, `vmrestore`, the data directory -- the store waits.
 
@@ -2392,7 +2360,7 @@ def test_a_backup_that_cannot_be_read_keeps_the_store_from_starting(
     unless its failure stops the container, and nothing listed starts the
     store empty over the backup that exists.
     """
-    pod = _restore_pod(sealed, 'history', tmp_path, shells)
+    pod = _restore_pod(applied, 'history', tmp_path, shells)
     _backed_up(pod, _prefix(pod))
     if failure == 'bucket down':
         (pod.state / 'down').write_text('')
@@ -2412,10 +2380,10 @@ def test_a_backup_that_cannot_be_read_keeps_the_store_from_starting(
 
 @pytest.mark.parametrize('held', [True, False])
 def test_a_restore_that_did_not_finish_is_run_again_and_never_started_on(
-    sealed: Run, tmp_path: Path, shells: Mapping[str, Path], held: bool
+    applied: Run, tmp_path: Path, shells: Mapping[str, Path], held: bool
 ) -> None:
     """`vmrestore`'s lock file left in the directory: restored again, or refused where the backup is gone."""
-    pod = _restore_pod(sealed, 'history', tmp_path, shells)
+    pod = _restore_pod(applied, 'history', tmp_path, shells)
     if held:
         _backed_up(pod, _prefix(pod))
     (pod.data / 'restore-in-progress').write_text('')
@@ -2445,12 +2413,12 @@ def _recorded(pod: Pod, text: str) -> Path:
 
 @pytest.mark.parametrize('recorded', [None, 41_000_000_000, 42_000_000_000])
 def test_the_history_store_is_backed_up_and_its_rows_recorded_where_it_holds_no_fewer(
-    sealed: Run, tmp_path: Path, shells: Mapping[str, Path], recorded: int | None
+    applied: Run, tmp_path: Path, shells: Mapping[str, Path], recorded: int | None
 ) -> None:
     """The backup runs against the store's snapshot endpoint, and the count read becomes the record."""
     from kluster.components.monitoring import stores
 
-    pod = _backup_pod(sealed, 'history', tmp_path, shells)
+    pod = _backup_pod(applied, 'history', tmp_path, shells)
     _metrics(pod, 42_000_000_000)
     if recorded is not None:
         _ = _recorded(pod, str(recorded))
@@ -2468,7 +2436,7 @@ def test_the_history_store_is_backed_up_and_its_rows_recorded_where_it_holds_no_
 
 @pytest.mark.parametrize('failure', ['fewer rows', 'listing fails', 'record not a number', 'record empty'])
 def test_the_history_store_is_not_backed_up_where_its_record_does_not_clear_it(
-    sealed: Run, tmp_path: Path, shells: Mapping[str, Path], failure: str
+    applied: Run, tmp_path: Path, shells: Mapping[str, Path], failure: str
 ) -> None:
     """Fewer rows than the record, a record that cannot be listed, or one that is no count: no backup, the record kept.
 
@@ -2479,7 +2447,7 @@ def test_the_history_store_is_not_backed_up_where_its_record_does_not_clear_it(
     passes. A listing that fails after the key is authorized reads as no
     record unless its failure stops the container.
     """
-    pod = _backup_pod(sealed, 'history', tmp_path, shells)
+    pod = _backup_pod(applied, 'history', tmp_path, shells)
     _metrics(pod, 1_000)
     held = {'record not a number': 'some rows', 'record empty': ''}.get(failure, '42000000000')
     record = _recorded(pod, held)
@@ -2491,9 +2459,9 @@ def test_the_history_store_is_not_backed_up_where_its_record_does_not_clear_it(
     assert record.read_text() == held
 
 
-def test_a_failed_backup_records_nothing(sealed: Run, tmp_path: Path, shells: Mapping[str, Path]) -> None:
+def test_a_failed_backup_records_nothing(applied: Run, tmp_path: Path, shells: Mapping[str, Path]) -> None:
     """The record is of the last backup that completed, so a count is never recorded for a backup that is not there."""
-    pod = _backup_pod(sealed, 'history', tmp_path, shells)
+    pod = _backup_pod(applied, 'history', tmp_path, shells)
     _metrics(pod, 1_000)
     (pod.state / 'fails').write_text('vmbackup')
 
@@ -2502,10 +2470,10 @@ def test_a_failed_backup_records_nothing(sealed: Run, tmp_path: Path, shells: Ma
 
 
 def test_the_recent_store_is_backed_up_whatever_it_holds(
-    sealed: Run, tmp_path: Path, shells: Mapping[str, Path]
+    applied: Run, tmp_path: Path, shells: Mapping[str, Path]
 ) -> None:
     """Its rows age out with its retention, so its count falls, and its backup reads neither the store nor a record."""
-    pod = _backup_pod(sealed, 'recent', tmp_path, shells)
+    pod = _backup_pod(applied, 'recent', tmp_path, shells)
     (pod.state / 'down').write_text('')
 
     assert pod.succeeded(), pod.stderr
@@ -2514,7 +2482,7 @@ def test_the_recent_store_is_backed_up_whatever_it_holds(
 
 
 def test_no_credential_is_an_argument_of_any_process_the_scripts_start(
-    sealed: Run, tmp_path: Path, shells: Mapping[str, Path]
+    applied: Run, tmp_path: Path, shells: Mapping[str, Path]
 ) -> None:
     """The node exporter reads every process's arguments on the node; the key and B2's tokens reach `curl` as files.
 
@@ -2526,9 +2494,9 @@ def test_no_credential_is_an_argument_of_any_process_the_scripts_start(
     """
     basic = base64.b64encode(':'.join(FAKE_KEY).encode()).decode()
     secrets = (*FAKE_KEY, basic, *FAKE_TOKENS)
-    restore = _restore_pod(sealed, 'history', tmp_path / 'restore', shells)
+    restore = _restore_pod(applied, 'history', tmp_path / 'restore', shells)
     _backed_up(restore, _prefix(restore))
-    backup = _backup_pod(sealed, 'history', tmp_path / 'backup', shells)
+    backup = _backup_pod(applied, 'history', tmp_path / 'backup', shells)
     _metrics(backup, 1_000)
     _ = _recorded(backup, '1')
 
@@ -2544,13 +2512,13 @@ def test_no_credential_is_an_argument_of_any_process_the_scripts_start(
         assert path.stat().st_mode & 0o077 == 0, f'{path.name} is readable beyond its owner'
 
 
-def test_no_container_is_handed_a_secret_in_its_command(sealed: Run) -> None:
+def test_no_container_is_handed_a_secret_in_its_command(applied: Run) -> None:
     """The snapshot key and the writer key reach every container through its environment, from their Secrets."""
     from kluster.components.monitoring import AUTH_KEYS_SECRET
 
     containers = [
-        *[container for job in _backup_jobs(sealed).values() for container in _pod_containers(job)],
-        *[container for restores in _restores(sealed).values() for container in restores],
+        *[container for job in _backup_jobs(applied).values() for container in _pod_containers(job)],
+        *[container for restores in _restores(applied).values() for container in restores],
     ]
     keyed = {
         it['name']: it['valueFrom']['secretKeyRef']
@@ -2626,7 +2594,7 @@ def _period(schedule: str) -> dt.timedelta:
 
 
 def test_every_cronjob_a_program_declares_is_a_rows_and_every_row_a_declared_cronjob(
-    sealed: Run, apps: Recorder
+    applied: Run, apps: Recorder
 ) -> None:
     """The family watches a CronJob through its row, so a CronJob without one is a job nothing reports stopping.
 
@@ -2635,15 +2603,15 @@ def test_every_cronjob_a_program_declares_is_a_rows_and_every_row_a_declared_cro
     CronJob. A row no program declares a CronJob for is two alerts over no
     series, and two rows of one CronJob are its alerts twice.
     """
-    for monitor in (sealed.monitor, apps):
+    for monitor in (applied.monitor, apps):
         assert monitor.of_type(KUBERNETES_PROVIDER), 'a run that opened no cluster'
     rows = [(job.namespace, job.cronjob) for job in schedule.SCHEDULED_JOBS]
 
     assert len(set(rows)) == len(rows)
-    assert set(_cronjobs(sealed.monitor, apps)) == set(rows)
+    assert set(_cronjobs(applied.monitor, apps)) == set(rows)
 
 
-def test_each_cronjob_runs_at_its_rows_period_and_is_cut_off_at_its_rows_deadline(sealed: Run, apps: Recorder) -> None:
+def test_each_cronjob_runs_at_its_rows_period_and_is_cut_off_at_its_rows_deadline(applied: Run, apps: Recorder) -> None:
     """The period is what the stale alert is held to and the deadline what the failed one waits for.
 
     A run is cut off at the deadline, which `Forbid` would otherwise let hold
@@ -2654,7 +2622,7 @@ def test_each_cronjob_runs_at_its_rows_period_and_is_cut_off_at_its_rows_deadlin
     """
     rows = {(job.namespace, job.cronjob): job for job in schedule.SCHEDULED_JOBS}
 
-    for key, spec in _cronjobs(sealed.monitor, apps).items():
+    for key, spec in _cronjobs(applied.monitor, apps).items():
         row = rows[key]
         starting = row.starting_deadline.total_seconds() if row.starting_deadline is not None else None
         assert _period(spec['schedule']) == row.period, key
@@ -2664,15 +2632,14 @@ def test_each_cronjob_runs_at_its_rows_period_and_is_cut_off_at_its_rows_deadlin
 
 
 def test_each_row_raises_a_stale_and_a_failed_alert_on_its_cronjob_naming_its_playbook(
-    absent: tuple[Run, list[str]],
+    applied: Run,
 ) -> None:
     """Stale over `max_age` of the row's period, failed held for its deadline, both `actionable`, on its CronJob alone.
 
     The expressions' behavior over kube-state-metrics' series is not read
     here: what holds is each rule's relation to its row.
     """
-    run, _ = absent
-    declared = _declared_rules(run)
+    declared = _declared_rules(applied)
 
     for job in schedule.SCHEDULED_JOBS:
         selector = f'{{namespace="{job.namespace}", cronjob="{job.cronjob}"}}'
@@ -2696,16 +2663,15 @@ def _kube_state_metrics_endpoint(run: Run) -> dict[str, Any]:
     return endpoint
 
 
-def test_a_status_reaches_the_rules_inside_the_lag_every_deadline_leaves(absent: tuple[Run, list[str]]) -> None:
+def test_a_status_reaches_the_rules_inside_the_lag_every_deadline_leaves(applied: Run) -> None:
     """A CronJob's status is published at the next scrape and read at the next evaluation after it.
 
     Both intervals are read off what the program declares: the interval of
     kube-state-metrics' scrape, which publishes the status, and vmalert's
     evaluation interval.
     """
-    run, _ = absent
-    scrape = _duration(_kube_state_metrics_endpoint(run)['interval'])
-    evaluation = _duration(_values(run)['vmalert']['spec']['evaluationInterval'])
+    scrape = _duration(_kube_state_metrics_endpoint(applied)['interval'])
+    evaluation = _duration(_values(applied)['vmalert']['spec']['evaluationInterval'])
 
     assert scrape + evaluation < schedule.REPORT_LAG
 
@@ -2724,7 +2690,7 @@ KUBE_STATE_METRICS_TARGET = {
 }
 
 
-def test_a_cronjobs_series_carries_the_namespace_its_rows_rules_select_it_by(absent: tuple[Run, list[str]]) -> None:
+def test_a_cronjobs_series_carries_the_namespace_its_rows_rules_select_it_by(applied: Run) -> None:
     """kube-state-metrics publishes a CronJob's series under the CronJob's namespace, which the target's own would replace.
 
     Without `honorLabels` a label the target carries wins, and the sample's is
@@ -2733,8 +2699,7 @@ def test_a_cronjobs_series_carries_the_namespace_its_rows_rules_select_it_by(abs
     row in that namespace would still match; a row in any other would match
     no series, and its alerts would never fire.
     """
-    run, _ = absent
-    endpoint = _kube_state_metrics_endpoint(run)
+    endpoint = _kube_state_metrics_endpoint(applied)
 
     for job in schedule.SCHEDULED_JOBS:
         sample = {
@@ -2810,8 +2775,9 @@ OCI_KEY = conventions.sealed.OCI_METRICS
 
 @pytest_asyncio.fixture(scope='module', loop_scope='module')
 async def without_oci_key() -> Run:
-    """Every sealed value the stack declares sealed in but the metrics reader's key."""
-    return await applied(sealed={name: value for name, value in SEALED.items() if name != OCI_KEY.name})
+    """The absent path of the metrics reader's key alone: every other sealed value the stack declares sealed in."""
+    run, _ = await declare(sealed=sealed_without(OCI_KEY))
+    return run
 
 
 def _named(run: Run, typ: str, name: str) -> list[dict[str, Any]]:
@@ -2827,22 +2793,22 @@ def _monitoring_objects(run: Run) -> set[tuple[str, str]]:
 
 
 def test_the_metrics_readers_key_adds_its_sealed_secret_the_pulls_config_map_and_its_cron_job(
-    sealed: Run, without_oci_key: Run
+    applied: Run, without_oci_key: Run
 ) -> None:
-    """The preview the key's commit shows: three objects created, and the rule already there."""
+    """What the key adds to its absent path: the preview its commit shows, three objects created and the rule already there."""
     from kluster.components.monitoring import oci_metrics
 
-    added = _monitoring_objects(sealed) - _monitoring_objects(without_oci_key)
+    added = _monitoring_objects(applied) - _monitoring_objects(without_oci_key)
 
     assert added == {
         (SEALED_SECRET, OCI_KEY.name),
         (CONFIGMAP, oci_metrics.PULL_CONFIGMAP),
         (CRONJOB, schedule.OCI_METRICS_PULL.cronjob),
     }
-    assert _monitoring_objects(without_oci_key) <= _monitoring_objects(sealed)
+    assert _monitoring_objects(without_oci_key) <= _monitoring_objects(applied)
     # The rule objects register concurrently, so the order their rules come
     # back in is not the program's: the two sets are compared as sets.
-    assert _rule_set(sealed) == _rule_set(without_oci_key)
+    assert _rule_set(applied) == _rule_set(without_oci_key)
 
 
 def _rule_set(run: Run) -> list[str]:
@@ -2853,7 +2819,7 @@ def _rule_set(run: Run) -> list[str]:
 def test_without_the_metrics_readers_key_the_pull_is_not_declared_and_the_key_is_named(
     absent: tuple[Run, list[str]], without_oci_key: Run
 ) -> None:
-    """The bring-up's tolerance: nothing of the pull until the key is sealed in, and the warning says which value."""
+    """The absent path: nothing of the pull until the key is sealed in, and the warning says which value."""
     from kluster.components.monitoring import oci_metrics
 
     run, warned = absent
@@ -2888,23 +2854,23 @@ def _settings(run: Run, tmp_path: Path) -> Any:
     return oci_pull.Job.read(path, credentials=tmp_path)
 
 
-def test_the_pull_runs_hourly_one_run_at_a_time_apart_from_the_backups(sealed: Run) -> None:
+def test_the_pull_runs_hourly_one_run_at_a_time_apart_from_the_backups(applied: Run) -> None:
     """No run shares a minute with a store's backup; how long a run may take is its row's (the family's cases)."""
-    job, _ = _pull(sealed)
+    job, _ = _pull(applied)
     minute, *every = job['schedule'].split()
-    backups = {it['spec']['schedule'].split()[0] for it in _backup_jobs(sealed).values()}
+    backups = {it['spec']['schedule'].split()[0] for it in _backup_jobs(applied).values()}
 
     assert every == ['*'] * 4
     assert minute not in backups
     assert job['concurrencyPolicy'] == 'Forbid'
 
 
-def test_the_pull_runs_its_pin_on_the_program_and_settings_its_config_map_carries(sealed: Run) -> None:
+def test_the_pull_runs_its_pin_on_the_program_and_settings_its_config_map_carries(applied: Run) -> None:
     """The image is the runtime alone; the program and its settings arrive as files of the mounted ConfigMap."""
     from kluster.components.monitoring import oci_metrics, oci_pull
 
-    pod = _pull_pod(sealed)
-    _, data = _pull(sealed)
+    pod = _pull_pod(applied)
+    _, data = _pull(applied)
     (container,) = pod['containers']
     (program_volume,) = [
         it for it in pod['volumes'] if it.get('configMap', {}).get('name') == oci_metrics.PULL_CONFIGMAP
@@ -2917,12 +2883,12 @@ def test_the_pull_runs_its_pin_on_the_program_and_settings_its_config_map_carrie
     assert data[oci_metrics.PROGRAM_FILE] == Path(oci_pull.__file__).read_text()
 
 
-def test_the_key_is_declared_where_the_pull_reads_it_as_the_files_the_program_opens(sealed: Run) -> None:
+def test_the_key_is_declared_where_the_pull_reads_it_as_the_files_the_program_opens(applied: Run) -> None:
     """The SealedSecret opens into the Secret the pod mounts, at the directory the program is told, a file per key."""
     from kluster.components.monitoring import oci_pull
 
-    (secret,) = _named(sealed, SEALED_SECRET, OCI_KEY.name)
-    pod = _pull_pod(sealed)
+    (secret,) = _named(applied, SEALED_SECRET, OCI_KEY.name)
+    pod = _pull_pod(applied)
     (container,) = pod['containers']
     (key_volume,) = [it for it in pod['volumes'] if it.get('secret', {}).get('secretName') == OCI_KEY.name]
     (mount,) = [it for it in container['volumeMounts'] if it['name'] == key_volume['name']]
@@ -2943,19 +2909,19 @@ def _census() -> set[tuple[str, str]]:
 
 
 def test_the_pulls_targets_are_every_declared_volume_by_the_ocid_physical_published(
-    sealed: Run, tmp_path: Path
+    applied: Run, tmp_path: Path
 ) -> None:
     """OCI names a volume by its OCID alone, so the settings carry the node and the name `conventions` gives it."""
     published = cast('dict[str, dict[str, str]]', PUBLISHED[conventions.PHYSICAL_OUTPUTS.volume_ids])
 
-    targets = _settings(sealed, tmp_path).targets
+    targets = _settings(applied, tmp_path).targets
 
     assert {(it.node, it.volume) for it in targets.values()} == _census()
     assert all(published[it.node][it.volume] == ocid for ocid, it in targets.items())
 
 
 def test_the_pull_reads_the_history_store_and_writes_through_vmagent_in_physicals_compartment(
-    sealed: Run, tmp_path: Path
+    applied: Run, tmp_path: Path
 ) -> None:
     """The newest samples are the history's; the samples reach both stores the way a scraped series does.
 
@@ -2963,29 +2929,28 @@ def test_the_pull_reads_the_history_store_and_writes_through_vmagent_in_physical
     the chart names as it names the recent store (`vmagent-<object>` on 8429,
     `vmagent_types.go` L567-572 and L615-619 at operator v0.74.0).
     """
-    settings = _settings(sealed, tmp_path)
+    settings = _settings(applied, tmp_path)
     stack_object = f'{conventions.MONITORING_NAMESPACE}-victoria-metrics-k8s-stack'
 
-    assert f'{settings.history}/api/v1/write' == _history_write(sealed)['url']
+    assert f'{settings.history}/api/v1/write' == _history_write(applied)['url']
     assert settings.importer == f'http://vmagent-{stack_object}.{conventions.MONITORING_NAMESPACE}.svc:8429'
     assert settings.compartment == conventions.OCI_TENANCY.compartments[conventions.PHYSICAL].ocid
 
 
-def test_every_series_the_pull_writes_is_kept_by_the_history_store(absent: tuple[Run, list[str]]) -> None:
+def test_every_series_the_pull_writes_is_kept_by_the_history_store(applied: Run) -> None:
     """The pull names its series after the namespace its requests name, and the history's class keeps that prefix."""
     from kluster.components.monitoring import oci_pull
 
-    run, _ = absent
-    relabeling = _history_write(run)['inlineUrlRelabelConfig']
+    relabeling = _history_write(applied)['inlineUrlRelabelConfig']
 
     for metric in oci_pull.METRICS:
         series = {'__name__': f'{OCI_BLOCKSTORE_METRICS}_{metric}', 'node': 'cp1', 'volume': BOOT_VOLUME}
         assert _relabel(series, relabeling) is not None, metric
 
 
-def test_the_pull_can_schedule_on_the_worker_alone(sealed: Run) -> None:
+def test_the_pull_can_schedule_on_the_worker_alone(applied: Run) -> None:
     """With the rest of the stack, off the cores the cloud nodes share with etcd."""
-    pod = _pull_pod(sealed)
+    pod = _pull_pod(applied)
 
     schedulable = {
         name
@@ -3044,8 +3009,9 @@ FRESHNESS_KEY = conventions.sealed.B2_FRESHNESS_DUMPS
 
 @pytest_asyncio.fixture(scope='module', loop_scope='module')
 async def without_freshness_key() -> Run:
-    """Every sealed value the stack declares sealed in but the freshness key."""
-    return await applied(sealed={name: value for name, value in SEALED.items() if name != FRESHNESS_KEY.name})
+    """The absent path of the freshness key alone: every other sealed value the stack declares sealed in."""
+    run, _ = await declare(sealed=sealed_without(FRESHNESS_KEY))
+    return run
 
 
 def _check_pod(run: Run, row: schedule.ScheduledJob) -> dict[str, Any]:
@@ -3058,19 +3024,19 @@ def _check_pod(run: Run, row: schedule.ScheduledJob) -> dict[str, Any]:
 CHECKS = (schedule.STATE_BACKEND_DUMPS, schedule.STATE_BACKEND_CERTIFICATE)
 
 
-def test_the_freshness_key_adds_its_sealed_secret_and_the_dump_check(sealed: Run, without_freshness_key: Run) -> None:
-    """The preview the key's ciphertext shows: two objects created, and the rules already there."""
-    added = _monitoring_objects(sealed) - _monitoring_objects(without_freshness_key)
+def test_the_freshness_key_adds_its_sealed_secret_and_the_dump_check(applied: Run, without_freshness_key: Run) -> None:
+    """What the key adds to its absent path: the preview its ciphertext shows, two objects created and the rules already there."""
+    added = _monitoring_objects(applied) - _monitoring_objects(without_freshness_key)
 
     assert added == {(SEALED_SECRET, FRESHNESS_KEY.name), (CRONJOB, schedule.STATE_BACKEND_DUMPS.cronjob)}
-    assert _monitoring_objects(without_freshness_key) <= _monitoring_objects(sealed)
-    assert _rule_set(sealed) == _rule_set(without_freshness_key)
+    assert _monitoring_objects(without_freshness_key) <= _monitoring_objects(applied)
+    assert _rule_set(applied) == _rule_set(without_freshness_key)
 
 
 def test_without_the_freshness_key_the_certificate_check_is_declared_and_the_dump_check_is_not(
     absent: tuple[Run, list[str]], without_freshness_key: Run
 ) -> None:
-    """The bring-up's tolerance: the certificate check holds no credential, so nothing it needs waits on one."""
+    """The absent path: the certificate check holds no credential, so nothing it needs waits on one."""
     from kluster.components.monitoring import state_backend
 
     run, warned = absent
@@ -3084,13 +3050,13 @@ def test_without_the_freshness_key_the_certificate_check_is_declared_and_the_dum
 
 @pytest.mark.parametrize('row', CHECKS, ids=lambda row: row.cronjob)
 def test_each_check_runs_its_pin_on_the_program_and_settings_its_config_map_carries(
-    sealed: Run, tmp_path: Path, row: schedule.ScheduledJob
+    applied: Run, tmp_path: Path, row: schedule.ScheduledJob
 ) -> None:
     """The image is the runtime alone; the program and the settings arrive as files of the mounted ConfigMap."""
     from kluster.components.monitoring import state_backend, state_backend_check
 
-    pod = _check_pod(sealed, row)
-    (configmap,) = _named(sealed, CONFIGMAP, state_backend.CHECKS_CONFIGMAP)
+    pod = _check_pod(applied, row)
+    (configmap,) = _named(applied, CONFIGMAP, state_backend.CHECKS_CONFIGMAP)
     (container,) = pod['containers']
     (program_volume,) = [
         it for it in pod['volumes'] if it.get('configMap', {}).get('name') == state_backend.CHECKS_CONFIGMAP
@@ -3106,10 +3072,10 @@ def test_each_check_runs_its_pin_on_the_program_and_settings_its_config_map_carr
     assert state_backend_check.Settings.read(path).address == backend_settings.ADDRESS
 
 
-def test_the_dump_check_reads_the_key_its_row_seals_at_the_directory_its_command_passes(sealed: Run) -> None:
+def test_the_dump_check_reads_the_key_its_row_seals_at_the_directory_its_command_passes(applied: Run) -> None:
     """The SealedSecret opens into the Secret the pod mounts, in the row's namespace, at the directory the program is told."""
-    (secret,) = _named(sealed, SEALED_SECRET, FRESHNESS_KEY.name)
-    pod = _check_pod(sealed, schedule.STATE_BACKEND_DUMPS)
+    (secret,) = _named(applied, SEALED_SECRET, FRESHNESS_KEY.name)
+    pod = _check_pod(applied, schedule.STATE_BACKEND_DUMPS)
     (container,) = pod['containers']
     (key_volume,) = [it for it in pod['volumes'] if it.get('secret', {}).get('secretName') == FRESHNESS_KEY.name]
     (mount,) = [it for it in container['volumeMounts'] if it['name'] == key_volume['name']]
@@ -3120,18 +3086,18 @@ def test_the_dump_check_reads_the_key_its_row_seals_at_the_directory_its_command
     assert not [arg for arg in container['command'] if 'AgB-sealed' in arg]
 
 
-def test_the_certificate_check_mounts_no_secret(sealed: Run) -> None:
+def test_the_certificate_check_mounts_no_secret(applied: Run) -> None:
     """The handshake takes no credential, so the pod that makes it is handed none."""
-    pod = _check_pod(sealed, schedule.STATE_BACKEND_CERTIFICATE)
+    pod = _check_pod(applied, schedule.STATE_BACKEND_CERTIFICATE)
 
     assert [it for it in pod['volumes'] if 'secret' in it or 'projected' in it] == []
     assert pod['automountServiceAccountToken'] is False
 
 
 @pytest.mark.parametrize('row', CHECKS, ids=lambda row: row.cronjob)
-def test_each_check_can_schedule_on_the_worker_alone(sealed: Run, row: schedule.ScheduledJob) -> None:
+def test_each_check_can_schedule_on_the_worker_alone(applied: Run, row: schedule.ScheduledJob) -> None:
     """With the rest of the stack, off the cores the cloud nodes share with etcd."""
-    pod = _check_pod(sealed, row)
+    pod = _check_pod(applied, row)
 
     schedulable = {
         name

@@ -1,7 +1,8 @@
 """The state table's daily upkeep: the program, its settings and its bundle, where the job's command reads them.
 
-Read off the whole `k8s-base` program with every sealed value it declares
-sealed in, which is when it declares the CronJob (`k8s_base_installation`).
+Read off the whole `k8s-base` program with what the stack file holds, every
+sealed value it declares sealed in, the upkeep's bundle among them
+(`k8s_base_installation`).
 The job's pod is laid out on disk the way the kubelet lays it out -- each
 ConfigMap and Secret it mounts, a file per key, under its mount path -- and
 the command's paths are read against that tree as the program reads them.
@@ -30,10 +31,10 @@ SEALED_SECRET = 'crds:bitnami.com/v1alpha1:SealedSecret'
 BUNDLE = conventions.sealed.STATE_UPKEEP_BUNDLE
 
 
-@pytest_asyncio.fixture(scope='module', loop_scope='module')
-async def sealed() -> Run:
-    """Every sealed value the stack declares sealed in, the upkeep's bundle among them."""
-    return await applied(sealed=SEALED)
+@pytest_asyncio.fixture(scope='module', loop_scope='module', name='applied')
+async def applied_fixture() -> Run:
+    """The stack as its file holds it: every sealed value it declares sealed in, the upkeep's bundle among them."""
+    return await applied()
 
 
 def _in_namespace(run: Run, typ: str) -> list[dict[str, Any]]:
@@ -92,7 +93,7 @@ def _arguments(run: Run, root: Path) -> tuple[Path, Path, Path]:
 
 
 def test_the_command_names_the_paths_the_pod_mounts_the_program_its_settings_and_the_bundle_at(
-    sealed: Run, tmp_path: Path
+    applied: Run, tmp_path: Path
 ) -> None:
     """Every path the command hands the program is a file or directory the pod mounts, and the bundle opens there.
 
@@ -100,8 +101,8 @@ def test_the_command_names_the_paths_the_pod_mounts_the_program_its_settings_and
     opens them, so a file of the bundle the settings name and the Secret
     lacks is no file under the mount, and fails here.
     """
-    _pod_tree(sealed, tmp_path)
-    program, settings_file, bundle_dir = _arguments(sealed, tmp_path)
+    _pod_tree(applied, tmp_path)
+    program, settings_file, bundle_dir = _arguments(applied, tmp_path)
 
     client = table.Settings.load(settings_file).client(bundle_dir)
 
@@ -112,18 +113,18 @@ def test_the_command_names_the_paths_the_pod_mounts_the_program_its_settings_and
         assert Path(path).is_file(), f'{variable} names {path}, which the pod does not mount'
 
 
-def test_the_config_map_carries_the_module_the_workstation_imports(sealed: Run, tmp_path: Path) -> None:
+def test_the_config_map_carries_the_module_the_workstation_imports(applied: Run, tmp_path: Path) -> None:
     """The file the command runs is `table` as it is on disk, so the job runs what `state-backend census` runs."""
-    _pod_tree(sealed, tmp_path)
-    program, _, _ = _arguments(sealed, tmp_path)
+    _pod_tree(applied, tmp_path)
+    program, _, _ = _arguments(applied, tmp_path)
 
     assert program.read_text() == Path(table.__file__).read_text()
 
 
-def test_the_rendered_settings_carry_the_values_of_settings_main_reads(sealed: Run, tmp_path: Path) -> None:
+def test_the_rendered_settings_carry_the_values_of_settings_main_reads(applied: Run, tmp_path: Path) -> None:
     """The database, the retention rule's lengths and the ceiling are `settings`', and the bundle's layout `bundle`'s."""
-    _pod_tree(sealed, tmp_path)
-    _, settings_file, bundle_dir = _arguments(sealed, tmp_path)
+    _pod_tree(applied, tmp_path)
+    _, settings_file, bundle_dir = _arguments(applied, tmp_path)
 
     read = table.Settings.load(settings_file)
 
@@ -135,10 +136,10 @@ def test_the_rendered_settings_carry_the_values_of_settings_main_reads(sealed: R
     assert read.client(bundle_dir).env == bundle.ssl_env(bundle_dir)
 
 
-def test_the_bundle_is_the_rows_sealed_secret_in_the_jobs_namespace(sealed: Run) -> None:
+def test_the_bundle_is_the_rows_sealed_secret_in_the_jobs_namespace(applied: Run) -> None:
     """The SealedSecret the pod mounts is the row's, holding the ciphertext the stack's configuration holds for it."""
-    pod, _ = _container(sealed)
-    (secret,) = [it for it in _in_namespace(sealed, SEALED_SECRET) if it['metadata']['name'] == BUNDLE.name]
+    pod, _ = _container(applied)
+    (secret,) = [it for it in _in_namespace(applied, SEALED_SECRET) if it['metadata']['name'] == BUNDLE.name]
     mounted = [it['secret']['secretName'] for it in pod['volumes'] if 'secret' in it]
 
     assert BUNDLE.namespace == STATE_UPKEEP.namespace

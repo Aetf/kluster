@@ -4,8 +4,9 @@ The program runs whole, against a `physical` that has published its addresses
 (`k8s_base_installation`), and the cases read what it handed the provider: the
 chart's values, the Gateway API definitions, the Gateways' class and its
 configuration, the three address pools, the baseline policy and the BGP session
-to the gateway (rfc-007 §4, §5.1). The session's cases run it twice more, with
-the session's password sealed in and as the stack stands until it is
+to the gateway (rfc-007 §4, §5.1). Its configuration is what the stack file
+holds, every sealed value the stack declares sealed in, the session's password
+among them. The session's absent path runs it once more, with no sealed value
 (physical/bring-up.md §1).
 
 Literals written here are the upstream projects' contracts: the values both
@@ -36,8 +37,10 @@ from client_kubeconfig import KUBECONFIG
 from k8s_base_installation import (
     CHART,
     GATEWAY_API_DEFINITIONS,
+    NOTHING_SEALED,
     OUTPUTS,
     PUBLISHED,
+    SEALED,
     VERSIONS_CONFIG,
     Autonaming,
     Physical,
@@ -110,7 +113,7 @@ TALOS_HOST_DNS = '169.254.116.108/32'
 
 @pytest_asyncio.fixture(scope='module', loop_scope='module', name='applied')
 async def applied_fixture() -> Run:
-    """The program against a `physical` that has published every output."""
+    """The program against a `physical` that has published every output, with what the stack file holds."""
     return await applied()
 
 
@@ -469,9 +472,9 @@ async def test_an_output_that_is_not_an_address_stops_the_run_by_name(
 
 PASSWORD = conventions.sealed.BGP_PASSWORD
 
-#: The ciphertext the sealed run's configuration holds for the session's
-#: password.
-SEALED_PASSWORD = 'AgB-the-sealed-bgp-password'
+#: The ciphertext the stack file holds for the session's password, under its
+#: one key.
+(SEALED_PASSWORD,) = cast('dict[str, str]', SEALED[PASSWORD.name]).values()
 
 #: The label Talos puts on every control plane node (`node_label_spec.go` at
 #: v1.13.9, L83–85), and the key Cilium reads a BGP password under
@@ -485,13 +488,14 @@ CILIUM_PASSWORD_KEY = 'password'
 UNPRIVILEGED_PORT_FLOOR = 1024
 
 
-async def _declared(*, sealed: dict[str, object] | None) -> tuple[Run, list[str]]:
+async def _declared(*, sealed: dict[str, object]) -> tuple[Run, list[str]]:
     """The whole program with `sealed` as its sealed values, and every warning it logged."""
     from kluster.stacks import k8s_base
 
-    config = {f'kluster:{KUBECONFIG_KEY}': KUBECONFIG}
-    if sealed is not None:
-        config[f'kluster:{conventions.sealed.CONFIG_KEY}'] = json.dumps(sealed)
+    config = {
+        f'kluster:{KUBECONFIG_KEY}': KUBECONFIG,
+        f'kluster:{conventions.sealed.CONFIG_KEY}': json.dumps(sealed),
+    }
     pulumi.runtime.set_all_config(config | VERSIONS_CONFIG, secret_keys=[f'kluster:{KUBECONFIG_KEY}'])
     monitor = await run_under_backstop(Autonaming(), stack=conventions.STACK_NAMES.k8s_base)
     warned: list[str] = []
@@ -508,15 +512,8 @@ async def _declared(*, sealed: dict[str, object] | None) -> tuple[Run, list[str]
 
 @pytest_asyncio.fixture(scope='module', loop_scope='module', name='unsealed')
 async def unsealed_fixture() -> tuple[Run, list[str]]:
-    """The stack as it stands before the session's password is sealed in."""
-    return await _declared(sealed=None)
-
-
-@pytest_asyncio.fixture(scope='module', loop_scope='module', name='sealed')
-async def sealed_fixture() -> Run:
-    """The session's password sealed in."""
-    run, _ = await _declared(sealed={PASSWORD.name: dict.fromkeys(PASSWORD.keys, SEALED_PASSWORD)})
-    return run
+    """The absent path: the stack holding no sealed value, the session's password among them."""
+    return await _declared(sealed=NOTHING_SEALED)
 
 
 def _one(run: Run, kind: str) -> dict[str, Any]:
@@ -643,21 +640,21 @@ def test_an_instance_listening_below_1024_has_the_agent_allowed_to_bind_it(appli
     assert not privileged or 'NET_BIND_SERVICE' in capabilities, privileged
 
 
-def test_the_peer_carries_the_password_reference_and_both_families(sealed: Run) -> None:
+def test_the_peer_carries_the_password_reference_and_both_families(applied: Run) -> None:
     """The password's Secret is the one the sealed value becomes, where the agent reads it; both families advertise.
 
     The Secret is named and placed by the sealed value's row, and the agent
     reads BGP secrets from the namespace the chart's values name, so the two
     have to be the same namespace. Each family selects the advertisement.
     """
-    spec = _one(sealed, BGP_PEER)['spec']
+    spec = _one(applied, BGP_PEER)['spec']
     (secret,) = [
-        it.inputs for it in sealed.monitor.of_type(SEALED_SECRET) if it.inputs['metadata']['name'] == PASSWORD.name
+        it.inputs for it in applied.monitor.of_type(SEALED_SECRET) if it.inputs['metadata']['name'] == PASSWORD.name
     ]
-    advertisement = _one(sealed, BGP_ADVERTISEMENT)['metadata']['labels']
+    advertisement = _one(applied, BGP_ADVERTISEMENT)['metadata']['labels']
 
     assert spec['authSecretRef'] == secret['metadata']['name']
-    assert secret['metadata']['namespace'] == sealed.values('cilium')['bgpControlPlane']['secretsNamespace']['name']
+    assert secret['metadata']['namespace'] == applied.values('cilium')['bgpControlPlane']['secretsNamespace']['name']
     assert secret['spec']['encryptedData'] == {CILIUM_PASSWORD_KEY: SEALED_PASSWORD}
     assert sorted((family['afi'], family['safi']) for family in spec['families']) == [
         ('ipv4', 'unicast'),
@@ -696,7 +693,7 @@ def test_the_advertisement_selects_the_lan_pools_services(applied: Run) -> None:
 def test_an_absent_password_declares_no_sealed_secret_warns_naming_it_and_leaves_the_session_declared(
     unsealed: tuple[Run, list[str]],
 ) -> None:
-    """Until the password is sealed in, nothing is declared for it, the run says so, and the session waits for it."""
+    """The absent path: nothing is declared for the password, the run says so, and the session waits for it."""
     run, warned = unsealed
 
     assert [it for it in run.monitor.of_type(SEALED_SECRET) if it.inputs['metadata']['name'] == PASSWORD.name] == []
@@ -705,8 +702,8 @@ def test_an_absent_password_declares_no_sealed_secret_warns_naming_it_and_leaves
     assert run.monitor.of_type(BGP_CLUSTER)
 
 
-def test_the_password_waits_for_the_sealing_controller(sealed: Run) -> None:
+def test_the_password_waits_for_the_sealing_controller(applied: Run) -> None:
     """A SealedSecret is an instance of the sealing controller's chart's definition."""
-    (secret,) = [it for it in sealed.monitor.of_type(SEALED_SECRET) if it.inputs['metadata']['name'] == PASSWORD.name]
+    (secret,) = [it for it in applied.monitor.of_type(SEALED_SECRET) if it.inputs['metadata']['name'] == PASSWORD.name]
 
-    assert sealed.urn(CHART, 'sealed-secrets') in sealed.monitor.depends_on(secret.name, secret.typ)
+    assert applied.urn(CHART, 'sealed-secrets') in applied.monitor.depends_on(secret.name, secret.typ)
