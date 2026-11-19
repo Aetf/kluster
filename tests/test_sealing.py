@@ -45,7 +45,6 @@ from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec, rsa
 from cryptography.x509.oid import NameOID
-from fake_gh import RecordedGh
 from fake_kubeseal import sealed_as_marked
 from fake_pulumi import RecordedPulumi, Unanswering
 from k8s_base_installation import SEALED, applied
@@ -75,7 +74,6 @@ from kluster.scripts.credentials import (
     sealing,
     workstation,
 )
-from kluster.scripts.credentials.github_secrets import Forge
 from kluster.scripts.credentials.kdbx import KdbxStore
 from kluster.scripts.credentials.pulumi_config import SlotRefused
 from kluster.stacks import physical
@@ -750,10 +748,6 @@ def b2_kit(b2_account: b2_api.FakeApi) -> KdbxStore:
     return store
 
 
-def _forge() -> Forge:
-    return Forge(token='admin-token', run=RecordedGh())
-
-
 def test_the_freshness_key_is_sealed_for_the_check_in_monitoring_as_the_minted_key(
     b2_account: b2_api.FakeApi,
     b2_kit: KdbxStore,
@@ -762,7 +756,7 @@ def test_the_freshness_key_is_sealed_for_the_check_in_monitoring_as_the_minted_k
     kubeseal: str,
     key_pair: KeyPair,
 ) -> None:
-    key_id = derived.b2_freshness_dumps(b2_kit, _forge(), sealer=sealer)
+    key_id = derived.b2_freshness_dumps(b2_kit, sealer=sealer)
 
     # Written into `k8s-base`'s configuration, the stack that declares the
     # monitoring namespace's Secrets, and opening there under the row's name
@@ -780,28 +774,26 @@ def test_the_freshness_mint_refuses_a_missing_declaring_stack_before_anything_is
     b2_account: b2_api.FakeApi, b2_kit: KdbxStore, sealer: sealing.Sealer, stacks: Stacks
 ) -> None:
     stacks.runner(K8S_BASE).stacks.clear()
-    gh = RecordedGh()
 
     with pytest.raises(pulumi_config.StackMissing) as refused:
-        _ = derived.b2_freshness_dumps(b2_kit, Forge(token='admin-token', run=gh), sealer=sealer)
+        _ = derived.b2_freshness_dumps(b2_kit, sealer=sealer)
     assert refused.value.stack == K8S_BASE
     assert b2_account.named(b2.FRESHNESS_DUMPS_NAME) == []
-    assert gh.invocations == []
 
 
-def test_a_freshness_write_that_fails_leaves_the_key_both_consumers_hold_live(
+def test_a_freshness_write_that_fails_leaves_the_key_the_check_holds_live(
     b2_account: b2_api.FakeApi, b2_kit: KdbxStore, stacks: Stacks
 ) -> None:
     sealer = sealing.Sealer(certificate='', open_stack=stacks.open, run=sealed_as_marked)
-    live = derived.b2_freshness_dumps(b2_kit, _forge(), sealer=sealer)
+    live = derived.b2_freshness_dumps(b2_kit, sealer=sealer)
     stacks.runner(K8S_BASE).misreports = 'value'
 
     with pytest.raises(pulumi_config.ReadBackRefused):
-        _ = derived.b2_freshness_dumps(b2_kit, _forge(), sealer=sealer)
+        _ = derived.b2_freshness_dumps(b2_kit, sealer=sealer)
 
-    # The ops repository took the new key, the stack did not: the key both
-    # consumers held is retired only once every target holds its successor,
-    # so it stands beside the new one.
+    # The stack did not take the new key: the key the cluster's check holds
+    # is retired only once the ciphertext is written, so it stands beside the
+    # new one.
     held = b2_account.named(b2.FRESHNESS_DUMPS_NAME)
     assert live in held
     assert len(held) == 2

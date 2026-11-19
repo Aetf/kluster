@@ -908,10 +908,9 @@ Costs and facts on record:
     Register row in credentials.md.
 -   **The ops repo burns private-repo Actions minutes** (billed
     per-minute, min 1/run): the hourly poller ≈ 720 min/mo, plus the
-    weekly drift trigger, the slot-drift probe, the quarterly
-    rebuild drill, and the daily `probes.yml` until the cluster's
-    checks replace it (operations.md §4) — the poller being most of
-    it, against the account-wide 2000-min free pool.
+    weekly drift trigger, the slot-drift probe and the quarterly
+    rebuild drill (operations.md §4) — the poller being most of it,
+    against the account-wide 2000-min free pool.
     Nothing the cluster runs on a clock spends a minute. Accepted
     as a few dollars a month at worst ("billed, not killed"); the
     recorded knob is the poller's cadence. The push leg is instant

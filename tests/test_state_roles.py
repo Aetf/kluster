@@ -86,6 +86,8 @@ import pytest
 from root_credentials import fake
 from scratch_projects import cli_directories
 
+from kluster.components.monitoring import state_backend as monitored
+from kluster.components.monitoring import state_backend_check as check
 from kluster.conventions import identity
 from kluster.lib import bundle, pulumi_cli, stack_environment, workstation
 from kluster.lib.bundle import CA_ENV, CERT_ENV, KEY_ENV, ssl_env
@@ -93,7 +95,7 @@ from kluster.lib.state_backend import render, settings, state, table
 from kluster.providers import postgres_tls
 from kluster.scripts.credentials import derived, pki, pulumi_config
 from kluster.scripts.operator_stack import driver
-from kluster.scripts.state_backend import census, cli, config, probe
+from kluster.scripts.state_backend import census, cli, config
 
 ADDRESS = '127.0.0.1'
 IMAGE = settings.POSTGRES_IMAGE
@@ -3219,11 +3221,17 @@ def test_a_client_that_presents_no_certificate_is_refused(box: Box, roots: confi
         _ = _psql(clients, unsigned, 'SELECT 1')
 
 
-def test_the_expiry_probe_reads_the_pooler_certificate_with_no_credential(box: Box) -> None:
-    """The probe's own handshake, `openssl s_client`, completes and reads the leaf though the pooler demands a client certificate."""
-    verdict = probe.certificate(address=ADDRESS, port=box.port)
+def test_the_certificate_check_reads_the_pooler_certificate_with_no_credential(box: Box, tmp_path: Path) -> None:
+    """The cluster check's own handshake, `openssl s_client`, completes and reads the leaf though the pooler demands a client certificate.
 
-    assert verdict.passed, str(verdict)
+    The settings are the ones the component renders, pointed at this box.
+    """
+    path = tmp_path / monitored.SETTINGS_FILE
+    path.write_text(json.dumps(json.loads(monitored.settings()) | {'address': ADDRESS, 'port': box.port}))
+
+    verdicts = check.certificate(check.Settings.read(path), now=dt.datetime.now(dt.UTC))
+
+    assert [verdict.passed for verdict in verdicts] == [True], [str(verdict) for verdict in verdicts]
 
 
 @pytest.mark.parametrize('argv', [['census', '--yes'], ['census', '--ceiling', '--yes']])

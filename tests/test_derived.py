@@ -42,7 +42,6 @@ from credentials_command_tree import ELSEWHERE_ENTRY, derived_commands_taking, n
 from cryptography import x509
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-from fake_gh import RecordedGh
 from fake_kubeseal import sealed_as_marked
 from fake_pulumi import RecordedPulumi
 from memory_kit import MemoryKit
@@ -75,7 +74,6 @@ from kluster.scripts.credentials import (
 # Aliased: `slots` is the name a fixture below gives the workstation's
 # `.credentials/` directory, and the map is a different thing entirely.
 from kluster.scripts.credentials import slots as slot_map
-from kluster.scripts.credentials.github_secrets import Forge
 from kluster.scripts.credentials.kdbx import KdbxStore
 from kluster.scripts.operator_stack import cli as operator_stack_cli
 
@@ -1610,13 +1608,11 @@ def test_the_freshness_row_on_a_machine_with_no_bundle_mints_nothing(
     """The dns01 row's case for the B2 row that seals: the declaring stack is asked for before the seed is read."""
     open_stack, runners = _stacks_on(_with_no_bundle(b2_kit, tmp_path))
     sealer = sealing.Sealer(certificate='', open_stack=open_stack, run=_never_sealed)
-    gh = RecordedGh()
 
     with pytest.raises(pulumi_config.SlotRefused) as refused:
-        _ = derived.b2_freshness_dumps(b2_kit, Forge(token='admin-token', run=gh), sealer=sealer)
+        _ = derived.b2_freshness_dumps(b2_kit, sealer=sealer)
 
     assert b2_api_fake.named(b2.FRESHNESS_DUMPS_NAME) == []
-    assert gh.invocations == []
     assert runners, 'the row opened no stack, so nothing held it to its backend'
     assert all(runner.invocations == [] for runner in runners.values())
     _refused_for_its_backend(refused.value, open_stack(conventions.sealed.B2_FRESHNESS_DUMPS.stack), tmp_path)
@@ -2018,9 +2014,7 @@ def _b2_freshness_dumps(request: pytest.FixtureRequest) -> KdbxStore:
         'bucketType': 'allPrivate',
         'lifecycleRules': [],
     }
-    _ = derived.b2_freshness_dumps(
-        kit, Forge(token='admin-token', run=RecordedGh()), sealer=_sealer_writing_nothing(), seed_entry=ELSEWHERE_ENTRY
-    )
+    _ = derived.b2_freshness_dumps(kit, sealer=_sealer_writing_nothing(), seed_entry=ELSEWHERE_ENTRY)
     return kit
 
 

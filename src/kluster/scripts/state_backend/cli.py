@@ -1,4 +1,4 @@
-"""`state-backend` -- inspect, dump, restore and probe the appliance.
+"""`state-backend` -- inspect, dump and restore the appliance.
 
 The appliance itself is the `state-backend` stack's, created, converged and
 replaced by `operator-stack state-backend up` (physical/state-backend.md §1);
@@ -9,18 +9,16 @@ owes after a replacement it took no dump for. `census` reads what the state
 table holds, prunes the rows nothing reads and holds every value to the
 ceiling the pooler's cap is derived for, `render` renders a scratch
 box for the rebuild drill, `ssh` logs in for diagnosis, `bundle` writes a
-client bundle, and `pins` checks the pinned artifacts. `probe` and
-`release-lock` are the commands written to run somewhere other than a
-workstation: the scheduled checks on the certificate and the dumps
-(`probe.py`), and the step of a deploy job that deletes the lock its own
-`pulumi up` left (`locks.py`).
+client bundle, and `pins` checks the pinned artifacts. `release-lock` is the
+command written to run somewhere other than a workstation: the step of a
+deploy job that deletes the lock its own `pulumi up` left (`locks.py`).
 """
 
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import logging
-import os
 import socket
 import sys
 import tempfile
@@ -36,11 +34,10 @@ from kluster.scripts.credentials import escrow, pki, workstation
 from kluster.scripts.credentials.age import AgeError
 from kluster.scripts.credentials.escrow import EscrowError
 from kluster.scripts.credentials.kdbx import KdbxError, KdbxStore
-from kluster.scripts.credentials.masters import CredentialRejected
 from kluster.scripts.credentials.pulumi_config import SlotRefused
 from kluster.scripts.credentials.workstation import WorkstationError
 
-from . import census, config, locks, probe, provision
+from . import census, config, locks, provision
 
 log = logging.getLogger(__name__)
 
@@ -59,7 +56,6 @@ log = logging.getLogger(__name__)
 REFUSALS = (
     AgeError,
     CompartmentMissing,
-    CredentialRejected,
     EscrowError,
     KdbxError,
     PulumiRefused,
@@ -72,6 +68,11 @@ REFUSALS = (
     provision.DocumentIncomplete,
     stack_environment.EnvironmentRefused,
 )
+
+
+def _hours(span: dt.timedelta) -> str:
+    """A span as the hours a reader compares a row's age in."""
+    return f'{span.total_seconds() / 3600:.1f} h'
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -130,7 +131,7 @@ def build_parser() -> argparse.ArgumentParser:
         '--prune-expired',
         action='store_true',
         help=(
-            f'also list each row the retention rule expires: past {probe.hours(settings.EXPIRY_AGE)}, every checkpoint copy, '
+            f'also list each row the retention rule expires: past {_hours(settings.EXPIRY_AGE)}, every checkpoint copy, '
             f'every update record beyond the newest {settings.HISTORY_RECORDS} of its stack, and every .bak '
             'whose stack has no checkpoint'
         ),
@@ -207,35 +208,6 @@ def build_parser() -> argparse.ArgumentParser:
         '--force',
         action='store_true',
         help='restore even though the target backend already serves stacks',
-    )
-
-    # What the ops repository's scheduled workflow runs (state-backend.md §6):
-    # every probe unless one is named, each verdict printed, the exit status
-    # saying which failed. Needs no offline database: the certificate probe
-    # is a handshake and the dump-age probe reads its key from the
-    # environment, which is where a workflow secret arrives.
-    probing = actions.add_parser(
-        'probe',
-        help='check the server certificate and the age of the newest dump from outside the box',
-        description=(
-            f'The two scheduled probes. `{probe.CERTIFICATE}` reads the server certificate off a TLS handshake '
-            f'with {settings.ADDRESS}:{settings.PORT} and fails when it is not valid, has less than '
-            f'{settings.EXPIRY_ALERT_MARGIN.days} days left, or does not name the address; `{probe.DUMPS}` lists '
-            f'the dump prefix as the list-only key in {probe.KEY_ID_ENV} and {probe.KEY_ENV} and fails when the '
-            f'newest dump is older than {probe.hours(settings.DUMP_MAX_AGE)} or there is none. Every verdict is printed, '
-            'with the playbook a failure calls for.'
-        ),
-        epilog=(
-            f'exit status: 0 every probe passed; {probe.FAILED[probe.CERTIFICATE]} the certificate probe failed; '
-            f'{probe.FAILED[probe.DUMPS]} the dump-age probe failed; their sum when both did; '
-            '1 the run could not probe at all — read its last words.'
-        ),
-    )
-    _ = probing.add_argument(
-        '--only',
-        choices=probe.PROBES,
-        default=None,
-        help='run one probe alone',
     )
 
     return parser
@@ -327,7 +299,7 @@ def main(argv: list[str] | None = None) -> int:
         parser.error('--yes deletes what --prune-superseded or --prune-expired lists, and is nothing without one')
 
     # One dispatch, and the kit is opened by the arms that need it rather than
-    # before them: `pins`, `ssh`, `probe`, `census`, `release-lock` and a drill's `restore
+    # before them: `pins`, `ssh`, `census`, `release-lock` and a drill's `restore
     # --identity-file` run on machines that have no offline database, and
     # asking for one would fail before the command started.
     def kit() -> KdbxStore:
@@ -340,8 +312,6 @@ def main(argv: list[str] | None = None) -> int:
         match args.action:
             case 'pins':
                 return 0 if provision.verify_pins() else 1
-            case 'probe':
-                return probe.run(only=args.only, environ=os.environ)
             case 'ssh':
                 provision.ssh(args.command)
             case 'census':

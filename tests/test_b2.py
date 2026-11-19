@@ -29,7 +29,6 @@ import pytest
 import requests
 from b2_api import ACCOUNT_ID, FakeApi
 from credentials_command_tree import named_commands
-from fake_gh import RecordedGh
 from fake_kubeseal import sealed_as_marked
 from fake_pulumi import RecordedPulumi
 from memory_kit import MemoryKit
@@ -38,10 +37,8 @@ from kluster import conventions
 from kluster.lib.state_backend import settings as appliance_settings
 from kluster.scripts.credentials import b2, derived, entries, masters, payload, pulumi_config, sealing
 from kluster.scripts.credentials.delivery import Delivery
-from kluster.scripts.credentials.github_secrets import Forge
 from kluster.scripts.credentials.kdbx import KdbxStore
 from kluster.scripts.credentials.masters import CredentialRejected
-from kluster.scripts.state_backend import probe
 
 PASSWORD = 'kit-password'
 SEED_ENTRY = entries.SEEDS['b2'].entry
@@ -639,8 +636,8 @@ def test_minting_the_drill_key_retires_its_predecessor(api: FakeApi, kit: KdbxSt
     key_id = _delivered(b2.mint_drill_read_key(session, bucket_id=bucket_id)).key_id
 
     # Re-running is the rotation: one live key of the name afterwards, and the
-    # freshness probe's key on the same prefix untouched -- the roles retire by
-    # name, and the names differ.
+    # freshness key on the same prefix untouched -- the roles retire by name,
+    # and the names differ.
     assert api.named(b2.DRILL_READ_NAME) == [key_id]
     assert previous not in api.keys
     assert api.named(b2.FRESHNESS_DUMPS_NAME) == [freshness]
@@ -681,12 +678,12 @@ def test_a_drill_key_is_not_minted_in_another_account(
     assert not api.named(b2.DRILL_READ_NAME)
 
 
-# -- the freshness probe's key -------------------------------------------------
+# -- the freshness key ---------------------------------------------------------
 
 
 def test_the_freshness_key_keeps_its_name() -> None:
     # Retirement matches on it (`retire_others`), so a rename would leave the
-    # key the ops repository holds outside every later sweep.
+    # key the cluster holds outside every later sweep.
     assert b2.FRESHNESS_DUMPS_NAME == 'kluster-freshness-dumps'
 
 
@@ -703,10 +700,10 @@ def test_the_freshness_key_is_confined_to_the_prefix_the_uploader_writes() -> No
 def test_the_freshness_key_may_list_and_nothing_more() -> None:
     lister = b2.freshness_dumps('bucket-x')
 
-    # Enough for the probe's one act, in B2's own terms: `b2_list_file_names`
-    # takes `listFiles`.
+    # Enough for the dump-age check's one act, in B2's own terms:
+    # `b2_list_file_names` takes `listFiles`.
     assert 'listFiles' in lister.capabilities
-    # Narrower than the drill's reader and disjoint from the writer: the probe
+    # Narrower than the drill's reader and disjoint from the writer: the check
     # asks what the newest object is called, so a key that could read one
     # would be a second drill reader held where only a listing is needed, and
     # one that could write would be a second uploader.
@@ -736,43 +733,13 @@ def test_the_freshness_key_is_verified_by_listing_the_prefix_as_itself(api: Fake
 
     pending = b2.mint_freshness_dumps_key(session, bucket_id=bucket_id)
 
-    # The one act the probe performs, done as the new key before anything is
-    # delivered, so a key the platform would refuse that act is refused here
-    # rather than on the probe's first scheduled run.
+    # The one act the dump-age check performs, done as the new key before
+    # anything is delivered, so a key the platform would refuse that act is
+    # refused here rather than on the check's first scheduled run.
     (key_id,) = api.named(b2.FRESHNESS_DUMPS_NAME)
     assert api.listings == [(key_id, bucket_id, f'{PREFIX}/')]
     assert api.calls.index(LIST_FILE_NAMES) > api.calls.index('b2_create_key')
     _ = _delivered(pending)
-
-
-def test_a_confined_key_learns_its_bucket_from_the_authorization(api: FakeApi, kit: KdbxStore) -> None:
-    _ = _seeded(api, kit)
-    session, bucket_id = _bucket(api, kit)
-    api.objects[bucket_id] = [f'{PREFIX}/a.dump.age']
-    minted = _delivered(b2.mint_freshness_dumps_key(session, bucket_id=bucket_id))
-
-    lister, confined = b2.Session.authorize_confined(minted.key_id, minted.key)
-
-    # No `listBuckets` on this key, so the bucket id every file call takes has
-    # to come back with the authorization -- and the session it comes with
-    # lists the prefix and can do nothing else the account offers.
-    assert confined == bucket_id
-    assert lister.file_names(bucket_id, prefix=f'{PREFIX}/') == (f'{PREFIX}/a.dump.age',)
-    with pytest.raises(requests.HTTPError):
-        _ = lister.buckets()
-    with pytest.raises(requests.HTTPError):
-        _ = lister.keys()
-
-
-def test_a_key_confined_to_no_bucket_is_refused_as_the_wrong_key(api: FakeApi, kit: KdbxStore) -> None:
-    key_id = _seeded(api, kit)
-
-    # The seed is account-wide; handed over where a prefix-scoped key was
-    # expected, the refusal says so and names where the intended key comes
-    # from, rather than failing later on a bucket id nothing supplied.
-    with pytest.raises(b2.Unconfined) as refused:
-        _ = b2.Session.authorize_confined(key_id, kit.get(SEED_ENTRY))
-    assert refused.value.key_id == key_id
 
 
 def test_minting_the_freshness_key_retires_its_predecessor(api: FakeApi, kit: KdbxStore) -> None:
@@ -800,9 +767,9 @@ def test_the_freshness_key_retires_nothing_until_the_credential_has_been_deliver
 
     pending = b2.mint_freshness_dumps_key(session, bucket_id=bucket_id)
 
-    # The order every mint in this package has: until the caller's push
-    # returns, the successor exists in this process alone, and a push that
-    # then failed would leave the ops repository naming a key the account has
+    # The order every mint in this package has: until the caller's delivery
+    # returns, the successor exists in this process alone, and a delivery
+    # that then failed would leave the cluster holding a key the account has
     # deleted.
     standing = api.named(b2.FRESHNESS_DUMPS_NAME)
     assert previous in standing
@@ -828,9 +795,8 @@ def test_a_freshness_key_is_not_minted_in_another_account(
     assert not api.named(b2.FRESHNESS_DUMPS_NAME)
 
 
-# -- the freshness row: the mint above, pushed through the GitHub sink and sealed
+# -- the freshness row: the mint above, sealed ------------------------------------
 
-OPS_REPOSITORY = conventions.forge.OPS.full_name
 FRESHNESS_SEALED = conventions.sealed.B2_FRESHNESS_DUMPS
 
 
@@ -839,8 +805,8 @@ class RecordedSealer(sealing.Sealer):
     """A sealer over stacks that all exist, which seals with the marking stand-in and records what it writes.
 
     The write goes no further than `written`, by data key, and `events`
-    names each seal and write as it happens, so a case can place them among
-    the pushes and the retirement. How a value is sealed and where its
+    names each seal and write as it happens, so a case can place them before
+    the retirement. How a value is sealed and where its
     ciphertext lands in the stack is `test_sealing`'s.
     """
 
@@ -875,35 +841,20 @@ def _freshness_bucket(api: FakeApi, kit: KdbxStore) -> str:
     return _dump_bucket(api, appliance_settings.B2_BUCKET)
 
 
-def test_the_freshness_row_pushes_both_halves_as_repository_secrets_of_the_ops_repository_and_seals_them(
-    api: FakeApi, kit: KdbxStore
-) -> None:
+def test_the_freshness_row_seals_both_halves_of_the_minted_key(api: FakeApi, kit: KdbxStore) -> None:
     _ = _seeded(api, kit)
     bucket_id = _freshness_bucket(api, kit)
-    gh = RecordedGh()
     sealer = _sealer()
 
-    key_id = derived.b2_freshness_dumps(kit, Forge(token='admin-token', run=gh), sealer=sealer)
+    key_id = derived.b2_freshness_dumps(kit, sealer=sealer)
 
-    # The sealed copy is the same key, each half under the field the
-    # cluster's check authorizes it from.
+    # The sealed copy is the key the account now lists under the role, each
+    # half under the field the cluster's check authorizes it from -- and that
+    # key is the minted one, confined as the role says.
     assert sealer.written == {
         'AWS_ACCESS_KEY_ID': sealed_as_marked([], stdin=key_id).strip(),
         'AWS_SECRET_ACCESS_KEY': sealed_as_marked([], stdin=api.keys[key_id].secret).strip(),
     }
-
-    # The addresses are the slot map's own: two repository secrets of the ops
-    # repository, no `--env`, holding the key the account now lists under the
-    # role -- and that key is the minted one, confined as the role says.
-    # The names are the ones the probe reads its key from, which is the other
-    # program's own spelling of the same two secrets.
-    assert set(gh.values) == {
-        (OPS_REPOSITORY, None, probe.KEY_ID_ENV),
-        (OPS_REPOSITORY, None, probe.KEY_ENV),
-    }
-    assert gh.values[(OPS_REPOSITORY, None, probe.KEY_ID_ENV)] == key_id
-    assert gh.values[(OPS_REPOSITORY, None, probe.KEY_ENV)] == api.keys[key_id].secret
-    assert all(['secret', 'set', name, '--repo', OPS_REPOSITORY] in gh.invocations for _, _, name in gh.values)
     minted = api.keys[key_id]
     assert (minted.bucket_id, minted.name_prefix) == (bucket_id, f'{PREFIX}/')
     assert b2.freshness_dumps(bucket_id).describes(
@@ -911,20 +862,14 @@ def test_the_freshness_row_pushes_both_halves_as_repository_secrets_of_the_ops_r
     )
 
 
-def test_the_freshness_row_retires_its_predecessor_only_after_both_carriers_and_the_seal_landed(
+def test_the_freshness_row_retires_its_predecessor_only_after_the_ciphertext_is_written(
     api: FakeApi, kit: KdbxStore
 ) -> None:
     _ = _seeded(api, kit)
     _ = _freshness_bucket(api, kit)
-    gh = RecordedGh()
-    previous = derived.b2_freshness_dumps(kit, Forge(token='admin-token', run=gh), sealer=_sealer())
+    previous = derived.b2_freshness_dumps(kit, sealer=_sealer())
     sealer = _sealer()
     order = sealer.events
-
-    def timed(args: Sequence[str], *, token: str, stdin: str | None) -> str:
-        if list(args[:2]) == ['secret', 'set']:
-            order.append(f'push {args[2]}')
-        return gh(args, token=token, stdin=stdin)
 
     def timed_post(url: str, *, json: dict[str, Any], headers: dict[str, str], timeout: int) -> requests.Response:
         api_name = url.rsplit('/', 1)[-1]
@@ -934,20 +879,12 @@ def test_the_freshness_row_retires_its_predecessor_only_after_both_carriers_and_
 
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr(b2.requests, 'post', timed_post)
-        current = derived.b2_freshness_dumps(kit, Forge(token='admin-token', run=timed), sealer=sealer)
+        current = derived.b2_freshness_dumps(kit, sealer=sealer)
 
-    # The order every mint in this package has, held across both consumers:
-    # both pushes and the ciphertext's write, in whichever order, then the
-    # deletion of the key the workflow and the cluster held before.
-    delivered = {
-        f'seal {FRESHNESS_SEALED.name}',
-        f'push {probe.KEY_ID_ENV}',
-        f'push {probe.KEY_ENV}',
-        f'write {FRESHNESS_SEALED.name}',
-    }
-    assert len(order) == len(delivered) + 1
-    assert set(order[:-1]) == delivered
-    assert order[-1] == 'retire'
+    # The order every mint in this package has: the seal and the
+    # ciphertext's write, then the deletion of the key the cluster held
+    # before.
+    assert order == [f'seal {FRESHNESS_SEALED.name}', f'write {FRESHNESS_SEALED.name}', 'retire']
     assert api.named(b2.FRESHNESS_DUMPS_NAME) == [current]
     assert previous not in api.keys
 
@@ -959,7 +896,7 @@ def test_the_freshness_row_refuses_before_minting_where_the_dump_bucket_does_not
     before = _mints(api)
 
     with pytest.raises(derived.BucketMissing) as refused:
-        _ = derived.b2_freshness_dumps(kit, Forge(token='admin-token', run=RecordedGh()), sealer=_sealer())
+        _ = derived.b2_freshness_dumps(kit, sealer=_sealer())
     assert refused.value.bucket == appliance_settings.B2_BUCKET
 
     assert _mints(api) == before
@@ -974,7 +911,7 @@ def test_the_freshness_row_mints_nothing_in_another_account(
     _elsewhere(monkeypatch)
 
     with pytest.raises(CredentialRejected, match=f'{ACCOUNT_ID}.*some-other-account'):
-        _ = derived.b2_freshness_dumps(kit, Forge(token='admin-token', run=RecordedGh()), sealer=_sealer())
+        _ = derived.b2_freshness_dumps(kit, sealer=_sealer())
 
     assert _mints(api) == before
 
@@ -984,19 +921,17 @@ def _refusing(args: Sequence[str], *, stdin: str | None) -> str:
     raise pulumi_config.SlotRefused('kubeseal refused the value')
 
 
-def test_a_freshness_seal_that_fails_pushes_nothing_and_leaves_the_key_both_consumers_hold_live(
+def test_a_freshness_seal_that_fails_writes_nothing_and_leaves_the_key_the_check_holds_live(
     api: FakeApi, kit: KdbxStore
 ) -> None:
     _ = _seeded(api, kit)
     _ = _freshness_bucket(api, kit)
-    previous = derived.b2_freshness_dumps(kit, Forge(token='admin-token', run=RecordedGh()), sealer=_sealer())
-    gh = RecordedGh()
+    previous = derived.b2_freshness_dumps(kit, sealer=_sealer())
     sealer = _sealer(run=_refusing)
 
     with pytest.raises(pulumi_config.SlotRefused, match='kubeseal refused'):
-        _ = derived.b2_freshness_dumps(kit, Forge(token='admin-token', run=gh), sealer=sealer)
+        _ = derived.b2_freshness_dumps(kit, sealer=sealer)
 
-    assert not gh.values
     assert not sealer.written
     assert previous in api.named(b2.FRESHNESS_DUMPS_NAME)
 

@@ -1228,11 +1228,10 @@ private half into that Environment and writes the public half to
 `src/kluster/lib/state_backend/machine/drill-recipient.txt`; the
 appliance encrypts to it from the converge that adopts the committed
 file (state-backend.md §5), and a dump written before that converge
-carries the escrowed generations alone. As of 2026-11-17 nothing reads the key: of the ops
+carries the escrowed generations alone. As of 2026-11-19 nothing reads the key: of the ops
 repository's workflows, `lint.yml` checks the workflow files
-themselves, `probes.yml` runs `state-backend probe` and
-`drift-trigger.yml` dispatches the drift check, and none of them
-opens a dump, while the rebuild drill's workflow is not written
+themselves and `drift-trigger.yml` dispatches the drift check, and
+neither opens a dump, while the rebuild drill's workflow is not written
 (`kluster-ops#57`). A rebuild is an operator opening the object with
 the kit. The rest of this paragraph is the argument for holding it
 there. It adds no new
@@ -1261,15 +1260,12 @@ exposed key reads in the clear is the resource graph and the
 non-secret configuration. With the key held there, the state-backend
 rebuild drill can run unattended end to end once its workflow exists.
 
-**As of 2026-11-17, one row runs, and only in part.** Of the
+**As of 2026-11-19, one row runs, and only in part.** Of the
 credential expiry tripwires, the state-backend server certificate's
-runs daily in the ops repository's `probes.yml`, beside the age of the
-appliance's newest dump (state-backend.md §6). Both checks are the
-cluster's under the rule below, and `probes.yml` runs them until the
-cluster's own have reported. Its alert job
-dispatches into the intake, whose handler is not built
-(`kluster-ops#715`), so a failing probe is a red run there and nothing
-more (the alert contract, below). The ops-repository row, the
+runs hourly in the cluster, as the CronJob `state-backend-certificate`
+beside the dump-age check `state-backend-dumps` (state-backend.md §6),
+and both report through the scheduled-job family's rules (the rule
+below). The ops-repository row, the
 state-backend rebuild, has no workflow written (`kluster-ops#57`). Of
 the in-cluster rows, the etcd restore-verify alone has its job written:
 `k8s-base` declares it beside the hourly snapshot it reads, both in
@@ -1403,8 +1399,8 @@ for its place. The last column says which run, as of 2026-11-17:
 | The block volumes' metrics, pulled hourly into the history store | The cluster: a CronJob in `monitoring` | The OCI metrics reader's key, sealed (credentials.md §3) | The family's rules (§6.3), then the cluster's check-in | No (`kluster-ops#790`) |
 | The authentication canary, every few minutes | The cluster: a CronJob in Authelia's namespace that requests a protected path with no credential (declarative/cluster-infra.md §2) | None: it presents none | Its own rule, which fires on anything but a refusal; the family's rules for the job; then the cluster's check-in | No: it ships with Authelia (rfc-008 §5.2) |
 | The state table's upkeep, daily: the census, the prune of the rows the retention rule expires, and the ceiling | The cluster: the CronJob `state-upkeep` in a namespace of its own, on the control planes, as the role `upkeep` (state-backend.md §2). It is no device's job: it deletes rows of the live table and checks the box, and a check never runs on what it watches. What it holds reads and deletes rows that an unmerged ref's runs already read and write (threat-model.md §3.1) | The `upkeep` client bundle, sealed (credentials.md §3) | The family's rules (state-backend.md §7.6), then the cluster's check-in | No: the first `up-k8s-base` after its merge declares it, its bundle sealed in ahead of it (`kluster-ops#784`) |
-| State-backend dump age, hourly | The cluster: the CronJob `state-backend-dumps` in `monitoring`, listing `pulumi-state/` (state-backend.md §6) | The list-only `B2 freshness key (state dumps)`, sealed | The family's rules (state-backend.md §6), then the cluster's check-in | No: the first `up-k8s-base` after its merge declares it, its key sealed in ahead of it (`kluster-ops#832`); `probes.yml` reads it today |
-| State-backend server certificate's expiry, hourly | The cluster: the CronJob `state-backend-certificate` in `monitoring`, reading the leaf off a Postgres STARTTLS handshake with the appliance (state-backend.md §6) | None: the box sends its certificate before anything authenticates | The family's rules (state-backend.md §6), then the cluster's check-in | No: the first `up-k8s-base` after its merge declares it (`kluster-ops#832`); `probes.yml` reads it today |
+| State-backend dump age, hourly | The cluster: the CronJob `state-backend-dumps` in `monitoring`, listing `pulumi-state/` (state-backend.md §6) | The list-only `B2 freshness key (state dumps)`, sealed | The family's rules (state-backend.md §6), then the cluster's check-in | Yes |
+| State-backend server certificate's expiry, hourly | The cluster: the CronJob `state-backend-certificate` in `monitoring`, reading the leaf off a Postgres STARTTLS handshake with the appliance (state-backend.md §6) | None: the box sends its certificate before anything authenticates | The family's rules (state-backend.md §6), then the cluster's check-in | Yes |
 | The kubeconfig copies' expiry, `KubeconfigCopyExpiring` | The cluster: a rule vmalert evaluates against the expiry `k8s-base` reads off its own copy, `conventions.cluster.KUBECONFIG_ALERT_MARGIN` ahead of it. It holds no credential, and it watches a date in `k8s-base`'s configuration rather than the cluster it runs on (§2.5) | None: the date is the certificate's public half | The cluster's check-in | No: it runs from the first `k8s-base` apply that declares monitoring |
 | The other credential expiry tripwires | Each placed by the same rule. Two are checked in the cluster: the state backend's server certificate, by the CronJob above, and the kubeconfig copies' client certificate, by the rule above. The `ci` and `operator` client bundles report their expiry at their first `pulumi` command, and the `upkeep` bundle at the state table's upkeep's first run after it (state-backend.md §6); the destroy dates stay with the offline day | — | — | — |
 | etcd restore-verify, daily | The cluster: the CronJob `etcd-restore-verify` in `etcd-backup`, off the control planes (storage.md §5) | The snapshots' read-only key, `reader-etcd`, which lists and downloads and writes nothing, and an age identity of its own, `etcd-drill`, both sealed | The family's rules (§7.2), then the cluster's check-in | Yes: from the first `k8s-base` apply that declares it, its two values sealed in ahead of it |
@@ -1419,7 +1415,6 @@ for its place. The last column says which run, as of 2026-11-17:
 | Weekly drift trigger, `drift-trigger.yml` | The ops repository: the trigger App starts runs on this repository's `main`, which acts on GitHub (framework/ci.md §3) | The trigger App's key and client id | Its alert job, then its own timer | Yes |
 | The drift check, `drift.yml` | This repository's CI, dispatched by the trigger: it needs `physical`'s passphrase, which threat-model.md §3.1 keeps from every unmerged ref | The CI Environments | Its own alert job | Yes |
 | State-backend rebuild drill, quarterly | The ops repository, in the `drill` Environment: its OCI user administers the `drill` compartment, and nothing an unmerged ref holds can create an instance (state-backend.md §7.3) | The `drill` Environment | Its alert job, then its own timer | No (`kluster-ops#57`) |
-| The ops repository's `probes.yml`, daily | The ops repository, until the two in-cluster checks of the state backend above have reported a pass; it then retires, and its two secrets with it | The `B2 freshness key (state dumps)` | Its alert job, then its own timer | Yes |
 
 Outside the rule are the jobs that do not run on a clock: the ops
 repository's `lint.yml`, which runs on push and pull request and gates
