@@ -554,7 +554,7 @@ three levels None, Limited and Full. A new environment starts at Limited
 with "Allow package managers" checked, and one saved as Trusted opens as
 that (the Claude Code documentation's cloud environments page, "Access
 levels"). That default refuses hosts the script downloads from — mise's
-own, the one uv fetches its Python from, and `archive.archlinux.org`,
+own, the one uv fetches its Python from, and `snapshot.debian.org`,
 where `dash` installs from (below) — and a refused download is the
 failure the script's line names. Full does not open the GitHub API: the
 session's GitHub proxy answers `api.github.com` only for repositories
@@ -564,12 +564,12 @@ comment there says how that one stays off it.
 
 The pinned tools install from these hosts, each tool's URL recorded in
 `mise.lock`: `nodejs.org` for `node`; `conda.anaconda.org` for every
-tool pinned from a `conda` channel (today `postgres`, `gawk` and
-`libxslt`), every package a `conda` install unpacks included;
-`archive.archlinux.org` for `dash`; `dl.k8s.io` for `kubectl`; and
-release downloads from `github.com` for every other tool. Full reaches
-any host. The Claude Code documentation lists each of them but
-`archive.archlinux.org` among the hosts that default allows too (its
+tool pinned from a `conda` channel (today `postgres`, `gawk`,
+`libxslt` and `libarchive`), every package a `conda` install unpacks
+included; `snapshot.debian.org` for `dash`; `dl.k8s.io` for `kubectl`;
+and release downloads from `github.com` for every other tool. Full
+reaches any host. The Claude Code documentation lists each of them but
+`snapshot.debian.org` among the hosts that default allows too (its
 cloud environments page, "Default allowed domains"); it scopes the
 GitHub proxy's repository check to API requests and source archives
 ("GitHub proxy"), which leaves release downloads out of it. Release

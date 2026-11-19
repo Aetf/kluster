@@ -203,7 +203,7 @@ SYSTEMD_TERMINATE_RELEASE = 258
 #: The device's base, as read on the device (physical/gateway.md §1). It moves
 #: last in §3's "The device's base moved", once what depends on it has moved:
 #: moved alone, it silences the finding and leaves the dash pin behind.
-DEVICE_BASE = DeviceBase(debian_release='11', shell='/bin/dash', terminate_signals_nspawn=False)
+DEVICE_BASE = DeviceBase(debian_release='13', shell='/usr/bin/dash', terminate_signals_nspawn=False)
 
 
 @final

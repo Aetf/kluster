@@ -335,9 +335,9 @@ def _device(tmp_path: Path, *, legacy: tuple[conventions.gateway.LegacyVhost, ..
         vtysh_fails=root / 'vtysh-fails',
         vtysh_calls=logs / 'vtysh',
     )
-    # `machinectl` as systemd 247 answers for a machine whose init is not
-    # systemd: `show` names the leader of a running machine and knows no other,
-    # and `shell` is refused either way, since machined starts its command
+    # `machinectl` as the device's systemd answers for a machine whose init is
+    # not systemd: `show` names the leader of a running machine and knows no
+    # other, and `shell` is refused either way, since machined starts its command
     # through the guest's systemd over the guest's bus, which these machines do
     # not run. Any other verb is refused as one the stand-in does not model.
     _stub(

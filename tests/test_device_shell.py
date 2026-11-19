@@ -2,9 +2,9 @@
 
 The device runs a `#!/bin/sh` script under dash; the host running the suite
 has whichever `/bin/sh` it has, which is not the device's: bash on a
-workstation, which passes a bashism that fails on the device, and a later dash
-on CI's Ubuntu runners. So a case that runs one goes through
-`device_shell.argv`, which names the dash `mise.toml` pins.
+workstation, which passes a bashism that fails on the device, and the runner
+image's own build of dash on CI's Ubuntu runners. So a case that runs one goes
+through `device_shell.argv`, which names the dash `mise.toml` pins.
 
 What is held here is that nothing is left out of that. The templates are
 found by their interpreter, not by a list of names, and each is held to a

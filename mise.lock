@@ -6,6 +6,10 @@ lockfile_version = 2
 url = "https://conda.anaconda.org/conda-forge/linux-64/_openmp_mutex-4.5-20_gnu.conda"
 checksum = "sha256:1dd3fffd892081df9726d7eb7e0dea6198962ba775bd88842135a4ddb4deb3c9"
 
+[conda-packages.linux-x64."bzip2-1.0.8-hda65f42_10"]
+url = "https://conda.anaconda.org/conda-forge/linux-64/bzip2-1.0.8-hda65f42_10.conda"
+checksum = "sha256:1a0d382c515ebf55f8ee1f38c8b81bc95af5c2acc42ad53b66bc5df932032f96"
+
 [conda-packages.linux-x64."ca-certificates-2026.10.23-hbd8a1cb_0"]
 url = "https://conda.anaconda.org/conda-forge/noarch/ca-certificates-2026.10.23-hbd8a1cb_0.conda"
 checksum = "sha256:95619b9c1184be7175392eeb0ee7eeb5ccf25d280951f4225f2d62e725790be3"
@@ -93,6 +97,14 @@ checksum = "sha256:eb8a0db0aa570124f7d2a93d7c7f596e3390df5e047818d873baad32985fc
 [conda-packages.linux-x64."lz4-c-1.10.0-hee9eb32_2"]
 url = "https://conda.anaconda.org/conda-forge/linux-64/lz4-c-1.10.0-hee9eb32_2.conda"
 checksum = "sha256:b8c0e930183e6b7f83cd35ace102f2b8c2f0faae41dc05255dc72f247dfc556a"
+
+[conda-packages.linux-x64."lz4-c-1.11.1-hee9eb32_0"]
+url = "https://conda.anaconda.org/conda-forge/linux-64/lz4-c-1.11.1-hee9eb32_0.conda"
+checksum = "sha256:e66dc54f3f3547f1988dc3ef606f2790d7fde24037ffd0a19b4f58e2895f4183"
+
+[conda-packages.linux-x64."lzo-2.10-hebe6cf0_1003"]
+url = "https://conda.anaconda.org/conda-forge/linux-64/lzo-2.10-hebe6cf0_1003.conda"
+checksum = "sha256:a0a1400198e5302d8367f2ed53437ee3cc41dbc463cb481921ce765578780b7a"
 
 [conda-packages.linux-x64."mpfr-4.2.2-ha2cb11d_1"]
 url = "https://conda.anaconda.org/conda-forge/linux-64/mpfr-4.2.2-ha2cb11d_1.conda"
@@ -183,6 +195,36 @@ conda_deps = [
     "ncurses-6.6-hdb14827_1",
 ]
 
+[[tools."conda:libarchive"]]
+version = "3.8.11"
+backend = "conda:libarchive"
+specifiers = ["3.8.11"]
+
+[tools."conda:libarchive".options]
+channel = "conda-forge"
+
+[tools."conda:libarchive"."platforms.linux-x64"]
+checksum = "sha256:9b37517af50530eb5fd7d2d40daad79f04b3c7820b6c88641451d77a4677a36c"
+url = "https://conda.anaconda.org/conda-forge/linux-64/libarchive-3.8.11-gpl_h0bafa77_101.conda"
+conda_deps = [
+    "lz4-c-1.11.1-hee9eb32_0",
+    "liblzma-5.8.3-hb03c661_1",
+    "libzlib-1.3.2-h25fd6f3_3",
+    "bzip2-1.0.8-hda65f42_10",
+    "libgcc-16.2.0-ha9f2e26_7",
+    "libstdcxx-16.2.0-h934c35e_7",
+    "libxml2-2.15.4-h7df9aa5_1",
+    "libxml2-16-2.15.4-hf3af7cc_1",
+    "lzo-2.10-hebe6cf0_1003",
+    "openssl-3.6.5-h781a0a9_0",
+    "zstd-1.5.7-hb78ec9c_7",
+    "_openmp_mutex-4.5-20_gnu",
+    "libgomp-16.2.0-he0feb66_7",
+    "icu-78.3-py310h44b86e0_2",
+    "libiconv-1.18-h0cb94f2_3",
+    "ca-certificates-2026.10.23-hbd8a1cb_0",
+]
+
 [[tools."conda:libxslt"]]
 version = "1.1.45"
 backend = "conda:libxslt"
@@ -253,13 +295,13 @@ checksum = "sha256:258e830a9e613c8a7a302d6059b4bb3b9758f2f3e1bb8ea0d707ce10a9a72
 url = "https://get.helm.sh/helm-v3.20.2-linux-amd64.tar.gz"
 
 [[tools."http:dash"]]
-version = "0.5.11.1"
+version = "0.5.12"
 backend = "http:dash"
-specifiers = ["0.5.11.1"]
+specifiers = ["0.5.12"]
 
 [tools."http:dash"."platforms.linux-x64"]
-checksum = "sha256:d34b294eee83a21aa2241003bec50d9c4e21eb54232c9578a56e1bcf4eb3aabc"
-url = "https://archive.archlinux.org/packages/d/dash/dash-0.5.11.1-1-x86_64.pkg.tar.zst"
+checksum = "sha256:a8902cb6d8650134764a25fb80aec8589d858ef71ece1680a62e84816c37bb04"
+url = "https://snapshot.debian.org/archive/debian/20250204T211159Z/pool/main/d/dash/dash_0.5.12-12_amd64.deb"
 
 [[tools.jj]]
 version = "0.47.1"
