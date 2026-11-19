@@ -158,17 +158,12 @@ def physical_stack(bundle_dir: Path) -> pulumi_config.Stack:
 
 def slot_passphrase() -> str:
     """`physical`'s passphrase from its workstation slot, refused with the command that fills a slot holding none."""
-    slot = workstation.physical_passphrase_path()
-    try:
-        found = slot.read_text().strip()
-    except FileNotFoundError:
-        found = ''
-    except OSError as exc:
-        raise stack_environment.EnvironmentRefused(f'{slot} cannot be read ({exc.strerror})') from exc
-    if not found:
+    found = workstation.physical_passphrase()
+    if found is None:
         raise stack_environment.EnvironmentRefused(
-            f'{slot} holds no passphrase: `credentials derived {stack_environment.PHYSICAL_PASSPHRASE_ROW} '
-            'recover` writes it, on a machine that holds the kit'
+            f'{workstation.physical_passphrase_path()} holds no passphrase: '
+            f'`credentials derived {stack_environment.PHYSICAL_PASSPHRASE_ROW} recover` writes it, '
+            'on a machine that holds the kit'
         )
     return found
 

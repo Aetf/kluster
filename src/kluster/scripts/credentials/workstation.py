@@ -12,7 +12,9 @@ template that cannot prompt, cannot unlock a keyring and cannot fail
 gracefully, so a file is the shape that fits. `physical`'s passphrase is a
 file for the same reason, though no template reads it: a `pulumi` run by hand
 against `physical` names the file to `pulumi` (`PULUMI_CONFIG_PASSPHRASE_FILE`,
-credentials.md §4.4), which a store entry could not be. The operator passphrase is read
+credentials.md §4.4), which a store entry could not be, and a `credentials`
+command that reaches `physical` reads it (`physical_passphrase`), so that
+opening that stack takes no kit. The operator passphrase is read
 by the `operator-stack` driver instead, through the acquisition chain
 (`kluster.lib.acquisition`), so its slot is the chain's file layer, below the
 store in the chain's order: where it lives on a machine whose store does not
@@ -30,6 +32,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from kluster.lib import stack_environment
 from kluster.lib import workstation as lib_workstation
 from kluster.lib.stack_environment import OPERATOR_PASSPHRASE_SLOT, PHYSICAL_PASSPHRASE_SLOT
 
@@ -46,6 +49,7 @@ __all__ = (
     'kit_path',
     'operator_passphrase_path',
     'passphrase_path',
+    'physical_passphrase',
     'physical_passphrase_path',
     'repo_root',
     'root_path',
@@ -105,6 +109,26 @@ def operator_passphrase_path() -> Path:
 
 def physical_passphrase_path() -> Path:
     return directory() / PHYSICAL_PASSPHRASE
+
+
+def physical_passphrase() -> str | None:
+    """`physical`'s passphrase as its slot holds it; None where the slot is absent or holds nothing.
+
+    The one reader of the slot: each caller decides what None means to it --
+    a fall back to the kit (`lifecycle.environment`), or a refusal naming the
+    command that writes the slot (`oci_recovery.slot_passphrase`). A slot that
+    is there and cannot be read is refused rather than taken for absent, so a
+    caller never falls back past a slot the operator meant it to use.
+    """
+    slot = physical_passphrase_path()
+    try:
+        return slot.read_text().strip() or None
+    # A level above it that is a file, rather than a directory, leaves no
+    # slot there either.
+    except (FileNotFoundError, NotADirectoryError):
+        return None
+    except OSError as exc:
+        raise stack_environment.EnvironmentRefused(f'{slot} cannot be read ({exc.strerror})') from exc
 
 
 def root_path(name: str) -> Path:
