@@ -1358,11 +1358,13 @@ restore-verify starts a scratch etcd inside its own pod, and the
 orphan-volume audit compares each node's on-disk volume directories
 against the live volumes, which needs what only a node can read; all
 four are the cluster's. Each automated job in the cluster or the ops
-repository is covered against stopping silently, because a job that
-silently stops running is indistinguishable from a failing one: an
-ops-repository workflow by its dead-man timer, and an in-cluster
-CronJob by the scheduled-job rule family (the rule below) and, behind
-the family, the cluster's check-in (the alert contract). The family is
+repository, and the gateway's daily check on the homelab host, is
+covered against stopping silently, because a job that silently stops
+running is indistinguishable from a failing one: an ops-repository
+workflow by its dead-man timer, an in-cluster CronJob by the
+scheduled-job rule family (the rule below) and, behind the family, the
+cluster's check-in, and the daily check by the homelab host's check-in
+(both in the alert contract). The family is
 declared with the rest of the cluster's rules in `k8s-base`, and it reads
 a CronJob only once the CronJob is declared: a job that waits for its
 sealed value, as the metrics stores' backups, the pull of OCI's
@@ -1371,11 +1373,11 @@ value is sealed in. Bring-up stage 6 seals every value `k8s-base`
 reads, each of those keys among them, and reads each job's first run;
 what bounds a value it missed is the pull request of stage 8 that
 deletes the sealed tolerance, from which an absent value stops the run
-by name (physical/bring-up.md §1). The timers
-do not exist yet, and until they do, an ops-repository workflow that
-stops running reports nothing. A device's own jobs are
-watched as the census below says, and the gateway's daily check by
-nothing but its own findings. One calendar act is left to the
+by name (physical/bring-up.md §1). The dead-man
+timers do not exist yet, and until they do, an ops-repository workflow
+that stops running reports nothing. A device's own jobs are
+watched as the census below says: the gateway's by its daily check,
+and the daily check by its check-in. One calendar act is left to the
 operator, the yearly offline day, because its steps need the offline
 kit and physical custody, which no job holds (the table above). The
 copy of the kubeconfig into `k8s-base`'s and `apps`'s configuration is
@@ -1406,8 +1408,8 @@ for its place. The last column says which run, as of 2026-11-17:
 | The state-backend appliance's dump, nightly (`state-dump.timer`) | The appliance itself: the job dumps the box's own database (state-backend.md §5) | The dump key, `writeFiles` alone, in the box's Ignition | The dump-age check above; the box's own failed-run notice reaches only a shell on it (state-backend.md §6) | Yes |
 | The state-backend appliance's OS updates, a weekly window (Zincati) | The appliance itself: they update the box's own OS (state-backend.md §1) | None beyond the box's own | None, deliberately (state-backend.md §6) | Yes |
 | The gateway controller's autobackup, monthly | The gateway itself: the controller's own schedule, a console setting | None | The gateway's daily check, which holds the newest autobackup to 32 days (physical/gateway.md §1.6) | Yes |
-| The gateway's weekly backup pull (`gateway-backup.timer`) | The homelab host: it keeps copies of the gateway's backups, and the gateway runs no timer of its own (physical/gateway.md §1.6) | The host's SSH access to the gateway | The daily check, which reads how fresh the copies are | Yes |
-| The gateway's daily check (`check-gateway.timer`) | The homelab host: the check reads the gateway as `root` over SSH, which the cluster may not hold, and the host already reads the gateway (physical/gateway.md §1.6) | The host's SSH access to the gateway | Its findings, mailed with their playbooks. A healthy run writes a journal line and nothing else, so nothing reports the timer stopping | Yes |
+| The gateway's weekly backup pull (`gateway-backup.timer`) | The homelab host: it keeps copies of the gateway's backups, and the gateway runs no timer of its own (physical/gateway.md §1.6) | The host's SSH access to the gateway | The daily check, which reads how fresh the copies are: a run that failed is reported at the next daily check, and a pull that stopped is reported within one of the controller's autobackup periods, plus eight days, of the stop. Both hold while the daily check runs, which its check-in watches | Yes |
+| The gateway's daily check (`check-gateway.timer`) | The homelab host: the check reads the gateway as `root` over SSH, which the cluster may not hold, and the host already reads the gateway (physical/gateway.md §1.6) | The host's SSH access to the gateway; the check-in's webhook id, in a file yadm encrypts on the host | Its findings, mailed with their playbooks, and its check-in to `timer.homelab_ops_check_gateway` after every run that delivered its findings or had none (the alert contract) | Yes |
 | Slot-drift probe | The ops repository: it lists every repository's and Environment's secrets, which takes a GitHub credential (credentials.md §4) | A token that lists secrets | Its alert job, then its own timer | No (`kluster-ops#1`) |
 | Issue-sync poller, hourly | The ops repository: it writes that repository's issues, which acts on GitHub (architecture.md §4.3) | The `alertmanager/read` token, and the workflow's own token | Its alert job, then its own timer. Its "monitoring unreachable" issue is the GitHub leg of a cluster that cannot be reached | No (`kluster-ops#57`) |
 | Weekly drift trigger, `drift-trigger.yml` | The ops repository: the trigger App starts runs on this repository's `main`, which acts on GitHub (framework/ci.md §3) | The trigger App's key and client id | Its alert job, then its own timer | Yes |
@@ -1517,6 +1519,32 @@ contract the Home Assistant side is built against:
     haos-webhook`). An in-cluster job has no timer of its own: the
     scheduled-job rule family watches it (the rule above), and the
     cluster's check-in below is the timer behind the family.
+-   **The homelab host's check-in.** The gateway's daily check
+    (physical/gateway.md §1.6) is watched by a Home Assistant timer of
+    its own, `timer.homelab_ops_check_gateway`, named from the source
+    its findings mail carries, `homelab-ops/check-gateway`. Its
+    duration is 36 hours, `conventions.backup.max_age` of the daily
+    cadence, and it survives a restart. The unit's `ExecStartPost=`
+    runs `check-in check-gateway` after every run that exits 0, which
+    is a healthy run or one whose mail was sent, so a check-in means
+    the findings reached the operator or there were none. It POSTs
+    once, with an empty body, to a webhook of its own, whose automation
+    accepts `POST` from the home site alone and whose one action
+    restarts the timer. There is one webhook per job, because the id
+    is the whole credential: its holder can restart that job's timer
+    and nothing else. The id is the host's, in a file yadm encrypts,
+    with no register row, like the job's SSH access to the gateway (the
+    census). There is no retry: one lost check-in is absorbed by the
+    next run, and two in a row expire the timer. A check-in is not an
+    alert: it carries no tier, pushes nothing and reaches neither
+    intake. The timer's expiry pushes "no check-in from
+    homelab-ops/check-gateway", whose message is the playbook,
+    physical/gateway.md §3, "The check stopped checking in". It
+    reports a timer, a unit, the user manager or a tool shim that
+    stops. A homelab host that stops takes Home Assistant with it,
+    since Home Assistant is a domain on that host, and nothing pushes:
+    the residual every Home Assistant timer here carries,
+    `timer.kluster_cluster` among them.
 -   **The cluster's check-in.** A rule that always fires, in the
     `heartbeat` tier, reaches alertmanager's intake once per repeat
     interval, ten minutes, and at most one group interval, a minute,
@@ -1540,10 +1568,15 @@ What is built of it is the census, CI's producer, the alert job every
 ops-repository workflow on a clock ends in, and the cluster's side:
 alertmanager's receiver, the rules, the scheduled-job rule family among
 them, and the check-in, declared in `k8s-base` and running once the
-bring-up applies it and seals the webhook in. The handler and the Home
-Assistant automations and timers are not: until the handler exists, a
-dispatch is accepted and starts nothing, and an alert from CI or from
-the ops repository is a red run and nothing more.
+bring-up applies it and seals the webhook in. Home Assistant's side of
+the cluster's alerting is built: the alertmanager intake, the cluster's
+check-in timer and its expiry push. The homelab host's check-in is
+built whole, and runs: the script and its unit line on the host, and in
+Home Assistant its webhook automation, its timer and the timer's expiry
+push. The handler is not built, nor are the ops repository's dead-man
+timers, `timer.kluster_ops_<workflow>`, and their automations: until
+the handler exists, a dispatch is accepted and starts nothing, and an
+alert from CI or from the ops repository is a red run and nothing more.
 
 ## 5. Playbook index
 
@@ -1554,7 +1587,7 @@ Owning docs keep the content — the index only locates it.
 | Playbook family | Lives in |
 | --- | --- |
 | State backend (cert/CA, PG major, rebuild, age rotation) | physical/state-backend.md §7 |
-| Gateway (ZeroTier container down, firmware-wiped device, UDM replacement; and every finding of the daily gateway check: a machine, the boot chain, a delivered unit, the routing daemon or the offline package cache, a check that did not run, a certificate not renewing, an autobackup not copied off) | physical/gateway.md §3 |
+| Gateway (ZeroTier container down, firmware-wiped device, UDM replacement; and every finding of the daily gateway check: a machine, the boot chain, a delivered unit, the routing daemon or the offline package cache, a check that did not run, a check that stopped checking in, a certificate not renewing, an autobackup not copied off) | physical/gateway.md §3 |
 | Node replacement (CP node, worker VM, block volume and VIP extras; the whole cluster with the account intact) | §3 here |
 | Upgrades (Talos serial, Cilium canary); the cluster credential's copies near their expiry (`KubeconfigCopyExpiring`) | §2 here |
 | Backup restores (CNPG, VolSync, etcd) | storage.md §5; the drills are §4 here |
