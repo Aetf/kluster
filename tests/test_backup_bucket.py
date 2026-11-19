@@ -119,6 +119,29 @@ async def test_a_writer_key_can_still_read_its_own_index() -> None:
 
 
 @pytest.mark.asyncio
+async def test_a_store_keeping_writer_can_learn_that_a_name_is_missing() -> None:
+    """Every family's key lets B2 answer a read of a missing name with 404.
+
+    Each family's tool keeps a store in the bucket and reads names that may
+    not exist yet as part of an ordinary run -- restic's `init`, barman's
+    object checks, `vmbackup`'s completion marker -- taking only a 404 for
+    absence. B2's S3 API answers such a read with 403 unless the key holds
+    `listBuckets` (kopia/kopia#5329; Aetf/kluster-ops#864), and the store's
+    first backup then fails. Written in B2's spelling, and over every family
+    `physical` mints a key for, so a family added later is held to it too.
+    """
+    scopes = [scope('a-namespace') for scope in physical.FAMILY_SCOPES.values()]
+    bucket = build(scopes)
+    assert set(bucket.keys) == {scope.name for scope in scopes}
+    assert scopes
+
+    for name, key in bucket.keys.items():
+        capabilities = await key.capabilities.future()
+        assert capabilities is not None
+        assert 'listBuckets' in capabilities, name
+
+
+@pytest.mark.asyncio
 async def test_each_key_reaches_one_prefix_and_one_bucket() -> None:
     etcd, volsync, barman = etcd_scope(), volsync_scope('immich'), barman_scope('immich')
     bucket = build([etcd, volsync, barman])
