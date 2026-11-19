@@ -1486,12 +1486,18 @@ contract the Home Assistant side is built against:
     relay or the overlay. Every alert in the body
     carries a `tier` label from the census and `summary` and
     `playbook` annotations (`kluster.components.monitoring.rules`),
-    and only firing alerts are sent. Per alert, the automation
-    restarts the cluster's timer when the tier is `heartbeat`, and
-    otherwise pushes a notification titled
-    `[<tier>] cluster/<alertname>: <summary>` whose message is the
-    playbook. alertmanager repeats a firing alert on its own interval,
-    so an `actionable` alert pushes again until it resolves; the issue
+    and alertmanager sends an alert's resolution as well as its
+    firing. Per alert, the automation restarts the cluster's timer
+    when the tier is `heartbeat` and the alert is firing, and ignores
+    the check-in's resolution, since the timer reads the check-in's
+    absence. An alert of any other tier pushes, when firing, a
+    notification titled `[<tier>] cluster/<alertname>: <summary>`
+    whose message is the playbook and whose tag is
+    `kluster-<fingerprint>`, from the fingerprint alertmanager gives
+    the alert; its resolution clears the notification under that
+    tag, so a resolved alert leaves nothing on the phone.
+    alertmanager repeats a firing alert on its own interval, so an
+    `actionable` alert pushes again until it resolves; the issue
     leg that would deduplicate it is the poller, which is not built
     (architecture.md §4.3).
 -   **The dead-man.** Every scheduled ops-repo workflow is watched by a
