@@ -1,7 +1,8 @@
-"""The state-backend's PKI: one escrowed CA key, three kinds of re-issuable leaf.
+"""The state-backend's PKI: one escrowed CA key, and re-issuable leaves under it.
 
-A single-purpose private CA that signs three kinds of certificate — the
-server's and the `ci`/`operator` clients' (physical/state-backend.md §3).
+A single-purpose private CA that signs the server's certificate and a client
+certificate for each role a certificate can name (`CLIENT_NAMES`;
+physical/state-backend.md §3).
 
 **The CA key is the only escrowed half.** It is random at creation and its
 ciphertext lives under `escrow/state-backend/ca` (credentials.md §2.2); losing
@@ -55,11 +56,12 @@ from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 
 from kluster.lib.secret import Secret
+from kluster.lib.state_backend import settings
 
 CURVE = ec.SECP256R1()
 
 #: Long enough that the CA is not an operational concern, short enough to be a
-#: real bound; the three leaves below rotate far more often.
+#: real bound; the leaves below rotate far more often.
 CA_VALIDITY = dt.timedelta(days=3653)
 LEAF_VALIDITY = dt.timedelta(days=1096)
 
@@ -68,8 +70,9 @@ LEAF_VALIDITY = dt.timedelta(days=1096)
 NOT_BEFORE_MARGIN = dt.timedelta(minutes=5)
 
 #: The appliance's pooler maps a client certificate's Common Name to the
-#: Postgres role it connects as.
-CLIENT_NAMES = ('ci', 'operator')
+#: Postgres role it connects as, so these are the appliance's roles a
+#: certificate can name: the two client roles and `upkeep`.
+CLIENT_NAMES = (settings.CI_ROLE, settings.OPERATOR_ROLE, settings.UPKEEP_ROLE)
 
 CA_COMMON_NAME = 'kluster state-backend CA'
 

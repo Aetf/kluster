@@ -328,13 +328,13 @@ oraclecloud`, x86_64), the qcow2 imports as a custom image
     already holds the server key and acts as both client roles, so the
     superuser adds nothing to the state it can reach (threat-model.md
     §4, clause 2, accepted). From the network the pooler's `hba.conf`
-    admits the two client roles, `ci` and `operator`, by the
-    certificate whose CN names the role, into `pulumi_state` and
-    nothing else, so a certificate the CA signs for any other name —
-    the superuser's included — is refused. Postgres's `pg_hba` admits
-    the same two roles, into `pulumi_state` alone, on the socket the
-    pooler reaches it through, which nothing but the two containers
-    enters (below). Both client roles are `NOSUPERUSER`
+    admits the two client roles, `ci` and `operator`, and the upkeep
+    role, `upkeep` (below), by the certificate whose CN names the role,
+    into `pulumi_state` and nothing else, so a certificate the CA signs
+    for any other name — the superuser's included — is refused.
+    Postgres's `pg_hba` admits the same roles, into `pulumi_state`
+    alone, on the socket the pooler reaches it through, which nothing
+    but the two containers enters (below). Both client roles are `NOSUPERUSER`
     members of `state_owner`, a role that cannot log in, and every
     session either opens acts as it (a per-role `role` setting in
     `pulumi_state`). What that role holds is exactly what Pulumi's
@@ -361,6 +361,40 @@ oraclecloud`, x86_64), the qcow2 imports as a custom image
     initialization, from a script the Butane file delivers, so they
     exist from a fresh data directory's first start and change only
     by a replacement.
+-   **`upkeep` reads and deletes rows of the state table.** It is the role the cluster's daily upkeep of the
+    table connects as — the census, the prune of expired rows and the
+    ceiling (below) — with a bundle sealed to the cluster
+    (credentials.md §3). It is `LOGIN NOSUPERUSER NOCREATEDB
+    NOCREATEROLE`, no member of `state_owner`, and acts as itself. The
+    box's initialization grants it `CONNECT` on `pulumi_state` and
+    `USAGE` on `public` without `CREATE`, and a default privilege of
+    `state_owner`'s in `public` gives it `SELECT` and `DELETE` on every
+    table that role creates. So it inserts, updates, truncates, drops
+    and creates nothing, large objects included: the box revokes the
+    functions that create one from every role, since no client uses
+    one. The pooler admits it into the transaction entry alone, never
+    the session entry. Its statements are pooled
+    like every query, inside the cap, which gains no term.
+    -   **A default privilege, not a grant on the table.** The table
+        does not exist when the box initializes, and it comes to exist
+        in two ways, each a session acting as `state_owner`: the
+        backend's first open, and every restore, whose `--clean` drops
+        the table and creates it again (§7). A restore takes no
+        privileges from the archive, as it takes no owner from it (§7),
+        so the restoring box's own default privilege is what grants
+        `upkeep` the table, and an archive restores into a box
+        regardless of whether either box has the role.
+    -   **What it can do is the excess.** It can delete any row, a
+        checkpoint included, and read every value. And since `DELETE`
+        carries the right to lock the table, it can hold `ACCESS
+        EXCLUSIVE` on it for as long as it keeps a transaction open
+        through the transaction entry, and every stack's run waits until
+        that transaction ends. Credentials.md §3 records all of it as its
+        certificate's excess. The delete is not
+        bounded by row: that would take a row-level policy on a table
+        that both the backend's first open and every restore create, so
+        the box would declare the backend's own schema, or apply the
+        policy again after every restore.
 -   **What one statement costs is a multiple of the value it touches.**
     Pulumi's Postgres backend (`pkg/backend/diy/postgres` at the pinned
     CLI) keeps every object in one table, `pulumi_state (key, data json,
@@ -402,7 +436,7 @@ oraclecloud`, x86_64), the qcow2 imports as a custom image
     replacement's restore hook takes the readiness wait to mean.
     -   **Two entries for the one database.** `pulumi_state`, the
         database's own name, is pooled per transaction and carries every
-        `pulumi` session and every query, `ci`'s and `operator`'s alike:
+        `pulumi` session and every query, every role's alike:
         a client holds a server process for one transaction, so a
         connection a `pulumi` process keeps idle holds none.
         `pulumi_state_session` (`settings.SESSION_DATABASE`) maps to the
@@ -431,10 +465,10 @@ oraclecloud`, x86_64), the qcow2 imports as a custom image
         client parsed. `pulumi` is therefore given its URL with
         `binary_parameters=yes`, which makes its driver send each
         statement in one round trip (§7.5, "Connecting").
-    -   **The cap.** The transaction entry's pools, both roles', hold at
-        most `POOL_CAP` server processes between them
+    -   **The cap.** The transaction entry's pools, every role's, hold
+        at most `POOL_CAP` server processes between them
         (`max_db_connections`), idle ones included, and an idle one of
-        one role's pool is closed for a client of the other's that is
+        one role's pool is closed for a client of another's that is
         waiting. A client beyond the cap waits in the pooler rather than
         being refused, for up to the longest a dump or restore holds the
         session entry (`state.TRANSFER_TIMEOUT`). The session entry adds
@@ -652,8 +686,9 @@ oraclecloud`, x86_64), the qcow2 imports as a custom image
     expires, so the set of valid leaves grows with use and is not
     something anyone can list. What a leaf is good for is bounded by
     the box instead: a client leaf authenticates as the one role its
-    CN names, and the box admits only the two client roles (§2).
-    Two kinds of leaf:
+    CN names, and the box admits only the two client roles and
+    `upkeep` (§2). `credentials derived state-backend-upkeep seal`
+    issues an `upkeep` leaf too. Two kinds of leaf:
 -   **Server cert, 2–3 years, SAN = the micro's reserved public IP.**
     Issued into the `state-backend` stack's configuration, the key
     as a secret and the certificate and the CA's certificate in the
@@ -662,7 +697,12 @@ oraclecloud`, x86_64), the qcow2 imports as a custom image
     matches IP SANs), keeping the state-backend hot path free of any
     DNS dependency — the backend stays reachable when Cloudflare or
     the `dns` stack is itself the thing being repaired.
--   **Client certs, for two roles — `ci` and `operator`**. The `ci`
+-   **Client certs, for the client roles `ci` and `operator` and for
+    `upkeep`**. The `upkeep` key is sealed to the cluster, into
+    `k8s-base`'s configuration, by `credentials derived
+    state-backend-upkeep seal`, which issues a fresh leaf each run, for
+    the cluster's daily upkeep of the state table; no workstation or CI
+    slot holds it. The `ci`
     key is a CI Environment secret; the `operator` key is a
     **workstation slot** (credentials.md §1 rule 6) —
     `.credentials/state-backend/` in the
@@ -1044,9 +1084,11 @@ shell on it:
         playbook §7.1; a box that does not complete the handshake is
         unreachable, into §7.3 (there is no NSG allowlist to refresh —
         §4). The leaf and only it: the CA is not what a handshake
-        proves, and the two client certificates are held by their
-        consumers, whose first `pulumi` command is their expiry's
-        report — out of a network probe's reach by design.
+        proves, and each client certificate is held by its consumer,
+        whose first use after the certificate expires is its report —
+        the first `pulumi` command for `ci` and `operator`, the next run
+        of the state table's daily upkeep for `upkeep` — out of a
+        network probe's reach by design.
     -   **Dumps.** Authorize as the list-only key (credentials.md §3,
         `B2 freshness key (state dumps)`, read from the two secrets
         `B2_FRESHNESS_DUMPS_KEY_ID` and `B2_FRESHNESS_DUMPS_KEY`), list
@@ -1187,6 +1229,12 @@ is the moment nobody can afford to find out later:
     client roles were superusers names `ci` or `operator` itself,
     which the restoring role cannot become — replaying that ownership
     would abort the transaction.
+-   So are the privileges: the load runs with `--no-privileges`, so
+    what it creates holds what the box grants (§2) — the owning role's
+    rights from the box's initialization, and `upkeep`'s grant on the
+    table from the box's default privilege. An archive names every role
+    the box it came from granted anything, and replaying a grant to a
+    role the restoring box does not have would abort the transaction.
 
 -   **§7.1 Certificate rotation / CA reissue.** Trigger: an expiry
     inside the renewal margin, which every run of the stack names (§1);
@@ -1202,7 +1250,9 @@ is the moment nobody can afford to find out later:
     §7.2, for the same reason. On compromise of the CA itself:
     `credentials derived state-backend-ca generate` for a new generation,
     the same reissue and replacement against it, redistribute the `ci`
-    and `operator` bundles → `verify-full` check.
+    and `operator` bundles, seal a fresh `upkeep` bundle with
+    `credentials derived state-backend-upkeep seal` and commit it →
+    `verify-full` check.
 -   **§7.2 Postgres major upgrade.** Trigger: renovate major pin PR.
     Outline: merge → `operator-stack state-backend up --force` (the run
     dumps the old box before deleting it, the new major initdb's a fresh

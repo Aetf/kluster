@@ -131,20 +131,21 @@ storage:
     # Who may connect, as whom, and how; a connection no line matches is
     # refused. From the network a certificate is the only way in, a client
     # certificate's CN is the role it becomes, and only the two client roles
-    # may become one, into the state's two entries alone, the session entry
-    # `operator` alone. The CA can sign any CN, and this is what makes a
-    # certificate naming the superuser worth nothing. The statistics console
+    # and `upkeep` may become one, into the state's entries alone: the
+    # session entry `operator` alone, and `upkeep` the transaction entry
+    # alone. The CA can sign any CN, and this is what makes a certificate
+    # naming the superuser worth nothing. The statistics console
     # is admitted on the pooler's own socket only, inside its container,
     # which is `podman exec` as root on this box.
     - path: /etc/kluster/pgbouncer/hba.conf
       mode: 0644
       contents:
         inline: |
-          local    pgbouncer               pgbouncer                                 trust
-          hostssl  {{ database }}          {{ ci_role }},{{ operator_role }}  0.0.0.0/0  cert
-          hostssl  {{ database }}          {{ ci_role }},{{ operator_role }}  ::/0       cert
-          hostssl  {{ session_database }}  {{ operator_role }}                0.0.0.0/0  cert
-          hostssl  {{ session_database }}  {{ operator_role }}                ::/0       cert
+          local    pgbouncer               pgbouncer                                                    trust
+          hostssl  {{ database }}          {{ ci_role }},{{ operator_role }},{{ upkeep_role }}  0.0.0.0/0  cert
+          hostssl  {{ database }}          {{ ci_role }},{{ operator_role }},{{ upkeep_role }}  ::/0       cert
+          hostssl  {{ session_database }}  {{ operator_role }}                                   0.0.0.0/0  cert
+          hostssl  {{ session_database }}  {{ operator_role }}                                   ::/0       cert
 
     # The users the pooler knows. It looks a user up here before any method
     # applies, and none of these is a password: the methods above are the
@@ -155,6 +156,7 @@ storage:
         inline: |
           "{{ ci_role }}" ""
           "{{ operator_role }}" ""
+          "{{ upkeep_role }}" ""
           "pgbouncer" ""
 
     # The pooler itself (state-backend.md §2).
@@ -170,9 +172,9 @@ storage:
     #     deterministic.
     #   - Two entries for the one database. The transaction entry, the
     #     database's own name, carries every `pulumi` session and every
-    #     query, both roles': a client holds a server process for one
+    #     query, every role's: a client holds a server process for one
     #     transaction, and `max_db_connections` holds the entry's pools,
-    #     both roles', to `pool_cap` server processes between them. The
+    #     every role's, to `pool_cap` server processes between them. The
     #     session entry carries `pg_dump` and `pg_restore`, one session at a
     #     time: they set session state -- `pg_restore`'s empty `search_path`,
     #     which outlasts its transaction, among it -- that the transaction
@@ -218,10 +220,10 @@ storage:
     # refused. Every line is a local socket's, since Postgres has no network,
     # and a `local` line matches both sockets the server listens on: the
     # container's own and the one the pooler's container shares. So the
-    # superuser and the client roles, the latter into the state's database
+    # superuser, and the client roles and `upkeep` into the state's database
     # alone, are each reachable from the pooler's container as well as by
-    # `podman exec`; the pooler connects as a client role only once it has
-    # checked a certificate naming it. Neither socket is reachable from
+    # `podman exec`; the pooler connects as one of the latter only once it
+    # has checked a certificate naming it. Neither socket is reachable from
     # outside the two containers -- getting there is `podman exec` as root on
     # this box -- so both are trusted and carry no credential. The pooler's
     # container already holds the server key and connects as both client
@@ -236,8 +238,8 @@ storage:
         id: {{ postgres_uid }}
       contents:
         inline: |
-          local    all             {{ superuser }}                     trust
-          local    {{ database }}  {{ ci_role }},{{ operator_role }}  trust
+          local    all             {{ superuser }}                                        trust
+          local    {{ database }}  {{ ci_role }},{{ operator_role }},{{ upkeep_role }}  trust
 
     # Run once, by the image's entrypoint, when it initializes an empty data
     # directory: as the superuser, connected to {{ database }}.
@@ -268,6 +270,31 @@ storage:
           REVOKE ALL ON DATABASE {{ database }} FROM PUBLIC;
           GRANT CONNECT ON DATABASE {{ database }} TO {{ owner }};
           GRANT USAGE, CREATE ON SCHEMA public TO {{ owner }};
+          --
+          -- A large object is persistent, and outside every table's grant:
+          -- any role may create one unless the functions that do are revoked.
+          -- No client of this box uses one, so the three that create one are
+          -- revoked from every role; the server-side `lo_import` is the
+          -- superuser's alone already.
+          REVOKE EXECUTE ON FUNCTION lo_creat(integer), lo_create(oid), lo_from_bytea(oid, bytea) FROM PUBLIC;
+          --
+          -- `upkeep` is the cluster's daily upkeep of the state table: the
+          -- census, the prune of expired rows and the ceiling. It reads and
+          -- deletes rows, with the lock on the table that `DELETE` carries,
+          -- and nothing more, so it is no member of {{ owner }} and acts as
+          -- itself. Its grant on the table is a
+          -- default privilege of {{ owner }}'s, because the table does not
+          -- exist yet and comes to exist in two ways, each a session acting
+          -- as {{ owner }}: the backend's first open, and every restore, whose
+          -- `--clean` drops the table and creates it again. A restore takes
+          -- no privileges from the archive (`state.pg_restore`), so this
+          -- default privilege is what grants the restored table to
+          -- `upkeep`, and an archive restores into a box with or without
+          -- the role.
+          CREATE ROLE {{ upkeep_role }} LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE;
+          GRANT CONNECT ON DATABASE {{ database }} TO {{ upkeep_role }};
+          GRANT USAGE ON SCHEMA public TO {{ upkeep_role }};
+          ALTER DEFAULT PRIVILEGES FOR ROLE {{ owner }} IN SCHEMA public GRANT SELECT, DELETE ON TABLES TO {{ upkeep_role }};
 
     # --- Backup pipeline ---------------------------------------------------
     - path: /etc/kluster/age-recipients.txt

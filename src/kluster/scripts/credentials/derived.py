@@ -33,9 +33,11 @@ in the clear into the configuration of the stack that declares it
 OCI key the block-volume metrics pull reads with (`oci_metrics`), and
 the backup bucket's writer keys, which `physical` mints and this side seals
 out of that stack's state into `apps`, or into `k8s-base` for a namespace
-the platform holds and for the etcd snapshots (`b2_writer_seal`); and Authelia's
+the platform holds and for the etcd snapshots (`b2_writer_seal`); Authelia's
 storage encryption key, which is escrowed and sealed from the escrow
-(`authelia_storage_key_seal`).
+(`authelia_storage_key_seal`); and the client bundle the state table's daily
+upkeep reaches the state backend with, issued from the escrowed CA
+(`state_backend_upkeep`).
 
 The drill age identity is drawn here rather than minted anywhere, as the
 appliance's SSH host key below is; its consumer is the ops repository's
@@ -79,7 +81,7 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import cast
 
@@ -87,7 +89,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from pulumi.runtime import rpc
 
-from kluster.lib import stack_environment
+from kluster.lib import bundle, stack_environment
 from kluster.lib import workstation as lib_workstation
 from kluster.lib.state_backend import committed
 from kluster.lib.state_backend import settings as appliance_settings
@@ -251,6 +253,7 @@ B2_FRESHNESS_DUMPS_ROW = 'b2-freshness-dumps'
 B2_STATE_BACKEND_MANAGEMENT_ROW = f'b2-{conventions.STATE_BACKEND}-management'
 STATE_BACKEND_SERVER_ROW = f'{conventions.STATE_BACKEND}-server'
 STATE_BACKEND_HOST_KEY_ROW = f'{conventions.STATE_BACKEND}-host-key'
+STATE_BACKEND_UPKEEP_ROW = f'{conventions.STATE_BACKEND}-upkeep'
 #: The escrowed row whose value the cluster consumes, sealed from the escrow
 #: by the two functions named after it (`authelia_storage_key_import`,
 #: `authelia_storage_key_seal`). Its name is its escrow label's
@@ -1002,6 +1005,57 @@ def state_backend_server(
     )
     log.info('the box serves it from the replacement that carries it')
     return server
+
+
+def upkeep_bundle(authority: pki.Authority, *, address: str) -> dict[str, str]:
+    """A fresh client bundle for the role `upkeep` at `address`, by the file each part is in a bundle directory.
+
+    The parts `appliance.write_client_bundle` writes for a workstation's
+    bundle, under `kluster.lib.bundle`'s file names, each as that function
+    writes it: the URL with its newline, and each PEM whole. A directory
+    holding them is a bundle `bundle.read` and `bundle.ssl_env` read. Every
+    call issues a new key (`appliance.client_bundle`).
+    """
+    issued = appliance.client_bundle(authority, name=appliance_settings.UPKEEP_ROLE, address=address)
+    return {
+        bundle.URL_FILE: f'{issued.url()}\n',
+        bundle.CA_FILE: issued.ca_cert.decode(),
+        bundle.CERT_FILE: issued.cert.decode(),
+        bundle.KEY_FILE: issued.key.decode(),
+    }
+
+
+def state_backend_upkeep(open_vault: Callable[[], escrow.Vault], *, sealer: sealing.Sealer) -> dt.datetime:
+    """Issue a fresh `upkeep` client bundle from the escrowed CA and seal it into `k8s-base`. Returns its leaf's expiry.
+
+    For the address the box is reached at (`settings.ADDRESS`), which the
+    bundle's connection string names. Its consumer is the state table's
+    daily upkeep in the cluster, so the delivery is a seal, strict, for the
+    Secret the census row names (`conventions.sealed.STATE_UPKEEP_BUNDLE`),
+    whose data keys are the bundle's file names; the seal refuses a part the
+    row does not carry.
+
+    No other slot holds the leaf, so a fresh seal is the rotation. Nothing is
+    retired: the box authenticates the CA rather than a leaf, so the leaf
+    sealed before stays valid until it expires. The escrow is opened by
+    `open_vault`, which reads the kit, only once the declaring stack is held
+    to exist; the cluster's certificate was fetched in building `sealer`.
+    So a refusal of either costs no kit prompt.
+    """
+    value = conventions.sealed.STATE_UPKEEP_BUNDLE
+    _ = sealer.stack(value)
+    log.info('recovering the state-backend CA from the escrow')
+    authority = pki.Authority.from_pem(open_vault().recover(escrow.CA))
+    parts = upkeep_bundle(authority, address=appliance_settings.ADDRESS)
+    sealer.deliver(value, parts)
+    expires = pki.not_valid_after(parts[bundle.CERT_FILE].encode())
+    log.info(
+        "the state table's upkeep reads as `%s` from the apply that hands it the sealed %s; its leaf is valid until %s",
+        appliance_settings.UPKEEP_ROLE,
+        value.name,
+        expires.date().isoformat(),
+    )
+    return expires
 
 
 def committed_target(path: Path) -> Path:

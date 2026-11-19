@@ -44,6 +44,7 @@ from kluster.conventions.cluster import (
     CERT_MANAGER_NAMESPACE,
     ETCD_BACKUP_NAMESPACE,
     MONITORING_NAMESPACE,
+    STATE_UPKEEP_NAMESPACE,
     WRITER_KEY_FIELDS,
 )
 from kluster.conventions.identity import STACK_NAMES
@@ -58,6 +59,7 @@ __all__ = (
     'ETCD_WRITER_KEY',
     'NAMESPACE_WRITER_KEYS',
     'OCI_METRICS',
+    'STATE_UPKEEP_BUNDLE',
     'VALUES',
     'WRITER_KEYS_BY_SCOPE',
     'WRITER_KEY_STACKS',
@@ -178,6 +180,22 @@ OCI_METRICS = SealedValue(
     stack=STACK_NAMES.k8s_base,
 )
 
+#: The client bundle the state table's daily upkeep reaches the state backend
+#: with: a client certificate for the role `upkeep`, its key, the CA's
+#: certificate and the connection string (credentials.md §3). Its data keys
+#: are the file names of a client bundle directory
+#: (`kluster.lib.bundle`), so the pod mounts the Secret as one. `conventions`
+#: sits below that module and cannot import it, so the names are spelled
+#: here; the seal keys the bundle's parts by that module's names, and refuses
+#: a part this row does not carry (`credentials derived state-backend-upkeep
+#: seal`).
+STATE_UPKEEP_BUNDLE = SealedValue(
+    name='state-backend-upkeep',
+    namespace=STATE_UPKEEP_NAMESPACE,
+    keys=('backend-url', 'ca.crt', 'client.crt', 'client.key'),
+    stack=STACK_NAMES.k8s_base,
+)
+
 #: The backup bucket's `etcd` writer key, which the hourly etcd snapshot
 #: uploads with (`components.backup.etcd`): `physical` mints it with the bucket,
 #: as the scope `ETCD_SCOPE` (`components.backup.etcd_scope`), and `credentials
@@ -288,6 +306,7 @@ VALUES: Mapping[str, SealedValue] = MappingProxyType(
             BGP_PASSWORD,
             ALERT_WEBHOOK,
             OCI_METRICS,
+            STATE_UPKEEP_BUNDLE,
             ETCD_WRITER_KEY,
             DKIM_EXIM,
             AUTHELIA_STORAGE_KEY,

@@ -368,6 +368,9 @@ INIT_FILE = '/etc/kluster/initdb/00-roles.sql'
 DUMP_ENV_FILE = '/etc/kluster/state-dump.env'
 POSTGRES_UNIT = 'pgstate.service'
 CLIENT_ROLES = {settings.CI_ROLE, settings.OPERATOR_ROLE}
+#: Every role a client certificate can name: the client roles, and the role
+#: the state table's upkeep connects as.
+CERTIFICATE_ROLES = {*CLIENT_ROLES, settings.UPKEEP_ROLE}
 
 
 def _postgres_env(ignition: str) -> dict[str, str]:
@@ -398,18 +401,18 @@ def test_no_role_a_certificate_names_is_the_superuser(ignition: str) -> None:
     client role there would put every CI job's certificate one `COPY ... TO
     PROGRAM` away from a shell beside the server's key. The two `hba` files
     are the other half. From the network only the pooler's admits anyone,
-    and only the two client roles, by certificate, into the state's entries
-    alone -- so a certificate the CA signs for any other name is worth
-    nothing here. Postgres's admits on local sockets alone: the superuser,
-    and the client roles into the state's database.
+    and only the roles a certificate can name, by certificate, into the
+    state's entries alone -- so a certificate the CA signs for any other name
+    is worth nothing here. Postgres's admits on local sockets alone: the
+    superuser, and those roles into the state's database.
     """
     superuser = _postgres_env(ignition)['POSTGRES_USER']
-    assert superuser not in CLIENT_ROLES
+    assert superuser not in CERTIFICATE_ROLES
 
     rules = [line.split() for line in _delivered(ignition, HBA_FILE).splitlines() if line.strip()]
     assert {rule[0] for rule in rules} == {'local'}
     assert sorted((rule[1], rule[2]) for rule in rules) == sorted(
-        [('all', superuser), (settings.DATABASE, ','.join(sorted(CLIENT_ROLES)))]
+        [('all', superuser), (settings.DATABASE, ','.join(sorted(CERTIFICATE_ROLES)))]
     )
     pooler = [line.split() for line in _delivered(ignition, POOLER_HBA_FILE).splitlines() if line.strip()]
     remote = [rule for rule in pooler if rule[0] != 'local']
@@ -417,7 +420,7 @@ def test_no_role_a_certificate_names_is_the_superuser(ignition: str) -> None:
     for rule in remote:
         assert rule[0] == 'hostssl', rule
         assert rule[1] in {settings.DATABASE, settings.SESSION_DATABASE}, rule
-        assert set(rule[2].split(',')) <= CLIENT_ROLES, rule
+        assert set(rule[2].split(',')) <= CERTIFICATE_ROLES, rule
         assert rule[4] == 'cert', rule
 
     # The dump reaches Postgres over the local socket, as the one role
@@ -433,10 +436,12 @@ def test_the_client_roles_hold_the_state_and_nothing_more(ignition: str) -> None
     INDEX IF NOT EXISTS` every time it opens, which Postgres answers only for
     the table's owner. Every session acting as the owner is what makes the
     table the backend creates, and whatever a restore loads, the owner's
-    whichever client got there first. The grants are the rest of what the
-    backend needs -- connecting, and creating in the schema its table lives
-    in -- and they are held to that set, so a grant added later is a change
-    this case names.
+    whichever client got there first. The owner's grants are the rest of what
+    the backend needs -- connecting, and creating in the schema its table
+    lives in -- and every grant but `upkeep`'s is held to that set, so a
+    grant added later to the owner or to a client role is a change this case
+    names. What `upkeep` holds is held by what it can and cannot do on a box
+    (`tests/test_state_roles.py`).
     """
     statements = _statements(_delivered(ignition, INIT_FILE))
     owners: set[str] = set()
@@ -451,7 +456,11 @@ def test_the_client_roles_hold_the_state_and_nothing_more(ignition: str) -> None
         next(statement for statement in statements if statement.startswith(f'CREATE ROLE {owner} ')).split()
     )
     assert not [statement for statement in statements if 'SUPERUSER' in statement.replace('NOSUPERUSER', '')]
-    assert {statement for statement in statements if statement.startswith('GRANT ')} == {
+    assert {
+        statement
+        for statement in statements
+        if statement.startswith('GRANT ') and not statement.endswith(f' TO {settings.UPKEEP_ROLE}')
+    } == {
         f'GRANT CONNECT ON DATABASE {settings.DATABASE} TO {owner}',
         f'GRANT USAGE, CREATE ON SCHEMA public TO {owner}',
     }

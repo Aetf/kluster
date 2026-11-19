@@ -208,6 +208,7 @@ _ORDER = """when to run what:
        credentials derived alert-webhook record
        credentials derived b2-writer seal --only writer-etcd
        credentials derived b2-writer seal --only writer-vm-monitoring
+       credentials derived state-backend-upkeep seal
          Every value a stack program reads before the first wave, which is
          every value k8s-base reads, once physical has brought the cluster up
          and k8s-base runs the sealed-secrets controller. Each is sealed with
@@ -219,11 +220,13 @@ _ORDER = """when to run what:
          physical's compartment, minted from the OCI seed; the BGP session
          password stage 8 recorded, read back out of physical's config;
          alertmanager's own Home Assistant webhook, made by the operator in
-         Home Assistant; and the backup bucket's keys whose readers k8s-base
+         Home Assistant; the backup bucket's keys whose readers k8s-base
          declares, the one the hourly etcd snapshot uploads with and the
          monitoring namespace's, which the metrics stores' backups upload
          with and their restores read, each minted by physical's apply and
-         read out of physical's state. Commit the stack file; the next
+         read out of physical's state; and the client bundle the state
+         table's daily upkeep reaches the state backend with, as the role
+         upkeep, issued from the escrowed CA. Commit the stack file; the next
          k8s-base apply hands each to what reads it. A value k8s-base gains
          after this stage has run is sealed by its own command ahead of its
          reader's merge. Re-running either mint rotates what it minted; a
@@ -1291,6 +1294,36 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_bundle_dir(appliance_host_key_generate)
 
+    # The state table's daily upkeep runs in the cluster, so its client
+    # bundle is sealed to the cluster rather than written into a slot of its
+    # own; it is issued from the escrowed CA as the server's certificate is.
+    appliance_upkeep = rows.add_parser(
+        derived.STATE_BACKEND_UPKEEP_ROW,
+        help="the client bundle the state table's daily upkeep reaches the state backend with, sealed to the cluster",
+        description=(
+            "A client certificate for the role upkeep, its key, the CA's certificate and the connection string "
+            "for the appliance's address: what the cluster's daily upkeep of the state table connects with. The "
+            'role reads and deletes rows of the state table and can do nothing more to it. Its one consumer is in the '
+            "cluster, so it is sealed to the cluster's certificate rather than written into a slot."
+        ),
+    )
+    appliance_upkeep_verbs = appliance_upkeep.add_subparsers(dest='action', required=True, metavar='<verb>')
+    appliance_upkeep_seal = appliance_upkeep_verbs.add_parser(
+        'seal',
+        help="issue a fresh bundle from the escrowed CA and seal it into the k8s-base stack's config",
+        description=(
+            "Fetch the sealing certificate from the cluster's sealed-secrets controller, with the kubeconfig in "
+            "the physical stack's state; recover the CA with the kit and issue a fresh upkeep certificate and "
+            "key for the appliance's address; seal each part of the bundle with kubeseal for the Secret the "
+            "upkeep mounts, bound to that Secret's name and namespace, under the name the part has in a bundle "
+            'directory; and write the ciphertext in the clear into the config of the stack that declares the '
+            'upkeep, reading it back. The cluster and the stack refuse before the kit is opened. The stack file '
+            'is then committed. Re-running this is the rotation; the leaf sealed before stays valid until it '
+            'expires.'
+        ),
+    )
+    _add_bundle_dir(appliance_upkeep_seal)
+
     # The drill's age key, drawn here and escrowed nowhere, as the host key
     # above is: its private half lands in the ops repository's Environment
     # through the GitHub sink, its public half in a committed file the
@@ -2126,6 +2159,14 @@ def main(argv: list[str] | None = None) -> int:
                 _ = derived.state_backend_server(
                     escrow.Vault.open(store, registry),
                     stack=_stack(args, store, derived.STATE_BACKEND_STACK, registry),
+                )
+            # Sealed rather than filled: the certificate is fetched first, and
+            # the escrow is opened -- the kit's prompt -- only once the seal
+            # has found `k8s-base`, so a cluster that cannot be reached or a
+            # stack that is not there refuses the run before the kit is read.
+            case ('derived', derived.STATE_BACKEND_UPKEEP_ROW, 'seal'):
+                _ = derived.state_backend_upkeep(
+                    lambda: escrow.Vault.open(store, registry), sealer=_sealer(_opener(args, store, registry))
                 )
             case ('derived', derived.STATE_BACKEND_HOST_KEY_ROW, 'generate'):
                 target = derived.committed_target(derived.HOST_KEY_FILE)

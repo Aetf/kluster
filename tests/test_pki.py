@@ -1,4 +1,4 @@
-"""The state-backend PKI: one escrowed CA, three leaves it can always re-issue.
+"""The state-backend PKI: one escrowed CA, and leaves it can always re-issue.
 
 The properties worth holding are the ones a silent break would hide — that a
 CA recovered from its PEM is the same CA, that a leaf gets a *fresh* key every
