@@ -1,11 +1,29 @@
 # RFC 007: The `k8s-base` and `apps` Stacks
 
-*   **Status:** Accepted, 2026-10-01. The operator approved the design
-    after two review rounds whose answers are written into the text: the
-    chart pins and sealed values in stack configuration, local-path
-    declared natively, the recommended Cilium installation on Talos, the
-    Gateway's certificate renewal over SDS, and §15.1 ruled (a). §15.3
-    records the two decisions left to later changes.
+*   **Status:** Implemented, 2026-11-19. Every slice of §14 is merged,
+    and the bring-up's gate read the built result
+    ([Aetf/kluster-ops#774](https://github.com/Aetf/kluster-ops/issues/774)),
+    with etcd's slow-sync tripwire accepted as a known risk that
+    [Aetf/kluster-ops#785](https://github.com/Aetf/kluster-ops/issues/785)
+    carries. The text below is kept as the accepted proposal rather than
+    as a description of the system. What the system *is* lives in the
+    design documents: the `k8s-base` stack, its install order, its
+    sealed values and its alert route to Home Assistant in
+    [declarative/cluster-infra.md](../declarative/cluster-infra.md) §1,
+    Cilium and the Gateway in §2 of the same document, the `apps` stack's
+    component contract in
+    [declarative/workloads.md](../declarative/workloads.md), local-path,
+    the node volumes and the backups in
+    [cluster/storage.md](../cluster/storage.md), the sealed-value rules
+    in [credentials.md](../credentials.md), and the playbooks for the
+    metrics stores, the etcd snapshots and the control planes in
+    [operations.md](../operations.md) §6–§8. Accepted 2026-10-01: the
+    operator approved the design after two review rounds whose answers
+    are written into the text: the chart pins and sealed values in stack
+    configuration, local-path declared natively, the recommended Cilium
+    installation on Talos, the Gateway's certificate renewal over SDS,
+    and §15.1 ruled (a). §15.3 records the two decisions left to later
+    changes.
 *   **Created:** 2026-09-28
 *   **Updated:** 2026-10-02 — §3.4, as slice 4 built it: a chart pin
     carries its manifest's digest wherever the publisher's OCI registry
