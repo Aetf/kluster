@@ -131,6 +131,7 @@ class Machine:
     session_database: str = _digested()
     ci_role: str = _digested()
     operator_role: str = _digested()
+    upkeep_role: str = _digested()
     #: The CA's certificate; its private half stays in the escrow.
     ca_cert: str = _digested()
     #: The server's certificate, for the reserved address. Rotating it, and the
@@ -215,6 +216,7 @@ def machine(
         database=settings.DATABASE,
         ci_role=settings.CI_ROLE,
         operator_role=settings.OPERATOR_ROLE,
+        upkeep_role=settings.UPKEEP_ROLE,
         ca_cert=ca_cert,
         server_cert=server_cert,
         server_key=server_key,

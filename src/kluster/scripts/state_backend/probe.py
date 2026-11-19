@@ -209,9 +209,11 @@ def certificate(
 ) -> Verdict:
     """The server-leaf certificate the box serves: valid, not about to expire, and naming the box.
 
-    The leaf and only it: the CA is not what a handshake proves, and the two
-    client certificates are held by their consumers, whose first `pulumi`
-    command is their expiry's report (state-backend.md §6). Credential-free,
+    The leaf and only it: the CA is not what a handshake proves, and each
+    client certificate is held by its consumer, whose first use after the
+    certificate expires is its report: the first `pulumi` command for `ci`
+    and `operator`, and the next run of the state table's daily upkeep for
+    `upkeep` (state-backend.md §6). Credential-free,
     because the box sends its certificate before anything authenticates and
     the handshake completes without a client certificate: what needs one is
     the connection after it.

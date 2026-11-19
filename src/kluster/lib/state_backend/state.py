@@ -398,6 +398,15 @@ def pg_restore(target: Connection, archive: Path) -> None:
     box the dump came from. On an archive from a box whose client roles were
     superusers that is `ci` or `operator` itself, which the connecting role
     may not become, and the transaction aborts on it.
+
+    `--no-privileges` for the same reason: the privileges on what this
+    creates are the box's to decide, not the archive's. The box's own
+    initialization grants the owning role what the backend needs, and its
+    default privilege grants `upkeep` the table this creates
+    (physical/state-backend.md §2), so nothing a restore needs comes from the
+    archive's grants. Replayed, they would name every role the box the dump
+    came from granted anything, and a role the target box does not have
+    aborts the transaction.
     """
     log.info(
         'restoring into %s — this writes the whole archive in one transaction',
@@ -411,6 +420,7 @@ def pg_restore(target: Connection, archive: Path) -> None:
             '--clean',
             '--if-exists',
             '--no-owner',
+            '--no-privileges',
             '--no-password',
             f'--dbname={target.form(bundle.Purpose.DUMP)}',
             str(archive),

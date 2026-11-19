@@ -188,7 +188,11 @@ reaches is the pooler's TLS and startup handling, at a pinned image that
 moves to its tag's newest build on the first of the month, as Postgres's
 does, and to a new release when one is offered (state-backend.md §2)
 (*amended 2026-11-17*, kluster-ops#820). Through the pooler, Postgres is reached
-only as a client role the pooler has authenticated; the superuser's `trust`
+only as a role the pooler has authenticated by certificate: a client role, or
+`upkeep`, which reads and deletes rows of the state table, can lock the table as
+`DELETE` allows, creates nothing, and reaches the transaction entry alone
+(state-backend.md §2)
+(*amended 2026-11-18*, kluster-ops#784); the superuser's `trust`
 line on the server's Unix sockets is reachable from the pooler's container
 too, which already holds the server key and acts as both client roles, so it
 adds no access to the state (threat-model.md §4, clause 2, accepted)

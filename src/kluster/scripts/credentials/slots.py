@@ -154,6 +154,11 @@ K8S_BASE_STACK = conventions.STACK_NAMES.k8s_base
 APPS_STACK = conventions.STACK_NAMES.apps
 STATE_BACKEND_STACK = derived.STATE_BACKEND_STACK
 
+#: The register's one row for every certificate the state-backend CA issues,
+#: which two rows of the map implement: the client bundle CI holds, and the
+#: `upkeep` bundle sealed to the cluster.
+CERTIFICATES = 'State-backend certificates (server, `ci`, `operator`, `upkeep`)'
+
 #: Where the `k8s-base` and `apps` programs read the cluster-admin kubeconfig,
 #: and therefore the key `sync` copies it under. Bare, in this project's
 #: namespace, for the reason the zones token's key is (`derived.API_TOKEN_KEY`).
@@ -1202,7 +1207,7 @@ ROWS: dict[str, Row] = {
         targets=(EscrowCopy(escrow.CA), OnBox('the certificate every bundle carries')),
     ),
     'state-backend-certificates': Row(
-        register='State-backend certificates (server, `ci`, `operator`)',
+        register=CERTIFICATES,
         source=Issued(appliance_settings.CI_ROLE),
         # Every Environment, for the same reason the passphrase reaches every
         # Environment: each one runs a `pulumi` command, and a `pulumi` command
@@ -1223,6 +1228,14 @@ ROWS: dict[str, Row] = {
         # delivery this map records (`PulumiConfig`).
         source=Minted(f'credentials derived {derived.STATE_BACKEND_SERVER_ROW} issue'),
         targets=(PulumiConfig(STATE_BACKEND_STACK, derived.SERVER_KEY_KEY),),
+    ),
+    derived.STATE_BACKEND_UPKEEP_ROW: Row(
+        register=CERTIFICATES,
+        # The `upkeep` leaf, issued and sealed in one run into the stack that
+        # declares the state table's daily upkeep, its one consumer, in the
+        # cluster. No other slot holds it, so a fresh seal is the rotation.
+        source=Minted(f'credentials derived {derived.STATE_BACKEND_UPKEEP_ROW} seal'),
+        targets=(SealedSecret(conventions.sealed.STATE_UPKEEP_BUNDLE),),
     ),
     derived.STATE_BACKEND_HOST_KEY_ROW: Row(
         register='State-backend SSH host key',

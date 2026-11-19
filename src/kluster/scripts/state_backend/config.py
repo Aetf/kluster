@@ -255,7 +255,7 @@ def machine(
 
 
 def client_bundle(authority: pki.Authority, *, name: str, address: str) -> ClientBundle:
-    """The `ci` or `operator` credential, and the string for reaching the box with it.
+    """The credential of the role `name`, one of `pki.CLIENT_NAMES`, and the string for reaching the box with it.
 
     Every call issues a fresh key: a client certificate is re-issuable from
     the CA and escrowed nowhere, so writing a bundle is minting one rather

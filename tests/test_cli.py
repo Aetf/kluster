@@ -25,6 +25,7 @@ names anyone has to keep.
 
 from __future__ import annotations
 
+import datetime as dt
 import inspect
 import io
 import types
@@ -126,6 +127,10 @@ def expected(path: list[str]) -> str | None:
         case ['derived', cli.derived.B2_WRITER_ROW, 'seal']:
             # The writer keys `physical` minted, sealed out of its state.
             return 'derived.b2_writer_seal'
+        case ['derived', cli.derived.STATE_BACKEND_UPKEEP_ROW as row, 'seal']:
+            # A client bundle issued under the escrowed CA and sealed in the
+            # same run, by its own function under the mint rows' convention.
+            return f'derived.{row}'.replace('-', '_')
         case ['derived', cli.derived.AUTHELIA_STORAGE_KEY_ROW as row, 'import' | 'seal' as verb]:
             # The escrowed row the cluster consumes: escrowed, then sealed from
             # the escrow, by a function of its own per verb in `derived.py`,
@@ -279,6 +284,7 @@ class Dispatch:
             (cli.derived, 'b2_freshness_dumps', 'key-id'),
             (cli.derived, 'b2_state_backend_management', 'key-id'),
             (cli.derived, 'state_backend_server', None),
+            (cli.derived, 'state_backend_upkeep', dt.datetime(2029, 11, 18, tzinfo=dt.UTC)),
             (cli.derived, 'state_backend_host_key', 'ssh-ed25519 AAAA'),
             (cli.derived, 'backup_age_recipient', 'age1recipient'),
             (cli.derived, 'b2_writer_seal', []),

@@ -42,7 +42,7 @@ from cloudflare_api import ACCOUNT_ID, FakeApi, console_seed
 from credentials_command_tree import named_leaves
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.hazmat.primitives.asymmetric import ec, rsa
 from cryptography.x509.oid import NameOID
 from fake_kubeseal import sealed_as_marked
 from fake_pulumi import RecordedPulumi, Unanswering
@@ -55,8 +55,9 @@ from scratch_projects import cli_directories, scrubbed
 
 from kluster import conventions
 from kluster.conventions.backup import BACKED_NAMESPACES, ETCD_SCOPE, writer_scope
-from kluster.lib import pulumi_cli
+from kluster.lib import bundle, pulumi_cli
 from kluster.lib.k8s import rendered_template
+from kluster.lib.state_backend import settings
 from kluster.scripts.credentials import (
     cli,
     cloudflare,
@@ -65,6 +66,7 @@ from kluster.scripts.credentials import (
     escrow,
     masters,
     oci_iam,
+    pki,
     pulumi_config,
     sealing,
     workstation,
@@ -1672,3 +1674,69 @@ def test_a_value_a_stack_file_holds_under_a_census_rows_name_carries_that_rows_k
             row = conventions.sealed.VALUES.get(name)
             if row is not None and row.stack == stack:
                 assert sorted(data) == sorted(row.keys), f'{stack}: {name}'
+
+
+# -- the state table's upkeep bundle --------------------------------------------
+
+UPKEEP_BUNDLE = conventions.sealed.STATE_UPKEEP_BUNDLE
+
+
+def _public(key: object) -> bytes:
+    """A public key as DER SubjectPublicKeyInfo, which two keys compare by."""
+    assert isinstance(key, ec.EllipticCurvePublicKey), type(key)
+    return key.public_bytes(serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo)
+
+
+def test_the_upkeep_seal_writes_a_bundle_of_upkeep_at_the_rows_paths(
+    stacks: Stacks, sealer: sealing.Sealer, kubeseal: str, key_pair: KeyPair, vault: escrow.Vault, tmp_path: Path
+) -> None:
+    """Every part lands at the row's path in `k8s-base`, and the parts open as a client bundle for `upkeep`.
+
+    Opened as the controller opens the row's SealedSecret and written under
+    each data key into a directory, which is how the pod mounts it: the
+    directory reads as a bundle naming `upkeep` at the box's address, its
+    certificate names `upkeep` and is the escrowed CA's, and its key is the
+    certificate's. That such a bundle logs in as `upkeep` on a box is
+    `tests/test_state_roles.py`'s.
+    """
+    _ = escrow.generate(vault, escrow.CA)
+    authority = pki.Authority.from_pem(vault.recover(escrow.CA))
+
+    expires = derived.state_backend_upkeep(lambda: vault, sealer=sealer)
+
+    k8s_base = stacks.runner(K8S_BASE)
+    assert set(k8s_base.plain) == {UPKEEP_BUNDLE.path(key) for key in UPKEEP_BUNDLE.keys}
+    assert not k8s_base.config
+    directory = tmp_path / 'upkeep'
+    directory.mkdir()
+    for name, part in unseal(kubeseal, key_pair, UPKEEP_BUNDLE, written(stacks, UPKEEP_BUNDLE)).items():
+        _ = (directory / name).write_text(part)
+    assert bundle.read(directory, bundle.Purpose.QUERY) == (
+        f'postgres://{settings.UPKEEP_ROLE}@{settings.ADDRESS}:{settings.PORT}/{settings.DATABASE}?sslmode=verify-full'
+    )
+    certificate = x509.load_pem_x509_certificate(Path(bundle.ssl_env(directory)[bundle.CERT_ENV]).read_bytes())
+    ca = x509.load_pem_x509_certificate(Path(bundle.ssl_env(directory)[bundle.CA_ENV]).read_bytes())
+    key = serialization.load_pem_private_key(Path(bundle.ssl_env(directory)[bundle.KEY_ENV]).read_bytes(), None)
+    assert [name.value for name in certificate.subject.get_attributes_for_oid(NameOID.COMMON_NAME)] == [
+        settings.UPKEEP_ROLE
+    ]
+    certificate.verify_directly_issued_by(ca)
+    assert _public(ca.public_key()) == _public(
+        x509.load_pem_x509_certificate(authority.certificate().cert_pem).public_key()
+    )
+    assert _public(key.public_key()) == _public(certificate.public_key())
+    assert expires == certificate.not_valid_after_utc
+
+
+def test_the_upkeep_seal_into_a_k8s_base_that_does_not_exist_opens_no_escrow() -> None:
+    """A missing declaring stack refuses before the escrow is opened, which is the kit's prompt."""
+    absent = Stacks()
+
+    def unopened() -> escrow.Vault:
+        raise AssertionError('the escrow was opened before the seal found its stack')
+
+    sealer = sealing.Sealer(certificate='', open_stack=absent.open, run=sealed_as_marked)
+
+    with pytest.raises(pulumi_config.StackMissing):
+        _ = derived.state_backend_upkeep(unopened, sealer=sealer)
+    assert absent.runner(K8S_BASE).plain == {}

@@ -808,7 +808,9 @@ def test_postgres_admits_no_one_from_a_network(rendered: dict[str, Any]) -> None
 def test_the_pooler_admits_the_client_roles_into_the_state_by_certificate_alone(rendered: dict[str, Any]) -> None:
     """From the network, the pooler's `hba.conf` admits a client role, into the state's entries, by its certificate.
 
-    The session entry, which `pg_dump` and `pg_restore` use, admits `operator` alone.
+    The session entry, which `pg_dump` and `pg_restore` use, admits `operator`
+    alone; `upkeep`, the role the state table's daily upkeep connects as, is
+    admitted into the transaction entry alone.
     """
     (argv,) = [argv for argv in _containers(rendered).values() if _image(argv) == settings.PGBOUNCER_IMAGE]
     config = _file(rendered, _host_path(argv, '/etc/pgbouncer/pgbouncer.ini'))
@@ -816,7 +818,7 @@ def test_the_pooler_admits_the_client_roles_into_the_state_by_certificate_alone(
     network = [rule for rule in _rules(_file(rendered, _host_path(argv, hba))) if rule[0] != 'local']
 
     admitted = {
-        settings.DATABASE: {settings.CI_ROLE, settings.OPERATOR_ROLE},
+        settings.DATABASE: {settings.CI_ROLE, settings.OPERATOR_ROLE, settings.UPKEEP_ROLE},
         settings.SESSION_DATABASE: {settings.OPERATOR_ROLE},
     }
     assert {rule[1] for rule in network} == set(admitted)

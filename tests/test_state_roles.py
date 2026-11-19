@@ -37,8 +37,10 @@ superusers restores into one whose roles are not, a dump and a restore go
 through the pooler, the appliance's dump script and the operator's
 `state.verify_dump` count the stack checkpoints the pinned `pulumi` writes --
 none on a box the backend has only opened, one after `stack init` -- a
-client beyond the pooler's cap waits rather than being refused, and the
-pooler starts only once the serving Postgres answers.
+client beyond the pooler's cap waits rather than being refused, the
+pooler starts only once the serving Postgres answers, and `upkeep` reads and
+deletes rows of the state table and can do nothing more to it, on a table the backend
+created and on one a restore created again.
 
 **Skipped where the images cannot be run without fetching them.** A test that
 pulls an image needs the network. This one runs where both pinned images are
@@ -89,7 +91,7 @@ from kluster.lib import bundle, pulumi_cli, stack_environment, workstation
 from kluster.lib.bundle import CA_ENV, CERT_ENV, KEY_ENV, ssl_env
 from kluster.lib.state_backend import render, settings, state, table
 from kluster.providers import postgres_tls
-from kluster.scripts.credentials import pki, pulumi_config
+from kluster.scripts.credentials import derived, pki, pulumi_config
 from kluster.scripts.operator_stack import driver
 from kluster.scripts.state_backend import census, cli, config, probe
 
@@ -1272,8 +1274,8 @@ def test_a_certificate_naming_the_superuser_is_refused(
 ) -> None:
     """The CA's key can sign any name, so the box is what refuses this one.
 
-    `pki` issues to the two client roles alone, but that is the issuing
-    code's rule, and anyone holding the key is not bound by it; the case
+    `pki` issues to the box's certificate roles alone, but that is the
+    issuing code's rule, and anyone holding the key is not bound by it; the case
     lifts the rule to mint what such a holder could. The certificate is
     genuine -- same CA, verified the same way as a client role's -- and the
     superuser is a role that exists. What refuses it is that no line of the
@@ -2085,6 +2087,213 @@ def test_the_program_does_what_the_census_with_its_prune_and_its_ceiling_does(
     assert left == filled - set(aged)
 
 
+# -- `upkeep`: the role the state table's daily upkeep connects as -------------
+
+
+def test_upkeep_runs_the_census_the_prune_and_the_ceiling_as_itself(
+    start: Start, ignition: dict[str, Any], roots: config.Roots, clients: Path, tmp_path: Path
+) -> None:
+    """What the daily upkeep runs, as `upkeep`, over a table the backend created at its first open.
+
+    The table is the owner's, created by `pulumi` acting as it, so what
+    `upkeep` reads and deletes there it holds by the owner's default
+    privileges, and as itself: it is no member of the owner.
+    """
+    box = _appliance(start, ignition)
+    operator = _bundle(roots, box, clients, settings.OPERATOR_ROLE)
+    project = tmp_path / 'project'
+    _stack_init(operator, project, STACK)
+    copy = f'{settings.DATABASE}/.pulumi/history/{project.name}/{STACK}/{STACK}-1790591454000000001.checkpoint.json'
+    _put(box, {copy: CEILING // 2})
+    _age(box, {copy})
+    upkeep = _bundle(roots, box, clients, settings.UPKEEP_ROLE)
+
+    assert _psql(clients, upkeep, 'SELECT current_user') == settings.UPKEEP_ROLE
+    printed = io.StringIO()
+    assert (
+        census.run(upkeep, prune=False, expire=True, yes=True, ceiling=True, out=printed, age=EXPIRY, bound=CEILING)
+        == 0
+    )
+    assert f'deleted  {copy}' in printed.getvalue()
+    assert 'largest value: ' in printed.getvalue()
+    assert copy not in _keys(box)
+    assert _names(state.stacks(operator)) == [STACK]
+
+
+#: What `upkeep` may not do to the state, each with what the server answers.
+#: Each runs in its own session, so one refusal cannot stand in for the next.
+UPKEEP_REFUSED = {
+    'insert': (
+        f"INSERT INTO {BACKEND_TABLE} (key, data) VALUES ('upkeep-wrote', '{{}}')",
+        'permission denied for table',
+    ),
+    'update': (f'UPDATE {BACKEND_TABLE} SET updated_at = now()', 'permission denied for table'),
+    'truncate': (f'TRUNCATE {BACKEND_TABLE}', 'permission denied for table'),
+    'drop': (f'DROP TABLE {BACKEND_TABLE}', 'must be owner of table'),
+    'create': ('CREATE TABLE upkeep_wrote (x int)', 'permission denied for schema public'),
+    # Every function that creates a large object, which no table's grant
+    # covers.
+    'lo_creat': ('SELECT lo_creat(-1)', 'permission denied for function lo_creat'),
+    'lo_create': ('SELECT lo_create(0)', 'permission denied for function lo_create'),
+    'lo_from_bytea': ("SELECT lo_from_bytea(0, 'x')", 'permission denied for function lo_from_bytea'),
+}
+
+
+def test_upkeep_is_refused_every_write_but_a_delete_and_the_session_entry(
+    start: Start, ignition: dict[str, Any], roots: config.Roots, clients: Path, tmp_path: Path
+) -> None:
+    """An insert, an update, a truncate, a drop, a create and a large object are each refused, and so is the session entry.
+
+    The control is the same role reading every row of the same table and
+    deleting one, so each refusal is the role's grant and not a connection
+    that never opened.
+    """
+    box = _appliance(start, ignition)
+    _stack_init(_bundle(roots, box, clients, settings.OPERATOR_ROLE), tmp_path / 'project', STACK)
+    upkeep = _bundle(roots, box, clients, settings.UPKEEP_ROLE)
+    keys = _keys(box)
+
+    for what, (sql, answer) in UPKEEP_REFUSED.items():
+        with pytest.raises(state.StateError, match=re.escape(answer)):
+            _ = _psql(clients, upkeep, sql)
+        assert _keys(box) == keys, what
+    assert box.local("SELECT to_regclass('upkeep_wrote') IS NULL") == 't'
+    assert box.local('SELECT count(*) FROM pg_largeobject_metadata') == '0'
+    dumping = state.Connection(url=upkeep.form(bundle.Purpose.DUMP), env=upkeep.env)
+    with pytest.raises(state.StateError, match=re.escape('no authentication method is found')):
+        _ = _psql(clients, dumping, 'SELECT 1')
+
+    _upkeep_reads_and_deletes(box, roots, clients)
+
+
+def _upkeep_reads_and_deletes(box: Box, roots: config.Roots, clients: Path) -> None:
+    """`upkeep` reads every row of the box's table, and deletes a row the superuser wrote for it."""
+    upkeep = _bundle(roots, box, clients, settings.UPKEEP_ROLE)
+    doomed = f'{settings.DATABASE}/.pulumi/history/upkeep/doomed/doomed-1790591454000000001.checkpoint.json'
+    _put(box, {doomed: 15})
+    keys = _keys(box)
+
+    assert set(_psql(clients, upkeep, f'SELECT key FROM {BACKEND_TABLE}').splitlines()) == keys
+    deleted = f"WITH gone AS (DELETE FROM {BACKEND_TABLE} WHERE key = '{doomed}' RETURNING key) SELECT key FROM gone"
+    assert _psql(clients, upkeep, deleted) == doomed
+    assert _keys(box) == keys - {doomed}
+
+
+def _archive_sql(archive: Path) -> str:
+    """The SQL a restore of `archive` runs, as `pg_restore` prints it."""
+    return process_sessions.run(
+        [state.PG_RESTORE, '--file=-', str(archive)], text=True, timeout=COMMAND_TIMEOUT, check=True
+    ).stdout
+
+
+def test_a_restore_leaves_upkeep_its_privileges_on_the_table_it_creates(
+    start: Start, ignition: dict[str, Any], roots: config.Roots, clients: Path, tmp_path: Path
+) -> None:
+    """The table a restore creates again carries `upkeep`'s grant, from the restoring box's default privilege.
+
+    The restore's `--clean` drops the table and the restore, acting as the
+    owner, creates it again, which is what the default privilege applies to.
+    Twice: an archive from a box with no `upkeep`, the shape of every archive
+    of a box built before the role, which names no grant to it; and the dump
+    of the box that took it, which does name one, and whose grants the
+    restore does not replay.
+    """
+    before = start(_superusers(), [], settings.CI_ROLE)
+    written = state.Connection(
+        url=f'postgres://{settings.CI_ROLE}@{ADDRESS}:{before.port}/{settings.DATABASE}?sslmode=disable', env={}
+    )
+    _stack_init(written, tmp_path / 'before', STACK)
+    archive = clients / 'without-upkeep.dump'
+    _ = archive.write_bytes(_podman('exec', before.name, 'pg_dump', '-Fc', '-U', settings.CI_ROLE, settings.DATABASE))
+    # The premise: the archive grants `upkeep` nothing.
+    assert settings.UPKEEP_ROLE not in _archive_sql(archive)
+
+    restored = _appliance(start, ignition)
+    operator = _bundle(roots, restored, clients, settings.OPERATOR_ROLE)
+    assert state.stacks(operator) == []
+    state.pg_restore(operator, archive)
+    _upkeep_reads_and_deletes(restored, roots, clients)
+
+    again = clients / 'with-upkeep.dump'
+    state.pg_dump(operator, again)
+    target = _appliance(start, ignition)
+    operator = _bundle(roots, target, clients, settings.OPERATOR_ROLE)
+    assert state.stacks(operator) == []
+    state.pg_restore(operator, again)
+    assert _names(state.stacks(operator)) == [STACK]
+    _upkeep_reads_and_deletes(target, roots, clients)
+
+
+#: Where the Ignition delivers the script the image's initialization runs.
+INIT_SQL = PurePosixPath('/etc/kluster/initdb/00-roles.sql')
+
+
+def _without_upkeep(ignition: dict[str, Any]) -> dict[str, Any]:
+    """The appliance's Ignition with every line of its init script that names `upkeep` left out: a box without the role."""
+    (script,) = [file for file in _delivered(ignition) if file.path == INIT_SQL]
+    kept = ''.join(
+        line for line in script.content.decode().splitlines(keepends=True) if settings.UPKEEP_ROLE not in line
+    )
+    built = json.loads(json.dumps(ignition))
+    (entry,) = [entry for entry in built['storage']['files'] if entry['path'] == str(INIT_SQL)]
+    entry['contents'] = {'source': f'data:,{urllib_parse.quote(kept)}'}
+    return built
+
+
+def test_a_dump_of_a_box_with_upkeep_restores_into_a_box_without_it(
+    start: Start, ignition: dict[str, Any], roots: config.Roots, clients: Path, tmp_path: Path
+) -> None:
+    """The restore takes no grant from the archive, so a role the archive names need not exist where it lands.
+
+    The archive grants `upkeep` the schema, the table and the owner's default
+    privilege, and the box it lands in has no such role: the box an earlier
+    or a reverted build renders, which a replacement restores into.
+    """
+    source = _appliance(start, ignition)
+    _stack_init(_bundle(roots, source, clients, settings.OPERATOR_ROLE), tmp_path / 'project', STACK)
+    archive = clients / 'with-upkeep.dump'
+    state.pg_dump(_bundle(roots, source, clients, settings.OPERATOR_ROLE), archive)
+    # The premise: the archive names `upkeep` in grants of each kind.
+    printed = _archive_sql(archive)
+    assert re.search(
+        rf'^GRANT SELECT,DELETE ON TABLE public\.{BACKEND_TABLE} TO {settings.UPKEEP_ROLE};$', printed, re.M
+    )
+    assert re.search(rf'^ALTER DEFAULT PRIVILEGES FOR ROLE \w+ .* TO {settings.UPKEEP_ROLE};$', printed, re.M)
+
+    target = start.appliance(_without_upkeep(ignition))
+    assert target.local(f"SELECT count(*) FROM pg_roles WHERE rolname = '{settings.UPKEEP_ROLE}'") == '0'
+    operator = _bundle(roots, target, clients, settings.OPERATOR_ROLE)
+    assert state.stacks(operator) == []
+    state.pg_restore(operator, archive)
+
+    assert _names(state.stacks(operator)) == [STACK]
+    assert _names(state.stacks(_bundle(roots, target, clients, settings.CI_ROLE))) == [STACK]
+
+
+def test_the_bundle_the_seal_issues_authenticates_as_upkeep(box: Box, roots: config.Roots, clients: Path) -> None:
+    """The parts `credentials derived state-backend-upkeep seal` seals, written as a bundle directory, log in as `upkeep`.
+
+    Each part is written under its key, the file the pod mounts it as, and
+    read back the way every client reads a bundle: the connection string by
+    `bundle.read`, and the files by `ssl_env`. That the seal writes exactly
+    these parts at the row's paths is `tests/test_sealing.py`'s.
+    """
+    parts = derived.upkeep_bundle(roots.ca, address=ADDRESS)
+    directory = clients / 'sealed-upkeep'
+    directory.mkdir(mode=0o700)
+    for name, part in parts.items():
+        path = directory / name
+        _ = path.write_text(part)
+        path.chmod(0o600)
+    url = bundle.read(directory, bundle.Purpose.QUERY)
+    assert url is not None
+    target = state.Connection(
+        url=url.replace(f'@{ADDRESS}:{settings.PORT}/', f'@{ADDRESS}:{box.port}/'), env=ssl_env(directory)
+    )
+
+    assert _psql(clients, target, 'SELECT current_user') == settings.UPKEEP_ROLE
+
+
 def _status(text: str) -> dict[str, int]:
     """The memory fields of a `/proc/<pid>/status`, in kB."""
     fields = (line.split(':', 1) for line in text.splitlines() if ':' in line)
@@ -2326,8 +2535,8 @@ def test_a_client_beyond_the_cap_waits_and_runs_once_a_transaction_commits(
 ) -> None:
     """With the cap's worth of transactions open across both roles, the next statement waits, and is not refused.
 
-    The cap is one count over both roles' pools of the transaction entry, so
-    the transactions held are of both. The next client's statement waits in
+    The cap is one count over every role's pools of the transaction entry,
+    so the transactions held are of both client roles. The next client's statement waits in
     the pooler -- its client is counted waiting, it holds no server process,
     and the server processes stay at the cap -- until a transaction commits
     and frees its server process, and then it runs. The commit is what the

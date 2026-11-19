@@ -141,6 +141,12 @@ MONITORING_NAMESPACE = 'monitoring'
 #: holds the etcd backup's own workloads and nothing else, and the grant
 #: reaches no other workload (credentials.md §1, rule 3).
 ETCD_BACKUP_NAMESPACE = 'etcd-backup'
+#: The state table's daily upkeep (physical/state-backend.md §2): the job
+#: that reads and prunes the state backend's table as the role `upkeep`,
+#: with the client bundle it reaches the box with. The namespace holds that
+#: job and what it mounts and nothing else, so no other workload can mount
+#: the bundle (credentials.md §1, rule 4).
+STATE_UPKEEP_NAMESPACE = 'state-upkeep'
 
 #: The namespaces the platform's other components run in: each component
 #: installs into its own, and the readings tell the platform's pods from a

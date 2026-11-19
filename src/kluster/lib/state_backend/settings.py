@@ -103,13 +103,22 @@ DATABASE = 'pulumi_state'
 #: (`kluster.lib.bundle.Purpose.DUMP`).
 SESSION_DATABASE = f'{DATABASE}_session'
 
-#: The client roles: the Common Names the CA issues client certificates to,
-#: and the only roles the pooler admits from the network. Neither is a
-#: superuser; both act as the role that owns the state (state-backend.md §2).
-#: That role and the superuser are named in the Butane template alone, since
-#: no client ever connects as either.
+#: The client roles: Common Names the CA issues client certificates to, and
+#: roles the pooler admits from the network. Neither is a superuser; both act
+#: as the role that owns the state (state-backend.md §2). That role and the
+#: superuser are named in the Butane template alone, since no client ever
+#: connects as either.
 CI_ROLE = 'ci'
 OPERATOR_ROLE = 'operator'
+#: The role the cluster's daily upkeep of the state table connects as: the
+#: census, the prune of expired rows and the ceiling. The CA issues client
+#: certificates to it as well, and the pooler admits it from the network into
+#: the transaction entry alone. It is no member of the owning role and acts
+#: as itself: it reads and deletes rows of the state table, and holds the
+#: lock on the table that `DELETE` carries, and nothing more
+#: (state-backend.md §2). The roles a certificate can name are the two
+#: client roles and this one.
+UPKEEP_ROLE = 'upkeep'
 #: The port clients reach the box on, where the pooler listens.
 PORT = 5432
 
