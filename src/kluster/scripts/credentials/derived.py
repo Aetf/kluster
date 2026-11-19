@@ -39,8 +39,8 @@ etcd snapshots' read-only key the same way into `k8s-base`
 storage encryption key, which is escrowed and sealed from the escrow
 (`authelia_storage_key_seal`); the client bundle the state table's daily
 upkeep reaches the state backend with, issued from the escrowed CA
-(`state_backend_upkeep`); the state dumps' freshness key, which its mint
-also pushes to the ops repository (`b2_freshness_dumps`); and the etcd
+(`state_backend_upkeep`); the state dumps' freshness key
+(`b2_freshness_dumps`); and the etcd
 restore-verify's age identity, drawn here (below).
 
 The drill age identity is drawn here rather than minted anywhere, as the
@@ -85,16 +85,11 @@ committed recipients file, which is how the box's recipients stop needing the
 kit (`backup_age_recipient`).
 
 The freshness key's row is the B2 half of that on its own, narrowed to a
-listing, and it has two consumers, each reading the dump prefix's age: the
-ops repository's probe, which takes it as a **repository** secret rather than
-from the `drill` Environment, because its job belongs to no Environment; and
-the cluster's dump-age check, which takes it sealed, as every credential the
-cluster consumes is, and which lands after the ciphertext (credentials.md §1
-rule 6). One mint delivers both, and retires the key it replaces
-only once both hold the new one (`b2_freshness_dumps`). The value's whole
-power is a listing of names. The names the ops repository's copy is
-delivered under are the probe's own (`state_backend.probe`), imported here,
-so the slot the mint fills and the variable the probe reads cannot drift.
+listing, and its one consumer is the cluster's dump-age check, which reads
+the dump prefix's age. It takes the key sealed, as every credential the
+cluster consumes is, and lands after the ciphertext (credentials.md §1 rule
+6). The mint retires the key it replaces only once the ciphertext is written
+(`b2_freshness_dumps`). The value's whole power is a listing of names.
 """
 
 from __future__ import annotations
@@ -117,7 +112,6 @@ from kluster.lib.state_backend import settings as appliance_settings
 
 from ... import conventions
 from ..state_backend import config as appliance
-from ..state_backend import probe
 from . import age, b2, cloudflare, entries, escrow, oci_iam, pki, pulumi_config, sealing
 from .github_secrets import Forge, Slot
 from .kdbx import KdbxStore
@@ -323,15 +317,6 @@ DRILL_OCI_SLOTS = (DRILL_OCI_USER_SLOT, DRILL_OCI_FINGERPRINT_SLOT, DRILL_OCI_PR
 DRILL_B2_KEY_ID_SLOT = _drill_slot('DRILL_B2_KEY_ID')
 DRILL_B2_KEY_SLOT = _drill_slot('DRILL_B2_KEY')
 DRILL_B2_SLOTS = (DRILL_B2_KEY_ID_SLOT, DRILL_B2_KEY_SLOT)
-
-#: Where the ops repository's copy of the freshness key lands: two repository
-#: secrets, no Environment, under the names its probe reads them by. The pair
-#: is one credential, as the drill's B2 pair is. The cluster's copy is sealed
-#: (`conventions.sealed.B2_FRESHNESS_DUMPS`).
-B2_FRESHNESS_DUMPS_SLOTS = (
-    Slot(repository=conventions.forge.OPS.full_name, name=probe.KEY_ID_ENV),
-    Slot(repository=conventions.forge.OPS.full_name, name=probe.KEY_ENV),
-)
 
 #: The two halves of the drill's credentials, as `--only` names them: the
 #: platform each key is minted at.
@@ -1591,26 +1576,21 @@ def _freshness_data(key: b2.AppKey) -> dict[str, str]:
     return {'AWS_ACCESS_KEY_ID': key.key_id, 'AWS_SECRET_ACCESS_KEY': key.key}
 
 
-def b2_freshness_dumps(kit: KdbxStore, forge: Forge, *, sealer: sealing.Sealer, seed_entry: str = B2_SEED_ENTRY) -> str:
-    """Mint the dump-freshness key into the ops repository's secrets and seal it for the cluster. Returns its key id.
+def b2_freshness_dumps(kit: KdbxStore, *, sealer: sealing.Sealer, seed_entry: str = B2_SEED_ENTRY) -> str:
+    """Mint the dump-freshness key and seal it into the stack that declares it. Returns its key id.
 
     `b2.mint_freshness_dumps_key` over the bucket the appliance dumps into --
     a listing of the dump prefix and nothing else, verified by listing it as
-    the new key -- delivered to both of its consumers: the two repository
-    secrets the ops repository's probe reads (`B2_FRESHNESS_DUMPS_SLOTS`),
-    each verified through the listing, and the Secret the census row names
-    (`conventions.sealed.B2_FRESHNESS_DUMPS`), sealed strict for the cluster's
-    dump-age check in the monitoring namespace and written in the clear into
-    `k8s-base`'s configuration. Re-running is the rotation of both.
+    the new key -- sealed strict for the cluster's dump-age check in the
+    monitoring namespace under the name its row in `conventions.sealed`
+    gives it (`conventions.sealed.B2_FRESHNESS_DUMPS`), and the ciphertext
+    written in the clear into `k8s-base`'s configuration. Re-running is the
+    rotation.
 
-    **The predecessor is retired only once every target holds the new key**,
-    because the mint retires every other key of its name: a delivery that
-    reached one consumer and not the other would leave that one holding a
-    retired key. So the seal is required rather than taken where a cluster
-    happens to answer, and the steps run in the order that changes least on
-    a failure: the key sealed, which writes nothing; both pushes; the
-    ciphertext written; and only then the retirement. A failure at any step
-    leaves the key both consumers held live.
+    **The predecessor is retired only once the ciphertext is written**,
+    because the mint retires every other key of its name: a seal or a write
+    that failed would otherwise leave the check holding a retired key. A
+    failure at any step leaves the key the check holds live.
 
     **Every refusal the run can know before minting fires before anything is
     minted**: a declaring stack that does not exist or that this machine has
@@ -1631,16 +1611,9 @@ def b2_freshness_dumps(kit: KdbxStore, forge: Forge, *, sealer: sealing.Sealer, 
     bucket_id = _dump_bucket(session)
     pending = b2.mint_freshness_dumps_key(session, bucket_id=bucket_id)
 
-    def deliver(key: b2.AppKey) -> None:
-        ciphertext = sealer.seal(value, _freshness_data(key))
-        for slot, half in zip(B2_FRESHNESS_DUMPS_SLOTS, (key.key_id, key.key), strict=True):
-            _push(forge, slot, half)
-        sealer.write(value, ciphertext)
-
-    delivered, _ = pending.deliver(deliver)
+    delivered, _ = pending.deliver(lambda key: sealer.deliver(value, _freshness_data(key)))
     log.info(
-        "the dump-age checks list the dump prefix as %s (%s): the ops repository's probe from now on, and the "
-        "cluster's from the apply that hands it the sealed %s",
+        "the cluster's dump-age check lists the dump prefix as %s (%s) from the apply that hands it the sealed %s",
         b2.FRESHNESS_DUMPS_NAME,
         delivered.key_id,
         value.name,

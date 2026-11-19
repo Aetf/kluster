@@ -36,14 +36,13 @@ shape nor the domain, which reads like a permissions problem.
 > `operator-stack state-backend` driver plans and applies the stack;
 > and the `state-backend` console script renders a scratch box, checks
 > the pins, writes the client bundle into its workstation slot (§3),
-> logs in for diagnosis, takes and restores dumps (§7), and probes the
-> box from outside (§6). The **drill key** of §5 has its generator
+> logs in for diagnosis, and takes and restores dumps (§7). The
+> **drill key** of §5 has its generator
 > (`credentials derived drill-age-identity generate`), and its
 > committed public half is among the recipients the box encrypts to
-> (`committed.age_recipients`). The two scheduled probes of §6 — the server certificate's
+> (`committed.age_recipients`). The two scheduled checks of §6 — the server certificate's
 > expiry, and the age of the newest dump — run hourly in the cluster,
-> each a CronJob of its own, and daily as `state-backend probe`, which the ops
-> repository's `probes.yml` runs (§6). Every key
+> each a CronJob of its own (§6). Every key
 > rotation this document describes is carried out with commands that exist and, for the age
 > identity, a pin edit (§7.4): a reissue into the stack's configuration
 > and the replacement that carries it for the server and host keys, a
@@ -274,7 +273,7 @@ oraclecloud`, x86_64), the qcow2 imports as a custom image
 -   **Every hand operation is a command.** The box is declared by the
     stack, and what the stack does not declare is a command of the
     `state-backend` console script: render a scratch box, ssh, pins,
-    bundle, dump, restore and probe. Key
+    bundle, dump, restore and census. Key
     rotation rides the `credentials derived` rows that fill the stack's
     configuration and the replacement that carries what they wrote; the
     CA and age identity rotations of §7.1 and §7.4 add the generator for
@@ -419,12 +418,12 @@ oraclecloud`, x86_64), the qcow2 imports as a custom image
     then admits a connection only by such a certificate, as the role the
     CN names (above). It does not demand a certificate in the handshake
     itself (`client_tls_sslmode = require`, not `verify-full`): a
-    handshake with no credential is how the expiry probe (§6) reads the
-    server certificate, and `verify-full` answers it with alert 116
-    after the client's side of it completes, so whether the probe's
-    `openssl s_client` exits 0 is a race and the probe would fail some
+    handshake with no credential is how the certificate check (§6) reads
+    the server certificate, and `verify-full` answers it with alert 116
+    after the client's side of it completes, so whether the check's
+    `openssl s_client` exits 0 is a race and the check would fail some
     runs. `require` admits the same connections, since `hba.conf`
-    refuses one that presented none, and keeps the probe deterministic.
+    refuses one that presented none, and keeps the check deterministic.
     Postgres runs with no network at all
     and serves the pooler on a Unix socket in a directory the two
     containers share, owned by Postgres's user, with the pooler's group
@@ -632,7 +631,7 @@ oraclecloud`, x86_64), the qcow2 imports as a custom image
         `DUMP_PERIOD`: a row that old has stood through two scheduled
         dumps, so one missed run does not leave it outside every dump, and
         it is half a period past `DUMP_MAX_AGE`, so while the dump-age
-        probe passes, the newest dump holds every row a prune takes.
+        check passes, the newest dump holds every row a prune takes.
         `HISTORY_RECORDS` is the page the reading of sources-of-truth.md
         §4 asks for, so the rule deletes no record a reader asks for, and
         the newest record is always kept.
@@ -784,9 +783,7 @@ oraclecloud`, x86_64), the qcow2 imports as a custom image
     server certificate off an `openssl s_client` handshake (no
     credentials needed) and fails once less than
     `settings.EXPIRY_ALERT_MARGIN` remains, into the unified alert
-    channel (architecture.md §4.3), and `state-backend probe` runs the
-    same check daily from the ops repository's `probes.yml` (§6). The
-    renewal margin opens earlier than the alert margin, so the check
+    channel (architecture.md §4.3). The renewal margin opens earlier than the alert margin, so the check
     fires only for an appliance whose stack nobody has run — or whose
     reports nobody acted on — in the interval between the two.
     Response: playbook §7.1.
@@ -806,7 +803,7 @@ certificate on every replacement. The address is recorded as
 `settings.ADDRESS`, beside the other pins: a site fact that follows
 from the first reservation, the way the compartment is recorded in
 `conventions`, and the one home a reader that holds no bundle — the
-probe of §6, and `state-backend ssh` — takes it from. It is public
+certificate check of §6, and `state-backend ssh` — takes it from. It is public
 already, on 5432 and 22 and in the certificate. The stack holds the
 reservation to it: the component refuses a reservation that carries any
 other address, naming both, before anything depends on it
@@ -886,8 +883,8 @@ step 8).
     rows. A refused run fails and uploads nothing, so the newest object
     stays the last dump that held state, and the failure leaves the
     login notice below. The first bring-up is no special case: until
-    the first `pulumi stack init` the nightly refuses, and the probe
-    (§6) reports an empty prefix, which is true — no state exists to
+    the first `pulumi stack init` the nightly refuses, and the dump-age
+    check (§6) reports an empty prefix, which is true — no state exists to
     back up. The script counts the checkpoints in the archive's state
     rows, read back with `pg_restore --data-only`, after listing the
     archive with `pg_restore --list`, which is the check that
@@ -941,7 +938,7 @@ step 8).
     missed is half a period overdue by the time it runs out. The
     timer's period is `settings.DUMP_PERIOD` beside its calendar
     expression, and `settings.DUMP_MAX_AGE` is the rule's answer for
-    it, which is the threshold the dump-age probe of §6 reads. The
+    it, which is the threshold the dump-age check of §6 reads. The
     daily retention classes carry the same answer in the alert rules'
     syntax, and a test holds them equal.
 -   The box reports one thing about itself, and to one audience: a
@@ -956,11 +953,11 @@ step 8).
     a timer that stopped firing, a box that is down — has no failure
     to report.
     Freshness is therefore asserted **from outside**, by the dump-age
-    probe of §6 (object-age on the prefix, which the cluster reads every
+    check of §6 (object-age on the prefix, which the cluster reads every
     hour), and the box's design is what makes that
-    probe load-bearing: a nightly that stopped in August looks exactly
+    check load-bearing: a nightly that stopped in August looks exactly
     like one that ran, until a restore reaches for it. Reading the
-    newest object's stamp is the assertion, and the probe is what
+    newest object's stamp is the assertion, and the check is what
     performs it; §7.3.1 has an operator perform it by hand.
 -   **The age identity rotates by generations; no key is assumed
     immortal.** A generation is a label with a **stored ciphertext**:
@@ -1153,26 +1150,6 @@ shell on it:
         though the reissue itself is a command and its delivery waits
         for `--force` — and the certificate check is the backstop
         behind it; for the dumps, their check is the only watcher.
--   **`state-backend probe`** runs the same two checks daily from
-    outside the cluster: the ops repository's `probes.yml` runs it from
-    a checkout of this repository at a pinned commit, alerting into the
-    unified alert channel (architecture.md §4.3), and it retires, with
-    `probes.yml`, once both checks above have reported a pass from the cluster
-    (operations.md §4). Until then a real finding is reported by both.
-    Its findings and playbooks are the ones above, though it reports
-    only the first finding of each check, and its dump check
-    reads the freshness key from the two repository secrets
-    `B2_FRESHNESS_DUMPS_KEY_ID` and `B2_FRESHNESS_DUMPS_KEY`, naming
-    them, never the id, in a refusal. One command runs both checks
-    (`--only certificate|dumps` runs one), prints each verdict with
-    what it measured as its check answers, and exits with one bit per
-    failed check — 4 for the certificate, 8 for the dumps, their sum
-    when both failed — so the workflow's log names which. 1 is a run
-    that could not check at all (an empty secret), which is a
-    different fact from a check that did and failed; 2 is what the
-    parser and `uv run` answer when the command never ran, which is
-    why no check's bit is 2. The workflow carries no threshold, no
-    prefix and no address: every number is this repository's.
 -   **The state table's daily upkeep** (§2) watches the table from the
     cluster: each run reads the largest value against the ceiling after
     its prune, and fails naming a row over it or a row its delete passed
@@ -1222,8 +1199,8 @@ fetches once at first boot from `settings.AGE_URL` and verifies against
 `settings.AGE_SHA256`; a workstation's `dump` and `restore` run the
 `age` that `mise.toml` pins, which
 `tests/test_age.py::test_local_age_matches_the_appliance_pin` holds
-equal to `settings.AGE_VERSION`; and the drill workflow's runner, like
-the probe's (§6), installs mise through `jdx/mise-action` inside its
+equal to `settings.AGE_VERSION`; and the drill workflow's runner
+installs mise through `jdx/mise-action` inside its
 checkout of this repository at a pinned commit, so its `age` is that
 same `mise.toml` pin as of that commit. Their `pg_dump` and `pg_restore`
 are `mise.toml`'s `postgres` pin, whose major
@@ -1342,8 +1319,7 @@ is the moment nobody can afford to find out later:
     Environment (§5) and the drill's OCI and B2 keys are minted beside
     it (credentials.md §3), but the workflow that would read them is not
     written (`kluster-ops#57`), so nothing runs this on a schedule and
-    no pass of it has happened. What that repository does run on a
-    schedule is `probes.yml` (§6), daily. Until a pass does run, the
+    no pass of it has happened. Until a pass does run, the
     same ground is covered by hand — §7.3.1, which
     opens the object with the kit, the `--identity-file` form being the
     workflow's.
@@ -1433,7 +1409,7 @@ failure is cheap:
     so listing the prefix and downloading the newest `.dump.age` are
     `b2_list_file_names` and `b2_download_file_by_name` under it. Record
     the object's name, size and timestamp — the same stamp the dump-age
-    probe of §6 reads, checked here by a person. Keep the file outside
+    check of §6 reads, checked here by a person. Keep the file outside
     the checkout: it is every stack's state.
 2.  **Render the scratch box.** `state-backend render --address
     127.0.0.1 > <scratch>/scratch.ign` — the command prints the
@@ -1560,7 +1536,7 @@ statements are `table` there, a module that imports nothing but the
 standard library, so it also runs as a program of its own. The stack
 that declares the appliance is `kluster.components.state_backend`,
 built by the `state-backend` stack program; and the code that renders a
-scratch box, logs in, writes bundles, probes and runs the census is
+scratch box, logs in, writes bundles and runs the census is
 `src/kluster/scripts/state_backend/`, exposed as the `state-backend`
 console script.
 
@@ -1623,7 +1599,6 @@ state-backend census --prune-superseded --yes  # and delete them
 state-backend census --prune-expired           # also list the rows the retention rule expires (§2)
 state-backend census --prune-expired --yes     # and delete them
 state-backend census --ceiling                 # read every row's value size, print the largest, and fail naming each over LARGEST_ROW_BYTES (§2); after any prune given beside it
-state-backend probe                   # the scheduled checks, run by the ops repository
 state-backend ssh                     # a diagnostic login; the box is never configured by hand
 ```
 

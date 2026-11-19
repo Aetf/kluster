@@ -2899,7 +2899,7 @@ def test_the_census_found_the_classes() -> None:
 @pytest.mark.parametrize('retention', RETENTION, ids=lambda r: r.name)
 def test_every_class_s_threshold_is_the_rule_s_answer_for_its_period(retention: backup.RetentionClass) -> None:
     # Every class, not the daily ones: the alert rules and the appliance's
-    # dump-age probe agree on stale only if no row carries a margin of its own.
+    # dump-age check agree on stale only if no row carries a margin of its own.
     assert _duration(retention.max_age) == backup.max_age(retention.period), retention.name
 
 
@@ -2907,8 +2907,9 @@ def test_every_class_s_threshold_is_the_rule_s_answer_for_its_period(retention: 
 def test_every_class_s_period_is_what_its_cron_line_says(retention: backup.RetentionClass) -> None:
     # Two spellings of one cadence: the cron line the scheduler reads and the
     # period the threshold is derived from. Held the way the appliance's
-    # timer is held to its period (`test_probe.py`), so a period cannot be
-    # chosen to make the rule produce a threshold someone had in mind.
+    # timer is held to its period (`test_dump_schedule.py`), so a period
+    # cannot be chosen to make the rule produce a threshold someone had in
+    # mind.
     shape = CRON_SHAPES.get(retention.period)
     assert shape is not None, f'{retention.name} runs every {retention.period}, a cadence CRON_SHAPES has no row for'
     assert shape.match(retention.schedule), f'{retention.name}: {retention.schedule!r} is not a {retention.period} line'

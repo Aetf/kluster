@@ -36,7 +36,6 @@ from kluster.lib import acquisition
 
 from ... import conventions
 from ..state_backend import config as appliance_config
-from ..state_backend import probe
 from . import (
     b2,
     derived,
@@ -232,8 +231,7 @@ _ORDER = """when to run what:
          client bundle the state table's daily upkeep reaches the state
          backend with, as the role upkeep, issued from the escrowed CA; the
          list-only B2 key the dump-age check lists the state backend's dump
-         prefix with, minted from the B2 seed and pushed into the ops repo's
-         repository secrets in the same run; and the age identity the etcd
+         prefix with, minted from the B2 seed; and the age identity the etcd
          restore-verify decrypts the newest snapshot with, drawn here, whose
          public half the same run writes to
          src/kluster/conventions/etcd-drill-recipient.txt. Commit the stack
@@ -383,10 +381,9 @@ _ORDER = """when to run what:
          The drill's OCI and B2 keys, both into that same Environment: a
          re-run is the rotation of both, --only rotates one.
     credentials derived b2-freshness-dumps mint
-         The list-only B2 key the scheduled dump-age checks list the dump
-         prefix with, into the ops repo's repository secrets and sealed into
-         the k8s-base stack's config, both in one run: a re-run is the
-         rotation of both.
+         The list-only B2 key the cluster's dump-age check lists the dump
+         prefix with, sealed into the k8s-base stack's config: a re-run is
+         the rotation.
     credentials derived <row> record
          The same for an escrowed row nothing here can draw: make another one
          in the console the command prints the steps for, and hand it in. A
@@ -1497,38 +1494,32 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_bundle_dir(drill_credentials_mint)
 
-    # The freshness key: the drill's B2 half narrowed to a listing, delivered
-    # to both of its consumers in one run -- as repository secrets of the ops
-    # repository through the same sink, under the names the probe reads
-    # (`state_backend.probe`), and sealed to the cluster for its dump-age check.
+    # The freshness key: the drill's B2 half narrowed to a listing, sealed to
+    # the cluster for its dump-age check.
     freshness_key = rows.add_parser(
         derived.B2_FRESHNESS_DUMPS_ROW,
-        help='the list-only B2 key the scheduled dump-age checks list the dump prefix with',
+        help="the list-only B2 key the cluster's dump-age check lists the dump prefix with",
         description=(
-            'The B2 key the dump-age checks list the dump prefix with to tell how old the newest dump is: '
-            '`state-backend probe` in the ops repository, and the check in the cluster. `listFiles` alone, '
-            'confined to the dump prefix of the bucket the appliance dumps into: names, never a byte. It lands '
-            'as two repository secrets of the ops repository -- not in its `drill` Environment, because the job '
-            "that reads it belongs to no Environment -- and sealed to the cluster's certificate into the k8s-base "
-            "stack's config. Rotating it is re-running this."
+            "The B2 key the cluster's dump-age check lists the dump prefix with to tell how old the newest dump "
+            'is. `listFiles` alone, confined to the dump prefix of the bucket the appliance dumps into: names, '
+            "never a byte. It lands sealed to the cluster's certificate in the k8s-base stack's config. Rotating "
+            'it is re-running this.'
         ),
     )
     freshness_verbs = freshness_key.add_subparsers(dest='action', required=True, metavar='<verb>')
     freshness_mint = freshness_verbs.add_parser(
         'mint',
-        help="mint it from the seed into the ops repository's secrets and seal it into the k8s-base stack's config",
+        help="mint it from the seed and seal it into the k8s-base stack's config",
         description=(
             "Fetch the sealing certificate from the cluster's sealed-secrets controller, with the kubeconfig in "
             "the physical stack's state, and hold the k8s-base stack to exist; then sign as the B2 seed to mint "
             'a key that lists the dump prefix of the bucket the appliance dumps into and can do nothing else, and '
             "prove it by listing that prefix as itself. Seal it with kubeseal for the Secret the cluster's "
-            "dump-age check reads, bound to that Secret's name and namespace; push "
-            f'`{probe.KEY_ID_ENV}` and `{probe.KEY_ENV}` into the ops repository as repository secrets, as '
-            "the GitHub admin token read back out of the github stack's config; and write the ciphertext in the "
+            "dump-age check reads, bound to that Secret's name and namespace, and write the ciphertext in the "
             "clear into the k8s-base stack's config, reading it back. The key of that name that was live before "
-            'is retired only once both carriers are in the listing and the ciphertext is written, so a run that '
-            'fails leaves the working key alone in both places. The cluster and the stack refuse before the seed '
-            'is opened. Commit the stack file; re-running this is the rotation.'
+            'is retired only once the ciphertext is written, so a run that fails leaves the working key alone. '
+            'The cluster and the stack refuse before the seed is opened. Commit the stack file; re-running this '
+            'is the rotation.'
         ),
     )
     _ = freshness_mint.add_argument(
@@ -2302,14 +2293,12 @@ def main(argv: list[str] | None = None) -> int:
                     oci_seed_entry=args.oci_entry,
                     b2_seed_entry=args.b2_entry,
                 )
-            # The freshness key: one seed out of the kit, both carriers
-            # through the same sink as the admin token, and the seal. The
+            # The freshness key: one seed out of the kit, and the seal. The
             # certificate is fetched before the seed is opened, so a cluster
             # that cannot be reached refuses the run with no key minted.
             case ('derived', derived.B2_FRESHNESS_DUMPS_ROW, 'mint'):
-                open_stack = _opener(args, store, registry)
                 _ = derived.b2_freshness_dumps(
-                    store, _forge(open_stack), sealer=_sealer(open_stack), seed_entry=args.entry
+                    store, sealer=_sealer(_opener(args, store, registry)), seed_entry=args.entry
                 )
             # The device rows: no mint, so the command is the console steps
             # plus the push. Which stack takes it comes from the row rather

@@ -20,8 +20,8 @@ of them. The keys that touch files are confined to one prefix of one bucket
 each, and the three on the dump prefix are ordered by what they may do: the
 appliance's uploader writes and can neither list nor read
 (`DUMP_CAPABILITIES`, which the `state-backend` stack declares), the rebuild drill's reader lists and reads and can write nothing, and the
-freshness probe's key lists and nothing more — names, never a byte
-(`drill_reads`, `freshness_dumps`).
+freshness key the cluster's dump-age check holds lists and nothing more —
+names, never a byte (`drill_reads`, `freshness_dumps`).
 
 **Every answer B2 sends crosses into a typed value at one parser** (`payload`):
 `post` hands back the decoded JSON as an `object`, and the `_…` functions below
@@ -62,17 +62,7 @@ class EntryIncomplete(KdbxError, ValueError):
         self.missing: tuple[str, ...] = missing
 
 
-class Unconfined(CredentialRejected):
-    """A key handed over as a prefix-scoped one that B2 confines to no bucket."""
-
-    def __init__(self, message: str, *, key_id: str) -> None:
-        super().__init__(message)
-        self.key_id: str = key_id
-
-
-#: Version 3 of B2's native API, which is what `Session.authorize_confined`
-#: needs: it learns a confined key's bucket from `apiInfo.storageApi.bucketId`,
-#: a field v4's answer does not carry. Every key this module authorizes is the
+#: Version 3 of B2's native API. Every key this module authorizes is the
 #: account's master key or one it mints itself, on v3 `b2_create_key` with a
 #: single `bucketId` or none, which v3 authorizes. A key a stack mints with
 #: `bucket_ids` is a multi-bucket key, which B2 authorizes on v4 alone
@@ -118,10 +108,10 @@ DUMP_CAPABILITIES: tuple[str, ...] = ('writeFiles',)
 #: objects it reads are age-encrypted (state-backend.md §5).
 DRILL_READ_CAPABILITIES: tuple[str, ...] = ('listFiles', 'readFiles')
 
-#: The freshness probe's whole permission over the same prefix: list the
+#: The freshness key's whole permission over the same prefix: list the
 #: dumps, so that how old the newest one is can be read off its name. No
-#: read, so an exposed probe key discloses what the dumps are called and not
-#: what they hold; the rest is absent for the reasons the drill's are.
+#: read, so an exposed freshness key discloses what the dumps are called and
+#: not what they hold; the rest is absent for the reasons the drill's are.
 FRESHNESS_CAPABILITIES: tuple[str, ...] = ('listFiles',)
 
 #: How many names to ask for per `b2_list_file_names` page. B2 caps a page at
@@ -201,15 +191,15 @@ STATE_BACKEND_MANAGEMENT = Role(
 #: the name its OCI principal carries (`oci_iam.Identity.name_for`), and the
 #: suffix says which of the drill's two keys this is.
 #:
-#: This name and the freshness probe's below are held by live keys in the
+#: This name and the freshness key's below are held by live keys in the
 #: account, and retirement matches on the name alone (`retire_others`). So a
 #: rename is a migration rather than an edit: the next mint creates a key
 #: under the new name and retires nothing, and the key under the old one stays
 #: live until it is deleted by hand.
 DRILL_READ_NAME = f'{conventions.CLUSTER_NAME}-{conventions.DRILL}-read'
 
-#: What the freshness probe's key is called, on the same terms: the state
-#: dumps are what it lists.
+#: What the freshness key is called, on the same terms: the state dumps are
+#: what it lists.
 FRESHNESS_DUMPS_NAME = f'{conventions.CLUSTER_NAME}-freshness-dumps'
 
 #: The prefix every dump-prefix role is confined to: the one `conventions`
@@ -241,11 +231,11 @@ def drill_reads(bucket_id: str) -> Role:
 
 
 def freshness_dumps(bucket_id: str) -> Role:
-    """The freshness probe's role: list-only, and confined to the same prefix the drill's reader reads.
+    """The freshness key's role: list-only, and confined to the same prefix the drill's reader reads.
 
     A function for the reason `drill_reads` is one, and the drill's reader narrowed
-    to its first act: the probe asks which object is newest and never opens
-    one, so the grant is the listing alone. Nothing in this repository can
+    to its first act: the cluster's dump-age check asks which object is newest
+    and never opens one, so the grant is the listing alone. Nothing in this repository can
     hand the mint a wider one.
     """
     return Role(
@@ -406,27 +396,6 @@ class Session:
         return cls._authorized(_authorization(key_id, key))
 
     @classmethod
-    def authorize_confined(cls, key_id: str, key: str) -> tuple[Session, str]:
-        """Authorize as a bucket-confined key: the session, and the id of the bucket it is confined to.
-
-        `b2_authorize_account` names the bucket a confined key is restricted
-        to, which is how a key without `listBuckets` learns the id every file
-        call takes -- the probe's key carries `listFiles` alone and could not
-        ask. A key that answers with no bucket is not the key this was handed
-        for, and is refused before it is used as one.
-        """
-        answer = _authorization(key_id, key)
-        storage = payload.Payload.of(answer, 'b2_authorize_account').nested('apiInfo').nested('storageApi')
-        confined = storage.optional_text('bucketId')
-        if confined is None:
-            raise Unconfined(
-                f'B2 key {key_id!r} is confined to no bucket, so it is not a prefix-scoped key of this '
-                'installation: `credentials derived ls` names the command that mints the intended one',
-                key_id=key_id,
-            )
-        return cls._authorized(answer), confined
-
-    @classmethod
     def _authorized(cls, answer: object) -> Session:
         """`b2_authorize_account`, whose three fields are exactly a session.
 
@@ -507,8 +476,7 @@ class Session:
         The one file call this package makes: the verification of both keys
         that list the dump prefix -- a key confined to a prefix is refused by
         B2 for a listing outside it, so listing the prefix *as the new key*
-        proves the grant is the one asked for -- and the freshness probe's
-        whole act. Paged for the reason `keys` is: a listing that stopped at
+        proves the grant is the one asked for. Paged for the reason `keys` is: a listing that stopped at
         the first answer would call an old dump the newest.
         """
         found: list[str] = []
@@ -778,10 +746,10 @@ def mint_drill_read_key(session: Session, *, bucket_id: str) -> Delivery[AppKey]
 
 
 def mint_freshness_dumps_key(session: Session, *, bucket_id: str) -> Delivery[AppKey]:
-    """A list-only key confined to the dump prefix of one bucket, for the freshness probe.
+    """A list-only key confined to the dump prefix of one bucket, for the cluster's dump-age check.
 
     The same bucket and the same prefix as the appliance's dump key and
-    `mint_drill_read_key`, and the narrowest grant of the three: the probe
+    `mint_drill_read_key`, and the narrowest grant of the three: the check
     asks what the newest object is called, and this key can ask that and
     nothing else. Verified the way the drill's key is, by the one act its
     holder performs -- the new key lists the prefix, as itself, before

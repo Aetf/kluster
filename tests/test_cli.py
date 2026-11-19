@@ -693,19 +693,6 @@ def test_the_drill_credentials_reach_their_mint_with_both_seeds_as_the_admin_tok
     assert {type(args[0]) for args, _ in calls} == {KdbxStore}
 
 
-def test_the_freshness_key_reaches_its_mint_with_the_seed_as_the_admin_token(dispatch: Dispatch) -> None:
-    assert cli.main(['derived', 'b2-freshness-dumps', 'mint']) == 0
-    assert cli.main(['derived', 'b2-freshness-dumps', 'mint', '--entry', 'seeds/other']) == 0
-
-    # The seed from the entry `--entry` names; the push authenticates as the
-    # token `derived sync` uses, read out of the `github` stack rather than
-    # from anything in the shell.
-    calls = [(args, kwargs) for name, args, kwargs in dispatch.calls if name == 'derived.b2_freshness_dumps']
-    assert [kwargs['seed_entry'] for _, kwargs in calls] == [entries.SEEDS['b2'].entry, 'seeds/other']
-    assert {args[1].token for args, _ in calls} == {'a-token'}
-    assert {type(args[0]) for args, _ in calls} == {KdbxStore}
-
-
 @pytest.mark.parametrize('argv', derived_commands_taking('--entry'), ids=lambda argv: argv[1])
 def test_a_mint_command_hands_its_function_the_entry_it_names(argv: list[str], dispatch: Dispatch) -> None:
     target = expected(argv)

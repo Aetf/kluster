@@ -256,7 +256,7 @@ DUMP_MAX_AGE = backup.max_age(DUMP_PERIOD)
 #: `state-backend census --prune-expired` enforces (`table.expired`). No row
 #: younger than `EXPIRY_AGE` expires: two dump periods, so a row that old has
 #: stood through two scheduled dumps and one missed run leaves it in the
-#: other, and half a period past `DUMP_MAX_AGE`, so while the dump-age probe
+#: other, and half a period past `DUMP_MAX_AGE`, so while the dump-age check
 #: passes the newest dump holds every row a prune takes. Past that age a
 #: checkpoint copy expires, and so does an update record that is not among
 #: the newest `HISTORY_RECORDS` of its stack's history directory: the page
@@ -273,15 +273,16 @@ REBOOT_WINDOW_MINUTES = 60
 #: every client bundle's connection string names and the server certificate's
 #: SAN carries. A site fact that follows from the first reservation, recorded
 #: here the way the compartment is recorded in `conventions.OCI_TENANCY`, so
-#: that a probe run from another repository has an address to check without
+#: that the cluster's certificate check has an address to dial without
 #: holding a bundle. Public already, on 5432 and 22 and in the certificate.
 #:
 #: Recorded rather than looked up, and held: the stack's component refuses a
 #: reservation that carries any other address, naming both
 #: (`StateBackend._held_address`). A box at another address is a decision this
-#: line records, not drift for a run to follow -- the probe and `state-backend
-#: ssh` dial this constant with no OCI credential to look anything up, and
-#: would otherwise report a dead certificate for a box alive elsewhere.
+#: line records, not drift for a run to follow -- the certificate check and
+#: `state-backend ssh` dial this constant with no OCI credential to look
+#: anything up, and the check would otherwise report a dead certificate for a
+#: box alive elsewhere.
 ADDRESS = '144.24.7.194'
 
 # --- Backups --------------------------------------------------------------
@@ -327,10 +328,10 @@ RENEWAL_MARGIN = dt.timedelta(days=90)
 #: How much life the server certificate must have left for the certificate
 #: check to pass (physical/state-backend.md §6), and the only home of that
 #: number. The cluster's check (`components.monitoring.state_backend`) reads it
-#: from the settings file `k8s-base` renders from it, and `state-backend probe`
-#: reads it here. Held below `RENEWAL_MARGIN` by a test: the check is the
-#: backstop for an appliance whose stack nobody has run, or whose reports
-#: nobody acted on, and a backstop that fires before the renewal margin opens
-#: is the first reporter rather than the last. The gap between the two is the
-#: time a reported expiry has to be acted on before it is alerted as well.
+#: from the settings file `k8s-base` renders from it. Held below
+#: `RENEWAL_MARGIN` by a test: the check is the backstop for an appliance
+#: whose stack nobody has run, or whose reports nobody acted on, and a
+#: backstop that fires before the renewal margin opens is the first reporter
+#: rather than the last. The gap between the two is the time a reported expiry
+#: has to be acted on before it is alerted as well.
 EXPIRY_ALERT_MARGIN = dt.timedelta(days=30)
