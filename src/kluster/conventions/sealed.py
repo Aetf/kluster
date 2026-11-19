@@ -57,6 +57,7 @@ __all__ = (
     'CONFIG_KEY',
     'DKIM_EXIM',
     'DNS01_TOKEN',
+    'ETCD_DRILL_IDENTITY',
     'ETCD_WRITER_KEY',
     'NAMESPACE_WRITER_KEYS',
     'OCI_METRICS',
@@ -228,6 +229,24 @@ ETCD_WRITER_KEY = SealedValue(
     stack=STACK_NAMES.k8s_base,
 )
 
+#: The etcd restore-verify's age identity, private half: what the monthly
+#: verify decrypts the newest etcd snapshot with before it restores it into a
+#: scratch member. Its own identity rather than the state-backend drill's,
+#: whose contract is the newest state dump alone, and which would open every
+#: dump besides (credentials.md §1 rule 4). Drawn by `credentials derived
+#: etcd-drill-age-identity generate` and escrowed nowhere, since every
+#: snapshot it opens also opens with an escrowed backup generation; the same
+#: run writes its public half to `conventions.backup.ETCD_DRILL_RECIPIENT`.
+#: Strict, in the etcd backup's namespace, because one Secret reads it under
+#: one name. Its one data key holds the identity as an identity file holds it,
+#: a line `age -i` reads.
+ETCD_DRILL_IDENTITY = SealedValue(
+    name='etcd-drill',
+    namespace=ETCD_BACKUP_NAMESPACE,
+    keys=('age-identity',),
+    stack=STACK_NAMES.k8s_base,
+)
+
 #: The mail relay's DKIM private key, which exim signs every mail zone's `k8s`
 #: selector with and reads as `tls.key`, the key the legacy cluster's
 #: cert-manager Secret holds it under. It is carried from the legacy cluster
@@ -326,6 +345,7 @@ VALUES: Mapping[str, SealedValue] = MappingProxyType(
             STATE_UPKEEP_BUNDLE,
             B2_FRESHNESS_DUMPS,
             ETCD_WRITER_KEY,
+            ETCD_DRILL_IDENTITY,
             DKIM_EXIM,
             AUTHELIA_STORAGE_KEY,
             *NAMESPACE_WRITER_KEYS,

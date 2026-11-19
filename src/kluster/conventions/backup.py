@@ -6,6 +6,7 @@ import datetime as dt
 from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
+from pathlib import Path
 from types import MappingProxyType
 
 from kluster.conventions.cluster import MONITORING_NAMESPACE
@@ -118,6 +119,18 @@ ETCD_SNAPSHOT_PREFIX = 'etcd'
 #: (`conventions.sealed.ETCD_WRITER_KEY`).
 ETCD_SCOPE = 'etcd'
 STATE_DUMP_PREFIX = 'pulumi-state'
+
+#: The etcd restore-verify's age identity, public half: one recipient, in a
+#: file `credentials derived etcd-drill-age-identity generate` writes in the
+#: checkout and the operator commits, in the same run that seals the private
+#: half into `k8s-base` (`conventions.sealed.ETCD_DRILL_IDENTITY`). A
+#: convention rather than a script's constant because the file has two
+#: programs: the command that writes it, and the stack that encrypts each
+#: etcd snapshot to it beside the escrowed backup generations, whose read
+#: lands after the file does (credentials.md §1 rule 6). It sits in this
+#: package, which a script and a stack program can both import, so the
+#: program finds it with no checkout around it.
+ETCD_DRILL_RECIPIENT = Path(__file__).with_name('etcd-drill-recipient.txt')
 
 #: The backup bucket, and it is not on the provider whose loss it insures
 #: (storage.md §4): a backup kept at that provider is not a backup. The name is

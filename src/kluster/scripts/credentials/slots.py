@@ -1277,6 +1277,17 @@ ROWS: dict[str, Row] = {
             ),
         ),
     ),
+    derived.ETCD_DRILL_AGE_IDENTITY_ROW: Row(
+        register='etcd drill age identity',
+        # Drawn by its own command and escrowed nowhere, like the drill age
+        # identity, and minted for the same reason: asking again draws a
+        # different key, which is the rotation. Its consumer is in the
+        # cluster, so the private half is sealed in the same run into the
+        # stack that declares it. The public half goes to a committed file,
+        # and a public half is no delivery.
+        source=Minted(f'credentials derived {derived.ETCD_DRILL_AGE_IDENTITY_ROW} generate'),
+        targets=(SealedSecret(conventions.sealed.ETCD_DRILL_IDENTITY),),
+    ),
     'restic-passwords': Row(
         register='restic repo passwords',
         source=Minted('the `claim` helper of the application base, one per claim under a retention class'),
