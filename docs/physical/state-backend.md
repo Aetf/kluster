@@ -460,9 +460,10 @@ oraclecloud`, x86_64), the qcow2 imports as a custom image
 
     A is the box's available memory at idle, the lower of two readings
     (kluster-ops#784), and S the swing between the two, which is the
-    margin. B is `shared_buffers`, counted whole. R is the largest row in
-    the state table: every row is one a statement through the pooler can
-    touch, since a listing sizes each key it finds, and one each dump
+    margin. B is `shared_buffers`, counted whole. R is the largest row
+    the state table is held to: every row is one a statement through the
+    pooler can touch, since a listing sizes each key it finds, and one
+    each dump
     reads. The nightly dump reaches Postgres around the pooler, so its
     reader is outside the cap: D·R is the Postgres container's peak while
     `pg_dump -Fc` reads a row, per byte of the row, times R. E·R + b is
@@ -471,44 +472,46 @@ oraclecloud`, x86_64), the qcow2 imports as a custom image
     what each of its N client connections adds. W·R + b is one write:
     the server process's peak per byte of the value, times R, plus every
     server process's baseline b. With the inputs as the settings hold
-    them, R being the largest value, a plain `backups/` copy of
-    `physical`'s checkpoint, and with R at the 1.48 MB of the largest
-    compressed checkpoint, `k8s-base`'s:
+    them:
 
-    | Term | `MiB`, R = 2.13 MB | `MiB`, R = 1.48 MB |
-    | --- | --- | --- |
-    | Available at idle, the lower reading (A) | 367 | 367 |
-    | Less the swing between readings (S) | 52 | 52 |
-    | Less `shared_buffers` (B) | 128 | 128 |
-    | Less the dump's reader: 3.4 × R (D·R) | 6.9 | 4.8 |
-    | Less the session entry: 2.1 × R + 3 (E·R + b) | 7.3 | 6.0 |
-    | Less the pooler: 17 + 100 clients × 0.044 (P + N·c) | 21.4 | 21.4 |
-    | Left for statements | 151.4 | 154.8 |
-    | One write: 5.8 × R + 3 (W·R + b) | 14.8 | 11.2 |
-    | Statements at once, rounded down | 10 | 13 |
+    | Term | `MiB`, R = 3.0 MB |
+    | --- | --- |
+    | Available at idle, the lower reading (A) | 367 |
+    | Less the swing between readings (S) | 52 |
+    | Less `shared_buffers` (B) | 128 |
+    | Less the dump's reader: 3.4 × R (D·R) | 9.7 |
+    | Less the session entry: 2.1 × R + 3 (E·R + b) | 9.0 |
+    | Less the pooler: 17 + 100 clients × 0.044 (P + N·c) | 21.4 |
+    | Left for statements | 146.9 |
+    | One write: 5.8 × R + 3 (W·R + b) | 19.6 |
+    | Statements at once, rounded down | 7 |
 
-    The settings hold R as `state-backend census --ceiling` last read the
-    largest value, rounded up (`LARGEST_ROW_BYTES`), a reading rather
-    than a forecast, so the cap moves when the ceiling reads another. R
-    is a value's own size, which is what every multiple above is per
-    byte of: the ceiling reads it as `octet_length` of the value, one row
-    at a time, in a session that cannot write, and never through `->>`,
-    so nothing parses the JSON and its server process peaks at a few
-    copies of the largest value, as a read of it does. It is not the
-    stored size the census prints (`pg_column_size`), which TOAST's
-    compression can bring to half of a plain checkpoint's value. The ceiling prints the largest value's size
-    whether it passes or fails, and fails, naming each row and its size,
-    when a value exceeds R: a row the cap was not derived for, so R is
-    read again and the cap derived from it. It reads the table after the
-    prune a run asks for, since a row the prune takes is no row a
-    statement can touch, and it runs whatever the prune answered. The
-    second column is what the census reads
-    once three things hold: `physical`'s next `up` has stored its
-    checkpoint compressed, a re-run of `census --prune-superseded` has
-    taken `physical`'s plain `history/` and `backups/` copies, which stay
-    at the plain size until then, and `github`'s plain checkpoint is
-    under 1.48 MB. The settings refuse a cap below one, which the pooler
-    would read as no cap at all.
+    Seven is the most statements CI was measured to run at once: eight
+    `k8s-base` previews beside a deploy's `up` held at most seven server
+    processes at once (`sv_active`), and no client waited for one
+    (`cl_waiting` stayed at 0; kluster-ops#784).
+
+    **R is a bound, not a reading** (`LARGEST_ROW_BYTES`). It is set as
+    high as it goes while the cap it derives still covers the most
+    statements CI was measured to run at once, and rounded clear of the
+    value where the cap would fall. Its room over the largest value
+    `state-backend census --ceiling` prints outlasts the month between
+    two digest refreshes, so a new bound rides a replacement the box
+    takes anyway. R is a value's own size, which is what every multiple
+    above is per byte of: the ceiling reads it as `octet_length` of the
+    value, one row at a time, in a session that cannot write, and never
+    through `->>`, so nothing parses the JSON and its server process
+    peaks at a few copies of the largest value, as a read of it does. It
+    is not the stored size the census prints (`pg_column_size`), which
+    TOAST's compression can bring to half of a plain checkpoint's value.
+    The ceiling prints the largest value's size whether it passes or
+    fails, and fails, naming each row and its size, when a value exceeds
+    R: a row the cap was not derived for, so R is set again by the same
+    rule and the cap derived from it. It reads the table after the prune
+    a run asks for, since a row the prune takes is no row a statement
+    can touch, and it runs whatever the prune answered. The settings
+    refuse a cap below one, which the pooler would read as no cap at
+    all.
 -   **Every stack kept here stores its checkpoint compressed, and no
     `backups/` copy.** `mise.toml` sets `PULUMI_DIY_BACKEND_ZSTD` and
     `PULUMI_DIY_BACKEND_DISABLE_CHECKPOINT_BACKUPS` for every `pulumi`
