@@ -265,9 +265,9 @@ machine_secrets
     StorageClass's provisioner is k8s-base's, but the directory under
     it is machine config); and on a node a block volume
     attaches to (§1), the **node volume** and a **node label** naming
-    it (`conventions.NODE_VOLUME_LABEL`), which the pods that consume
-    the volume's class select, hath's client among them, in the
-    configuration the node boots with.
+    it (`conventions.NODE_VOLUME_LABEL`), which the volume's class
+    matches as its allowed topology, in the configuration the node
+    boots with.
 -   **Each node is named what the declaration names it.** The node's
     name in the rolls (`conventions.CLOUD_NODES`,
     `conventions.HOMELAB_NODE`) is its hostname, stated in a

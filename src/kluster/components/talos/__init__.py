@@ -627,11 +627,10 @@ def node_volume_document(name: str) -> dict[str, Any]:
 def node_volume_label_patch(name: str) -> dict[str, Any]:
     """Label the node carrying the node volume `name` with it.
 
-    The node-side half of `node_volume_document`, and what the pod consuming
-    the volume's class selects, and a copy's destination onto it, since a
-    claim of the class holds no pod anywhere by itself (rfc-002 §10.5). A
-    strategic merge into `v1alpha1`, because v1.13 has no document for node
-    labels.
+    The node-side half of `node_volume_document`, and the topology the
+    volume's class allows, by which the scheduler places the class's
+    consumers on this node (storage.md §6). A strategic merge into
+    `v1alpha1`, because v1.13 has no document for node labels.
     """
     return {'machine': {'nodeLabels': {conventions.NODE_VOLUME_LABEL: name}}}
 

@@ -130,9 +130,9 @@ be preserved (see the worked example).
 -   **`cloud-block-<row>`**, `conventions.node_volume_class(row)`, is the
     class a node volume's data is claimed under: an ordinary `claim`
     with that `storage_class` (storage.md §6). The pod that consumes it
-    selects the volume's node label (`conventions.NODE_VOLUME_LABEL`),
-    since a claim that waits for its first consumer holds no pod
-    anywhere by itself.
+    needs no node selection: the class's allowed topology matches the
+    volume's node label (`conventions.NODE_VOLUME_LABEL`), so the
+    scheduler places the pod on the node carrying the volume.
 
 **A pod writes to the NAS as the export's anonymous user.** The export
 squashes every client, so every NFS write arrives as one user, whatever
@@ -247,10 +247,9 @@ per-app number:
 -   **Block-volume app (hath's cache)**: an ordinary `claim` of the
     class `local-path` serves from the node volume the `physical` stack
     attached (`conventions.node_volume_class(row)` over
-    `conventions.NODE_VOLUMES`), protected, with the client selecting
-    the volume's node label, because a claim that waits for its first
-    consumer holds no pod anywhere by itself. The provisioner hands out
-    a directory inside the volume, `/var/mnt/<name>/<namespace>/<claim>/`
+    `conventions.NODE_VOLUMES`), protected; the client selects no node,
+    since the class's topology places it on the volume's node. The
+    provisioner hands out a directory inside the volume, `/var/mnt/<name>/<namespace>/<claim>/`
     — never the mount point, so a volume that failed to mount is a
     claim that stays pending, or a path missing at the pod's start
     (storage.md §6). `off` on record — the H@H network's own

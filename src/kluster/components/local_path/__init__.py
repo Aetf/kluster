@@ -13,11 +13,12 @@ provisioner's configuration keys its pools by class. A pool is stated for
 every node rather than for the volume's: the node's name is Kubernetes', and a
 claim of the class lands where its first consumer is scheduled. The class
 confines that to the node carrying the volume by its allowed topology, the
-volume's node label, so a consumer that does not select the label is refused
-by the scheduler rather than placed on a node where nothing mounts the volume.
-The one node the scheduler accepts still refuses the data while its volume is
-unmounted: the helper's `DirectoryOrCreate` cannot create inside the kubelet's
-read-only `/var/mnt`, and the claim stays pending (physical.md §2).
+volume's node label: the scheduler drops every other node from a consumer's
+candidates, so a consumer that selects no node lands on the volume's node, and
+one that selects another node is unschedulable. That node still refuses the
+data while its volume is unmounted: the helper's `DirectoryOrCreate` cannot
+create inside the kubelet's read-only `/var/mnt`, and the claim stays pending
+(physical.md §2).
 
 Such a class reclaims `Retain`, because the dataset is preserved rather than
 backed up and has no undo (storage.md §3.3); it names each claim's directory
@@ -119,11 +120,15 @@ def _carrying(row: str) -> k8s.core.v1.TopologySelectorTermArgs:
     labels whatever their keys, before it selects the node for a claim that
     waits for its first consumer (`checkVolumeProvisions` in kube-scheduler's
     `pkg/scheduler/framework/plugins/volumebinding/binder.go`, through
-    `MatchTopologySelectorTerms`). A pod whose claims no node satisfies is
-    unschedulable, and the claim is never handed to the provisioner, which
-    reads nothing of the class's topology: only the node the scheduler
-    selected (`provisioner.go` at v0.0.37, `opts.SelectedNode`), whose
-    `kubernetes.io/hostname` it writes into the volume's node affinity.
+    `MatchTopologySelectorTerms`), and drops a node outside them from the
+    pod's candidates. A consumer that selects no node is therefore placed on
+    the node the topology admits, and needs no selection of its own. One that
+    no candidate node satisfies, because it selects another node or the
+    admitted node cannot take it, is unschedulable, and its claim is never
+    handed to the provisioner, which reads nothing of the class's topology:
+    only the node the scheduler selected (`provisioner.go` at v0.0.37,
+    `opts.SelectedNode`), whose `kubernetes.io/hostname` it writes into the
+    volume's node affinity.
 
     The node label and not the hostname, because the label is the row's own
     fact about the node (`conventions.NODE_VOLUME_LABEL`): it names no
