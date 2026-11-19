@@ -396,6 +396,19 @@ EXPOSURES: Mapping[str, Exposure] = MappingProxyType(
         ),
         # hath leaves and arrives on one address of its own.
         'hath': Exposure(ports=(Port('hath', 60011, Transports.TCP, internet=Dedicated()),)),
+        # The front door's exit criterion (rfc-007 §9.2), which goes with its
+        # component at Wave A1's land (rfc-008 slice 28).
+        'echo': Exposure(
+            routes=(
+                Route(
+                    'echo',
+                    internet=Direct(
+                        "the front door's check: the request crosses the balancer with the client's own address, "
+                        "not the proxy's"
+                    ),
+                ),
+            )
+        ),
     }
 )
 

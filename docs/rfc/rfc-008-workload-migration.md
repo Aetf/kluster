@@ -90,6 +90,13 @@
     file under another key's prefix, and the etcd snapshots upload one
     from stage 6 (declarative/physical.md §6,
     [Aetf/kluster-ops#857](https://github.com/Aetf/kluster-ops/issues/857)).
+*   **Updated:** 2026-11-19. §10's echo row is `Route('echo',
+    internet=Direct(…))`, as rfc-007 §9.2 has it: off the proxy, so the
+    request crosses the balancer with the client's address, and the name
+    resolves to the balancer for slice 13's in-cluster check
+    ([Aetf/kluster-ops#772](https://github.com/Aetf/kluster-ops/issues/772)).
+    §10's record and §5.5's are `public_records` on the application base,
+    which `expose` calls, rather than `route`'s (rfc-007 §9.1).
 *   **Authority:** AGENTS.md,
     [framework/dispatch.md](../framework/dispatch.md),
     [framework/rfc.md](../framework/rfc.md) and the style rules
@@ -1980,10 +1987,11 @@ worker as it booted (§6.1), so the wave needs no window.
     and moving it would save 35 MB. Its name is a device row (above).
 *   **Monitoring's name.** `mon` becomes a row of the monitoring
     component (rfc-007 §7.4): Grafana behind it with its single sign-on
-    client, and `k8s-base` publishing its record. A stack that calls
-    `route` for a public row builds a Cloudflare provider and reads the
-    `dns` stack's zone identifiers (rfc-007 §9.1), so at this wave's
-    land `k8s-base` gains the zones token, whose slot names it as a
+    client, and `k8s-base` publishing its record. A stack that declares
+    a public row's record, which the monitoring component does with
+    `public_records` beside `route`, builds a Cloudflare provider and
+    reads the `dns` stack's zone identifiers (rfc-007 §9.1), so at this
+    wave's land `k8s-base` gains the zones token, whose slot names it as a
     target, and a StackReference to `dns` for the identifiers, the
     recorded use `apps` already makes. `dns`, `k8s-base` and `apps`
     share one passphrase, so no reader gains the token that does not
@@ -2511,9 +2519,11 @@ from an application's `Exposure` in place of a row with an `Exposure`
 field, and emits one `HTTPRoute` for each of `internet`, `lan` and `media`
 the row sets. Its test stands as written, with "the gateways the
 exposure selects" now the fields the row sets, and a record published
-only where `internet` is set. The echo server's row is
-`Route('echo', internet=PROXIED)`, in an `Exposure` of its own, and
-dns.md §5's one route helper is `expose(exposure)`. `Route`'s `exposure`,
+only where `internet` is set, which `expose` declares beside the routes
+(`public_records`, rfc-007 §9.1). The echo server's row is
+`Route('echo', internet=Direct(…))`, in an `Exposure` of its own, off
+the proxy as rfc-007 §9.2 puts it, and dns.md §5's one route helper is
+`expose(exposure)`. `Route`'s `exposure`,
 `proxied`, `extras`, `public` and `lan_side` go, with the enumeration.
 
 ### 10.1 Pre-live: the mechanisms and the shapes

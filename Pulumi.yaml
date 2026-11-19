@@ -105,6 +105,10 @@ config:
   # tag, which compares equal under the image's versioning, so the pin is moved
   # to it by hand.
 
+  # The echo server, the front door's exit criterion (rfc-007 §9.2), which
+  # goes with its component at Wave A1's land.
+  versions:image-echo: docker.io/traefik/whoami:v1.12.0@sha256:c4717a8d1f0134a7444e24f881160e033991f23027c6c5a9a3f8fd22e70d1d44
+
   # Wave A1. exim runs on the worker, and its image may publish amd64 alone.
   versions:image-exim: docker.io/devture/exim-relay:4.94.2-r0-2@sha256:4bafb3a859befd9e4c6c0dfd810588129112e8c97f350030857edd91be3ce38d
   versions:image-authelia: ghcr.io/authelia/authelia:4.39.4@sha256:64b356c30fd817817a4baafb4dbc0f9f8702e46b49e1edb92ff42e19e487b517

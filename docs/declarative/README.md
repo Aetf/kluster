@@ -86,8 +86,9 @@ addresses of its front (rfc-008 §4.1); and `k8s-base` reads, once the
 OCI pull's key is sealed in, the OCID of each cloud node's volume
 ([cluster-infra.md](cluster-infra.md) §0). The exception is `dns`'s
 zone IDs, which it exports for the records declared beside each
-application ([dns.md](dns.md) §1); `apps` declares no record yet, and
-reads none. A resource that deliberately keeps autonaming publishes its
+application ([dns.md](dns.md) §1); `apps` reads them, and a zone a
+record is in that the mapping lacks stops the run naming it
+([dns.md](dns.md) §5). A resource that deliberately keeps autonaming publishes its
 generated name the same way, because a generated name is a machine
 fact too.
 
