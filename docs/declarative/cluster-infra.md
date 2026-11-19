@@ -304,7 +304,10 @@ classes its objects fall into (§1.2):
     chart finds as a pod behind a Service while Talos runs it as a
     service of the host (rfc-007 §7.1). vmagent keeps the chart's
     `selectAllByDefault` and reads every VictoriaMetrics scrape object
-    in the cluster. The component declares the scrape objects for
+    in the cluster. vmalert reads every `VMRule` in the cluster, its
+    `selectAllByDefault` declared by the component rather than left to
+    the chart, since a component that declares a CronJob and its rules
+    together declares them in its own namespace. The component declares the scrape objects for
     Cilium's metrics endpoints, which are instances of this chart's
     definitions and so cannot be Cilium's. **What vmagent scrapes is
     held to what the store keeps.** Every job is scraped every 30 s.
@@ -353,22 +356,27 @@ classes its objects fall into (§1.2):
     `playbook` annotations, which a test resolves for every rule the
     program declares (operations.md §5). **Every CronJob a stack program
     declares is watched by the scheduled-job rule family** (operations.md
-    §4). Each is a row of `conventions.schedule.SCHEDULED_JOBS`, which
-    gives its namespace, its name, its period, the deadline a run is cut
-    off at and its playbook, and both the component that declares the
-    CronJob and the rules read that row. From each row come two
+    §4). Each is a `ScheduledJob` (`conventions.schedule`), which gives
+    its namespace, its name, its period, the deadline a run is cut off at
+    and its playbook, spelled once where both its CronJob and its rules
+    read it: a row of `conventions.schedule.SCHEDULED_JOBS` where another
+    component declares the CronJob, whose rules this component declares,
+    and the declaring component's own where it declares the CronJob and
+    the rules beside it (`components.monitoring.rules.scheduled_job_rules`).
+    From each job come two
     `actionable` alerts over kube-state-metrics' series of that CronJob,
     named after the job, as `MetricsBackupStale` and
     `MetricsBackupFailed` are: the stale one once its last success is
     older than one and a half periods, and the failed one once a run
     scheduled after that success has not succeeded within the deadline.
-    A row refuses a deadline longer than half its period, less the
+    A job refuses a deadline longer than half its period, less the
     minute a CronJob's status takes to reach the rules
     (`conventions.schedule.REPORT_LAG`, which a test holds the scrape and
     the evaluation interval below), so a run that succeeds is never
     reported stale. A test holds every CronJob `k8s-base` and `apps`
-    declare to a row, and every row to a CronJob one of them declares.
-    A CronJob a chart renders is not a stack program's and has no row:
+    declare to the family's two rules declared for it, and every such
+    rule to a CronJob one of them declares.
+    A CronJob a chart renders is not a stack program's and has no job:
     whether one a chart bump brings in needs watching is the bump's
     review to say (operations.md §1).
     **Every scrape job an alert reads is watched by the scrape-target

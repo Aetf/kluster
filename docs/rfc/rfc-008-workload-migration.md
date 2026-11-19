@@ -147,6 +147,14 @@
     tests, as slice 35's do hath's. §10.2's images with no numeric user
     gain continuwuity's
     ([Aetf/kluster#878](https://github.com/Aetf/kluster/pull/878)).
+*   **Updated:** 2026-11-19. §4.3's drill and "a rule that alerts on a
+    failed or missing run, with its tier and playbook": the rule is the
+    scheduled-job family's pair, derived from the drill's `ScheduledJob`,
+    which the shape spells once and declares the CronJob and the rules
+    from, beside each other in the database's namespace. A job's facts
+    live in `conventions.schedule` only where two components declare its
+    CronJob and its rules (operations.md §4, ruled by the operator,
+    [Aetf/kluster#877](https://github.com/Aetf/kluster/pull/877)).
 *   **Authority:** AGENTS.md,
     [framework/dispatch.md](../framework/dispatch.md),
     [framework/rfc.md](../framework/rfc.md) and the style rules

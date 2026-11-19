@@ -22,7 +22,10 @@ the call.
 
 **Removal**: once `import pulumi_crds.operator.v1beta1` succeeds, each call
 becomes the SDK class of its kind, its spec the class's `Args`, and this
-module goes, with what reads it in `tests/test_monitoring.py`: the tripwire
+module goes, with each caller (this component, and the `VMRule` of a
+database's drill in `components.apps.database`), the lookups by `type_token`
+in `tests/test_apps_database.py`, and what reads it in
+`tests/test_monitoring.py`: the tripwire
 that holds the import's failure and goes red the day it imports, the check
 of each spec against its definition, which the class's `Args` then make, and
 the lookups by `type_token`, which then read the class's token.
@@ -41,7 +44,8 @@ __all__ = ('API_VERSION', 'OperatorKind', 'operator_object', 'type_token')
 #: The group and version every kind declared here is served at.
 API_VERSION = 'operator.victoriametrics.com/v1beta1'
 
-#: The kinds the monitoring component declares.
+#: The kinds declared through here: the monitoring component's, and the
+#: `VMRule` a component declares beside its CronJob.
 type OperatorKind = Literal['VMAlertmanagerConfig', 'VMNodeScrape', 'VMPodScrape', 'VMRule', 'VMSingle']
 
 

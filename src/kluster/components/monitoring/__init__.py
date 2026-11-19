@@ -541,7 +541,15 @@ def _stack_values(release: str, chart: ChartPin, restore: Sequence[Mapping[str, 
         # The recording rules reach the stores through vmagent, so the history
         # keeps those of its class as it keeps scraped series.
         'vmalert': {
-            'spec': {'affinity': WORKER_AFFINITY, 'evaluationInterval': backup.duration(EVALUATION_INTERVAL)},
+            'spec': {
+                'affinity': WORKER_AFFINITY,
+                'evaluationInterval': backup.duration(EVALUATION_INTERVAL),
+                # Every `VMRule` in every namespace: a component that declares a
+                # CronJob and its rules beside it, as a database's drill does,
+                # declares them in its application's namespace. The chart's
+                # default too, stated so that a chart bump cannot drop it.
+                'selectAllByDefault': True,
+            },
             'remoteWriteVMAgent': True,
         },
         'defaultDatasources': {
@@ -798,14 +806,20 @@ class Monitoring(Component, pulumi_type='kluster:monitoring:Monitoring'):
             f'{name}-rules',
             kind='VMRule',
             metadata=k8s.meta.v1.ObjectMetaArgs(namespace=self.namespace.metadata.name),
-            spec={'groups': [_rule_group(group) for group in rules.rule_groups(scrape_jobs(name, stack_chart.name))]},
+            spec={
+                'groups': [
+                    rules.rule_group_spec(group) for group in rules.rule_groups(scrape_jobs(name, stack_chart.name))
+                ]
+            },
             opts=after_the_chart,
         )
         self.kubeconfig_rules = operator_object(
             f'{name}-kubeconfig-rules',
             kind='VMRule',
             metadata=k8s.meta.v1.ObjectMetaArgs(namespace=self.namespace.metadata.name),
-            spec={'groups': kubeconfig_expiry.apply(lambda expiry: [_rule_group(rules.kubeconfig_copy(expiry))])},
+            spec={
+                'groups': kubeconfig_expiry.apply(lambda expiry: [rules.rule_group_spec(rules.kubeconfig_copy(expiry))])
+            },
             opts=after_the_chart,
         )
         self.cilium_scrapes = [
@@ -1080,21 +1094,4 @@ def receiver_spec() -> dict[str, object]:
                 }
             ],
         },
-    }
-
-
-def _rule_group(group: rules.RuleGroup) -> dict[str, object]:
-    """One rule group as the definition spells it, every alert labeled with its tier and annotated with the rest."""
-    return {'name': group.name, 'rules': [_rule(rule) for rule in group.rules]}
-
-
-def _rule(rule: rules.AlertRule | rules.RecordingRule) -> dict[str, object]:
-    if isinstance(rule, rules.RecordingRule):
-        return {'record': rule.record, 'expr': rule.expr}
-    return {
-        'alert': rule.alert,
-        'expr': rule.expr,
-        **({'for': backup.duration(rule.pending)} if rule.pending is not None else {}),
-        'labels': {**rule.labels, rules.TIER_LABEL: rule.tier.value},
-        'annotations': {'summary': rule.summary, 'playbook': str(rule.playbook)},
     }
