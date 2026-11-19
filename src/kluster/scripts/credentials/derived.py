@@ -37,8 +37,9 @@ the platform holds and for the etcd snapshots (`b2_writer_seal`); Authelia's
 storage encryption key, which is escrowed and sealed from the escrow
 (`authelia_storage_key_seal`); the client bundle the state table's daily
 upkeep reaches the state backend with, issued from the escrowed CA
-(`state_backend_upkeep`); and the state dumps' freshness key, which its mint
-also pushes to the ops repository (`b2_freshness_dumps`).
+(`state_backend_upkeep`); the state dumps' freshness key, which its mint
+also pushes to the ops repository (`b2_freshness_dumps`); and the etcd
+restore-verify's age identity, drawn here (below).
 
 The drill age identity is drawn here rather than minted anywhere, as the
 appliance's SSH host key below is; its consumer is the ops repository's
@@ -48,6 +49,17 @@ because every dump it opens is also encrypted to an escrowed generation
 (credentials.md §2.2) — so its private half goes to the ops-repo Environment
 through the same GitHub sink every other GitHub secret takes, and its public
 half to a committed file the appliance's recipient list appends.
+
+The etcd restore-verify's age identity is drawn here too, and is the drill
+identity's counterpart for the cluster: its own key, so that neither drill
+opens what the other's contract leaves out (credentials.md §1 rule 4). Its
+consumer is in the cluster, so its private half is sealed into `k8s-base`
+rather than pushed to a forge, and its public half goes to a committed file
+for the etcd snapshots to be encrypted to, by a read of that file which
+lands after it (`etcd_drill_age_identity`; credentials.md §1 rule 6). One run
+writes both, and reaches `physical` for the cluster's certificate and
+`k8s-base` for the write, each under its passphrase's workstation slot, and
+nothing in the kit.
 
 The drill's other row is one command over two mints: the OCI key that
 administers the drill compartment and the B2 key that reads the dump prefix
@@ -95,6 +107,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from pulumi.runtime import rpc
 
+from kluster.conventions.backup import ETCD_DRILL_RECIPIENT
 from kluster.lib import bundle, stack_environment
 from kluster.lib import workstation as lib_workstation
 from kluster.lib.state_backend import committed
@@ -238,6 +251,10 @@ HOST_KEY_FILE = committed.HOST_KEY
 #: The backup generations' public halves, one line per generation the box
 #: encrypts its dumps to: the escrow label, then the recipient.
 BACKUP_RECIPIENTS_FILE = committed.BACKUP_RECIPIENTS
+#: The etcd restore-verify's age identity, public half, committed for the
+#: cluster's etcd snapshots to be encrypted to; its row is
+#: `ETCD_DRILL_AGE_IDENTITY_ROW`.
+ETCD_DRILL_RECIPIENT_FILE = ETCD_DRILL_RECIPIENT
 
 #: The names these rows carry on the command line and in the slot map. One
 #: string per row, defined here because this is where the mint lives: the map
@@ -255,6 +272,7 @@ OCI_METRICS_ROW = 'oci-metrics'
 B2_MANAGEMENT_ROW = 'b2-management'
 DRILL_AGE_IDENTITY_ROW = f'{conventions.DRILL}-age-identity'
 DRILL_CREDENTIALS_ROW = f'{conventions.DRILL}-credentials'
+ETCD_DRILL_AGE_IDENTITY_ROW = f'{conventions.sealed.ETCD_DRILL_IDENTITY.name}-age-identity'
 B2_FRESHNESS_DUMPS_ROW = 'b2-freshness-dumps'
 B2_STATE_BACKEND_MANAGEMENT_ROW = f'b2-{conventions.STATE_BACKEND}-management'
 STATE_BACKEND_SERVER_ROW = f'{conventions.STATE_BACKEND}-server'
@@ -1356,6 +1374,53 @@ def drill_age_identity(forge: Forge, *, recipient_file: Path, rotate: bool) -> s
     )
     log.info('commit %s; the appliance encrypts to it from the replacement that carries it:', recipient_file)
     log.info('    operator-stack state-backend up --force    # dumps the box, replaces it, restores into the new one')
+    return identity.public
+
+
+def etcd_drill_age_identity(*, sealer: sealing.Sealer, recipient_file: Path) -> str:
+    """Draw the etcd restore-verify's age identity: private half sealed into `k8s-base`, public half to a file.
+
+    Returns the recipient written. The identity exists in this process, on
+    `kubeseal`'s standard input and as ciphertext only the cluster opens: no
+    file, no kit row and no escrow ciphertext holds the private half in the
+    clear, and `age.Identity` keeps it out of every repr. It is escrowed
+    nowhere, because every etcd snapshot it opens also opens with an escrowed
+    backup generation; losing it costs a fresh draw, never a snapshot. The
+    seal is strict, for the Secret the census row names
+    (`conventions.sealed.ETCD_DRILL_IDENTITY`), and its value is the identity
+    line as an identity file holds it.
+
+    **Re-running is the rotation**, and it is the seal again after a rebuild
+    of the cluster, whose new sealing key no earlier ciphertext opens under:
+    the private half cannot be read back out of the cluster, so each run
+    draws a fresh identity over both halves. The run writes both, and they
+    are committed together, so `main` never holds one half without the
+    other.
+
+    **The stack first, then the seal, then the file.** The declaring stack is
+    held to exist before anything is drawn, so a refusal costs nothing; the
+    cluster's certificate was fetched in building `sealer`. The file is
+    written only once the ciphertext is written and read back, since a
+    recipient on file whose private half was never sealed is, once the
+    snapshots read the file, a snapshot encrypted to a key nothing holds --
+    harmless to the data, a verify failure found a month later -- where a
+    seal with no file yet is repaired by running this again.
+    """
+    value = conventions.sealed.ETCD_DRILL_IDENTITY
+    _ = sealer.stack(value)
+    log.info('drawing the etcd restore-verify age identity with %s', age.KEYGEN)
+    identity = age.generate()
+    (key,) = value.keys
+    sealer.deliver(value, {key: f'{identity.secret}\n'})
+    log.info('%s holds the sealed private half; writing the public half to %s', value.stack, recipient_file)
+    _ = recipient_file.write_text(
+        "# The etcd restore-verify's age identity, public half (docs/credentials.md §3). The\n"
+        f'# private half is sealed into Pulumi.{value.stack}.yaml at {value.path(key)}; nothing\n'
+        '# on disk holds it in the clear.\n'
+        f'# Written by `credentials derived {ETCD_DRILL_AGE_IDENTITY_ROW} generate`; replaced by running it again.\n'
+        f'{identity.public}\n'
+    )
+    log.info('commit %s and Pulumi.%s.yaml together', recipient_file, value.stack)
     return identity.public
 
 

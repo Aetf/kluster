@@ -61,6 +61,7 @@ from kluster.lib import bundle, pulumi_cli
 from kluster.lib.k8s import rendered_template
 from kluster.lib.state_backend import settings
 from kluster.scripts.credentials import (
+    age,
     b2,
     cli,
     cloudflare,
@@ -1701,6 +1702,186 @@ def test_the_writer_seal_needs_no_kit_on_a_machine_holding_both_passphrase_slots
         row.path('AWS_ACCESS_KEY_ID'): f'AgB-sealed-{ETCD_SCOPE}-id',
         row.path('AWS_SECRET_ACCESS_KEY'): f'AgB-sealed-{ETCD_SCOPE}-secret',
     }
+
+
+# -- the etcd restore-verify's age identity ---------------------------------------
+
+ETCD_DRILL = conventions.sealed.ETCD_DRILL_IDENTITY
+
+
+@pytest.fixture
+def pinned_age() -> None:
+    """The pinned `age-keygen`, which draws the identity, and `age`, which opens what is encrypted to it.
+
+    Refused when either is missing rather than skipped.
+    """
+    pinned_tools.require(*pinned_tools.AGE)
+
+
+def recipients_on_file(path: Path) -> list[str]:
+    """The recipient lines of a recipient file, its `#` comments aside."""
+    return [line for line in path.read_text().splitlines() if line.strip() and not line.startswith('#')]
+
+
+@pytest.mark.usefixtures('pinned_age')
+def test_what_is_encrypted_to_the_recipient_on_file_opens_with_the_sealed_identity_as_a_file(
+    stacks: Stacks, sealer: sealing.Sealer, kubeseal: str, key_pair: KeyPair, tmp_path: Path
+) -> None:
+    """The sealed value, opened as the controller opens the row's SealedSecret, is the recipient file's identity.
+
+    Written out as a pod mounts the Secret, one file per data key, it is an
+    identity file `age -i` reads, and it opens a file encrypted to the one
+    recipient the run committed -- which is the whole of what the two halves
+    owe each other.
+    """
+    recipient_file = tmp_path / 'etcd-drill-recipient.txt'
+
+    returned = derived.etcd_drill_age_identity(sealer=sealer, recipient_file=recipient_file)
+
+    k8s_base = stacks.runner(K8S_BASE)
+    assert set(k8s_base.plain) == {ETCD_DRILL.path(key) for key in ETCD_DRILL.keys}
+    assert not k8s_base.config
+    assert recipients_on_file(recipient_file) == [returned]
+    mounted = tmp_path / 'mounted'
+    mounted.mkdir()
+    for key, value in unseal(kubeseal, key_pair, ETCD_DRILL, written(stacks, ETCD_DRILL)).items():
+        _ = (mounted / key).write_text(value)
+    (identity_file,) = mounted.iterdir()
+    snapshot = tmp_path / 'snapshot.age'
+    _ = snapshot.write_text(age.encrypt('an etcd snapshot', [returned]))
+    opened = process_sessions.run(
+        [age.BINARY, '--decrypt', '--identity', str(identity_file), str(snapshot)],
+        text=True,
+        check=True,
+        timeout=TIMEOUT,
+    )
+    assert opened.stdout == 'an etcd snapshot'
+
+
+@pytest.mark.usefixtures('pinned_age')
+def test_running_the_etcd_drill_generator_again_replaces_both_halves(stacks: Stacks, tmp_path: Path) -> None:
+    """A second run draws a new identity: one recipient on file, the new one, and the sealed value is its identity."""
+    sealer = sealing.Sealer(certificate='', open_stack=stacks.open, run=sealed_as_marked)
+    recipient_file = tmp_path / 'etcd-drill-recipient.txt'
+    first = derived.etcd_drill_age_identity(sealer=sealer, recipient_file=recipient_file)
+
+    second = derived.etcd_drill_age_identity(sealer=sealer, recipient_file=recipient_file)
+
+    assert second != first
+    assert recipients_on_file(recipient_file) == [second]
+    (sealed,) = written(stacks, ETCD_DRILL).values()
+    assert age.recipient(sealed.removeprefix('AgB-sealed-').strip()) == second
+
+
+def test_the_etcd_drill_generator_into_a_k8s_base_that_does_not_exist_draws_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A missing declaring stack refuses before an identity is drawn, and no recipient lands on file."""
+    absent = Stacks()
+
+    def undrawn() -> age.Identity:
+        raise AssertionError('an identity was drawn before the seal found its stack')
+
+    monkeypatch.setattr(derived.age, 'generate', undrawn)
+    sealer = sealing.Sealer(certificate='', open_stack=absent.open, run=sealed_as_marked)
+    recipient_file = tmp_path / 'etcd-drill-recipient.txt'
+
+    with pytest.raises(pulumi_config.StackMissing):
+        _ = derived.etcd_drill_age_identity(sealer=sealer, recipient_file=recipient_file)
+    assert not recipient_file.exists()
+    assert absent.runner(K8S_BASE).plain == {}
+
+
+@pytest.mark.usefixtures('pinned_age')
+def test_a_seal_that_fails_leaves_the_recipient_on_file_as_it_was(stacks: Stacks, tmp_path: Path) -> None:
+    """The file is written only after the ciphertext: a refused seal leaves the recipient in service untouched."""
+
+    def prints_nothing(args: Sequence[str], *, stdin: str | None) -> str:
+        del args, stdin
+        return ''
+
+    sealer = sealing.Sealer(certificate='', open_stack=stacks.open, run=prints_nothing)
+    recipient_file = tmp_path / 'etcd-drill-recipient.txt'
+    _ = recipient_file.write_text('# the key in service\nage1inservice\n')
+
+    with pytest.raises(SlotRefused):
+        _ = derived.etcd_drill_age_identity(sealer=sealer, recipient_file=recipient_file)
+    assert recipients_on_file(recipient_file) == ['age1inservice']
+    assert stacks.runner(K8S_BASE).plain == {}
+
+
+@pytest.mark.usefixtures('pinned_age')
+def test_the_etcd_drill_generator_needs_no_kit_on_a_machine_holding_both_passphrase_slots(
+    tmp_path: Path, credential_files: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`credentials derived etcd-drill-age-identity generate`, the command as the operator runs it.
+
+    It reads `physical`'s state under that stack's passphrase for the
+    cluster's certificate and writes into `k8s-base` under the stack
+    passphrase, each from its workstation slot. The kit is a real one,
+    locked, every prompt fails the case, and the escrow holds nothing, so a
+    run that reached for either would stop. Only the certificate fetch is
+    stood in for, which reads the kubeconfig as the command does and asks
+    `kubeseal` nothing, and the recipient file is the case's own.
+    """
+    credential_files.mkdir(parents=True)
+    _ = (credential_files / workstation.PASSPHRASE).write_text('the-stack-passphrase\n')
+    _ = (credential_files / workstation.PHYSICAL_PASSPHRASE).write_text('the-physical-passphrase\n')
+    kit = KdbxStore.create(tmp_path / 'kit.kdbx', 'kit-password')
+    bundle_dir = tmp_path / 'bundle'
+    bundle_dir.mkdir()
+    _ = (bundle_dir / 'backend-url').write_text('postgres://operator@192.0.2.10:5432/pulumi_state\n')
+
+    def unasked(prompt: str = '') -> str:
+        raise AssertionError(f'the run prompted: {prompt}')
+
+    monkeypatch.setattr('getpass.getpass', unasked)
+    backend = UnderOwnPassphrases(
+        runners={
+            PHYSICAL: PathPulumi(outputs={conventions.PHYSICAL_OUTPUTS.kubeconfig: KUBECONFIG}),
+            K8S_BASE: PathPulumi(),
+        },
+        passphrases={PHYSICAL: 'the-physical-passphrase', K8S_BASE: 'the-stack-passphrase'},
+    )
+    monkeypatch.setattr(pulumi_cli, 'run_pulumi', backend)
+
+    def certificate_unfetched(
+        physical: pulumi_config.Stack,
+        *,
+        open_stack: Callable[[str], pulumi_config.Stack],
+        run: sealing.Kubeseal = sealed_as_marked,
+    ) -> sealing.Sealer:
+        _ = run, sealing.cluster_kubeconfig(physical)
+        return sealing.Sealer(certificate='', open_stack=open_stack, run=sealed_as_marked)
+
+    monkeypatch.setattr(sealing, 'cluster_sealer', certificate_unfetched)
+    recipient_file = tmp_path / 'etcd-drill-recipient.txt'
+
+    def in_the_case(path: Path) -> Path:
+        assert path == derived.ETCD_DRILL_RECIPIENT_FILE
+        return recipient_file
+
+    monkeypatch.setattr(derived, 'committed_target', in_the_case)
+
+    status = cli.main(
+        [
+            '--kdbx',
+            str(kit.path),
+            '--escrow',
+            str(tmp_path / 'escrow'),
+            'derived',
+            derived.ETCD_DRILL_AGE_IDENTITY_ROW,
+            'generate',
+            '--bundle-dir',
+            str(bundle_dir),
+        ]
+    )
+
+    assert status == 0
+    (on_file,) = recipients_on_file(recipient_file)
+    assert set(backend.runners[K8S_BASE].plain) == {ETCD_DRILL.path(key) for key in ETCD_DRILL.keys}
+    (sealed,) = backend.runners[K8S_BASE].plain.values()
+    assert age.recipient(sealed.removeprefix('AgB-sealed-').strip()) == on_file
 
 
 # -- what the stack files hold ------------------------------------------------

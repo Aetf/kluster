@@ -210,6 +210,7 @@ _ORDER = """when to run what:
        credentials derived b2-writer seal --only writer-vm-monitoring
        credentials derived state-backend-upkeep seal
        credentials derived b2-freshness-dumps mint
+       credentials derived etcd-drill-age-identity generate
          Every value a stack program reads before the first wave, which is
          every value k8s-base reads, once physical has brought the cluster up
          and k8s-base runs the sealed-secrets controller. Each is sealed with
@@ -227,11 +228,15 @@ _ORDER = """when to run what:
          with and their restores read, each minted by physical's apply and
          read out of physical's state; the client bundle the state table's
          daily upkeep reaches the state backend with, as the role upkeep,
-         issued from the escrowed CA; and the list-only B2 key the dump-age
+         issued from the escrowed CA; the list-only B2 key the dump-age
          check lists the state backend's dump prefix with, minted from the
          B2 seed and pushed into the ops repo's repository secrets in the
-         same run. Commit the stack file; the next k8s-base apply hands each
-         to what reads it. A value k8s-base gains after this stage has run is
+         same run; and the age identity the monthly etcd restore-verify
+         decrypts the newest snapshot with, drawn here, whose public half
+         the same run writes to
+         src/kluster/conventions/etcd-drill-recipient.txt. Commit the stack
+         file, and that file with it; the next k8s-base apply hands each to
+         what reads it. A value k8s-base gains after this stage has run is
          sealed by its own command ahead of its reader's merge. Re-running a
          mint rotates what it minted; a `bgp record` from here on seals in
          the same run.
@@ -368,6 +373,10 @@ _ORDER = """when to run what:
          so nothing counts its generations -- the file is what refuses a
          run without --rotate. Then commit, operator-stack state-backend
          up --force, and one fresh dump for the drill to open.
+    credentials derived etcd-drill-age-identity generate
+         The etcd restore-verify's key: a fresh identity sealed into the
+         k8s-base stack's config, its recipient over the one on file, both
+         in one run and committed together. Needs no kit.
     credentials derived drill-credentials mint [--only oci|b2]
          The drill's OCI and B2 keys, both into that same Environment: a
          re-run is the rotation of both, --only rotates one.
@@ -1368,6 +1377,40 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_bundle_dir(drill_identity_generate)
 
+    # The etcd restore-verify's age key, drawn here and escrowed nowhere, as
+    # the drill's is; its consumer is in the cluster, so its private half is
+    # sealed to the cluster and its public half lands in a committed file
+    # for the etcd snapshots to be encrypted to (`derived.py`).
+    etcd_drill_identity = rows.add_parser(
+        derived.ETCD_DRILL_AGE_IDENTITY_ROW,
+        help='the age key the monthly etcd restore-verify opens the newest snapshot with',
+        description=(
+            "The age identity the cluster's etcd restore-verify holds. Its public half is committed for the etcd "
+            'snapshots to be encrypted to, beside the escrowed backup generations; its private half is sealed to '
+            "the cluster for the verify's Secret and is in no kit row and no escrow ciphertext, because every "
+            'snapshot it opens also opens with an escrowed generation, so losing it costs a fresh key rather '
+            "than a snapshot. It is a key of its own rather than the state-backend drill's, which would open "
+            'every state dump besides.'
+        ),
+    )
+    etcd_drill_identity_verbs = etcd_drill_identity.add_subparsers(dest='action', required=True, metavar='<verb>')
+    etcd_drill_identity_generate = etcd_drill_identity_verbs.add_parser(
+        'generate',
+        help="draw it: the private half sealed into the k8s-base stack's config, the public half into a file",
+        description=(
+            "Fetch the sealing certificate from the cluster's sealed-secrets controller, with the kubeconfig in "
+            "the physical stack's state, and hold the k8s-base stack to exist; then draw a fresh age identity, "
+            'seal it with kubeseal for the Secret the verify reads, bound to that name and namespace, write the '
+            "ciphertext in the clear into the k8s-base stack's config and read it back, and only then write the "
+            f'public half to `src/kluster/conventions/{derived.ETCD_DRILL_RECIPIENT_FILE.name}`, a file to commit '
+            "with the stack file. Both stacks are opened under their passphrases' workstation slots, and nothing is "
+            'read from the kit. '
+            'Re-running this is the rotation, and is the seal again after a rebuild of the cluster: the '
+            'private half cannot be read back, so each run draws a fresh identity over both halves.'
+        ),
+    )
+    _add_bundle_dir(etcd_drill_identity_generate)
+
     # The drill's other row: two mints the rows above already run, aimed at
     # the drill's own boundaries, every carrier into the same Environment
     # through the sink. No `--compartment`: the drill compartment is a
@@ -2197,6 +2240,18 @@ def main(argv: list[str] | None = None) -> int:
                 target = appliance_config.drill_recipient_target()
                 _ = derived.drill_age_identity(
                     _forge(_opener(args, store, registry)), recipient_file=target, rotate=args.rotate
+                )
+            # The etcd restore-verify's age identity: drawn here, sealed to
+            # the cluster and escrowed nowhere. The public half is written into
+            # `conventions` for the operator to commit with the stack file.
+            # Neither stack's passphrase is recovered with the kit while its
+            # workstation slot holds it, so the run asks for none.
+            case ('derived', derived.ETCD_DRILL_AGE_IDENTITY_ROW, 'generate'):
+                # The target first: a file no commit picks up must stop the
+                # run before anything is drawn or sealed.
+                target = derived.committed_target(derived.ETCD_DRILL_RECIPIENT_FILE)
+                _ = derived.etcd_drill_age_identity(
+                    sealer=_sealer(_opener(args, store, registry)), recipient_file=target
                 )
             # The drill's provider keys: two seeds out of the kit, every
             # carrier through the same sink as the admin token. The

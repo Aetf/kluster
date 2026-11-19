@@ -109,7 +109,9 @@ def expected(path: list[str]) -> str | None:
             return f'derived.{row}'.replace('-', '_')
         case [
             'derived',
-            cli.derived.DRILL_AGE_IDENTITY_ROW | cli.derived.STATE_BACKEND_HOST_KEY_ROW as row,
+            cli.derived.DRILL_AGE_IDENTITY_ROW
+            | cli.derived.ETCD_DRILL_AGE_IDENTITY_ROW
+            | cli.derived.STATE_BACKEND_HOST_KEY_ROW as row,
             'generate',
         ] | ['derived', cli.derived.STATE_BACKEND_SERVER_ROW as row, 'issue']:
             # The `generate` rows that escrow nothing, and the `issue` of a
@@ -280,6 +282,7 @@ class Dispatch:
             (cli.derived, 'oci_state_backend', 'ocid1.user.test'),
             (cli.derived, 'b2_management', 'key-id'),
             (cli.derived, 'drill_age_identity', 'age1recipient'),
+            (cli.derived, 'etcd_drill_age_identity', 'age1recipient'),
             (cli.derived, 'drill_credentials', {}),
             (cli.derived, 'b2_freshness_dumps', 'key-id'),
             (cli.derived, 'b2_state_backend_management', 'key-id'),
