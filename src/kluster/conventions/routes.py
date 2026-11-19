@@ -251,7 +251,11 @@ class Held[T: (Route, Passthrough, Host)]:
 
 @dataclass(frozen=True)
 class Balancer:
-    """`internet` at the balancer, with the names the port is dialed at."""
+    """`internet` at the balancer, with the names it publishes for the port.
+
+    A front that publishes none is dialed at a name another row publishes:
+    the one its home side shares, as the discovery server's does.
+    """
 
     hosts: tuple[Host | Held[Host], ...] = ()
 
@@ -387,6 +391,13 @@ EXPOSURES: Mapping[str, Exposure] = MappingProxyType(
                     lan=Vip('syncapi'),
                 ),
             )
+        ),
+        # The discovery server, on a port of its own at the balancer and at
+        # the LAN VIP (Aetf/kluster-ops#723). It is dialed at `syncapi`, which
+        # the peer port publishes and its home side shares, so it publishes
+        # no name of its own.
+        'stdiscosrv': Exposure(
+            ports=(Port('stdiscosrv', 8443, Transports.TCP, internet=Balancer(), lan=Vip('syncapi')),)
         ),
         # The bulk-transfer peer port, through the site's forward and
         # pinhole: inbound peer traffic lands where its outbound traffic

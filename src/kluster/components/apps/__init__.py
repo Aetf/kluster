@@ -19,8 +19,9 @@ that says how it is reached, and its component makes one call for it,
 
 A `Passthrough` row is refused, naming its host: Cilium drops a TLS
 passthrough listener together with the zone's wildcard listener on the same
-port, and how such a row is reached instead is Aetf/kluster-ops#723
-(`kluster.lib.k8s.refuse_passthrough`). Every route without a gate removes the
+port, so a pod that terminates its own TLS is reached at a raw port instead,
+as the discovery server is (Aetf/kluster-ops#723,
+`kluster.lib.k8s.refuse_passthrough`). Every route without a gate removes the
 portal's identity headers from the request, since nothing but the client
 writes them there (`kluster.lib.k8s.Portal`).
 
