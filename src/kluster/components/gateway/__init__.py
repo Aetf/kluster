@@ -126,10 +126,9 @@ DELIVERED_UNITS: tuple[str, ...] = (UDM_BOOT_UNIT, WATCHDOG_UNIT, access.CONVERG
 #: The address families whose policy rules the health reading holds to a rule
 #: that looks up the main table: the rule the gateway's own packets are routed
 #: by, and one networkd under its defaults removes with every other rule it did
-#: not create (physical/gateway.md §1.2). IPv4 is the family the device's
-#: rules have been read in; IPv6 joins once a reading of the healthy device
-#: shows such a rule there too.
-POLICY_RULE_FAMILIES: tuple[str, ...] = ('4',)
+#: not create (physical/gateway.md §1.2). The healthy device holds that rule
+#: in both families.
+POLICY_RULE_FAMILIES: tuple[str, ...] = ('4', '6')
 
 #: The name `systemd-analyze cat-config` reads networkd's configuration by,
 #: main file and drop-ins together in the order networkd applies them.

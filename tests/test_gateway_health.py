@@ -94,9 +94,13 @@ SYSTEMD = 'systemd'
 
 MACHINE_UNITS = tuple(declaration.unit_name for declaration in (caddy(), *RESOLVERS, OVERLAY))
 
-#: The policy rules of a healthy gateway, in the form `ip rule show` prints
-#: them: the firmware's rule that looks up the main table, and no kernel-default
-#: `32766` one, which the device does not hold.
+#: The address families the device holds policy rules in, as `ip -<family>` names them.
+RULE_FAMILIES = ('4', '6')
+
+#: The policy rules of a healthy gateway, in either family, in the form
+#: `ip rule show` prints them: the firmware's rule that looks up the main
+#: table, and no kernel-default `32766` one that looks up main, which the
+#: device does not hold.
 RULES = '0:\tfrom all lookup local\n32000:\tfrom all lookup main\n'
 #: The same rules after networkd removed what it did not create, which leaves
 #: the kernel's own.
@@ -172,10 +176,6 @@ class _Port:
     master: str | None
     #: Whether the device lists the port among its links; the machine's `host0` names it either way.
     listed: bool = True
-
-
-#: The address family the reading reads the rules of first.
-FAMILY = gateway.POLICY_RULE_FAMILIES[0]
 
 
 def playbook_titles() -> set[str]:
@@ -444,7 +444,7 @@ def _device(tmp_path: Path, *, legacy: tuple[conventions.gateway.LegacyVhost, ..
     )
     _ = device.neighbor.write_text(NEIGHBOR)
     _write_ports(device)
-    for family in gateway.POLICY_RULE_FAMILIES:
+    for family in RULE_FAMILIES:
         _ = (device.rules / family).write_text(RULES)
     # `systemctl --version` as Debian's systemd answers it, the release first;
     # every other question goes to the stand-in systemd.
@@ -640,8 +640,13 @@ def _move_systemd_across_the_terminate_release(device: _Device) -> None:
     _ = device.systemd_release.write_text(str(_systemd_release(terminate_signals_nspawn=moved)))
 
 
-def _lose_the_main_rule(device: _Device) -> None:
-    _ = (device.rules / FAMILY).write_text(RULES_WITHOUT_MAIN)
+def _losing_the_main_rule(family: str) -> Callable[[_Device], None]:
+    """The deviation in which networkd removed the rules of `family` it did not create, the other family untouched."""
+
+    def lose_the_main_rule(device: _Device) -> None:
+        _ = (device.rules / family).write_text(RULES_WITHOUT_MAIN)
+
+    return lose_the_main_rule
 
 
 def _let_networkd_manage_a_port(device: _Device) -> None:
@@ -719,7 +724,8 @@ def _misshape_the_bridges_lease_line(device: _Device) -> None:
         (_revise_dash, 'dash', gateway.PLAYBOOKS.base),
         (_replace_bin_sh, '/bin/sh', gateway.PLAYBOOKS.base),
         (_move_systemd_across_the_terminate_release, 'systemd', gateway.PLAYBOOKS.base),
-        (_lose_the_main_rule, f'ip -{FAMILY} rule', gateway.PLAYBOOKS.networkd),
+        (_losing_the_main_rule('4'), 'ip -4 rule', gateway.PLAYBOOKS.networkd),
+        (_losing_the_main_rule('6'), 'ip -6 rule', gateway.PLAYBOOKS.networkd),
         (_let_networkd_manage_a_port, PORT, gateway.PLAYBOOKS.networkd),
         (_turn_an_option_back_on_in_a_later_drop_in, GUARDED, gateway.PLAYBOOKS.networkd),
         (_renumber_the_bridge, BRIDGE, gateway.PLAYBOOKS.prefix),
@@ -747,7 +753,8 @@ def _misshape_the_bridges_lease_line(device: _Device) -> None:
         'dash',
         'bin-sh',
         'systemd',
-        'no-main-rule',
+        'no-main-rule-v4',
+        'no-main-rule-v6',
         'managed-link',
         'option-on',
         'bridge-renumbered',
@@ -1235,7 +1242,7 @@ def _healthy(_: _Device) -> None:
         _fail_the_boot_chain,
         _take_the_member_offline,
         _leave_a_member_uncached,
-        _lose_the_main_rule,
+        _losing_the_main_rule('6'),
         _let_networkd_manage_a_port,
         _turn_an_option_back_on_in_a_later_drop_in,
         _stop_the_suite,
