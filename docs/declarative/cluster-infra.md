@@ -353,6 +353,9 @@ classes its objects fall into (§1.2):
     the evaluation interval below), so a run that succeeds is never
     reported stale. A test holds every CronJob `k8s-base` and `apps`
     declare to a row, and every row to a CronJob one of them declares.
+    A CronJob a chart renders is not a stack program's and has no row:
+    whether one a chart bump brings in needs watching is the bump's
+    review to say (operations.md §1).
     **Every scrape job an alert reads is watched by the scrape-target
     family** (operations.md §6.4): a job that reports nothing leaves
     each alert that reads it evaluating over no series, silent rather
