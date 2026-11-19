@@ -204,6 +204,37 @@ facts about them.
     the same `seal` seals the etcd snapshots' writer key strict, since one
     Secret reads it.
 
+    **A sealed value is on `main` before what reads it.** A value a
+    program cannot run without stops the run where it is read
+    (style/pulumi.md, "Layering"), and a merge applies the stack, so a
+    reader merged ahead of its ciphertext would hold the deploy chain red
+    until a sitting. A ported ciphertext exists before its reader is
+    written, and lands in its reader's pull request. A value
+    `credentials` seals exists only once its command has run, and the
+    command runs from `main`: the row is settled there, with the name and
+    the namespace a strict seal binds into the ciphertext, and a key
+    `physical` mints is minted there and on no branch. So such a value
+    lands in order:
+
+    -   its **declaration**: the census row, the register row (rule 3),
+        the command that seals it and whatever that command reads, which
+        is everything that names the value and nothing that reads it;
+    -   its **ciphertext**: the operator runs the command from `main` and
+        commits what it wrote, and no code changes with it;
+    -   its **reader**: the program's read and what consumes the Secret,
+        whose preview plans the SealedSecret once its base holds the
+        ciphertext, and which merges after that.
+
+    Between the last two the value sits in its own slot, sealed at the
+    scope it is opened at, and waits only for its reader's merge, which
+    is not the parking rule 2 forbids. One sitting seals every declared
+    value the stack files do not hold yet. Taking a value away runs the
+    order backwards: the reader goes before the ciphertext and the row,
+    or with them. The bring-up's own values are the dated exception:
+    their readers merged before a controller existed to seal to, and the
+    tolerance of physical/bring-up.md §1 declares nothing for an absent
+    one until its stage 8 ends.
+
     **The operator stacks are encrypted apart, under the operator
     passphrase.** An operator stack is one no CI job runs
     (framework/pulumi.md §3.3); `github` is one, and its config secret
@@ -1709,10 +1740,11 @@ operator-passphrase generate` and `recover`.
     `etcd` key, which the hourly etcd snapshot uploads with, and the
     `monitoring` namespace's, which the metrics stores' backups upload
     with and their restores read. The stack file is then committed, and
-    the next `k8s-base` apply hands each to what reads it. A value whose
-    reader merges after this stage has run is sealed by its own command,
-    on its own, before the last step of physical/bring-up.md stage 8,
-    from which an absent value stops the run by name.
+    the next `k8s-base` apply hands each to what reads it. A value
+    `k8s-base` gains after this stage has run is sealed by its own
+    command ahead of its reader's merge (§1 rule 6), and its declaration
+    adds that command to this stage, where a bring-up from scratch runs
+    it.
 12. `credentials derived b2-writer seal` — the backup bucket's writer
     keys, at the hand-over to the first wave (physical/bring-up.md stage
     9): after the legacy sealing key is carried into the cluster and the
@@ -1798,11 +1830,12 @@ Restic passwords will not join that list: `claim` under a retention
 class (declarative/workloads.md §3) generates its repository's password
 into state and puts it in the repository's SealedSecret, so a new volume
 in a namespace that already backs up needs no `credentials` run (rule
-6). A namespace that starts backing up does: a row in
+6). A namespace that starts backing up does, in rule 6's order: a row in
 `conventions.backup.BACKED_NAMESPACES`, and one in
 `conventions.sealed.WRITER_KEY_STACKS` when `k8s-base` rather than `apps`
-declares what reads its key; the `physical` apply that mints the key; and
-`credentials derived b2-writer seal`. Until the commands
+declares what reads its key; the `physical` apply that mints the key;
+`credentials derived b2-writer seal`, and the stack file committed; and
+only then the claim that reads the key. Until the commands
 above exist, a bring-up delivers the seed kit; the operator passphrase;
 the `state-backend` stack's configuration and the state backend it
 declares; the stack passphrase and `physical`'s; the zones token, the gateway's ACME token, the

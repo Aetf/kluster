@@ -6,7 +6,9 @@ the cluster's sealing key alone. It needs no stack encryption, so it is a
 in the clear beside that stack's config secrets (credentials.md §1 rule 6,
 rfc-007 §6.2). Two programs agree on each one: the `credentials` command seals
 it and writes it there, and the stack program reads it there and hands it to
-`sealed_secret`. Two readers is what places the census here.
+`sealed_secret`. Two readers is what places the census here. A row lands ahead
+of what reads it, with its ciphertext between the two (credentials.md §1 rule
+6).
 
 Each row names the Secret it becomes, the namespace that Secret lives in, the
 keys of its data, the scope it is sealed at and the stack that declares it.

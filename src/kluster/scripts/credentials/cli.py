@@ -224,11 +224,10 @@ _ORDER = """when to run what:
          monitoring namespace's, which the metrics stores' backups upload
          with and their restores read, each minted by physical's apply and
          read out of physical's state. Commit the stack file; the next
-         k8s-base apply hands each to what reads it. A value whose reader
-         merges after this stage has run is sealed on its own before the
-         bring-up's gate ends, after which an absent value stops the run.
-         Re-running either mint rotates what it minted; a `bgp record` from
-         here on seals in the same run.
+         k8s-base apply hands each to what reads it. A value k8s-base gains
+         after this stage has run is sealed by its own command ahead of its
+         reader's merge. Re-running either mint rotates what it minted; a
+         `bgp record` from here on seals in the same run.
    12. credentials derived b2-writer seal
          The backup bucket's writer keys, at the hand-over to the first wave:
          after the legacy sealing key is carried into the cluster and the
