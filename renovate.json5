@@ -706,6 +706,13 @@
       // Position is load-bearing, as for the `jdx/mise-action` rule: this sits
       // *after* the rule grouping the whole mise manager as the toolchain, so
       // its group wins for `talosctl`. A test holds the order.
+      //
+      // A Talos release can move the cluster's etcd to another minor, and the
+      // restore-verify's image follows that minor (`docker/etcd-age.conf`),
+      // behind an approval of its own that no rule can tie to this one: the
+      // minor a release defaults to is read off its source, not off any data
+      // source. The pull request says so, as the Fedora CoreOS major's says
+      // what it moves.
       matchDepNames: [
         'siderolabs/talos',
         'talosctl',
@@ -714,6 +721,9 @@
       groupName: 'talos and the node fleet',
       groupSlug: 'physical',
       dependencyDashboardApproval: true,
+      prBodyNotes: [
+        'A Talos release may move the cluster\'s etcd to another minor (`DefaultEtcdVersion` in Talos\' constants). If it does, approve the `registry.k8s.io/etcd` bump of `docker/etcd-age.conf` on the dependency dashboard with it, so the restore-verify restores with the minor the cluster runs.',
+      ],
     },
     {
       // The appliance's pins change the box rather than a library: a release
@@ -1027,7 +1037,8 @@
       // releases are re-enabled for them, because with no group to ride along
       // in, the global `patch: enabled: false` would drop them entirely —
       // and an image the cluster pins by exact tag never picks one up
-      // implicitly.
+      // implicitly. A rule further down takes them off again for a pin whose
+      // patches are not worth a pull request each, `etcd-age.conf`'s etcd.
       matchFileNames: [
         'docker/**',
       ],
@@ -1140,6 +1151,44 @@
         'patch',
       ],
       dependencyDashboardApproval: true,
+    },
+    {
+      // The etcd the restore-verify restores with, read off `ETCD` in
+      // `etcd-age.conf`. It follows the minor the cluster's etcd runs, not
+      // upstream's newest: a newer `etcdutl` restores an older snapshot, an
+      // older one is not promised to restore a newer one, and a newer one
+      // proves less about the cluster's own etcd. So a minor or a major waits
+      // on the dashboard, and is approved with the Talos release that moves
+      // the cluster's minor, whose pull request says so.
+      matchFileNames: [
+        'docker/etcd-age.conf',
+      ],
+      matchDepNames: [
+        'registry.k8s.io/etcd',
+      ],
+      matchUpdateTypes: [
+        'major',
+        'minor',
+      ],
+      dependencyDashboardApproval: true,
+    },
+    {
+      // Its patches stay under the global `patch: enabled: false`, which the
+      // rule for `docker/` above lifts for every other self-built image. This
+      // etcd restores a snapshot and reads it back, and serves no cluster, so
+      // its patch level buys no exposure worth a conf pull request and a
+      // deploy pull request each month; a patch arrives with the next minor.
+      // Digest refreshes stay in the monthly group above.
+      matchFileNames: [
+        'docker/etcd-age.conf',
+      ],
+      matchDepNames: [
+        'registry.k8s.io/etcd',
+      ],
+      matchUpdateTypes: [
+        'patch',
+      ],
+      enabled: false,
     },
     {
       // The any-Terraform-provider bridge every SDK under `sdks/` is generated
