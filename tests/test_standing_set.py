@@ -23,6 +23,7 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
+from typing import Any
 
 import pytest
 import pytest_asyncio
@@ -200,6 +201,40 @@ def test_a_node_volumes_class_retains_names_each_claims_directory_and_hands_out_
     )
     assert rendered.startswith('some-namespace/some-claim/')
     assert storage_class['metadata']['annotations'] == {'defaultVolumeType': 'local'}
+
+
+def _admits(topologies: list[dict[str, Any]], labels: dict[str, str]) -> bool:
+    """Whether a node with `labels` satisfies a class's `allowedTopologies`, as the scheduler decides it.
+
+    Kubernetes' `MatchTopologySelectorTerms` (`pkg/apis/core/v1/helper`): no
+    terms admit every node; otherwise a node is admitted by any term all of
+    whose expressions it satisfies, an expression by the node's value of its
+    key being one of its values, and a term without expressions admits none.
+    """
+    return not topologies or any(
+        term.get('matchLabelExpressions')
+        and all(labels.get(it['key']) in it['values'] for it in term['matchLabelExpressions'])
+        for term in topologies
+    )
+
+
+@pytest.mark.parametrize('row', sorted(conventions.NODE_VOLUMES))
+def test_a_node_volumes_class_admits_the_node_carrying_it_and_no_other(applied: Run, row: str) -> None:
+    """The scheduler places a consumer of the class only on the node its machine configuration labels with the row.
+
+    A consumer that does not select that node is refused a node rather than
+    placed where nothing mounts the volume. The labels are those the Talos
+    configuration gives the volume's node, a node carrying another volume and
+    a node carrying none.
+    """
+    topologies = applied.inputs(STORAGE_CLASS, f'{LOCAL_PATH}-{row}').get('allowedTopologies', [])
+
+    def labels(volume: str) -> dict[str, str]:
+        return talos.node_volume_label_patch(volume)['machine']['nodeLabels']
+
+    assert _admits(topologies, labels(row))
+    assert not _admits(topologies, labels(f'not-{row}'))
+    assert not _admits(topologies, {})
 
 
 def test_local_path_is_the_default_class_reclaims_delete_and_binds_on_scheduling(applied: Run) -> None:

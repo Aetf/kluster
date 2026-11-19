@@ -90,6 +90,11 @@
     file under another key's prefix, and the etcd snapshots upload one
     from stage 6 (declarative/physical.md §6,
     [Aetf/kluster-ops#857](https://github.com/Aetf/kluster-ops/issues/857)).
+*   **Updated:** 2026-11-19. §4.2's node-volume class allows only the
+    node carrying the volume, by its node label, so a consumer that does
+    not select that node is refused a node by the scheduler rather than
+    placed on another one (storage.md §6,
+    [Aetf/kluster-ops#870](https://github.com/Aetf/kluster-ops/issues/870)).
 *   **Updated:** 2026-11-19. §10's echo row is `Route('echo',
     internet=Direct(…))`, as rfc-007 §9.2 has it: off the proxy, so the
     request crosses the balancer with the client's address, and the name
@@ -1396,8 +1401,9 @@ first consumer holds no pod anywhere by itself. storage.md §6's static
 and one key of a configuration it already renders.
 
 **A volume that failed to mount still cannot take the data**, and
-neither half needs a step of its own. A pod on any other node meets the
-same refusal:
+neither half needs a step of its own. A pod that does not select the
+volume's node is refused a node by the class's allowed topology
+(storage.md §6):
 
 *   **At provisioning.** The helper pod's `hostPath` asks for
     `DirectoryOrCreate`, but the kubelet's view of `/var/mnt` is
