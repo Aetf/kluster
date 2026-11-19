@@ -1,0 +1,19 @@
+{#
+email-oauth2-proxy's configuration, the program's part of the ported Secret.
+Each field below in single braces is a key the Secret seals, which the
+sealed-secrets controller puts in its place (`kluster.lib.k8s.rendered_template`);
+everything else is the program's.
+-#}
+[IMAP-{{ port }}]
+server_address = imap.gmail.com
+server_port = 993
+local_certificate_path = {{ certificate }}
+local_key_path = {{ key }}
+
+[{account}]
+permission_url = https://accounts.google.com/o/oauth2/auth
+token_url = https://oauth2.googleapis.com/token
+oauth2_scope = https://mail.google.com/
+redirect_uri = http://localhost:{{ authorization_port }}
+client_id = {client_id}
+client_secret = {client_secret}
