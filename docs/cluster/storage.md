@@ -600,8 +600,8 @@ Per nodes.md §5, durability = declarative rebuild + backups + drills:
         disk. Its playbook is operations.md §7.2.
     -   **Status**: both run. The snapshot job's key and the
         restore-verify's two values are sealed into `k8s-base`, which
-        declares each CronJob only once its values are there
-        (physical/bring-up.md §1). Snapshots taken before the `k8s-base`
+        declares each CronJob with them and stops at the read of a value
+        it does not hold (physical/bring-up.md §1). Snapshots taken before the `k8s-base`
         apply that added the restore-verify's recipient carry the
         escrowed generations alone, and leave the listing within 14
         days.
@@ -620,9 +620,8 @@ Per nodes.md §5, durability = declarative rebuild + backups + drills:
     each copied hourly and incrementally by `vmbackup` to
     `b2://…/vm/monitoring/<store>/` (`conventions.backup.metrics_repo_path`)
     under the `vm` family's writer key, which `credentials` seals into
-    `k8s-base`, the stack that declares the monitoring stack; until the
-    key is sealed in, neither the backup jobs nor the restore are
-    declared. `vmbackup` copies from an
+    `k8s-base`, the stack that declares the monitoring stack, with the
+    backup jobs and the restore. `vmbackup` copies from an
     instant snapshot of hard links to immutable parts, because a
     file-by-file copy such as VolSync's is not consistent for a store
     that merges and deletes its parts while the copy runs. The restore

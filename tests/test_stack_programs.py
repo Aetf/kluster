@@ -4,8 +4,8 @@ What is held here is where each program's providers' credentials come from --
 the kubeconfig and the zones token, both out of the stack's own configuration,
 the kubeconfig read so that anything but a kubeconfig stops the run -- what
 each reads across a StackReference, with every sealed value configured, as the
-stack files hold them, and on the absent path with none, read so that anything
-but the machine fact it names stops the run, that what `apps` reads reaches
+stack files hold them, read so that anything but the machine fact it names
+stops the run, that what `apps` reads reaches
 the application it wires, and that each committed stack file turns a missed
 provider into an error. What `k8s-base` installs is `test_cilium.py`'s and
 `test_standing_set.py`'s; what an application's component declares is
@@ -33,6 +33,7 @@ from k8s_base_installation import (
     Physical,
     release_assets,
     sealed_values,
+    sealed_without,
 )
 from mock_monitor import declaring, run_under_backstop
 from pulumi.output import UNKNOWN
@@ -40,7 +41,7 @@ from pulumi.runtime.rpc import UNKNOWN as UNKNOWN_SENTINEL
 from referenced_stack import reading_back
 
 from kluster import conventions, stacks
-from kluster.lib.k8s import KUBECONFIG_KEY, UnusableKubeconfig
+from kluster.lib.k8s import KUBECONFIG_KEY, AbsentSealedValue, UnusableKubeconfig
 from kluster.lib.stack_addresses import Held, UnusableAddressOutput
 from kluster.stacks import apps
 
@@ -100,18 +101,13 @@ def _extensions() -> dict[str, str]:
 #: which the `kubernetes` provider serves.
 EXTENSIONS = _extensions()
 
-#: What each program reads across a StackReference, by stack and by whether
-#: its configuration holds every sealed value its stack declares or none: the
-#: pools' outputs; for `apps`, the `dns` stack's zone identifiers its records
-#: are declared in; and for `k8s-base` with the metrics reader's key sealed in,
-#: the volumes' OCIDs the pull of OCI's block-volume series is configured with.
-#: The stack files hold every sealed value; a run with none is the absent path
-#: (physical/bring-up.md §1).
-READS: dict[tuple[str, bool], frozenset[str]] = {
-    (conventions.STACK_NAMES.k8s_base, False): POOL_OUTPUTS,
-    (conventions.STACK_NAMES.k8s_base, True): POOL_OUTPUTS | {conventions.PHYSICAL_OUTPUTS.volume_ids},
-    (conventions.STACK_NAMES.apps, False): POOL_OUTPUTS | {apps.DNS_ZONE_IDS},
-    (conventions.STACK_NAMES.apps, True): POOL_OUTPUTS | {apps.DNS_ZONE_IDS},
+#: What each program reads across a StackReference, by stack: the pools'
+#: outputs; for `apps`, the `dns` stack's zone identifiers its records are
+#: declared in; and for `k8s-base`, the volumes' OCIDs the pull of OCI's
+#: block-volume series is configured with.
+READS: dict[str, frozenset[str]] = {
+    conventions.STACK_NAMES.k8s_base: POOL_OUTPUTS | {conventions.PHYSICAL_OUTPUTS.volume_ids},
+    conventions.STACK_NAMES.apps: POOL_OUTPUTS | {apps.DNS_ZONE_IDS},
 }
 
 #: Stack name → the program it runs, read off the dispatch table, so a case
@@ -167,14 +163,14 @@ async def declare(
     *,
     kubeconfig: str | None = KUBECONFIG,
     preview: bool = False,
-    sealed: bool = True,
+    sealed: dict[str, object] | None = None,
     dns_outputs: dict[str, object] | None = None,
 ) -> Run:
     """One program, declared once, with `kubeconfig` in its configuration, or none at all.
 
     The configuration holds every sealed value the census has the stack
-    declare (`sealed_values`), as the committed stack files do; with `sealed`
-    false it holds none, which is the absent path.
+    declare (`sealed_values`), as the committed stack files do, unless
+    `sealed` is given.
     `dns_outputs` is what the `dns` stack publishes, its zone identifiers
     unless given.
 
@@ -187,7 +183,7 @@ async def declare(
     secrets = {f'kluster:{apps.CLOUDFLARE_API_TOKEN}': ZONES_TOKEN}
     if kubeconfig is not None:
         secrets[f'kluster:{KUBECONFIG_KEY}'] = kubeconfig
-    plain = {f'kluster:{conventions.sealed.CONFIG_KEY}': json.dumps(sealed_values(name) if sealed else {})}
+    plain = {f'kluster:{conventions.sealed.CONFIG_KEY}': json.dumps(sealed_values(name) if sealed is None else sealed)}
     pulumi.runtime.set_all_config(secrets | plain | VERSIONS_CONFIG, secret_keys=list(secrets))
     monitor = await run_under_backstop(Run(dns_outputs), stack=name, preview=preview)
 
@@ -216,12 +212,6 @@ async def applied() -> dict[str, Run]:
     return {name: await declare(name) for name in PROGRAMS}
 
 
-@pytest_asyncio.fixture(scope='module', loop_scope='module')
-async def nothing_sealed() -> dict[str, Run]:
-    """The absent path: each program as `applied` declares it, with no sealed value in its configuration."""
-    return {name: await declare(name, sealed=False) for name in PROGRAMS}
-
-
 @pytest.mark.parametrize('name', PROGRAMS)
 def test_each_program_builds_one_kubernetes_provider_from_its_configured_kubeconfig(
     applied: dict[str, Run], name: str
@@ -242,11 +232,8 @@ def test_each_program_builds_one_kubernetes_provider_from_its_configured_kubecon
 
 
 @pytest.mark.parametrize('name', PROGRAMS)
-@pytest.mark.parametrize('sealed', [False, True], ids=['absent path, nothing sealed', 'every value sealed'])
-def test_no_program_reads_the_kubeconfig_across_a_stack_reference(
-    applied: dict[str, Run], nothing_sealed: dict[str, Run], name: str, sealed: bool
-) -> None:
-    """Each program reads only its machine facts from `physical`, and no kubeconfig crosses, sealed values or none.
+def test_no_program_reads_the_kubeconfig_across_a_stack_reference(applied: dict[str, Run], name: str) -> None:
+    """Each program reads only its machine facts from `physical`, and no kubeconfig crosses.
 
     `physical` is encrypted under a passphrase of its own (rfc-005 §5.1), and a
     StackReference from a stack that cannot decrypt it hands back `{}` for the
@@ -255,17 +242,15 @@ def test_no_program_reads_the_kubeconfig_across_a_stack_reference(
     from: the pools' members, which `k8s-base` builds its pools from and
     `apps` hands a raw port's Service (rfc-007 §3.1, §4.4; rfc-008 §4.1);
     the `dns` stack's zone identifiers, which `apps` declares its records
-    in (rfc-007 §3.1); and, once the metrics reader's key is sealed in, the
-    volumes' OCIDs,
-    which `k8s-base` configures the pull of OCI's block-volume series with
-    (`READS`).
+    in (rfc-007 §3.1); and the volumes' OCIDs, which `k8s-base` configures
+    the pull of OCI's block-volume series with (`READS`).
 
     Held two ways. By name, the by-name reads are the program's machine facts
     and nothing else. By value, the kubeconfig `physical` publishes here
     reaches no registration's inputs, providers included, which a read
     through the reference's `outputs` mapping would otherwise get past.
     """
-    run = (applied if sealed else nothing_sealed)[name]
+    run = applied[name]
     read = set(run.read_across)
     carrying = [
         f'{request.type}::{request.name}' for request in run.requested if PUBLISHED_KUBECONFIG in str(request.object)
@@ -273,7 +258,7 @@ def test_no_program_reads_the_kubeconfig_across_a_stack_reference(
 
     assert carrying == []
     assert conventions.PHYSICAL_OUTPUTS.kubeconfig not in read
-    assert read == READS[name, sealed]
+    assert read == READS[name]
 
 
 @pytest.mark.parametrize('name', PROGRAMS)
@@ -310,6 +295,30 @@ async def test_a_configured_kubeconfig_that_is_not_one_stops_the_run(name: str, 
 
     assert FILLED_BY in filled_by(str(refused.value))
     assert ('apply physical in full' in str(refused.value).lower()) == (found == 'sentinel')
+
+
+#: Every sealed value the census has `k8s-base` declare.
+K8S_BASE_VALUES: list[conventions.sealed.SealedValue] = [
+    value for value in conventions.sealed.VALUES.values() if value.stack == conventions.STACK_NAMES.k8s_base
+]
+
+
+@pytest.mark.parametrize('value', K8S_BASE_VALUES, ids=[value.name for value in K8S_BASE_VALUES])
+@pytest.mark.asyncio
+async def test_a_sealed_value_the_stack_does_not_hold_stops_k8s_base_at_its_read(
+    value: conventions.sealed.SealedValue,
+) -> None:
+    """Every value the program declares reaches the read that refuses an absent one, and no component reads around it.
+
+    The stack holds every other value the census has it declare, so the run
+    stops at this one's read and at no other: a value read some other way,
+    or read only where something else is present, would let the run go on
+    and declare a consumer of a Secret that is not there.
+    """
+    with pytest.raises(AbsentSealedValue) as refused:
+        _ = await declare(conventions.STACK_NAMES.k8s_base, sealed=sealed_without(value))
+
+    assert refused.value.value == value
 
 
 def test_the_kubeconfig_is_copied_under_the_key_both_programs_read() -> None:

@@ -42,8 +42,7 @@ pool, the worker's GUA beside its IPv4, which is a convention (rfc-008 §4.1);
 each is read so that anything but an address stops the run
 (`kluster.lib.stack_addresses`). The OCIDs of the cloud nodes' volumes cross
 the same way, which the pull of OCI's block-volume series names its series
-by; they are read only once that pull's key is sealed in, since nothing else
-reads them, and so that anything but a map of OCIDs stops the run
+by; they are read so that anything but a map of OCIDs stops the run
 (`kluster.lib.stack_volumes`). The age recipients the etcd snapshots are
 encrypted to are the escrowed backup generations' committed file, the one the
 state backend's dumps are encrypted to (`kluster.lib.state_backend.committed`),
@@ -53,9 +52,8 @@ or a file that is absent, stops the run. And the sealed values
 it declares are plain values of this stack's configuration, under the one key
 `conventions.sealed.CONFIG_KEY`, read out per value by the value's census row
 (`kluster.lib.k8s.sealed_ciphertext`) and handed to the component that
-declares it (rfc-007 §6.2). One the stack does not hold yet is declared as
-nothing, with a warning, until the bring-up's gate has passed
-(`kluster.lib.k8s.sealed_value`, physical/bring-up.md §1).
+declares it (rfc-007 §6.2). One the stack does not hold stops the run,
+naming the value and the command that seals it.
 
 The chart set is pinned on first contact (declarative/README.md, "Deliberately
 not pre-decided"), and each chart is a project-level `versions:chart-<name>`
@@ -182,9 +180,6 @@ async def main() -> None:
     # definitions.
     snapshots = SnapshotDefinitions('snapshot-definitions', definitions=snapshot_definitions, after=[cilium], opts=opts)
     _ = VolSync('volsync', chart=versions.chart['volsync'], after=[cert_manager, snapshots], opts=opts)
-    # The volumes' OCIDs are read only where the pull is declared, which is
-    # once the metrics reader's key is sealed in.
-    metrics_reader_key = sealed_ciphertext(conventions.sealed.OCI_METRICS, sealed)
     _ = Monitoring(
         'monitoring',
         stack_chart=versions.chart['victoria-metrics-k8s-stack'],
@@ -200,11 +195,9 @@ async def main() -> None:
         restore_image=versions.image['metrics-restore'],
         bucket_image=versions.image['metrics-bucket'],
         oci_pull=OciPull(
-            ciphertext=metrics_reader_key,
+            ciphertext=sealed_ciphertext(conventions.sealed.OCI_METRICS, sealed),
             volume_ids=stack_volumes.volume_ids(physical, conventions.PHYSICAL_OUTPUTS.volume_ids),
-        )
-        if metrics_reader_key is not None
-        else None,
+        ),
         oci_sdk_image=versions.image['oci-sdk'],
         freshness_key=sealed_ciphertext(conventions.sealed.B2_FRESHNESS_DUMPS, sealed),
         opts=opts,

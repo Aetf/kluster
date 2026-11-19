@@ -68,6 +68,7 @@ __all__ = (
     'WRITER_KEYS_BY_SCOPE',
     'WRITER_KEY_STACKS',
     'SealedValue',
+    'SealingCommand',
     'SealingScope',
     'writer_key',
 )
@@ -108,6 +109,30 @@ CONFIG_KEY = 'sealedSecrets'
 
 
 @dataclass(frozen=True)
+class SealingCommand:
+    """The `credentials derived` command that seals a census row's value: the register row, and its verb there.
+
+    The register (`kluster.scripts.credentials.slots.ROWS`) is the one place
+    that maps a census row to the row that delivers it, and a script is
+    nothing a program may import (style/pulumi.md, "Layering"), so the
+    command is spelled here, where the program reads it to name what seals an
+    absent value (`kluster.lib.k8s.AbsentSealedValue`). It is held to the
+    register and to the command tree by a seam test
+    (`tests/test_conventions.py`).
+    """
+
+    row: str
+    """The register row, which is the `credentials derived` subcommand."""
+    verb: str
+    """The row's verb that seals the value: not one verb for every row, since
+    a value recorded or escrowed before the cluster existed is sealed by a
+    verb of its own."""
+
+    def __str__(self) -> str:
+        return f'credentials derived {self.row} {self.verb}'
+
+
+@dataclass(frozen=True)
 class SealedValue:
     """One Secret the cluster receives as a SealedSecret, and where its ciphertext is committed."""
 
@@ -120,6 +145,9 @@ class SealedValue:
     stack: str
     """The stack that declares the SealedSecret, and whose configuration holds
     the ciphertext."""
+    sealed_by: SealingCommand
+    """The command that seals the value into `stack`'s configuration, which
+    the program names when it finds the value absent."""
     scope: SealingScope = SealingScope.STRICT
 
     def path(self, key: str) -> str:
@@ -145,6 +173,7 @@ DNS01_TOKEN = SealedValue(
     namespace=CERT_MANAGER_NAMESPACE,
     keys=('api-token',),
     stack=STACK_NAMES.k8s_base,
+    sealed_by=SealingCommand('cloudflare-dns01', 'mint'),
 )
 
 #: The worker's end of the BGP session's MD5 password: Cilium's BGPv2
@@ -155,6 +184,7 @@ BGP_PASSWORD = SealedValue(
     namespace=BGP_SECRETS_NAMESPACE,
     keys=('password',),
     stack=STACK_NAMES.k8s_base,
+    sealed_by=SealingCommand('bgp', 'seal'),
 )
 
 #: The id of the Home Assistant webhook alertmanager posts to, the one secret
@@ -167,6 +197,7 @@ ALERT_WEBHOOK = SealedValue(
     namespace=MONITORING_NAMESPACE,
     keys=('id',),
     stack=STACK_NAMES.k8s_base,
+    sealed_by=SealingCommand('alert-webhook', 'record'),
 )
 
 #: The OCI API key the block-volume metrics pull signs with: its own user's,
@@ -182,6 +213,7 @@ OCI_METRICS = SealedValue(
     namespace=MONITORING_NAMESPACE,
     keys=('fingerprint', 'key_content', 'user'),
     stack=STACK_NAMES.k8s_base,
+    sealed_by=SealingCommand('oci-metrics', 'mint'),
 )
 
 #: The client bundle the state table's daily upkeep reaches the state backend
@@ -198,6 +230,7 @@ STATE_UPKEEP_BUNDLE = SealedValue(
     namespace=STATE_UPKEEP_NAMESPACE,
     keys=('backend-url', 'ca.crt', 'client.crt', 'client.key'),
     stack=STACK_NAMES.k8s_base,
+    sealed_by=SealingCommand('state-backend-upkeep', 'seal'),
 )
 
 #: The state backend's dump-freshness key: B2's `listFiles` on the dump prefix
@@ -214,6 +247,7 @@ B2_FRESHNESS_DUMPS = SealedValue(
     namespace=MONITORING_NAMESPACE,
     keys=tuple(sorted(WRITER_KEY_FIELDS)),
     stack=STACK_NAMES.k8s_base,
+    sealed_by=SealingCommand('b2-freshness-dumps', 'mint'),
 )
 
 #: The backup bucket's `etcd` writer key, which the hourly etcd snapshot
@@ -229,6 +263,7 @@ ETCD_WRITER_KEY = SealedValue(
     namespace=ETCD_BACKUP_NAMESPACE,
     keys=tuple(sorted(WRITER_KEY_FIELDS)),
     stack=STACK_NAMES.k8s_base,
+    sealed_by=SealingCommand('b2-writer', 'seal'),
 )
 
 #: The backup bucket's `etcd-reader` key, which the etcd restore-verify lists
@@ -246,6 +281,7 @@ ETCD_READER_KEY = SealedValue(
     namespace=ETCD_BACKUP_NAMESPACE,
     keys=tuple(sorted(WRITER_KEY_FIELDS)),
     stack=STACK_NAMES.k8s_base,
+    sealed_by=SealingCommand('b2-reader', 'seal'),
 )
 
 #: The etcd restore-verify's age identity, private half: what the daily
@@ -264,6 +300,7 @@ ETCD_DRILL_IDENTITY = SealedValue(
     namespace=ETCD_BACKUP_NAMESPACE,
     keys=('age-identity',),
     stack=STACK_NAMES.k8s_base,
+    sealed_by=SealingCommand('etcd-drill-age-identity', 'generate'),
 )
 
 #: The mail relay's DKIM private key, which exim signs every mail zone's `k8s`
@@ -278,6 +315,7 @@ DKIM_EXIM = SealedValue(
     namespace='mail-system',
     keys=('tls.key',),
     stack=STACK_NAMES.apps,
+    sealed_by=SealingCommand('dkim-exim', 'record'),
 )
 
 #: Authelia's storage encryption key, which encrypts the second factors and
@@ -292,6 +330,7 @@ AUTHELIA_STORAGE_KEY = SealedValue(
     namespace='serving-system',
     keys=('STORAGE_ENCRYPTION_KEY',),
     stack=STACK_NAMES.apps,
+    sealed_by=SealingCommand('authelia-storage-key', 'seal'),
 )
 
 
@@ -327,6 +366,7 @@ def writer_key(namespace: str, family: BackupFamily) -> SealedValue:
         namespace=namespace,
         keys=tuple(sorted(WRITER_KEY_FIELDS)),
         stack=WRITER_KEY_STACKS.get(namespace, STACK_NAMES.apps),
+        sealed_by=SealingCommand('b2-writer', 'seal'),
         scope=SealingScope.NAMESPACE_WIDE,
     )
 

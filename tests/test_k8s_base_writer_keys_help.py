@@ -7,8 +7,8 @@ Two help texts tell the operator so: the bring-up order in `credentials
 Each case here is a writer key taken from the census (`conventions.sealed`),
 so a key that comes to be declared in `k8s-base` is a case without anyone
 editing this file, and a help text that leaves it out fails that case: an
-operator who follows it would finish the sitting with that key unsealed, and,
-once the bring-up's tolerance is gone, `k8s-base` stopped at the read.
+operator who follows it would finish the sitting with that key unsealed, and
+`k8s-base` stopped at the read.
 """
 
 from __future__ import annotations

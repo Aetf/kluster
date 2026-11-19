@@ -39,6 +39,7 @@ from typing import Any, NamedTuple, cast
 
 import pytest
 import yaml
+from credentials_command_tree import tree
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from fences import prose
@@ -65,7 +66,7 @@ from kluster.conventions import backup, identity, routes
 from kluster.conventions.cluster import Transports
 from kluster.conventions.outputs import BOOT_VOLUME
 from kluster.lib import k8s as lib_k8s
-from kluster.scripts.credentials import pulumi_config
+from kluster.scripts.credentials import cli, pulumi_config, slots
 
 # --------------------------------------------------------------------------
 # The site, zone, gateway and cloud censuses.
@@ -3233,6 +3234,29 @@ def test_the_dkim_key_every_mail_zone_publishes_is_the_one_conventions_holds() -
     }
     assert tags['v'] == 'DKIM1'
     assert isinstance(serialization.load_der_public_key(base64.b64decode(tags['p'])), rsa.RSAPublicKey)
+
+
+@pytest.mark.parametrize('value', conventions.sealed.VALUES.values(), ids=conventions.sealed.VALUES)
+def test_the_command_a_sealed_value_names_is_the_one_the_register_seals_it_with(
+    value: conventions.sealed.SealedValue,
+) -> None:
+    """A refusal of an absent value sends the operator to `sealed_by`, so it must be the command that writes the value.
+
+    The other side of the seam is the `credentials` program's own spelling of
+    the same decision: the register row whose SealedSecret targets hold the
+    value, which `tests/test_slots.py` proves is exactly one, and the command
+    tree its parser carries. The row named must be that register row, and
+    the row and the verb together a command the parser reaches.
+    """
+    sealing = [
+        name
+        for name, row in slots.ROWS.items()
+        if any(isinstance(target, slots.SealedSecret) and target.what == value for target in row.targets)
+    ]
+    commands = {path for path, _ in tree(cli.build_parser())}
+
+    assert sealing == [value.sealed_by.row]
+    assert ('derived', value.sealed_by.row, value.sealed_by.verb) in commands
 
 
 def test_a_sealed_values_path_refuses_a_key_it_does_not_carry() -> None:

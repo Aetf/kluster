@@ -67,6 +67,7 @@ __all__ = (
     'POD_SECURITY_ENFORCE_LABEL',
     'PORTAL',
     'PRIVATE_SPACE',
+    'AbsentSealedValue',
     'ApiClients',
     'ApplicationNamespace',
     'Backend',
@@ -117,6 +118,22 @@ _FILLED_BY = f'`credentials derived sync --only {KUBECONFIG_KEY}`'
 
 class UnusableKubeconfig(ValueError):
     """The stack's configuration holds no kubeconfig, or one no provider can open or whose certificate's expiry is unreadable."""
+
+
+class AbsentSealedValue(ValueError):
+    """The declaring stack holds no ciphertext for a census row its program reads.
+
+    `value` is the row, so a caller can tell which one stopped the run
+    without reading the message.
+    """
+
+    def __init__(self, value: SealedValue) -> None:
+        super().__init__(
+            f"sealed value {value.name!r} ({value.namespace}) is absent from {value.stack}'s "
+            f'{conventions.sealed.CONFIG_KEY}; `{value.sealed_by}` seals it, from main, ahead of the merge of what '
+            'reads it (credentials.md §1 rule 6)'
+        )
+        self.value = value
 
 
 def kubeconfig_from(configured: pulumi.Output[str] | None) -> pulumi.Output[str]:
@@ -1011,7 +1028,7 @@ def sealed_secret(
     )
 
 
-def sealed_ciphertext(value: SealedValue, configured: object) -> dict[str, str] | None:
+def sealed_ciphertext(value: SealedValue, configured: object) -> dict[str, str]:
     """The ciphertext of each of a census row's keys, out of what the declaring stack holds under its sealed key.
 
     `configured` is that whole object as the program read it, `None` when the
@@ -1019,20 +1036,24 @@ def sealed_ciphertext(value: SealedValue, configured: object) -> dict[str, str] 
     `SealedValue.path` -- the value's name, then each data key -- so what the
     sealing command wrote is what is found.
 
-    `None` when the stack holds nothing under the row's name: a value not yet
-    sealed in, which `sealed_value` declares as nothing until the bring-up's
-    gate has passed (physical/bring-up.md §1). Anything else that is not a
-    non-empty string per key is a write gone wrong, and is refused as a
-    `ShapeRefused` naming its path and its type, never its content
-    (`kluster.lib.config`): ciphertext does not belong in a run log either.
+    **Absent, it stops the run**, as an unusable kubeconfig does: a stack
+    that holds nothing under the row's name, or no sealed value at all, is
+    refused with `AbsentSealedValue`, naming the value, its namespace and the
+    command that seals it (`SealedValue.sealed_by`). A value lands ahead of
+    what reads it (credentials.md §1 rule 6), so a reader merged ahead of its
+    ciphertext stops at its own preview rather than declaring a consumer of a
+    Secret that is not there. Anything else that is not a non-empty string
+    per key is a write gone wrong, and is refused as a `ShapeRefused` naming
+    its path and its type, never its content (`kluster.lib.config`):
+    ciphertext does not belong in a run log either.
     """
     if configured is None:
-        return None
+        raise AbsentSealedValue(value)
     if not isinstance(configured, Mapping):
         raise _not_a_mapping(conventions.sealed.CONFIG_KEY, configured, 'one entry per value')
     held = cast('Mapping[str, object]', configured).get(value.name)
     if held is None:
-        return None
+        raise AbsentSealedValue(value)
     if not isinstance(held, Mapping):
         raise _not_a_mapping(f'{conventions.sealed.CONFIG_KEY}["{value.name}"]', held, 'its data keys')
     data = cast('Mapping[str, object]', held)
@@ -1049,11 +1070,11 @@ def sealed_value(
     resource_name: str,
     value: SealedValue,
     *,
-    ciphertext: Mapping[str, pulumi.Input[str]] | None,
+    ciphertext: Mapping[str, pulumi.Input[str]],
     rendered: Mapping[str, str] | None = None,
     opts: pulumi.ResourceOptions | None = None,
-) -> crds.bitnami.v1alpha1.SealedSecret | None:
-    """The SealedSecret of a census row, named, placed and scoped as the row says; none while its ciphertext is absent.
+) -> crds.bitnami.v1alpha1.SealedSecret:
+    """The SealedSecret of a census row, named, placed and scoped as the row says.
 
     A row's ciphertext is sealed to the row's name and namespace at the row's
     scope (`conventions.sealed`), so the object is declared from the row
@@ -1070,25 +1091,7 @@ def sealed_value(
     secret is the program's, held where it is declared, and only the secret
     part is sealed; what is rendered changes with the program, under the same
     ciphertext.
-
-    **Absent, it declares nothing and warns, naming the value.** A sealed
-    value can be made only once the controller that opens it runs, which is
-    after the cluster's first `up`, so the stacks merge ahead of their values
-    and whatever reads one stays pending until the commit that adds it. That
-    is a dated exception to the rule that a value the program cannot run
-    without stops the run at the read (style/pulumi.md, "Layering"), and it
-    retires when the bring-up's gate has passed (physical/bring-up.md §1):
-    from then on an absent value is refused by name. Until then the warning
-    is what tells an `up` that declared nothing from one that declared the
-    value.
     """
-    if ciphertext is None:
-        pulumi.log.warn(
-            f"sealed value {value.name!r} ({value.namespace}) is absent from this stack's "
-            f'{conventions.sealed.CONFIG_KEY}, so no SealedSecret is declared for it and what reads it stays pending '
-            f'until it is sealed in (physical/bring-up.md §1)'
-        )
-        return None
     return sealed_secret(
         resource_name,
         name=value.name,

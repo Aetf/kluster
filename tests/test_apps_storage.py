@@ -72,7 +72,15 @@ async def declared() -> Recorder:
         # Two backed claims in one namespace.
         _ = claim('notes', 'data', 2, WEEKDAY, namespace='notes', uid=UID, writer_key=writer_key('notes'))
         _ = claim('notes-index', 'index', 1, WEEKDAY, namespace='notes', uid=UID, writer_key=writer_key('notes'))
-        _ = claim('models', 'models', 11, off('re-derived on start'), namespace='models', uid=UID, writer_key=None)
+        _ = claim(
+            'models',
+            'models',
+            11,
+            off('re-derived on start'),
+            namespace='models',
+            uid=UID,
+            writer_key=writer_key('models'),
+        )
         # The copy of a backed claim, and the finish of the same move.
         _ = claim(
             'copying',
@@ -96,7 +104,7 @@ async def declared() -> Recorder:
             off('its network is its redundancy'),
             namespace='cache',
             uid=UID,
-            writer_key=None,
+            writer_key=writer_key('cache'),
             generation=2,
             moving_to=TARGET,
             stopped=workload,
@@ -188,7 +196,7 @@ def test_the_repository_secret_carries_the_namespaces_writer_key_and_a_password_
 
 def test_a_claim_of_less_than_a_gib_is_refused() -> None:
     with pytest.raises(ValueError, match='1 GiB'):
-        _ = claim('empty', 'data', 0, WEEKDAY, namespace='empty', uid=UID, writer_key=None)
+        _ = claim('empty', 'data', 0, WEEKDAY, namespace='empty', uid=UID, writer_key=writer_key('empty'))
 
 
 def test_a_backed_claims_password_is_protected_and_template_safe(declared: Recorder) -> None:
@@ -206,25 +214,6 @@ def test_a_protected_claim_is_registered_protected_and_so_is_the_claim_it_copies
 def test_a_writer_key_of_other_fields_is_refused() -> None:
     with pytest.raises(ValueError, match='AWS_SECRET_ACCESS_KEY'):
         _ = claim('bad', 'data', 1, WEEKDAY, namespace='bad', uid=UID, writer_key={'AWS_ACCESS_KEY_ID': 'only-half'})
-
-
-@pytest.mark.asyncio(loop_scope='module')
-async def test_an_absent_writer_key_declares_no_secret_and_warns() -> None:
-    """Until the key is sealed in, the source is declared and its Secret is not (physical/bring-up.md §1)."""
-    declared = await run_with(Generating(), stack='apps')
-    warnings: list[str] = []
-
-    def warn(message: str, *_: object, **__: object) -> None:
-        warnings.append(message)
-
-    with pytest.MonkeyPatch.context() as patch:
-        patch.setattr(pulumi.log, 'warn', warn)
-        async with declaring():
-            _ = claim('unsealed', 'data', 1, WEEKDAY, namespace='unsealed', uid=UID, writer_key=None)
-
-    assert in_namespace(declared, SEALED_SECRET, 'unsealed') == []
-    assert names(declared, SOURCE, 'unsealed') == ['data-g0']
-    assert any("'unsealed'" in message and 'physical/bring-up.md' in message for message in warnings)
 
 
 # -- a move -------------------------------------------------------------------
@@ -259,7 +248,15 @@ def test_a_copy_adds_the_target_claim_and_an_rsync_tls_pair_started_by_hand(decl
 def test_a_copy_is_ordered_after_a_workload_it_is_handed() -> None:
     with pytest.raises(ValueError, match='scale-down'):
         _ = claim(
-            'early', 'data', 1, WEEKDAY, namespace='early', uid=UID, writer_key=None, generation=1, moving_to=TARGET
+            'early',
+            'data',
+            1,
+            WEEKDAY,
+            namespace='early',
+            uid=UID,
+            writer_key=writer_key('early'),
+            generation=1,
+            moving_to=TARGET,
         )
 
 
@@ -273,7 +270,7 @@ def test_a_copy_names_where_it_moves_to() -> None:
             WEEKDAY,
             namespace='nowhere',
             uid=UID,
-            writer_key=None,
+            writer_key=writer_key('nowhere'),
             generation=1,
             moving_to={},
             stopped=stopped,
@@ -291,7 +288,7 @@ def test_a_copy_of_a_name_too_long_for_the_destinations_service_is_refused() -> 
             WEEKDAY,
             namespace='long',
             uid=UID,
-            writer_key=None,
+            writer_key=writer_key('long'),
             generation=1,
             moving_to=TARGET,
             stopped=stopped,
@@ -300,7 +297,9 @@ def test_a_copy_of_a_name_too_long_for_the_destinations_service_is_refused() -> 
 
 def test_a_copy_raises_the_generation() -> None:
     with pytest.raises(ValueError, match='generation'):
-        _ = claim('flat', 'data', 1, WEEKDAY, namespace='flat', uid=UID, writer_key=None, moving_to=TARGET)
+        _ = claim(
+            'flat', 'data', 1, WEEKDAY, namespace='flat', uid=UID, writer_key=writer_key('flat'), moving_to=TARGET
+        )
 
 
 def test_a_copy_leaves_the_claim_it_copies_as_it_was_made(declared: Recorder) -> None:

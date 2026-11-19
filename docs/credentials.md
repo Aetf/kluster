@@ -230,10 +230,9 @@ facts about them.
     is not the parking rule 2 forbids. One sitting seals every declared
     value the stack files do not hold yet. Taking a value away runs the
     order backwards: the reader goes before the ciphertext and the row,
-    or with them. The bring-up's own values are the dated exception:
-    their readers merged before a controller existed to seal to, and the
-    tolerance of physical/bring-up.md §1 declares nothing for an absent
-    one until its stage 8 ends.
+    or with them. A reader merged ahead of its ciphertext stops at its
+    read, in its own preview, naming the value, its namespace and the
+    command that seals it (`kluster.lib.k8s.AbsentSealedValue`).
 
     **The operator stacks are encrypted apart, under the operator
     passphrase.** An operator stack is one no CI job runs

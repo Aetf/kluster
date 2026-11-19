@@ -3,9 +3,7 @@
 The program runs whole, against a `physical` that has published its addresses
 (`k8s_base_installation`), with what the stack file holds: every sealed value
 the stack declares sealed in (rfc-007 §7). The random provider's password is
-answered as it would be generated into state. The cases of the absent path run
-it again with no sealed value, and with every one but the metrics reader's key
-or the freshness key (physical/bring-up.md §1).
+answered as it would be generated into state.
 
 Literals written here are upstream contracts: the charts' value names, the
 label Talos puts on a control plane node, Kubernetes' node-affinity and Pod
@@ -40,7 +38,6 @@ from client_kubeconfig import KUBECONFIG, NOT_AFTER
 from fake_b2_shell import AUTHORIZATION_V4, BUCKET, FAKE_KEY, FAKE_TOKENS, authorization, fake_env
 from fences import prose
 from k8s_base_installation import (
-    NOTHING_SEALED,
     PUBLISHED,
     SEALED,
     VERSIONS_CONFIG,
@@ -48,7 +45,6 @@ from k8s_base_installation import (
     Physical,
     Run,
     release_assets,
-    sealed_without,
 )
 from mock_monitor import Recorder, declaring, run_under_backstop
 from renovate_text import effective, package_rules, scalar
@@ -141,39 +137,26 @@ class Generating(Autonaming):
         return outputs | {'result': self.generated(args.name)} if args.typ == PASSWORD else outputs
 
 
-async def declare(*, sealed: dict[str, object] = SEALED) -> tuple[Run, list[str]]:
-    """The whole program with `sealed` as its sealed values, the stack file's unless given, and every warning it logged."""
+async def declare() -> Run:
+    """The whole program with the stack file's sealed values."""
     from kluster.stacks import k8s_base
 
     config = {
         f'kluster:{KUBECONFIG_KEY}': KUBECONFIG,
-        f'kluster:{conventions.sealed.CONFIG_KEY}': json.dumps(sealed),
+        f'kluster:{conventions.sealed.CONFIG_KEY}': json.dumps(SEALED),
     }
     pulumi.runtime.set_all_config(config | VERSIONS_CONFIG, secret_keys=[f'kluster:{KUBECONFIG_KEY}'])
     monitor = await run_under_backstop(Generating(), stack=conventions.STACK_NAMES.k8s_base)
-    warned: list[str] = []
-
-    def warn(message: str, *_: object, **__: object) -> None:
-        warned.append(message)
-
-    with release_assets() as fetched, pytest.MonkeyPatch.context() as patch:
-        patch.setattr(pulumi.log, 'warn', warn)
+    with release_assets() as fetched:
         async with declaring():
             await k8s_base.main()
-    return Run(monitor, fetched), warned
+    return Run(monitor, fetched)
 
 
 @pytest_asyncio.fixture(scope='module', loop_scope='module', name='applied')
 async def applied_fixture() -> Run:
     """The stack as its file holds it: every sealed value it declares sealed in, the webhook among them."""
-    run, _ = await declare()
-    return run
-
-
-@pytest_asyncio.fixture(scope='module', loop_scope='module')
-async def absent() -> tuple[Run, list[str]]:
-    """The absent path: the stack holding no sealed value, and every warning the run logged."""
-    return await declare(sealed=NOTHING_SEALED)
+    return await declare()
 
 
 def _values(run: Run) -> dict[str, Any]:
@@ -848,7 +831,9 @@ def test_grafana_installs_no_plugin_at_start(applied: Run) -> None:
 
 
 def _digest(chart: ChartPin) -> str:
-    return cast('str', cast('dict[str, Any]', stack_values(STACK, chart)['grafana'])['env'][DATASOURCES_DIGEST_ENV])
+    return cast(
+        'str', cast('dict[str, Any]', stack_values(STACK, chart, restore=[])['grafana'])['env'][DATASOURCES_DIGEST_ENV]
+    )
 
 
 def test_grafanas_pod_changes_when_what_renders_its_datasources_changes(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1448,15 +1433,6 @@ def test_the_sealed_webhook_is_declared_where_the_receiver_reads_it(applied: Run
         )
 
 
-def test_an_absent_webhook_declares_no_sealed_secret_and_warns_naming_it(absent: tuple[Run, list[str]]) -> None:
-    """The absent path: nothing is declared for the webhook; the receiver is declared all the same, and stays pending."""
-    run, warned = absent
-
-    assert [it for it in run.monitor.of_type(SEALED_SECRET) if it.inputs['metadata']['name'] == WEBHOOK.name] == []
-    assert [message for message in warned if repr(WEBHOOK.name) in message]
-    assert run.monitor.of_type(VM_ALERTMANAGER_CONFIG)
-
-
 _DURATION = re.compile(r'^(\d+)([smhdw])$')
 _UNITS = {'s': 'seconds', 'm': 'minutes', 'h': 'hours', 'd': 'days', 'w': 'weeks'}
 
@@ -1889,19 +1865,6 @@ def _restores(run: Run) -> dict[str, list[dict[str, Any]]]:
         'recent': _values(run)['vmsingle']['spec'].get('initContainers', []),
         'history': _history(run)['spec'].get('initContainers', []),
     }
-
-
-def test_without_the_writer_key_nothing_backs_up_or_restores_and_the_key_is_named(
-    absent: tuple[Run, list[str]],
-) -> None:
-    """The absent path: the stores start empty and are copied nowhere until the key is sealed in."""
-    run, warned = absent
-    backups = {job.cronjob for job in schedule.METRICS_BACKUPS.values()}
-
-    assert [it for it in run.monitor.of_type(CRONJOB) if it.inputs['metadata']['name'] in backups] == []
-    assert _restores(run) == {'recent': [], 'history': []}
-    assert [it for it in run.monitor.of_type(SEALED_SECRET) if it.inputs['metadata']['name'] == WRITER_KEY.name] == []
-    assert [message for message in warned if repr(WRITER_KEY.name) in message]
 
 
 def _backup_jobs(run: Run) -> dict[str, dict[str, Any]]:
@@ -2773,61 +2736,8 @@ def test_a_starting_deadline_takes_its_share_of_the_slack_and_one_that_starts_no
 OCI_KEY = conventions.sealed.OCI_METRICS
 
 
-@pytest_asyncio.fixture(scope='module', loop_scope='module')
-async def without_oci_key() -> Run:
-    """The absent path of the metrics reader's key alone: every other sealed value the stack declares sealed in."""
-    run, _ = await declare(sealed=sealed_without(OCI_KEY))
-    return run
-
-
 def _named(run: Run, typ: str, name: str) -> list[dict[str, Any]]:
     return [it.inputs for it in run.monitor.of_type(typ) if it.inputs.get('metadata', {}).get('name') == name]
-
-
-def _monitoring_objects(run: Run) -> set[tuple[str, str]]:
-    """Each object the monitoring component declares, by its type and the name it gives it, or its logical name."""
-    return {
-        (typ, run.inputs(typ, name).get('metadata', {}).get('name', name))
-        for typ, name, _ in run.children('kluster:monitoring:Monitoring')
-    }
-
-
-def test_the_metrics_readers_key_adds_its_sealed_secret_the_pulls_config_map_and_its_cron_job(
-    applied: Run, without_oci_key: Run
-) -> None:
-    """What the key adds to its absent path: the preview its commit shows, three objects created and the rule already there."""
-    from kluster.components.monitoring import oci_metrics
-
-    added = _monitoring_objects(applied) - _monitoring_objects(without_oci_key)
-
-    assert added == {
-        (SEALED_SECRET, OCI_KEY.name),
-        (CONFIGMAP, oci_metrics.PULL_CONFIGMAP),
-        (CRONJOB, schedule.OCI_METRICS_PULL.cronjob),
-    }
-    assert _monitoring_objects(without_oci_key) <= _monitoring_objects(applied)
-    # The rule objects register concurrently, so the order their rules come
-    # back in is not the program's: the two sets are compared as sets.
-    assert _rule_set(applied) == _rule_set(without_oci_key)
-
-
-def _rule_set(run: Run) -> list[str]:
-    """Every alerting rule the program declares, each as canonical JSON, in sorted order."""
-    return sorted(json.dumps(rule, sort_keys=True) for rule in _declared_rules(run))
-
-
-def test_without_the_metrics_readers_key_the_pull_is_not_declared_and_the_key_is_named(
-    absent: tuple[Run, list[str]], without_oci_key: Run
-) -> None:
-    """The absent path: nothing of the pull until the key is sealed in, and the warning says which value."""
-    from kluster.components.monitoring import oci_metrics
-
-    run, warned = absent
-    for declared in (run, without_oci_key):
-        assert _named(declared, CRONJOB, schedule.OCI_METRICS_PULL.cronjob) == []
-        assert _named(declared, CONFIGMAP, oci_metrics.PULL_CONFIGMAP) == []
-        assert _named(declared, SEALED_SECRET, OCI_KEY.name) == []
-    assert [message for message in warned if repr(OCI_KEY.name) in message]
 
 
 def _pull(run: Run) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -3007,13 +2917,6 @@ def test_a_volume_physical_published_that_the_census_does_not_declare_is_not_pul
 FRESHNESS_KEY = conventions.sealed.B2_FRESHNESS_DUMPS
 
 
-@pytest_asyncio.fixture(scope='module', loop_scope='module')
-async def without_freshness_key() -> Run:
-    """The absent path of the freshness key alone: every other sealed value the stack declares sealed in."""
-    run, _ = await declare(sealed=sealed_without(FRESHNESS_KEY))
-    return run
-
-
 def _check_pod(run: Run, row: schedule.ScheduledJob) -> dict[str, Any]:
     """The pod spec of the check `row` is the row of."""
     (job,) = _named(run, CRONJOB, row.cronjob)
@@ -3022,30 +2925,6 @@ def _check_pod(run: Run, row: schedule.ScheduledJob) -> dict[str, Any]:
 
 #: Each check, by its row.
 CHECKS = (schedule.STATE_BACKEND_DUMPS, schedule.STATE_BACKEND_CERTIFICATE)
-
-
-def test_the_freshness_key_adds_its_sealed_secret_and_the_dump_check(applied: Run, without_freshness_key: Run) -> None:
-    """What the key adds to its absent path: the preview its ciphertext shows, two objects created and the rules already there."""
-    added = _monitoring_objects(applied) - _monitoring_objects(without_freshness_key)
-
-    assert added == {(SEALED_SECRET, FRESHNESS_KEY.name), (CRONJOB, schedule.STATE_BACKEND_DUMPS.cronjob)}
-    assert _monitoring_objects(without_freshness_key) <= _monitoring_objects(applied)
-    assert _rule_set(applied) == _rule_set(without_freshness_key)
-
-
-def test_without_the_freshness_key_the_certificate_check_is_declared_and_the_dump_check_is_not(
-    absent: tuple[Run, list[str]], without_freshness_key: Run
-) -> None:
-    """The absent path: the certificate check holds no credential, so nothing it needs waits on one."""
-    from kluster.components.monitoring import state_backend
-
-    run, warned = absent
-    for declared in (run, without_freshness_key):
-        assert len(_named(declared, CRONJOB, schedule.STATE_BACKEND_CERTIFICATE.cronjob)) == 1
-        assert len(_named(declared, CONFIGMAP, state_backend.CHECKS_CONFIGMAP)) == 1
-        assert _named(declared, CRONJOB, schedule.STATE_BACKEND_DUMPS.cronjob) == []
-        assert _named(declared, SEALED_SECRET, FRESHNESS_KEY.name) == []
-    assert [message for message in warned if repr(FRESHNESS_KEY.name) in message]
 
 
 @pytest.mark.parametrize('row', CHECKS, ids=lambda row: row.cronjob)

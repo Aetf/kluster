@@ -42,9 +42,7 @@ its pod mounts no Kubernetes token.
 other workload can mount the bundle. The job runs on the control planes, as
 the etcd snapshot does: it goes on through an outage of the home site, its
 traffic stays in the cloud, and only the control planes' kubelets are served
-the bundle. Until the bundle's ciphertext is in the stack's configuration,
-the namespace and the program's ConfigMap are all it declares
-(`kluster.lib.k8s.sealed_value`, physical/bring-up.md §1).
+the bundle.
 """
 
 from __future__ import annotations
@@ -205,10 +203,9 @@ class StateUpkeep(Component, pulumi_type='kluster:state_upkeep:StateUpkeep'):
     """The upkeep's namespace, its program, its client bundle and its CronJob.
 
     `bundle` is the ciphertext the stack's configuration holds for
-    `conventions.sealed.STATE_UPKEEP_BUNDLE`, `None` while it holds none;
-    until it holds one, neither the bundle nor the CronJob is declared. The
-    `None` is the bring-up's tolerance, and goes with it
-    (physical/bring-up.md §1). `image` is the pin the CronJob runs.
+    `conventions.sealed.STATE_UPKEEP_BUNDLE`
+    (`kluster.lib.k8s.sealed_ciphertext`). `image` is the pin the CronJob
+    runs.
 
     `after` is what it is installed behind: Cilium, since nothing schedules
     before the CNI, and the sealing controller, whose chart defines the
@@ -222,7 +219,7 @@ class StateUpkeep(Component, pulumi_type='kluster:state_upkeep:StateUpkeep'):
         name: str,
         *,
         image: ImagePin,
-        bundle: Mapping[str, str] | None,
+        bundle: Mapping[str, str],
         after: Sequence[pulumi.Resource],
         opts: pulumi.ResourceOptions | None = None,
     ) -> None:
@@ -248,15 +245,11 @@ class StateUpkeep(Component, pulumi_type='kluster:state_upkeep:StateUpkeep'):
             opts=self.child_opts(depends_on=[*after, self.namespace]),
         )
         # Behind what its pod mounts: the program's ConfigMap and the bundle.
-        self.cronjob = (
-            k8s.batch.v1.CronJob(
-                f'{name}-{STATE_UPKEEP.cronjob}',
-                metadata=k8s.meta.v1.ObjectMetaArgs(name=STATE_UPKEEP.cronjob, namespace=self.namespace.metadata.name),
-                spec=cronjob_spec(image=image),
-                opts=self.child_opts(depends_on=[self.program, self.bundle]),
-            )
-            if self.bundle is not None
-            else None
+        self.cronjob = k8s.batch.v1.CronJob(
+            f'{name}-{STATE_UPKEEP.cronjob}',
+            metadata=k8s.meta.v1.ObjectMetaArgs(name=STATE_UPKEEP.cronjob, namespace=self.namespace.metadata.name),
+            spec=cronjob_spec(image=image),
+            opts=self.child_opts(depends_on=[self.program, self.bundle]),
         )
 
         self.register_outputs({})

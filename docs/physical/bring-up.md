@@ -35,35 +35,21 @@ ahead of the window, so that the cluster's first `up` declares all of
 them at once. A stage's row says what else it needs: stage 7 needs the
 migration design's `route`, and stage 8 ends with a small pull request.
 
-**A consumer of a sealed value is declared with its value absent, and
-waits.** A sealed value can be made only once the controller runs, and
-the controller runs only after the first `up`. So until stage 8 ends, an
-absent value declares no SealedSecret and warns at the run, and whatever
-reads it stays pending: the issuer's certificates, the BGP session and
-alertmanager's receiver. A scheduled job that reads one is not declared
-at all until its value is sealed in, and the scheduled-job rule family
-reads only a declared job (operations.md §4): the metrics stores'
-backups, and their restores with them, behind the monitoring
-namespace's writer key (declarative/cluster-infra.md §1 item 6); the
-pull of OCI's block-volume series, behind the metrics reader's key; the
-hourly etcd snapshot, behind its writer key
-(declarative/cluster-infra.md §1 item 9); and the state table's daily
-upkeep, behind its client bundle (declarative/cluster-infra.md §1 item
-10).
-
-**Stage 6 seals every value a stack program reads before the first
-wave**, today every value `k8s-base` reads, as one commit to the stack
-file, and no code changes with it. A value declared after stage 6 has
-run is sealed ahead of its reader's merge (credentials.md §1 rule 6), so
-the tolerance carries the values of stage 6 and no other. The
-applications' writer keys wait for stage 9, since
-nothing `apps` declares before the first wave reads one. Stage 8's last
-step is the pull request that deletes the tolerance, and from then on
-an absent value stops the run by name, as an unusable kubeconfig does,
-so no reader of a sealed value is left undeclared past it. rfc-007
-slice 9 builds the tolerance, with a test of the absent path, and until
-it goes it is a dated exception to style/pulumi.md's rule that absence
-stops the run at the read.
+**An absent sealed value stops the run at its read**, naming the
+value, its namespace and the command that seals it, as an unusable
+kubeconfig does (style/pulumi.md, "Layering"). A sealed value can be
+made only once the controller runs, and the controller runs only after
+the first `up`, so stage 5's runs and stage 5a's rebuild come before any
+value exists. **Stage 6 seals every value a stack program reads before
+the first wave**, today every value `k8s-base` reads, as one commit to
+the stack file, and no code changes with it. From then on each stack
+file holds a ciphertext for every value its program reads, a value
+declared later is sealed ahead of its reader's merge (credentials.md §1
+rule 6), and a rebuild runs over the committed ciphertext and seals it
+again (operations.md §3.5). A pass run again from stack files that hold
+no ciphertext, as a new installation's would be, stops at its first
+sealed value. The applications' writer keys wait for stage 9, since
+nothing `apps` declares before the first wave reads one.
 
 **The rest of the pass is operator steps and readings.** Three parties
 run it: the **operator**, from the checkout that holds `.credentials/`;
@@ -84,7 +70,7 @@ a step that needs one.
 | 5a | **The rebuild drill**: the cluster deleted and created again from the repository and the credentials, by operations.md §3.5, once, touching nothing outside the cluster (Aetf/kluster-ops#782 records it) | operator, chain on the merge, dispatcher records | stage 5, and the first `up` of `k8s-base` and `apps` converging in one run | operations.md §3.5's pass readings, stage 5's gate among them, and nothing outside changed | Forward, by operations.md §3.5's own steps. §3 |
 | 6 | **One sealing sitting**: `credentials derived cloudflare-dns01 mint`, `oci-metrics mint`, `bgp seal`, `alert-webhook record`, `b2-writer seal --only writer-etcd`, `b2-writer seal --only writer-vm-monitoring`, `b2-reader seal`, `state-backend-upkeep seal`, `b2-freshness-dumps mint` and `etcd-drill-age-identity generate` (credentials.md §4.1 stage 11), every value `k8s-base` reads, where the operator enters the webhook's id alone and the program assembles its URL at Home Assistant's own address, so that an in-cluster alert stays direct, the writer keys of the etcd snapshots and of the metrics stores, and the etcd snapshots' read-only key, are read out of `physical`'s state with `physical`'s passphrase and no kit, the state table's upkeep bundle is issued from the CA the kit recovers, the dump freshness key is minted from the B2 seed in the kit and pushed into the ops repository in the same run, and the etcd restore-verify's age identity is drawn and sealed with no kit, its public half written to `src/kluster/conventions/etcd-drill-recipient.txt` in the same run, one commit to `Pulumi.k8s-base.yaml` and that file | operator, chain on the merge | stage 5a, and the webhook of stage 0 | a certificate issued for the primary zone; each Gateway's Service holding exactly its addresses; a route in the gateway's kernel table for a VIP of each family, the IPv6 one through the worker's link-local, which the gateway's neighbor table resolves to the worker's MAC (gateway-cutover.md §5); an alert reaching the phone; both metrics stores `Running` again; and the first run of each job `conventions.schedule.SCHEDULED_JOBS` names `Complete` (operations.md §4), the etcd snapshot's log naming the object it uploaded under `etcd/` (cluster/storage.md §5) | Re-run the one command, which writes a fresh ciphertext, and merge it. §3 |
 | 7 | **The echo server wired**: rfc-007 slice 12's second half, on `route` as the migration's design composes it | chain | stage 6's certificate, and that design's `route` merged | the exit criterion of rfc-007 §14 slice 12 | Revert it; nothing else stands on it |
-| 8 | **The gate**: rfc-007 §14 slice 13's list, and the rest of migration.md §1 item 4. A transcript per item. Then the pull request that deletes the sealed tolerance of §1 | dispatcher, operator for anything a credential reads, a builder for the pull request | stage 7 | every item, with a fallback that flips landing in the document that records it | A failing item is its own issue. No application moves until it closes |
+| 8 | **The gate**: rfc-007 §14 slice 13's list, and the rest of migration.md §1 item 4. A transcript per item. Then the pull request after which an absent sealed value stops the run (§1) | dispatcher, operator for anything a credential reads, a builder for the pull request | stage 7 | every item, with a fallback that flips landing in the document that records it | A failing item is its own issue. No application moves until it closes |
 | 9 | **Handing over**: the legacy sealing key carried, the certificate the controller serves confirmed as the cluster's own, and then the backup bucket's writer keys sealed and Authelia's storage encryption key imported from the legacy cluster into the escrow, which seals it (credentials.md §4.1 stage 12). These open the first wave | operator | stage 8, and the `physical` apply that minted the writer keys | the certificate confirmed, each key sealed, and `escrow/authelia/storage-key/1.age`, `Pulumi.apps.yaml` and `Pulumi.k8s-base.yaml` committed | §3 |
 
 ## 3. What a failure costs, by stage
