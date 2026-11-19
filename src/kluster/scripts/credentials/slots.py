@@ -1093,6 +1093,19 @@ ROWS: dict[str, Row] = {
             *(SealedSecret(value) for value in conventions.sealed.WRITER_KEYS_BY_SCOPE.values()),
         ),
     ),
+    derived.B2_READER_ROW: Row(
+        register='B2 reader key (etcd snapshots)',
+        source=Minted(
+            f'the `physical` stack, from the B2 seed, and sealed into `k8s-base` by '
+            f'`credentials derived {derived.B2_READER_ROW} seal`'
+        ),
+        # The same state export as the writer keys', under the reader's own
+        # scope; the sealed copy is the etcd restore-verify's.
+        targets=(
+            PulumiState(PHYSICAL_STACK, "the etcd snapshots' read-only key, exported in `backup_keys`"),
+            *(SealedSecret(value) for value in conventions.sealed.READER_KEYS_BY_SCOPE.values()),
+        ),
+    ),
     'b2-dump': Row(
         register='B2 dump key (micro)',
         # Minted through the stack: the program declares the key with the

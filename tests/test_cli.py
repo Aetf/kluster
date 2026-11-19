@@ -129,6 +129,9 @@ def expected(path: list[str]) -> str | None:
         case ['derived', cli.derived.B2_WRITER_ROW, 'seal']:
             # The writer keys `physical` minted, sealed out of its state.
             return 'derived.b2_writer_seal'
+        case ['derived', cli.derived.B2_READER_ROW, 'seal']:
+            # The read-only keys `physical` minted, sealed out of its state.
+            return 'derived.b2_reader_seal'
         case ['derived', cli.derived.STATE_BACKEND_UPKEEP_ROW as row, 'seal']:
             # A client bundle issued under the escrowed CA and sealed in the
             # same run, by its own function under the mint rows' convention.
@@ -291,6 +294,7 @@ class Dispatch:
             (cli.derived, 'state_backend_host_key', 'ssh-ed25519 AAAA'),
             (cli.derived, 'backup_age_recipient', 'age1recipient'),
             (cli.derived, 'b2_writer_seal', []),
+            (cli.derived, 'b2_reader_seal', []),
             (cli.derived, 'authelia_storage_key_import', 1),
             (cli.derived, 'authelia_storage_key_seal', 1),
             (cli.devices, 'deliver', ()),

@@ -487,13 +487,15 @@ be able to destroy the safety net it lives inside.
     lifecycle: hide, then delete) — restic/barman deletions become
     recoverable hides, which is the ransomware/fat-finger floor. Costs
     a modest storage overhead on churn; that is the price of the floor.
--   Keys are **prefix-scoped per consumer**, capabilities
-    `listFiles + readFiles + writeFiles` and **never `deleteFiles`**:
-    an app's restic key reaches only `volsync/<its-namespace>/…`;
-    barman's (`cnpg/<namespace>/…`), the monitoring stack's `vmbackup`
-    key (`vm/<namespace>/…`) and the `etcd/` prefix likewise. One key
-    per family of each backed namespace, from the census
-    `conventions.backup.BACKED_NAMESPACES`, minted by `physical`.
+-   Keys are **prefix-scoped per consumer**, each with the capabilities
+    its consumer needs and **never `deleteFiles`**: an app's restic key
+    reaches only `volsync/<its-namespace>/…`; barman's
+    (`cnpg/<namespace>/…`), the monitoring stack's `vmbackup` key
+    (`vm/<namespace>/…`) and the etcd snapshots' keys (`etcd/`)
+    likewise. A store's writer key is `listFiles + readFiles +
+    writeFiles`. One key per family of each backed namespace, from the
+    census `conventions.backup.BACKED_NAMESPACES`, minted by
+    `physical`.
     (restic/barman need list+read even to *back up*, and `vmbackup`
     lists the destination to upload only what it lacks — a literally
     write-only key cannot work — and their prunes still run in-cluster
@@ -508,13 +510,20 @@ be able to destroy the safety net it lives inside.
     ([bisected over single capabilities](https://github.com/kopia/kopia/issues/5329)),
     so without it a store's first backup cannot start. On a key
     restricted to the one bucket, `listBuckets` reads that bucket's own
-    settings and grants nothing on files. The etcd snapshots' uploader
-    reads nothing, and its key goes without. **No delete-capable key
+    settings and grants nothing on files. The etcd snapshots have two
+    keys, neither with `listBuckets`. The uploader's is `writeFiles`
+    alone, since `talos-backup` puts the object and reads nothing. The
+    reader's is `listFiles + readFiles` and writes nothing. It is the
+    key the etcd restore-verify lists the prefix and downloads the
+    newest snapshot with, a reader that lands after its ciphertext
+    (credentials.md §1 rule 6). Both a recovery and the restore-verify
+    take the newest name, so whatever runs with the reading key must not
+    be able to write one. **No delete-capable key
     exists in any automation**; the B2 account's master key is an account root in
     the operator's personal estate — deliberately not in the seed kit
     (credentials.md §2) — and is borrowed only to re-seed, account 2FA
-    on. The one genuine write-only key is the micro's
-    pg_dump uploader (`writeFiles` alone — it keeps no index,
+    on. The micro's pg_dump uploader is write-only too, on the state
+    backend's own bucket (`writeFiles` alone — it keeps no index,
     state-backend.md §5).
 -   **The etcd snapshots' retention is the bucket's.** A second
     lifecycle rule, on `etcd/`, hides a snapshot 14 days after its
@@ -554,8 +563,10 @@ Per nodes.md §5, durability = declarative rebuild + backups + drills:
     -   **Credentials**: it speaks Talos with a certificate Talos issues
         it for the `os:etcd:backup` role alone and renews by itself, and
         writes with the `etcd` scope's writer key, sealed strict into
-        `k8s-base` as `writer-etcd`; the key lists, reads and writes
-        `etcd/` and cannot delete.
+        `k8s-base` as `writer-etcd`; the key writes under `etcd/` and
+        cannot list, read or delete. Reading the snapshots back is the
+        `etcd-reader` scope's key, `listFiles + readFiles` on `etcd/`,
+        sealed strict into `k8s-base` as `reader-etcd`.
     -   **A run**: one snapshot, refused without etcd's hash trailer,
         encrypted with age to every escrowed backup generation in
         `src/kluster/lib/state_backend/machine/backup-recipients.txt`,

@@ -23,9 +23,9 @@ The second property here is about the one help text that is *not* generated
 from a register: the bring-up order the top-level epilog carries (`cli._ORDER`)
 is written out by hand, so a row added to a register reaches the tree on its
 own but reaches that order only when someone types it in. The walks below are
-what say so: one over every `derived <row> mint` the tree offers, and one over
-the rows a person makes, which two registers hold and which are run the same
-way. What the order runs is read by the CLI's own parser rather than matched
+what say so: one over every `derived <row> mint` the tree offers, one over
+every `derived <row> seal`, and one over the rows a person makes, which two
+registers hold and which are run the same way. What the order runs is read by the CLI's own parser rather than matched
 as text, so a leaf renamed in the tree is one the order no longer runs, even
 while its hand-written line still names the old word.
 
@@ -171,6 +171,34 @@ def test_when_to_run_what_names_every_mint(row: str, monkeypatch: pytest.MonkeyP
     assert ('derived', row, 'mint') in runs_of(row, order), (
         f'`credentials derived {row} mint` is in the tree but the order in `credentials --help` never runs '
         'it: an operator who follows that order would finish with the credential unminted.'
+    )
+
+
+def seal_rows() -> list[str]:
+    """Every row the tree offers a `credentials derived <row> seal` for, found by walking it.
+
+    A seal is how a value the cluster consumes reaches it from where it is
+    already held, and each runs at a sitting of the bring-up, so the order
+    has to say which. Walked for the reason `mint_rows` is.
+    """
+    return [
+        path[1] for path, _ in tree(cli.build_parser()) if len(path) == 3 and path[0] == 'derived' and path[2] == 'seal'
+    ]
+
+
+def test_the_seal_walk_finds_the_seals() -> None:
+    # As for the mints: a walk that found nothing would leave the case below
+    # with no parameters, which pytest reports as skipped rather than failed.
+    assert derived.B2_WRITER_ROW in seal_rows()
+
+
+@pytest.mark.parametrize('row', seal_rows())
+def test_when_to_run_what_names_every_seal(row: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    order = _rendered('credentials', monkeypatch)
+
+    assert ('derived', row, 'seal') in runs_of(row, order), (
+        f'`credentials derived {row} seal` is in the tree but the order in `credentials --help` never runs '
+        'it: an operator who follows that order would finish with the value never sealed to the cluster.'
     )
 
 

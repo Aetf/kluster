@@ -118,6 +118,11 @@ ETCD_SNAPSHOT_PREFIX = 'etcd'
 #: `credentials` reads it by when it seals it for the snapshot
 #: (`conventions.sealed.ETCD_WRITER_KEY`).
 ETCD_SCOPE = 'etcd'
+#: The name of the etcd snapshots' read-only scope on the backup bucket: the
+#: name `physical` mints the key that lists and reads the snapshots under and
+#: exports it by, which `credentials` reads it by when it seals it for the
+#: restore-verify (`conventions.sealed.ETCD_READER_KEY`).
+ETCD_READER_SCOPE = 'etcd-reader'
 STATE_DUMP_PREFIX = 'pulumi-state'
 
 #: The etcd restore-verify's age identity, public half: one recipient, in a

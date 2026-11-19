@@ -25,7 +25,13 @@ test is about:
 -   `b2_create_key` refuses a capability name B2 does not have, so a
     misspelled capability is a refused mint rather than a key that quietly
     lacks the grant. The answer is the call's documented generic refusal,
-    `400 bad_request`.
+    `400 bad_request`;
+-   the calls on files are held to the key's bucket and prefix as a listing
+    is: an upload address, the large-file calls, a hide and a download by
+    id. What the fake leaves out is the bytes: an upload address and a part's
+    are answered and never posted to, since the capability is checked where
+    the address is asked for, and a download answers with a body that names
+    the file.
 
 The capability names, and which endpoint needs which, come from the API
 reference. Everything else above is what the first live run against the
@@ -75,7 +81,18 @@ REQUIRED: dict[str, str] = {
     'b2_list_keys': 'listKeys',
     'b2_delete_key': 'deleteKeys',
     'b2_list_file_names': 'listFiles',
+    'b2_download_file_by_id': 'readFiles',
+    'b2_get_upload_url': 'writeFiles',
+    'b2_start_large_file': 'writeFiles',
+    'b2_get_upload_part_url': 'writeFiles',
+    'b2_finish_large_file': 'writeFiles',
+    'b2_cancel_large_file': 'writeFiles',
+    'b2_hide_file': 'writeFiles',
 }
+
+#: Where this fake account's downloads answer: `b2_authorize_account` hands the
+#: caller a download host beside the API host, and a download by id goes there.
+DOWNLOAD_URL = 'https://f001.backblazeb2.com'
 
 #: What the account master key carries: "all capabilities", in the words of
 #: backblaze.com/docs/cloud-storage-application-keys, which is every row of the
@@ -170,6 +187,8 @@ class FakeApi:
     file_page_limit: int = 1000
     #: Every listing served, as (the key it was served to, bucket, prefix).
     listings: list[tuple[str, str, str]] = field(default_factory=list[tuple[str, str, str]])
+    #: Large files started and not yet finished or canceled: file id -> (bucket, name).
+    large_files: dict[str, tuple[str, str]] = field(default_factory=dict[str, tuple[str, str]])
 
     def __post_init__(self) -> None:
         self.keys[ACCOUNT_ID] = Key(
@@ -231,7 +250,11 @@ class FakeApi:
             return self._refusal(Refused(401, 'unauthorized', 'invalid credentials'))
         token = f'token-{key_id}-{next(self.counter)}'
         self.tokens[token] = key_id
-        storage: dict[str, Any] = {'apiUrl': API_URL, 'capabilities': list(key.capabilities)}
+        storage: dict[str, Any] = {
+            'apiUrl': API_URL,
+            'downloadUrl': DOWNLOAD_URL,
+            'capabilities': list(key.capabilities),
+        }
         if key.bucket_id is not None:
             # A confined key is told what it is confined to, which is the
             # only way one without `listBuckets` learns its bucket's id.
@@ -256,7 +279,8 @@ class FakeApi:
 
     def post(self, url: str, *, json: dict[str, Any], headers: dict[str, str], timeout: int) -> requests.Response:
         api = urlparse(url).path.rsplit('/', 1)[-1]
-        assert url == f'{API_URL}/b2api/v3/{api}', f'unexpected POST {url}'
+        host = DOWNLOAD_URL if api == 'b2_download_file_by_id' else API_URL
+        assert url == f'{host}/b2api/v3/{api}', f'unexpected POST {url}'
         self.calls.append(api)
         self.posted.append((api, json))
         try:
@@ -281,6 +305,16 @@ class FakeApi:
                 return self._update_bucket(body)
             case 'b2_list_file_names':
                 return self._list_file_names(caller, body)
+            case 'b2_download_file_by_id':
+                return self._download_file_by_id(caller, body)
+            case 'b2_get_upload_url':
+                return self._get_upload_url(caller, body)
+            case 'b2_start_large_file':
+                return self._start_large_file(caller, body)
+            case 'b2_get_upload_part_url' | 'b2_finish_large_file' | 'b2_cancel_large_file':
+                return self._large_file(api, caller, body)
+            case 'b2_hide_file':
+                return self._hide_file(caller, body)
             case _:  # pragma: no cover - a call the minter is not meant to make
                 raise AssertionError(f'unexpected call {api}')
 
@@ -352,10 +386,7 @@ class FakeApi:
     def _list_file_names(self, caller: Key, body: dict[str, Any]) -> dict[str, Any]:
         bucket_id = str(body['bucketId'])
         prefix = str(body.get('prefix', ''))
-        if caller.bucket_id is not None and caller.bucket_id != bucket_id:
-            raise Refused(401, 'unauthorized', 'the key is confined to another bucket')
-        if caller.name_prefix is not None and not prefix.startswith(caller.name_prefix):
-            raise Refused(401, 'unauthorized', 'the key is confined to another prefix')
+        self._confined(caller, bucket_id, prefix)
         self.listings.append((caller.key_id, bucket_id, prefix))
         names = sorted(name for name in self.objects.get(bucket_id, []) if name.startswith(prefix))
         start = body.get('startFileName')
@@ -364,6 +395,75 @@ class FakeApi:
         wanted = min(int(body['maxFileCount']), self.file_page_limit)
         page, rest = names[:wanted], names[wanted:]
         return {
-            'files': [{'fileName': name, 'action': 'upload'} for name in page],
+            'files': [{'fileName': name, 'fileId': self.file_id(bucket_id, name), 'action': 'upload'} for name in page],
             'nextFileName': rest[0] if rest else None,
         }
+
+    @staticmethod
+    def file_id(bucket_id: str, name: str) -> str:
+        """The id a stored file answers to, which a listing names it by."""
+        return f'file:{bucket_id}:{name}'
+
+    def _confined(self, caller: Key, bucket_id: str, name: str) -> None:
+        """Refuse a call on a bucket, or a name, outside the key's restriction."""
+        if caller.bucket_id is not None and caller.bucket_id != bucket_id:
+            raise Refused(401, 'unauthorized', 'the key is confined to another bucket')
+        if caller.name_prefix is not None and not name.startswith(caller.name_prefix):
+            raise Refused(401, 'unauthorized', 'the key is confined to another prefix')
+
+    def _download_file_by_id(self, caller: Key, body: dict[str, Any]) -> dict[str, Any]:
+        file_id = str(body['fileId'])
+        found = [
+            (bucket_id, name)
+            for bucket_id, names in self.objects.items()
+            for name in names
+            if self.file_id(bucket_id, name) == file_id
+        ]
+        if not found:
+            raise Refused(404, 'not_found', f'no file {file_id}')
+        ((bucket_id, name),) = found
+        self._confined(caller, bucket_id, name)
+        return {'contents': f'the contents of {name}'}
+
+    def _get_upload_url(self, caller: Key, body: dict[str, Any]) -> dict[str, Any]:
+        bucket_id = str(body['bucketId'])
+        # The name is not known yet: the prefix is held at the upload itself,
+        # which goes to the address this answers with.
+        self._confined(caller, bucket_id, caller.name_prefix or '')
+        return {'bucketId': bucket_id, 'uploadUrl': f'{API_URL}/upload/{bucket_id}', 'authorizationToken': 'upload'}
+
+    def _start_large_file(self, caller: Key, body: dict[str, Any]) -> dict[str, Any]:
+        bucket_id, name = str(body['bucketId']), str(body['fileName'])
+        self._confined(caller, bucket_id, name)
+        file_id = f'large:{next(self.counter)}'
+        self.large_files[file_id] = (bucket_id, name)
+        return {'fileId': file_id, 'fileName': name, 'bucketId': bucket_id}
+
+    def _large_file(self, api: str, caller: Key, body: dict[str, Any]) -> dict[str, Any]:
+        file_id = str(body['fileId'])
+        if file_id not in self.large_files:
+            raise Refused(400, 'bad_request', f'no unfinished large file {file_id}')
+        bucket_id, name = self.large_files[file_id]
+        self._confined(caller, bucket_id, name)
+        match api:
+            case 'b2_get_upload_part_url':
+                return {
+                    'fileId': file_id,
+                    'uploadUrl': f'{API_URL}/upload-part/{file_id}',
+                    'authorizationToken': 'part',
+                }
+            case 'b2_finish_large_file':
+                del self.large_files[file_id]
+                self.objects.setdefault(bucket_id, []).append(name)
+                return {'fileId': file_id, 'fileName': name, 'action': 'upload'}
+            case _:
+                del self.large_files[file_id]
+                return {'fileId': file_id, 'fileName': name, 'bucketId': bucket_id}
+
+    def _hide_file(self, caller: Key, body: dict[str, Any]) -> dict[str, Any]:
+        bucket_id, name = str(body['bucketId']), str(body['fileName'])
+        self._confined(caller, bucket_id, name)
+        if name not in self.objects.get(bucket_id, []):
+            raise Refused(404, 'not_found', f'no file {name}')
+        self.objects[bucket_id].remove(name)
+        return {'fileName': name, 'action': 'hide'}

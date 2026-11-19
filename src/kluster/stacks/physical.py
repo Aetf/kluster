@@ -40,7 +40,15 @@ import pulumi_oci as oci
 import pulumiverse_talos
 
 from kluster import conventions
-from kluster.components.backup import BackupBucket, Scope, barman_scope, etcd_scope, metrics_scope, volsync_scope
+from kluster.components.backup import (
+    BackupBucket,
+    Scope,
+    barman_scope,
+    etcd_reader_scope,
+    etcd_scope,
+    metrics_scope,
+    volsync_scope,
+)
 from kluster.components.cloud import CloudNetwork
 from kluster.components.cloud.guardrails import AlertRule, Guardrails
 from kluster.components.cloud.nodes import CloudNodes, NodeLoadBalancer
@@ -116,8 +124,9 @@ BUDGET_ALERT_RULES: tuple[AlertRule, ...] = (
     ),
 )
 
-#: The bucket's consumers that exist whether or not any application does.
-FIXED_SCOPES: tuple[Scope, ...] = (etcd_scope(),)
+#: The bucket's consumers that exist whether or not any application does: the
+#: etcd snapshots' uploader, and what reads the snapshots back.
+FIXED_SCOPES: tuple[Scope, ...] = (etcd_scope(), etcd_reader_scope())
 
 
 #: The scope each backup family's writer key reaches, by the namespace it
@@ -130,7 +139,7 @@ FAMILY_SCOPES: Mapping[BackupFamily, Callable[[str], Scope]] = {
 
 
 def backup_scopes(backed: Mapping[str, frozenset[BackupFamily]]) -> tuple[Scope, ...]:
-    """Every writer key the bucket carries: the fixed consumers, and one per family of each backed namespace.
+    """Every key the bucket carries: the fixed consumers', and a writer key per family of each backed namespace.
 
     `backed` is `conventions.backup.BACKED_NAMESPACES`, the census
     `credentials` seals the keys by too, so a namespace that starts backing up
@@ -490,10 +499,12 @@ async def main() -> None:
 
     # Names, endpoints and credentials, because that is what a consumer of a
     # bucket is configured with (physical.md §0). The keys are one per scope:
-    # the etcd snapshots', and a writer key per family of every backed
-    # namespace, which `credentials derived b2-writer seal` reads out of this
-    # stack's state by its scope and seals into the stack that declares what
-    # reads it, `apps` or `k8s-base` (`conventions.sealed.WRITER_KEY_STACKS`).
+    # the etcd snapshots' uploader and reader, and a writer key per family of
+    # every backed namespace. `credentials derived b2-writer seal` reads each
+    # writer key out of this stack's state by its scope and seals it into the
+    # stack that declares what reads it, `apps` or `k8s-base`
+    # (`conventions.sealed.WRITER_KEY_STACKS`), and `b2-reader seal` does the
+    # same for the reader (`conventions.sealed.READER_KEYS_BY_SCOPE`).
     pulumi.export(outputs.backup_bucket, backup.bucket_name)
     pulumi.export(outputs.backup_endpoint, backup.endpoint)
     pulumi.export(

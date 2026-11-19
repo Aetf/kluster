@@ -783,7 +783,8 @@ column to the map lists it as one the map does not carry.
 | Cloudflare token (gateway ACME) | CF seed token | DNS edit on the zones the gateway's own vhosts are served under | Pulumi config secret (`physical`) · device secret (caddy's token file) | the gateway's caddy, written onto the device by `physical` |
 | B2 management key | B2 seed key | Bucket/key/lifecycle admin, **no file capabilities** | Pulumi config secret | `physical` |
 | B2 management key (state backend) | B2 seed key (`credentials derived b2-state-backend-management mint`) | The same capabilities as the one above, under a key name of its own, so that neither row's mint retires the other's key | Pulumi config secret (`state-backend`) | the `state-backend` stack, which declares the appliance's dump bucket and dump key with it (rfc-006 §4) |
-| B2 writer keys | B2 seed key (via `physical`) | Prefix-scoped, `list+read+write`, **no `deleteFiles`** — deletes degrade to lifecycle-purged hides (audit H4): VolSync, CNPG barman, the VictoriaMetrics stores' `vmbackup`, etcd snapshots. The keys whose consumer keeps a store — VolSync, barman and `vmbackup` — also hold `listBuckets`, without which B2's S3 API answers a read of a missing name with 403 rather than 404 and the store's first backup fails (storage.md §4). The excess that grant carries: a read of the bucket's own settings — its type, its bucket info, its CORS and lifecycle rules — and nothing on files, nothing beyond the bucket, and no write | Pulumi state (`physical`, `backup_keys`, by scope) · SealedSecret (`sealedSecrets.writer-<scope>` in the stack that declares its consumers, by `credentials derived b2-writer seal`: one per family of each namespace `conventions.backup.BACKED_NAMESPACES` names, in `apps`, or `k8s-base` for `monitoring`, sealed namespace-wide; and the etcd snapshots', `writer-etcd` in `k8s-base`, in the etcd backup's namespace, sealed strict) | restic/barman, `vmbackup` and `vmrestore`, and the hourly etcd snapshot (`components.backup.etcd`, storage.md §5) |
+| B2 writer keys | B2 seed key (via `physical`) | Prefix-scoped, **no `deleteFiles`** — deletes degrade to lifecycle-purged hides (audit H4). The keys whose consumer keeps a store, VolSync, CNPG barman and the VictoriaMetrics stores' `vmbackup`, are `list+read+write`; the etcd snapshots' is `writeFiles` alone, all its uploader asks for, so nothing that holds it can list or read a snapshot. The keys whose consumer keeps a store — VolSync, barman and `vmbackup` — also hold `listBuckets`, without which B2's S3 API answers a read of a missing name with 403 rather than 404 and the store's first backup fails (storage.md §4). The excess that grant carries: a read of the bucket's own settings — its type, its bucket info, its CORS and lifecycle rules — and nothing on files, nothing beyond the bucket, and no write | Pulumi state (`physical`, `backup_keys`, by scope) · SealedSecret (`sealedSecrets.writer-<scope>` in the stack that declares its consumers, by `credentials derived b2-writer seal`: one per family of each namespace `conventions.backup.BACKED_NAMESPACES` names, in `apps`, or `k8s-base` for `monitoring`, sealed namespace-wide; and the etcd snapshots', `writer-etcd` in `k8s-base`, in the etcd backup's namespace, sealed strict) | restic/barman, `vmbackup` and `vmrestore`, and the hourly etcd snapshot (`components.backup.etcd`, storage.md §5) |
+| B2 reader key (etcd snapshots) | B2 seed key (via `physical`) | `listFiles + readFiles` on `etcd/` and nothing else: no write, so whatever runs with it cannot plant the object a recovery takes for the newest snapshot, and no `listBuckets`, since its consumer downloads a file it has just listed | Pulumi state (`physical`, `backup_keys`, under `etcd-reader`) · SealedSecret (`k8s-base`, `sealedSecrets.reader-etcd`, in the etcd backup's namespace, sealed strict, by `credentials derived b2-reader seal`) | the etcd restore-verify, which lands after the ciphertext (§1 rule 6) |
 | B2 dump key (micro) | minted through the `state-backend` stack, with its own B2 management key; rotated by a generation bump in its configuration | `writeFiles` alone, dump prefix | Pulumi state (`state-backend`, its committed checkpoint) · on-box (Ignition) | state-backend pg_dump timer |
 | B2 freshness key (state dumps) | B2 seed key (`credentials derived b2-freshness-dumps mint`) | `listFiles` alone, confined to the dump prefix of the appliance's bucket: names, never a byte | ops-repo secret (`B2_FRESHNESS_DUMPS_KEY_ID`, `B2_FRESHNESS_DUMPS_KEY`) · SealedSecret (`k8s-base`, `sealedSecrets.b2-freshness-dumps`, in the `monitoring` namespace) | The cluster's hourly dump-age check, the CronJob `state-backend-dumps`, which mounts the Secret (state-backend.md §6); `state-backend probe`, run daily by the ops repo's `probes.yml` (state-backend.md §6) |
 | GitHub App key (dispatch) | Made on the App's own page (no key API) | Signs a JWT for that App alone, which mints a per-run installation token carrying contents:write on `kluster` and `kluster-ops` — the App is installed on both, and each mint is scoped to the one repository its run pushes to. The residual: the key is a repository secret any same-repository job can read, and its token pushes non-workflow files to `kluster`'s unprotected branches and merges any `kluster` pull request whose required checks are green and that changes no workflow file — `main`'s protection requires checks and restricts nobody (threat-model.md §3.2) — and pushes to any branch of `kluster-ops`, a private repository with no branch protection on this plan; it writes no workflow file in either (no `workflows` permission), and nothing in `kluster-ops` that writes one takes instructions from a file it can write (architecture.md §4.3). What it reaches counts as reachable by whatever can start a run that reads the key (threat-model.md §2.8) | escrow as `github/dispatch-key` · `kluster` repository secret (`DISPATCH_APP_PRIVATE_KEY`) | `sdk-regenerate.yml`, whose push onto a renovate branch is the App's act so that the pushed head's runs start on their own (ci.md §3); the alert producer (`alert.yml`), to which the `alert` job every workflow on `main` but `deploy.yml` ends in (ci.md §3) hands the key, and which posts the alert to `kluster-ops` |
@@ -908,20 +909,25 @@ stack that declares its readers, at the path its row in
 `k8s-base` for `monitoring`, a namespace the platform holds
 (`conventions.sealed.WRITER_KEY_STACKS`), and for the etcd snapshots'
 key (`conventions.sealed.ETCD_WRITER_KEY`). A configuration secret of
-either stack would reach every pull request's preview (§1), and a writer
-key reads every backup in its prefix: a `vmbackup` copy as it is, and a
+either stack would reach every pull request's preview (§1), and a store's
+writer key reads every backup in its prefix: a `vmbackup` copy as it is, and a
 restic repository beside its password. Each key is sealed **namespace-wide** rather than strict,
 the one exception to rule 6's strict seal, because one ciphertext serves
 every repository Secret of its namespace, each under its own name
-(declarative/workloads.md §3). The etcd snapshots' key is sealed strict,
+(declarative/workloads.md §3). The etcd snapshots' writer key is sealed strict,
 like every other value: one Secret, in the etcd backup's namespace,
 reads it. Which namespaces back up is the census
 `conventions.backup.BACKED_NAMESPACES`: `physical` mints one key per
 family of each from it, and the seal covers every namespace at once,
-and the etcd snapshots' key beside them. `--only <value>` seals one key
+and the etcd snapshots' writer key beside them. `--only <value>` seals one key
 alone, which is how each key whose readers `k8s-base` declares, the etcd
 snapshots' and the one of `monitoring`, is sealed at the sitting that
-seals the cluster's own values (§4.1 stage 11).
+seals the cluster's own values (§4.1 stage 11). The etcd snapshots'
+reader key leaves `physical`'s state the same way, strict into
+`k8s-base` (`conventions.sealed.ETCD_READER_KEY`), by a command of its
+own, `credentials derived b2-reader seal`: it reads the snapshots back
+and writes nothing, so it is no writer key, and a row or a command named
+for writers would say it is.
 
 **The OCI rows are one mint and two stacks.** Both are the same act — the
 seed creates a user, the group that holds it and a policy confining that
@@ -1241,6 +1247,7 @@ name.
 | `credentials derived alert-webhook record` | After `physical` has brought the cluster up and `k8s-base` runs the sealed-secrets controller, and after the operator has made alertmanager's intake automation in Home Assistant — which the command prints the steps for. Takes the webhook id without echoing it, and refuses a value not shaped as one, a whole URL among them; seals it with `kubeseal` strict for the Secret alertmanager's receiver reads, to which the SealedSecret adds the URL built from the id, and writes the ciphertext in the clear at `sealedSecrets.alert-webhook.id` in `k8s-base`'s config, reading it back; the stack file is then committed. No stack holds the id as a secret: its one consumer is in the cluster. A new webhook id and this command again is the rotation. |
 | `credentials derived dkim-exim record [--key-file <path>]` | Once, after `k8s-base` runs the sealed-secrets controller and before exim moves in Wave A1 ([cluster/migration.md](cluster/migration.md) §2). Takes the mail relay's DKIM private key whole on standard input, piped from the legacy cluster's `cert-dkim-exim` Secret by the command it prints, or from the file `--key-file` names, and echoes it nowhere. Before anything is sealed it refuses a key whose public half's SHA-256 over the DER differs from `conventions.DKIM_K8S`'s, the key every mail zone publishes as `k8s._domainkey`, printing the two digests and nothing of the key. Then it seals the key with `kubeseal` strict for the Secret exim reads, and writes the ciphertext in the clear at `sealedSecrets["dkim-exim"]["tls.key"]` in the `apps` stack's config, reading it back; `Pulumi.apps.yaml` is then committed. The key is never rotated in place (§2.2). |
 | `credentials derived b2-writer seal [--only <value>]` | Once, at the hand-over to the first wave ([physical/bring-up.md](physical/bring-up.md) stage 9), after the legacy sealing key is carried and the certificate the controller serves is confirmed as the cluster's own; and again after a `physical` apply that mints a writer key for a newly backed namespace. `--only writer-etcd` and `--only writer-vm-monitoring` earlier, at the sitting that seals the cluster's own values (§4.1 stage 11), and again after a rebuild. Fetches the cluster's sealing certificate with the kubeconfig in `physical`'s state, reads every writer key `physical` exports under `backup_keys` out of that state under `physical`'s passphrase, or the one `--only` names: the etcd snapshots', and one per family of each namespace in `conventions.backup.BACKED_NAMESPACES`. It seals a backed namespace's key with `kubeseal` namespace-wide and the etcd snapshots' strict, and writes the ciphertexts in the clear at their rows' paths in the config of the stack each row names, `apps`'s or, for `monitoring` and the etcd snapshots, `k8s-base`'s, reading each back; `Pulumi.apps.yaml` and `Pulumi.k8s-base.yaml` are then committed. A declaring stack that does not exist, or a key `physical` does not export yet refuses the run before anything is written, and a `--only` that names no writer key refuses it before anything is read. |
+| `credentials derived b2-reader seal [--only <value>]` | At the sitting that seals the cluster's own values (§4.1 stage 11), and again after a rebuild; and once, ahead of its reader's merge, on an installation past that stage when the read-only key is first declared (§1 rule 6). Fetches the cluster's sealing certificate with the kubeconfig in `physical`'s state, reads every read-only key `physical` exports under `backup_keys` out of that state under `physical`'s passphrase, with no kit, or the one `--only` names: today the etcd snapshots' reader, `listFiles + readFiles` on `etcd/`. It seals each strict, for the one Secret that reads it, and writes the ciphertext in the clear at its row's path in `k8s-base`'s config, reading it back; `Pulumi.k8s-base.yaml` is then committed. A declaring stack that does not exist, or a key `physical` does not export yet, refuses the run before anything is written, and a `--only` that names no read-only key refuses it before anything is read. |
 | `credentials derived authelia-storage-key import` | Once, while the legacy cluster still holds the key: at the bring-up's last kit sitting ([physical/bring-up.md](physical/bring-up.md) stage 9), beside `b2-writer seal`, or, on an installation past that stage, at a kit sitting of its own before Wave A1's head (rfc-008 §5.2). Takes Authelia's storage encryption key on standard input, piped from the legacy cluster's `authelia` Secret by the command it prints, and with the surrounding whitespace stripped, as every piped value is; refuses, filing nothing, a key shorter than Authelia accepts; escrows it as the next generation of `authelia/storage-key`; and seals what the registry then returns, read back out of the ciphertext, strict for the Secret the server reads, into `apps`'s config, reading it back. The cluster's certificate and the `apps` stack are held to exist before anything is escrowed. A seal that fails after the escrow is repaired by `seal` below, not by a second `import`, which would file the same key again as the next generation. The escrow file and `Pulumi.apps.yaml` are committed together. Wave A1's sign-in with a second factor against the migrated database, before the cut (rfc-008 §5.2), is what proves the escrowed key, whitespace stripped, is the one Authelia encrypted with. |
 | `credentials derived authelia-storage-key seal` | After a rebuild of the cluster, which is the whole of that key's recovery, and after an `import` whose seal failed. Opens the newest escrowed generation with the kit, seals it to the cluster's certificate strict for the Secret the server reads, and writes the ciphertext into `apps`'s config, reading it back; `Pulumi.apps.yaml` is then committed. On an installation whose Authelia has no database yet, it is also the step after `generate`. While the escrow holds no generation it refuses, naming `import`, and writes nothing. |
 | `credentials derived github-admin record` | Once per installation, and again on each rotation, for the GitHub admin token — into the `github` stack's config, which is where the stack and every command that pushes a GitHub secret read it. Nothing in this repository can create the value: GitHub publishes no API that makes a personal access token, so a token generated on the account's settings page and recorded here is the whole of a rotation, and the superseded one is deleted on the same page. It runs before `derived sync`, which authenticates as it. |
@@ -1377,7 +1384,8 @@ parked. The DNS-01 token is delivered too, sealed to the cluster into
 `k8s-base`'s configuration (below), and so are the backup bucket's
 writer keys, which `physical` mints and `credentials derived b2-writer
 seal` seals into `apps`'s, and `monitoring`'s and the etcd snapshots'
-into `k8s-base`'s. The
+into `k8s-base`'s, beside the etcd snapshots' reader key, which
+`b2-reader seal` seals into `k8s-base`'s. The
 GitHub-secret half of a row is
 delivered separately, by `credentials derived sync` rather than by the
 row's own command, for the rows whose value can be obtained without
@@ -1414,7 +1422,8 @@ alertmanager's webhook and the mail relay's DKIM key each by its
 `record` once a cluster exists, or by its `seal`, which reads the value
 back out of `physical`'s configuration, for a password recorded before
 there was a cluster to seal it to. The writer keys are sealed by
-`b2-writer seal`, which reads them out of `physical`'s state, and
+`b2-writer seal`, which reads them out of `physical`'s state, the etcd
+snapshots' reader key by `b2-reader seal`, which reads it from there too, and
 Authelia's storage encryption key by its `import` and its `seal`, each of
 which seals what the escrow holds.
 
@@ -1731,6 +1740,7 @@ operator-passphrase generate` and `recover`.
     `credentials derived alert-webhook record`,
     `credentials derived b2-writer seal --only writer-etcd`,
     `credentials derived b2-writer seal --only writer-vm-monitoring`,
+    `credentials derived b2-reader seal`,
     `credentials derived state-backend-upkeep seal`,
     `credentials derived b2-freshness-dumps mint` and
     `credentials derived etcd-drill-age-identity generate` —
@@ -1748,17 +1758,18 @@ operator-passphrase generate` and `recover`.
     the role `upkeep`, issued from the CA the kit recovers; the list-only
     B2 key the dump-age check lists the state backend's dump prefix with,
     minted from the B2 seed and pushed into the ops repository in the
-    same run; the age identity the monthly etcd restore-verify decrypts
+    same run; the age identity the etcd restore-verify decrypts
     the newest snapshot with, drawn in the run that seals it, whose public
     half the same run writes to
     `src/kluster/conventions/etcd-drill-recipient.txt`; and the backup
-    bucket's writer keys whose readers `k8s-base` declares, which
+    bucket's keys whose consumers `k8s-base` declares, which
     `physical`'s apply minted, read out of `physical`'s state: the
-    `etcd` key, which the hourly etcd snapshot uploads with, and the
-    `monitoring` namespace's, which the metrics stores' backups upload
-    with and their restores read. The stack file is then committed, with
-    the recipient file beside it, and the next `k8s-base` apply hands each
-    to what reads it. A value
+    `etcd` key, which the hourly etcd snapshot uploads with, the
+    `monitoring` namespace's, which both the metrics stores' backups and
+    their restores use, and the `etcd-reader` key, which the
+    etcd restore-verify lists and downloads the newest snapshot with. The
+    stack file is then committed, with the recipient file beside it, and
+    the next `k8s-base` apply hands each to what reads it. A value
     `k8s-base` gains after this stage has run is sealed by its own
     command ahead of its reader's merge (§1 rule 6), and its declaration
     adds that command to this stage, where a bring-up from scratch runs
@@ -1772,7 +1783,7 @@ operator-passphrase generate` and `recover`.
     `physical`'s state and sealed namespace-wide into the configuration of
     the stack that declares its readers, `apps`'s, or `k8s-base`'s for
     `monitoring`, every namespace in one run, the key of `monitoring`
-    sealed again among them and stage 11's etcd snapshots' key beside
+    sealed again among them and stage 11's etcd snapshots' writer key beside
     them. `Pulumi.apps.yaml` and
     `Pulumi.k8s-base.yaml` are then committed. At the same sitting, Authelia's storage encryption key
     is carried from the legacy cluster by the pipe that

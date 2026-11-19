@@ -208,6 +208,7 @@ _ORDER = """when to run what:
        credentials derived alert-webhook record
        credentials derived b2-writer seal --only writer-etcd
        credentials derived b2-writer seal --only writer-vm-monitoring
+       credentials derived b2-reader seal
        credentials derived state-backend-upkeep seal
        credentials derived b2-freshness-dumps mint
        credentials derived etcd-drill-age-identity generate
@@ -224,16 +225,17 @@ _ORDER = """when to run what:
          alertmanager's own Home Assistant webhook, made by the operator in
          Home Assistant; the backup bucket's keys whose readers k8s-base
          declares, the one the hourly etcd snapshot uploads with and the
-         monitoring namespace's, which the metrics stores' backups upload
-         with and their restores read, each minted by physical's apply and
-         read out of physical's state; the client bundle the state table's
-         daily upkeep reaches the state backend with, as the role upkeep,
-         issued from the escrowed CA; the list-only B2 key the dump-age
-         check lists the state backend's dump prefix with, minted from the
-         B2 seed and pushed into the ops repo's repository secrets in the
-         same run; and the age identity the monthly etcd restore-verify
-         decrypts the newest snapshot with, drawn here, whose public half
-         the same run writes to
+         monitoring namespace's, which both the metrics stores' backups and
+         their restores use, and the read-only key the etcd restore-verify
+         lists and downloads the newest snapshot with, each
+         minted by physical's apply and read out of physical's state; the
+         client bundle the state table's daily upkeep reaches the state
+         backend with, as the role upkeep, issued from the escrowed CA; the
+         list-only B2 key the dump-age check lists the state backend's dump
+         prefix with, minted from the B2 seed and pushed into the ops repo's
+         repository secrets in the same run; and the age identity the etcd
+         restore-verify decrypts the newest snapshot with, drawn here, whose
+         public half the same run writes to
          src/kluster/conventions/etcd-drill-recipient.txt. Commit the stack
          file, and that file with it; the next k8s-base apply hands each to
          what reads it. A value k8s-base gains after this stage has run is
@@ -1129,6 +1131,39 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     _add_bundle_dir(writer_seal)
+
+    reader = rows.add_parser(
+        derived.B2_READER_ROW,
+        help="the backup bucket's read-only keys, sealed to the cluster",
+        description=(
+            "The keys that read a prefix of the backup bucket back and write nothing: the etcd snapshots' reader, "
+            'which lists the snapshots and downloads one, and which the etcd restore-verify reads the newest '
+            "snapshot with. It is a key apart from the uploader's, so that nothing that reads the snapshots can "
+            'write one. The physical stack mints it from the B2 management key and keeps it in its state; its '
+            'consumer is in the cluster, so it reaches it sealed.'
+        ),
+    )
+    reader_verbs = reader.add_subparsers(dest='action', required=True, metavar='<verb>')
+    reader_seal = reader_verbs.add_parser(
+        'seal',
+        help='seal every read-only key physical holds into the config of the stack that reads it',
+        description=(
+            "Fetch the sealing certificate from the cluster's sealed-secrets controller, with the kubeconfig in "
+            "the physical stack's state; read each read-only key out of that state, under the physical stack's "
+            'own passphrase, with no kit; seal each with kubeseal, strict, for the one Secret that reads it; and '
+            'write the ciphertext in the clear into the config of the stack that declares that Secret, k8s-base, '
+            'reading it back. A key physical does not hold yet refuses the run before anything is written. Then '
+            'commit the config. Every run writes fresh ciphertext.'
+        ),
+    )
+    _ = reader_seal.add_argument(
+        '--only',
+        choices=[value.name for value in conventions.sealed.READER_KEYS_BY_SCOPE.values()],
+        default=None,
+        metavar='<value>',
+        help='seal this read-only key alone',
+    )
+    _add_bundle_dir(reader_seal)
 
     physical_key = rows.add_parser(
         derived.OCI_PHYSICAL_ROW,
@@ -2185,6 +2220,8 @@ def main(argv: list[str] | None = None) -> int:
             # is read.
             case ('derived', derived.B2_WRITER_ROW, 'seal'):
                 _ = derived.b2_writer_seal(sealer=_sealer(_opener(args, store, registry)), only=args.only)
+            case ('derived', derived.B2_READER_ROW, 'seal'):
+                _ = derived.b2_reader_seal(sealer=_sealer(_opener(args, store, registry)), only=args.only)
             case ('derived', derived.OCI_PHYSICAL_ROW, 'mint'):
                 _ = derived.oci_physical(
                     store,
