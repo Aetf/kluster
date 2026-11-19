@@ -2,4 +2,4 @@
 # private half is sealed into Pulumi.k8s-base.yaml at sealedSecrets["etcd-drill"]["age-identity"]; nothing
 # on disk holds it in the clear.
 # Written by `credentials derived etcd-drill-age-identity generate`; replaced by running it again.
-age1vv55nmu30n7tvjrh6cj3u9jqfsz9azdwxvyg7q5ru87aujs26caqj3fkcq
+age1kwzly0ty9s5ngaq335uzhnenuvjmv9t8pfuwdq3f64ytaucqsgqsvjznmg
