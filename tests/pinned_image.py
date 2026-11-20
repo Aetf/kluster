@@ -39,8 +39,23 @@ DOCKER_HUB = 'docker.io/'
 DOCKER_HUB_MIRROR = 'mirror.gcr.io/'
 
 #: The bound on a pull, which reaches a registry: a stop-loss, below the case
-#: bound, which nothing asserts on.
+#: bound, which nothing asserts on. An image's size here is its download, the
+#: compressed layers its manifest lists for the platform, which a reviewer can
+#: read before pulling it. This bound is for a download of up to half a
+#: gigabyte; the largest that pulls inside it on CI's runner is the drill
+#: client's, `database-restore-drill`, at 0.32 GB. A larger download takes
+#: `LARGE_PULL_TIMEOUT`.
 PULL_TIMEOUT = 45
+#: The bound on a pull of an image whose download is over half a gigabyte,
+#: which the caller passes to `pulled` and builds its case bound on: the caller
+#: names the pin, and the size is the pin's. One figure sized for these would
+#: hold a stalled pull of a small image as long, in every case that pulls one,
+#: and a case that pulls several images adds the bound once for each. The
+#: basis is `immich-server` v3.3.3, a 0.61 GB download: a cold pull takes 16 s
+#: on a workstation and took more than `PULL_TIMEOUT` on CI's runner, where
+#: the suite's other cases run beside it. The bound is an order of magnitude
+#: above the first and several times the second's floor.
+LARGE_PULL_TIMEOUT = 300
 #: The bound on each other podman command, every one local.
 COMMAND_TIMEOUT = 30
 #: How long a container a case starts may run: the run's outer bound
@@ -78,9 +93,12 @@ def source(image: ImagePin) -> str:
     return f'{repository}@{image.digest}'
 
 
-def pulled(image: ImagePin) -> str:
-    """`source(image)`, pulled first where it is not local."""
+def pulled(image: ImagePin, *, timeout: int = PULL_TIMEOUT) -> str:
+    """`source(image)`, pulled first where it is not local, the pull bounded by `timeout`.
+
+    An image whose download is over half a gigabyte passes `LARGE_PULL_TIMEOUT`.
+    """
     reference = source(image)
     if process_sessions.run(['podman', 'image', 'exists', reference], timeout=COMMAND_TIMEOUT).returncode != 0:
-        _ = process_sessions.run(['podman', 'pull', '--quiet', reference], timeout=PULL_TIMEOUT, check=True)
+        _ = process_sessions.run(['podman', 'pull', '--quiet', reference], timeout=timeout, check=True)
     return reference
