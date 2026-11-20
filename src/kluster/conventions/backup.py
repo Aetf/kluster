@@ -210,7 +210,7 @@ BACKED_NAMESPACES: Mapping[str, frozenset[BackupFamily]] = MappingProxyType(
         'golinks': frozenset({BackupFamily.VOLSYNC}),
         'emailproxy': frozenset({BackupFamily.VOLSYNC}),
         'spoolman': frozenset({BackupFamily.VOLSYNC}),
-        'media': frozenset({BackupFamily.VOLSYNC}),
+        'shoko': frozenset({BackupFamily.VOLSYNC}),
         'immich': frozenset({BackupFamily.BARMAN}),
         'jellyfin': frozenset({BackupFamily.VOLSYNC}),
         'qbittorrent': frozenset({BackupFamily.VOLSYNC}),

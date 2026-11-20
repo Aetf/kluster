@@ -713,10 +713,9 @@ Consequences, all deliberate:
         system made, and makes again. That account is its second home,
         and a loss costs a visit to it. Today: the mail relay's Gmail
         login (`exim`), the mail proxy's OAuth client (`emailproxy`),
-        the Hentai@Home login (`hath`), the key of the anime database
-        account shoko signs in to (`shoko`), and the legacy backup
-        bucket's service-account keys (`immich-db`, `splitpro-db`),
-        which the decommission deletes.
+        the Hentai@Home login (`hath`), and the legacy backup bucket's
+        service-account keys (`immich-db`, `splitpro-db`), which the
+        decommission deletes.
     -   **A random draw whose loss costs a redraw**: a value the legacy
         cluster generated whose loss loses no stored data, so it costs a
         sign-in or a restart. It is escrowed nowhere on purpose, by the
