@@ -367,9 +367,53 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     that hold the box's roles, its client authentication and its dump
     script to a real server. A pull that fails fails the step rather
     than leaving the module to skip, since a green run that skipped it
-    would read as one that proved it. The step's log names the runner's
-    podman and the buildah it carries, which are what the module's own
-    podman workarounds name as the conditions for removing them.
+    would read as one that proved it.
+-   **The podman every case runs containers on is pinned: a podman 6
+    release, the line the workstations run, moved by renovate once it
+    is a release-age old.** A case that runs a container judges the
+    podman it runs on as much as the declaration it reads, so CI runs
+    the podman the suite is written against rather than the runner
+    image's, whose release follows Ubuntu's and lags a workstation's.
+    The podman project publishes no engine for Linux, only its remote
+    client, so the pin is `mgoltzsche/podman-static`: upstream's podman
+    built statically with `conmon`, `crun`, `runc`, `netavark`,
+    `aardvark-dns`, `pasta`, `fuse-overlayfs` and `catatonit`, one
+    release per podman release and under its version. It carries no
+    systemd support, so it manages its control groups itself and logs
+    its events to a file, where a workstation's podman hands both to
+    systemd.
+-   **The pin is `mise.ci.toml`'s, which only `checks` loads.** mise
+    loads that configuration beside `mise.toml` only where `MISE_ENV`
+    is `ci`. `checks` sets that on its job, so its install puts the
+    pinned podman in and its `mise x` puts it on the path ahead of the
+    runner's. Nothing else sets it, so a workstation's or a cloud
+    session's `mise x` keeps that host's own podman. Its lock is
+    `mise.ci.lock`, which `mise.toml`'s `locked` binds as it binds
+    `mise.lock`; `tests/test_mise_lock.py` holds every pin to an entry
+    carrying a sum, and `MISE_ENV=ci mise lock <tool>` moves an entry.
+    Renovate's mise manager reads the file by its name and writes its
+    lock under `MISE_ENV=ci`, so a release moves the pin in the
+    `toolchain` group's pull request like any other mise pin.
+-   **The `Podman` step fits the runner to the pinned build and asserts
+    its version.** It takes the archive's binaries and not its
+    configuration. Two files in the runner user's configuration fit the
+    runner's own to them: a drop-in in `containers.conf.d` names the
+    pinned build's `conmon`, OCI runtimes, `catatonit` and helper
+    binaries, which would otherwise resolve to the runner image's
+    copies, found first on the default search paths, and a
+    `storage.conf` keeps the store in the user's home, where without one
+    this podman takes the root-owned store the runner's
+    `/usr/share/containers/storage.conf` names. The step also turns off
+    `kernel.apparmor_restrict_unprivileged_userns`, Ubuntu's restriction
+    that admits an unprivileged user namespace only to a program a
+    security profile names: the runner's podman profile names
+    `/usr/bin/podman` alone, so with the restriction on, the pinned
+    podman cannot enter its rootless namespace. The runner is a VM the
+    job alone uses. The step fails unless podman reports the pinned
+    version, and its log names the buildah that podman carries and
+    every runtime piece by path and version, which are what the suite's
+    podman and pasta workarounds name as the conditions for removing
+    them.
 
 -   **Every job that runs the program installs its plugins first, with
     the job's token.** An `Install plugins` step runs

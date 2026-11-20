@@ -27,6 +27,11 @@ jobs:
     # step twice for its `post` phase, plus five minutes for the runner's own
     # phases -- a backstop for what no step bound reaches (framework/ci.md §3).
     timeout-minutes: 155
+    # Every mise command in the job reads `mise.ci.toml` beside `mise.toml`,
+    # so the install puts the pinned podman in, and every `mise x` puts it on
+    # the path ahead of the runner image's (framework/ci.md §3).
+    env:
+      MISE_ENV: ci
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         timeout-minutes: 5
@@ -96,24 +101,69 @@ jobs:
       # reference -- tag and digest -- resolve to it locally, as the cases
       # run it.
       #
-      # The log names the podman the module runs on and the buildah it
-      # carries, which is what the module's podman workarounds name as their
-      # removal conditions.
+      # The podman every case runs containers on is `mise.ci.toml`'s pin, not
+      # the runner image's (framework/ci.md §3). Its archive's binaries are
+      # taken and its configuration is not. Two files in the runner user's
+      # configuration fit the runner's own to them: a `containers.conf`
+      # drop-in names the pinned build's conmon, OCI runtimes, init
+      # (catatonit) and helpers (netavark, pasta, rootlessport), which would
+      # otherwise resolve to the runner image's copies, found first on the
+      # default search paths, and a `storage.conf` keeps the store in the user's
+      # home, where without one this podman takes the `graphroot` of the
+      # runner's `/usr/share/containers/storage.conf`, which only root can
+      # write. The step fails unless podman reports the pinned version, and
+      # the log names what it runs with -- the buildah it carries and every
+      # runtime piece, by path and version -- which is what the suite's
+      # podman and pasta workarounds name as their removal conditions.
       - name: Podman
         timeout-minutes: 5
         run: |
           set -euo pipefail
-          podman info --format 'podman {{.Version.Version}}, buildah {{.Host.BuildahVersion}}, rootless network {{.Host.RootlessNetworkCmd}}'
+          expected=$(mise current github:mgoltzsche/podman-static)
+          # The archive's tree under its `usr/local`, wherever mise unpacked it.
+          build=$(dirname "$(dirname "$(mise which podman)")")
+          # Ubuntu admits an unprivileged user namespace only to a program an
+          # AppArmor profile names, and the runner's podman profile names
+          # `/usr/bin/podman` alone, so with the restriction on, the pinned
+          # podman fails its re-exec into the rootless namespace (`failed to
+          # reexec: Permission denied`). The runner is a VM this job alone
+          # uses, and the restriction is lifted on it for every program.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          mkdir -p ~/.config/containers/containers.conf.d
+          cat >~/.config/containers/containers.conf.d/50-pinned-podman.conf <<EOF
+          [containers]
+          init_path = "$build/lib/podman/catatonit"
+
+          [engine]
+          helper_binaries_dir = ["$build/lib/podman", "$build/libexec/podman", "$build/bin"]
+          conmon_path = ["$build/lib/podman/conmon"]
+
+          [engine.runtimes]
+          crun = ["$build/bin/crun"]
+          runc = ["$build/bin/runc"]
+          EOF
+          cat >~/.config/containers/storage.conf <<EOF
+          [storage]
+          driver = "overlay"
+          graphroot = "$HOME/.local/share/containers/storage"
+          runroot = "$XDG_RUNTIME_DIR/containers"
+          EOF
+          mise x -- podman info --format json | mise x -- jq '{podman: .version.Version, buildah: .host.buildahVersion, conmon: .host.conmon, ociRuntime: (.host.ociRuntime | {name, path, version}), network: .host.networkBackendInfo, pasta: .host.pasta, rootlessNetworkCmd: .host.rootlessNetworkCmd, cgroupManager: .host.cgroupManager, eventLogger: .host.eventLogger, graphDriver: .store.graphDriverName}'
+          found=$(mise x -- podman info --format '{{.Version.Version}}')
+          if [ "$found" != "$expected" ]; then
+            echo "::error::podman is $found, and mise.ci.toml pins $expected"
+            exit 1
+          fi
           pin=$(mise x uv -- uv run python -c 'from kluster.lib.state_backend import settings as s; print(s.POSTGRES_REPOSITORY, s.POSTGRES_TAG, s.POSTGRES_DIGEST)')
           read -r repository tag digest <<<"$pin"
           echo "pulling $repository:$tag@$digest from mirror.gcr.io"
-          id=$(podman pull --quiet "mirror.gcr.io/${repository#docker.io/}@$digest")
-          podman tag "$id" "$repository:$tag"
+          id=$(mise x -- podman pull --quiet "mirror.gcr.io/${repository#docker.io/}@$digest")
+          mise x -- podman tag "$id" "$repository:$tag"
           pin=$(mise x uv -- uv run python -c 'from kluster.lib.state_backend import settings as s; print(s.PGBOUNCER_REPOSITORY, s.PGBOUNCER_TAG, s.PGBOUNCER_DIGEST)')
           read -r repository tag digest <<<"$pin"
           echo "pulling $repository:$tag@$digest"
-          id=$(podman pull --quiet "$repository@$digest")
-          podman tag "$id" "$repository:$tag"
+          id=$(mise x -- podman pull --quiet "$repository@$digest")
+          mise x -- podman tag "$id" "$repository:$tag"
 
       # A hung case fails by name under the per-case bound `pyproject.toml`
       # configures; the outer `timeout` is the hang guard for what that

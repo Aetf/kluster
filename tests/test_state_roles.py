@@ -191,13 +191,12 @@ TIMED_OUT = 124
 #: the condition decides, and `COMMAND_TIMEOUT` is the stop-loss.
 POLL_INTERVAL = 0.1
 
-#: How many zero bytes the tripwire on `_archive`'s workaround puts after its
-#: probe's end-of-archive blocks: sixteen times what the pipe between podman
-#: and its copier holds, 64 KiB, the kernel's default, which Go's `os.Pipe`
-#: keeps. So a copier that stops at the blocks fails that copy whatever the
-#: timing. The padding `tarfile` writes, under one 10 KiB record, fits a pipe
-#: of that size, and fails the copy only when the copier wins a race or the
-#: pipe is smaller than it, as the 8 KiB pipes of containers/buildah#6573 were.
+#: How many zero bytes `test_podman_cp_reads_a_stream_past_its_end_of_archive_blocks`
+#: puts after its probe's end-of-archive blocks: sixteen times what the pipe
+#: between podman and its copier holds, 64 KiB, the kernel's default, which
+#: Go's `os.Pipe` keeps. So a copier that stops at the blocks fails that copy
+#: whatever the timing, where the padding `tarfile` writes, under one 10 KiB
+#: record, fails it only when the copier wins a race.
 PAST_THE_END = 1 << 20
 
 
@@ -242,25 +241,11 @@ class File:
 
 
 def _archive(files: list[File]) -> bytes:
-    """A tar stream of `files`, rooted at `/`, with their parent directories, ending at its end-of-archive blocks.
+    """A tar stream of `files`, rooted at `/`, with their parent directories.
 
     Ownership travels inside the stream, and `podman cp --archive=false`
     keeps it: that is how a server key reaches the uid the image runs
     Postgres as, which refuses a key it does not own.
-
-    **The stream stops at the end-of-archive blocks, without the padding
-    `tarfile` adds up to a whole record: a workaround for
-    containers/buildah#6573.** podman's copier stops reading at those blocks
-    and exits, and podman's write of the padding into its pipe then fails
-    the copy with `passing bulk input to subprocess: write |1: broken pipe`
-    whenever the copier has exited first. On podman 4.9 a stream of one
-    small file, which is mostly padding, fails that way reliably. Its
-    boundary is the slice on the return line, which
-    `test_an_archive_ends_at_its_end_of_archive_blocks` holds, and the
-    tripwire `test_remove_the_archive_workaround_once_the_runners_copier_drains_its_stream`
-    with its `PAST_THE_END`. All of it goes once the podman on CI's runner
-    carries a copier that drains the stream, as buildah's does from 1.44
-    (containers/buildah#6678): the tripwire fails there then.
     """
     buffer = io.BytesIO()
     with tarfile.open(fileobj=buffer, mode='w') as tar:
@@ -279,8 +264,7 @@ def _archive(files: list[File]) -> bytes:
             entry.uid = file.uid
             entry.gid = file.gid
             tar.addfile(entry, io.BytesIO(file.content))
-    # Closed, `tar.offset` is where the end-of-archive blocks end.
-    return buffer.getvalue()[: tar.offset]
+    return buffer.getvalue()
 
 
 def _delivered(ignition: dict[str, Any]) -> list[File]:
@@ -1145,84 +1129,32 @@ def test_a_container_whose_start_never_comes_goes_with_its_teardown() -> None:
     assert not _exists('container', name)
 
 
-def test_an_archive_ends_at_its_end_of_archive_blocks() -> None:
-    """`_archive`'s stream is a whole tar, and nothing follows its end-of-archive blocks.
+def test_podman_cp_reads_a_stream_past_its_end_of_archive_blocks() -> None:
+    """A stream with bytes after its end-of-archive blocks goes into a box whole, and the copy succeeds.
 
-    The workaround's own contract (`_archive`): what podman's copier reads up
-    to is the whole stream, so podman has nothing left to write into a pipe
-    the copier has stopped reading. The race the workaround avoids is not
-    held still here: only a stream with more past its blocks than a pipe
-    holds makes the defect show every time, and that is the tripwire's
-    probe. This is what the workaround promises, read by `tarfile`'s
-    reader, which finds the blocks on its own.
-    """
-    files = [
-        File(PurePosixPath('/etc/kluster/a.conf'), b'one\n', 0o600, 999, 999),
-        File(PurePosixPath('/srv/b'), b'two' * 1000),
-    ]
-    stream = _archive(files)
-
-    with tarfile.open(fileobj=io.BytesIO(stream), mode='r:') as tar:
-        read = {
-            member.name: (member.mode, member.uid, member.gid, extracted.read())
-            for member in tar.getmembers()
-            if member.isfile() and (extracted := tar.extractfile(member)) is not None
-        }
-        end = tar.offset
-    assert read == {str(file.path.relative_to('/')): (file.mode, file.uid, file.gid, file.content) for file in files}
-    assert stream[end:] == bytes(2 * tarfile.BLOCKSIZE)
-
-
-def test_remove_the_archive_workaround_once_the_runners_copier_drains_its_stream() -> None:
-    """The tripwire on `_archive`'s workaround: red on CI's runner once its podman reads past the end-of-archive blocks.
-
-    The probe is `_archive`'s stream with `PAST_THE_END` zero bytes after
-    its blocks, copied into a box that is only created. A copier that stops
-    at the blocks (containers/buildah#6573) takes the archive up to them
-    whole and fails the copy every time; one that drains the stream takes
-    all of it and the copy succeeds. The probe file is read back either
-    way. What the probe finds says whether this host's podman needs the
-    workaround, and the outcome says which it found:
-
-    -   **It stops at the blocks: the case passes.** The workaround is
-        needed here.
-    -   **It drains the stream, on CI's runner: the case fails**, naming the
-        layer to remove. The runner's run is the verdict, being the podman
-        every change runs this module on.
-    -   **It drains the stream anywhere else: the case skips**, naming what
-        it found. A workstation's run sees only its own podman, so its
-        finding cannot clear the workaround for the runner.
-
-    A copy that fails before the archive is in -- the probe file is not
-    read back whole -- fails the case, since that failure says nothing
-    about the copier. podman's message does not tell the two apart: any
-    copy that ends before podman has passed on its input prints
-    `io: read/write on closed pipe`, and a remote client sees only that and
-    the service's `500`.
+    `_archive`'s stream ends with the padding `tarfile` writes up to a whole
+    record, and so does every stream the suite hands `podman cp -`. A copier
+    that stops reading at the blocks (containers/buildah#6573, fixed in
+    buildah 1.44 by containers/buildah#6678) fails such a copy with
+    `write |1: broken pipe` whenever it exits before podman has written the
+    rest. The padding fits a pipe, so with it alone that failure is a race;
+    `PAST_THE_END` does not, so a copier that stops at the blocks fails this
+    copy every time. The probe file is read back as well, so a copy that
+    succeeds without the archive is not taken for one that took it. On CI's
+    runner the podman is the one `mise.ci.toml` pins.
     """
     name = f'kluster-test-drain-{uuid.uuid4().hex[:12]}'
     path, content = PurePosixPath('/kluster-drain-probe'), b'probe\n'
     probe = _archive([File(path, content)]) + bytes(PAST_THE_END)
     with _removing(name):
         _ = _podman(*_named(_superusers(), name))
-        copied = process_sessions.run(
-            ['podman', 'cp', '--archive=false', '-', f'{name}:/'], input=probe, timeout=COMMAND_TIMEOUT
-        )
-        read = process_sessions.run(['podman', 'cp', f'{name}:{path}', '-'], timeout=COMMAND_TIMEOUT)
+        _ = _podman('cp', '--archive=false', '-', f'{name}:/', stdin=probe)
+        read = _podman('cp', f'{name}:{path}', '-')
 
-    # Whichever way the copy ended, the archive before the blocks went in
-    # whole; a copy that failed short of it failed on something else.
-    assert read.returncode == 0, (copied.stderr.decode(), read.stderr.decode())
-    with tarfile.open(fileobj=io.BytesIO(read.stdout), mode='r:') as tar:
+    with tarfile.open(fileobj=io.BytesIO(read), mode='r:') as tar:
         extracted = tar.extractfile(path.name)
-        assert extracted is not None and extracted.read() == content, copied.stderr.decode()
-    if copied.returncode != 0:
-        return
-    buildah = _podman('info', '--format', '{{.Host.BuildahVersion}}').decode().strip()
-    _runners_verdict(
-        f'podman cp read past the end-of-archive blocks on buildah {buildah}',
-        'the `_archive` workaround (containers/buildah#6573) and this case',
-    )
+        assert extracted is not None
+        assert extracted.read() == content
 
 
 def _on_ci_runner() -> bool:
