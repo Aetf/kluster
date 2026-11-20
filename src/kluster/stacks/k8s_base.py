@@ -3,11 +3,11 @@
 Gateway API CRDs, Cilium, sealed-secrets, cert-manager, CNPG and VolSync with
 the volume snapshot definitions it watches, VictoriaMetrics, NFD and the GPU
 plugin, the small standing set the legacy cluster proved, the hourly etcd
-snapshot with its daily restore-verify, the state table's daily upkeep and
-the `PriorityClass` a held pod runs at — in that dependency order, per
-docs/declarative/cluster-infra.md, monitoring apart, which is behind the
-`PriorityClass` since it renders pods that name it. The component list is closed: additions
-argue for themselves in writing first.
+snapshot with its daily restore-verify, the state table's daily upkeep, the
+`PriorityClass` a held pod runs at and the patches that put a replica of the
+cluster's DNS on each site — in the dependency order
+docs/declarative/cluster-infra.md §1 states. The component list is closed:
+additions argue for themselves in writing first.
 
 Its components live in areas of `kluster/components/`, the way `physical`
 composes the areas it declares: this module stays the wiring, a component for
@@ -84,6 +84,7 @@ from kluster.components.backup.snapshots import SnapshotDefinitions
 from kluster.components.backup.volsync import VolSync
 from kluster.components.certificates import CertManager
 from kluster.components.cilium import BgpSession, Cilium, internet_pool_members
+from kluster.components.coredns import CoreDnsPerSite
 from kluster.components.gpu import IntelGpuPlugin, NodeFeatureDiscovery
 from kluster.components.local_path import LocalPathProvisioner
 from kluster.components.monitoring import Monitoring, OciPull
@@ -160,6 +161,9 @@ async def main() -> None:
     # The class a held pod names, which the API server refuses a pod for
     # until it exists: a component that declares a held pod is behind it.
     held = HeldPriority('held-priority', after=[cilium], opts=opts)
+    # Talos' own CoreDNS objects, patched rather than taken over; the rollout
+    # the Deployment's patch waits for needs the CNI.
+    _ = CoreDnsPerSite('coredns', after=[cilium], opts=opts)
     _ = BgpSession(
         'bgp',
         after=[cilium, sealing],

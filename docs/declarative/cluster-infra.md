@@ -12,7 +12,8 @@ that speaks the k8s API, consumed by `apps`.
 > baseline and the BGP session), the sealed-secrets controller,
 > cert-manager with its issuer and certificates, CNPG with its Barman
 > Cloud plugin and the restore drills' admission policy, VolSync, NFD and the Intel GPU plugin,
-> local-path-provisioner, reloader, and monitoring with metrics-server.
+> local-path-provisioner, reloader, monitoring with metrics-server, and the
+> patches that put a replica of the cluster's DNS on each site (§2).
 
 ## 0. Scope and rules
 
@@ -79,8 +80,9 @@ that speaks the k8s API, consumed by `apps`.
 ## 1. Install order
 
 The order is a real dependency chain, so a single `up` converges from
-an empty cluster: each item is behind the items above it, and
-monitoring (item 6) behind item 11 too, the class its held pods name.
+an empty cluster: every item after Cilium is behind it, and behind
+whatever else its entry names, which is above it; monitoring (item 6) is
+behind item 11 too, the class its held pods name.
 Between components, it is encoded by Pulumi
 `depends_on` and parent relationships; inside every chart, by the
 classes its objects fall into (§1.2):
@@ -105,7 +107,8 @@ classes its objects fall into (§1.2):
 4.  **cert-manager** — ACME with Cloudflare DNS-01; the solver
     credential is a SealedSecret per §1.1 (a *separate*,
     minimally-scoped token from the one the pulumi-cloudflare provider
-    uses); every later component may reference issuers.
+    uses); every later component may reference issuers. It is behind
+    the sealing controller, whose chart defines the SealedSecret.
 5.  **CNPG operator** (≥1.26 — the floor for declarative offline
     in-place major upgrades, workloads.md §4), **VolSync** —
     independent of each other; both before any app declares a
@@ -114,7 +117,10 @@ classes its objects fall into (§1.2):
     `database-restore-drill`, and its binding, cluster-scoped and
     running nothing, which hold the name, labels, annotations and
     `inheritedMetadata` of every database drill's cluster to the drill's
-    manifest (workloads.md §4). VolSync is behind the **volume
+    manifest (workloads.md §4). Both are behind cert-manager, the
+    operator because its Barman Cloud plugin declares cert-manager's
+    objects. VolSync is
+    behind the **volume
     snapshot definitions** (`snapshot.storage.k8s.io`, from
     `external-snapshotter`), which its controller watches whatever a
     mover's copy method; they are served and nothing more, with no
@@ -444,9 +450,13 @@ classes its objects fall into (§1.2):
     **not declared yet**: it lands with its reader, the poller, when
     the dashboard's name moves (§3, rfc-007 §7.4). HA-delivery failure
     surfaces as a meta-alert on the notification-failure metric.
+    Monitoring is behind the sealing controller, whose chart defines the
+    SealedSecrets its sealed values arrive in.
 7.  **NFD + Intel GPU device plugin** — inert until the GPU cutover
     flips vfio on the homelab worker (physical/homelab-host.md §3), present from
-    day 0, so the cutover needs no k8s-base change.
+    day 0, so the cutover needs no k8s-base change. The GPU plugin is
+    behind NFD, whose objects it declares, and behind cert-manager,
+    whose objects its operator declares.
 8.  **The small standing set the legacy cluster already proved**
     (nodes.md §4.4 counted them as "kept as-is" but this list never
     named them — explicit now so the closed list is honest):
@@ -503,6 +513,12 @@ classes its objects fall into (§1.2):
     else. It is behind Cilium, as every component is, and the API server
     refuses a pod naming a class it does not hold, so monitoring, which
     renders pods that name it, is installed behind it.
+12. **The cluster's DNS on each site** — server-side-apply patches over
+    the `coredns` Deployment and the `kube-dns` Service that Talos'
+    bootstrap manifest installs (`components.coredns`), described with
+    the datapath setting they rely on in §2. They are behind Cilium,
+    since the Deployment's patch waits for the rollout it starts, whose
+    pods need the CNI.
 
 Every chart this list installs is pinned in `Pulumi.yaml`'s `versions:`
 block as `versions:chart-<name>`, the Gateway API definitions as
@@ -1094,6 +1110,42 @@ All decided behavior from architecture.md §3, expressed as config:
     layer — harden and monitor the mechanism.) Apps with
     native OIDC (immich, grafana, matrix, splitpro) are unaffected by
     this mechanism's availability.
+-   **The cluster's DNS answers on each site** (cluster/architecture.md
+    §1.1): a pod resolves at a replica on its own site, so a pod on the
+    worker keeps resolving while the home uplink is down, when it
+    reaches no cloud node. The cluster's DNS is Talos' bootstrap
+    manifest: two replicas placed, beside the OS label, by a preferred
+    anti-affinity over the hostname alone, so both can be on control
+    planes. `components.coredns`
+    adds two fields to Talos' objects. The `coredns` Deployment gains a
+    topology spread over the site label, `topology.kubernetes.io/zone`,
+    with `maxSkew: 1` and `DoNotSchedule`, counting the pods of one
+    replica set at a time (`matchLabelKeys: [pod-template-hash]`), so
+    the two replicas the manifest pins land one at each site, a rollout
+    included. While the worker is down its replica stays `Pending`
+    rather than joining the cloud one, because the worker's site still
+    counts (`nodeTaintsPolicy: Ignore`); the cloud replica keeps
+    running, since a spread decides only where a new pod goes. The
+    `kube-dns` Service gains `trafficDistribution: PreferSameZone`: the
+    EndpointSlice controller hints each endpoint with its node's zone,
+    which is its site, and the chart's `loadBalancer.serviceTopology`
+    has the proxy replacement honor the hints, so a client is sent to
+    the replica at its own site while that replica serves, and to any
+    replica while none at its site does (Cilium's
+    `pkg/loadbalancer/writer/writer.go` L582–616 at v1.20.4). **The patches are a layer over Talos'
+    objects, not the manifest taken over.** They apply by server-side
+    apply under a field manager of their own, `kluster-coredns`, and
+    name only fields the manifest does not set. machined applies a
+    bootstrap manifest only while its object is missing, and
+    `talosctl upgrade-k8s` applies it again by server-side apply as the
+    manager `talos`, which removes only fields `talos` owned; so Talos
+    keeps every field it writes, the replica count among them, and the
+    patched fields stay. A Talos release whose manifest sets one of them
+    takes it by forced ownership, and the patch, which does not force,
+    then fails on the conflict when next applied rather than taking the
+    field back. Removing the component releases both fields and leaves
+    Talos' objects as its manifest writes them. The Talos source lines
+    each statement rests on are cited in the component.
 -   **Hubble**: enabled with relay + UI off (its flow metrics — drops,
     TCP, flows, ICMP — into VictoriaMetrics; the UI is a port-forward
     away when needed — no standing dashboard, per the standing-rent
