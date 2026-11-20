@@ -35,8 +35,8 @@ from pulumi import runtime
 from kluster import conventions
 from kluster.components.apps.storage import claim, nas_claim, off
 from kluster.components.backup import s3_endpoint
-from kluster.components.monitoring import WORKER_AFFINITY
 from kluster.conventions.backup import RetentionClass
+from kluster.lib.k8s import WORKER_AFFINITY_JSON
 
 CLAIM = 'kubernetes:core/v1:PersistentVolumeClaim'
 VOLUME = 'kubernetes:core/v1:PersistentVolume'
@@ -797,7 +797,7 @@ def test_a_nas_claim_is_scheduled_to_the_worker_alone(declared: Recorder) -> Non
     (volume,) = [it.inputs for it in declared.of_type(VOLUME)]
 
     assert volume['spec']['nodeAffinity'] == {
-        'required': WORKER_AFFINITY['nodeAffinity']['requiredDuringSchedulingIgnoredDuringExecution']
+        'required': WORKER_AFFINITY_JSON['nodeAffinity']['requiredDuringSchedulingIgnoredDuringExecution']
     }
 
 

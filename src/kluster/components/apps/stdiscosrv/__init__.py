@@ -52,10 +52,9 @@ import pulumi_kubernetes as k8s
 
 from kluster.components.apps import Exposed, Fronts, dialed_names, expose
 from kluster.components.certificates import ISSUER
-from kluster.components.cilium.bgp import CONTROL_PLANE_LABEL
 from kluster.conventions.cluster import Transports
 from kluster.conventions.routes import Exposure, Port
-from kluster.lib.k8s import ApplicationNamespace, application_namespace
+from kluster.lib.k8s import CLOUD_POD_AFFINITY, ApplicationNamespace, application_namespace
 from kluster.lib.versions import ImagePin
 from putils import Component
 
@@ -98,24 +97,6 @@ def _discovery(exposure: Exposure) -> Port:
             f'the discovery port {row.name!r} names no host a device dials it at, and its certificate is for those names'
         )
     return row
-
-
-#: What places the pod on the cloud pool: a control plane node, which every
-#: cloud node is and the worker is not (nodes.md §4.2). The control planes take
-#: workloads, so no toleration goes with it.
-_CLOUD_POOL = k8s.core.v1.AffinityArgs(
-    node_affinity=k8s.core.v1.NodeAffinityArgs(
-        required_during_scheduling_ignored_during_execution=k8s.core.v1.NodeSelectorArgs(
-            node_selector_terms=[
-                k8s.core.v1.NodeSelectorTermArgs(
-                    match_expressions=[
-                        k8s.core.v1.NodeSelectorRequirementArgs(key=CONTROL_PLANE_LABEL, operator='Exists')
-                    ]
-                )
-            ]
-        )
-    )
-)
 
 
 def _container(image: ImagePin, row: Port) -> k8s.core.v1.ContainerArgs:
@@ -215,7 +196,7 @@ class Stdiscosrv(Component, pulumi_type='kluster:apps:Stdiscosrv'):
                     spec=k8s.core.v1.PodSpecArgs(
                         # It speaks HTTPS to devices alone, and never Kubernetes.
                         automount_service_account_token=False,
-                        affinity=_CLOUD_POOL,
+                        affinity=CLOUD_POD_AFFINITY,
                         security_context=k8s.core.v1.PodSecurityContextArgs(
                             run_as_non_root=True,
                             run_as_user=USER,

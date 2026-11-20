@@ -53,11 +53,10 @@ import pulumi_kubernetes as k8s
 from kluster import conventions
 from kluster.components.apps import Backend, Exposed, Fronts, expose
 from kluster.components.apps.storage import Claim, claim
-from kluster.components.cilium.bgp import CONTROL_PLANE_LABEL
 from kluster.conventions.backup import PRECIOUS
 from kluster.conventions.routes import Exposure, Held, Proxied, Route
 from kluster.lib import templates
-from kluster.lib.k8s import ApplicationNamespace, PortedSecret, application_namespace, sealed_value
+from kluster.lib.k8s import CLOUD_POD_AFFINITY, ApplicationNamespace, PortedSecret, application_namespace, sealed_value
 from kluster.lib.versions import ImagePin
 from putils import Component
 
@@ -269,22 +268,6 @@ def _refuse_exposure(exposure: Exposure, client: conventions.sso.Client) -> None
             'reach the server without the portal session a gate asks for'
         )
 
-
-#: What places a pod on the cloud pool: every control plane node, which are
-#: the cloud nodes (nodes.md §4.2), each carrying `CONTROL_PLANE_LABEL`.
-_CLOUD_AFFINITY = k8s.core.v1.AffinityArgs(
-    node_affinity=k8s.core.v1.NodeAffinityArgs(
-        required_during_scheduling_ignored_during_execution=k8s.core.v1.NodeSelectorArgs(
-            node_selector_terms=[
-                k8s.core.v1.NodeSelectorTermArgs(
-                    match_expressions=[
-                        k8s.core.v1.NodeSelectorRequirementArgs(key=CONTROL_PLANE_LABEL, operator='Exists')
-                    ]
-                )
-            ]
-        )
-    )
-)
 
 #: Who a pod of the homeserver's runs as: the server's user, which owns the
 #: claim's files, and the group the client secret's file is readable by.
@@ -499,7 +482,7 @@ class Matrix(Component, pulumi_type='kluster:apps:Matrix'):
             namespace=NAMESPACE,
             uid=MATRIX_USER,
             writer_key=writer_key,
-            placement=_CLOUD_AFFINITY,
+            placement=CLOUD_POD_AFFINITY,
             protect=True,
             opts=behind,
         )

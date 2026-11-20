@@ -44,9 +44,8 @@ import pulumi_crds as crds
 import pulumi_kubernetes as k8s
 
 from kluster import conventions
-from kluster.components.monitoring import WORKER_AFFINITY
 from kluster.lib import templates
-from kluster.lib.k8s import ApplicationNamespace, PortedSecret, application_namespace, sealed_value
+from kluster.lib.k8s import WORKER_POD_AFFINITY, ApplicationNamespace, PortedSecret, application_namespace, sealed_value
 from kluster.lib.versions import ImagePin
 from putils import Component
 
@@ -258,13 +257,7 @@ class Exim(Component, pulumi_type='kluster:apps:Exim'):
                     spec=k8s.core.v1.PodSpecArgs(
                         # It speaks SMTP alone, and never Kubernetes.
                         automount_service_account_token=False,
-                        affinity=k8s.core.v1.AffinityArgs(
-                            node_affinity=k8s.core.v1.NodeAffinityArgs(
-                                required_during_scheduling_ignored_during_execution=WORKER_AFFINITY['nodeAffinity'][
-                                    'requiredDuringSchedulingIgnoredDuringExecution'
-                                ]
-                            )
-                        ),
+                        affinity=WORKER_POD_AFFINITY,
                         security_context=k8s.core.v1.PodSecurityContextArgs(
                             run_as_non_root=True,
                             run_as_user=EXIM_USER,

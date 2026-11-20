@@ -5,13 +5,13 @@ Item 6 of declarative/cluster-infra.md §1, with metrics-server from item 8
 database (vmsingle), the scraper (vmagent), the rule evaluator (vmalert),
 alertmanager, Grafana, kube-state-metrics and the node exporter.
 
-**It runs on the worker** (`WORKER_AFFINITY`), the node exporter apart, which
-runs on every node it reports on. Alertmanager has to: it posts to Home
-Assistant at Home Assistant's own address, which only the worker has a route
-to (rfc-008 §4.1, operations.md §4). The rest goes with it because the worker
-has the memory and the local disk, and the cloud nodes share their cores with
-etcd. Grafana is reached by a port-forward until its name moves (rfc-007
-§7.4).
+**It runs on the worker** (`kluster.lib.k8s.WORKER_AFFINITY_JSON`), the node
+exporter apart, which runs on every node it reports on. Alertmanager has to: it
+posts to Home Assistant at Home Assistant's own address, which only the worker
+has a route to (rfc-008 §4.1, operations.md §4). The rest goes with it because
+the worker has the memory and the local disk, and the cloud nodes share their
+cores with etcd. Grafana is reached by a port-forward until its name moves
+(rfc-007 §7.4).
 
 **Two stores keep what is scraped** (`stores`): the chart's vmsingle, the
 recent store, every series for a month; and the history store, a vmsingle the
@@ -169,15 +169,22 @@ import pulumi_random as random
 
 from kluster import conventions
 from kluster.components.backup import s3_endpoint
-from kluster.components.cilium.bgp import CONTROL_PLANE_LABEL
 from kluster.components.monitoring import dashboard, memory, oci_metrics, rules, state_backend, stores
 from kluster.components.monitoring.operator_objects import operator_object
 from kluster.components.monitoring.stores import Store, stack_fullname
-from kluster.conventions import backup, schedule
+from kluster.conventions import CONTROL_PLANE_LABEL, backup, schedule
 from kluster.conventions.alert import Tier
 from kluster.conventions.backup import BackupFamily
 from kluster.conventions.outputs import BOOT_VOLUME
-from kluster.lib.k8s import LooserLevel, PodSecurity, helm_chart, namespace, sealed_value
+from kluster.lib.k8s import (
+    WORKER_AFFINITY_JSON,
+    WORKER_POD_AFFINITY,
+    LooserLevel,
+    PodSecurity,
+    helm_chart,
+    namespace,
+    sealed_value,
+)
 from kluster.lib.monitoring.jobs import ETCD_JOB, KUBE_STATE_METRICS_JOB, KUBELET_JOB, SCRAPE_INTERVAL
 from kluster.lib.versions import ChartPin, ImagePin
 from putils import Component
@@ -202,7 +209,6 @@ __all__ = (
     'RECEIVER',
     'SNAPSHOTS_MAX_AGE',
     'WEBHOOK_URL_KEY',
-    'WORKER_AFFINITY',
     'CiliumScrape',
     'Monitoring',
     'OciPull',
@@ -215,34 +221,6 @@ __all__ = (
     'stack_fullname',
     'stack_values',
     'webhook_url',
-)
-
-#: What places a pod on the homelab worker: every node that is not a control
-#: plane node. The control plane is the cloud nodes (nodes.md §4.2), Talos
-#: labels each node of that type with `CONTROL_PLANE_LABEL` and no other, and
-#: the worker is the one node `physical` declares with any other role; the BGP
-#: session selects its node the same way (`components.cilium.bgp`).
-WORKER_AFFINITY: Mapping[str, Any] = {
-    'nodeAffinity': {
-        'requiredDuringSchedulingIgnoredDuringExecution': {
-            'nodeSelectorTerms': [{'matchExpressions': [{'key': CONTROL_PLANE_LABEL, 'operator': 'DoesNotExist'}]}],
-        },
-    },
-}
-
-#: `WORKER_AFFINITY`, as a pod the component declares itself takes it.
-_WORKER_AFFINITY_ARGS = k8s.core.v1.AffinityArgs(
-    node_affinity=k8s.core.v1.NodeAffinityArgs(
-        required_during_scheduling_ignored_during_execution=k8s.core.v1.NodeSelectorArgs(
-            node_selector_terms=[
-                k8s.core.v1.NodeSelectorTermArgs(
-                    match_expressions=[
-                        k8s.core.v1.NodeSelectorRequirementArgs(key=CONTROL_PLANE_LABEL, operator='DoesNotExist')
-                    ]
-                )
-            ]
-        )
-    )
 )
 
 #: alertmanager's one receiver, Home Assistant's webhook for alertmanager.
@@ -518,11 +496,11 @@ def _stack_values(release: str, chart: ChartPin, restore: Sequence[Mapping[str, 
             # The chart's default, stated: it is what keeps the webhook's
             # certificate from being generated afresh on every run.
             'admissionWebhooks': {'keepTLSSecret': True},
-            'affinity': WORKER_AFFINITY,
+            'affinity': WORKER_AFFINITY_JSON,
         },
         'vmsingle': {
             'spec': {
-                'affinity': WORKER_AFFINITY,
+                'affinity': WORKER_AFFINITY_JSON,
                 # Stated rather than left to the cluster's default class: a
                 # claim made before any class is the default would be made with
                 # none, and never bind.
@@ -535,14 +513,14 @@ def _stack_values(release: str, chart: ChartPin, restore: Sequence[Mapping[str, 
             },
         },
         'vmagent': {
-            'spec': {'affinity': WORKER_AFFINITY, 'scrapeInterval': backup.duration(SCRAPE_INTERVAL)},
+            'spec': {'affinity': WORKER_AFFINITY_JSON, 'scrapeInterval': backup.duration(SCRAPE_INTERVAL)},
             'additionalRemoteWrites': [stores.history_remote_write(history)],
         },
         # The recording rules reach the stores through vmagent, so the history
         # keeps those of its class as it keeps scraped series.
         'vmalert': {
             'spec': {
-                'affinity': WORKER_AFFINITY,
+                'affinity': WORKER_AFFINITY_JSON,
                 'evaluationInterval': backup.duration(EVALUATION_INTERVAL),
                 # Every `VMRule` in every namespace: a component that declares a
                 # CronJob and its rules beside it, as a database's drill does,
@@ -566,7 +544,7 @@ def _stack_values(release: str, chart: ChartPin, restore: Sequence[Mapping[str, 
         },
         'alertmanager': {
             'spec': {
-                'affinity': WORKER_AFFINITY,
+                'affinity': WORKER_AFFINITY_JSON,
                 # The receiver's configuration is a VMAlertmanagerConfig, whose
                 # route the operator otherwise confines to alerts carrying its
                 # own namespace's label; alertmanager here has one receiver for
@@ -575,7 +553,7 @@ def _stack_values(release: str, chart: ChartPin, restore: Sequence[Mapping[str, 
             },
         },
         'grafana': {
-            'affinity': WORKER_AFFINITY,
+            'affinity': WORKER_AFFINITY_JSON,
             # The credentials are the component's Secret, so that the chart
             # draws no password and renders no checksum of one.
             'admin': {
@@ -594,7 +572,7 @@ def _stack_values(release: str, chart: ChartPin, restore: Sequence[Mapping[str, 
             },
         },
         'kube-state-metrics': {
-            'affinity': WORKER_AFFINITY,
+            'affinity': WORKER_AFFINITY_JSON,
             'vmScrape': {'spec': {'endpoints': [dict(KUBE_STATE_METRICS_ENDPOINT)]}},
         },
     }
@@ -610,7 +588,7 @@ def metrics_server_values() -> dict[str, object]:
     item 6 of declarative/cluster-infra.md §1.
     """
     return memory.merged(
-        {'args': ['--kubelet-insecure-tls'], 'affinity': WORKER_AFFINITY},
+        {'args': ['--kubelet-insecure-tls'], 'affinity': WORKER_AFFINITY_JSON},
         memory.chart_values(memory.METRICS_SERVER_CHART),
     )
 
@@ -909,7 +887,7 @@ class Monitoring(Component, pulumi_type='kluster:monitoring:Monitoring'):
             metadata=k8s.meta.v1.ObjectMetaArgs(
                 name=schedule.OCI_METRICS_PULL.cronjob, namespace=self.namespace.metadata.name
             ),
-            spec=oci_metrics.cronjob_spec(image=oci_sdk_image, affinity=_WORKER_AFFINITY_ARGS),
+            spec=oci_metrics.cronjob_spec(image=oci_sdk_image, affinity=WORKER_POD_AFFINITY),
             opts=self.child_opts(depends_on=[self.chart, self.history, self.oci_pull_program, self.metrics_reader_key]),
         )
 
@@ -930,7 +908,7 @@ class Monitoring(Component, pulumi_type='kluster:monitoring:Monitoring'):
             metadata=k8s.meta.v1.ObjectMetaArgs(
                 name=schedule.STATE_BACKEND_CERTIFICATE.cronjob, namespace=self.namespace.metadata.name
             ),
-            spec=state_backend.certificate_cronjob_spec(image=oci_sdk_image, affinity=_WORKER_AFFINITY_ARGS),
+            spec=state_backend.certificate_cronjob_spec(image=oci_sdk_image, affinity=WORKER_POD_AFFINITY),
             opts=self.child_opts(depends_on=[self.state_backend_checks]),
         )
         # Behind the sealing controller, whose chart defines the kind, and the
@@ -947,7 +925,7 @@ class Monitoring(Component, pulumi_type='kluster:monitoring:Monitoring'):
             metadata=k8s.meta.v1.ObjectMetaArgs(
                 name=schedule.STATE_BACKEND_DUMPS.cronjob, namespace=self.namespace.metadata.name
             ),
-            spec=state_backend.dumps_cronjob_spec(image=oci_sdk_image, affinity=_WORKER_AFFINITY_ARGS),
+            spec=state_backend.dumps_cronjob_spec(image=oci_sdk_image, affinity=WORKER_POD_AFFINITY),
             opts=self.child_opts(depends_on=[self.state_backend_checks, self.freshness_key]),
         )
 
@@ -1003,7 +981,7 @@ def history_store_spec(*, image: ImagePin, restore: Sequence[Mapping[str, Any]])
     return {
         'image': {'repository': image.repository, 'tag': f'{image.tag}@{image.digest}'},
         'retentionPeriod': stores.HISTORY_RETENTION,
-        'affinity': WORKER_AFFINITY,
+        'affinity': WORKER_AFFINITY_JSON,
         'resources': memory.HISTORY_STORE.memory.resources(),
         'storage': {
             'storageClassName': conventions.SC_LOCAL_PATH,
@@ -1022,9 +1000,9 @@ def etcd_scrape_spec() -> dict[str, object]:
     by its presence: Talos gives it an empty value, and the operator turns a
     `matchLabels` entry into a relabeling that keeps a target whose label
     matches the value, which an absent label, read as empty, does too.
-    vmagent runs on the worker (`WORKER_AFFINITY`), so its request reaches a
-    control plane over KubeSpan, which the node firewall accepts ahead of
-    every rule: the port takes no opening (`components.talos.HOST_OPENINGS`).
+    vmagent runs on the worker (`WORKER_AFFINITY_JSON`), so its request
+    reaches a control plane over KubeSpan, which the node firewall accepts
+    ahead of every rule: the port takes no opening (`components.talos.HOST_OPENINGS`).
     """
     return {
         'selector': {'matchExpressions': [{'key': CONTROL_PLANE_LABEL, 'operator': 'Exists'}]},

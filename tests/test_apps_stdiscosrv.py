@@ -25,7 +25,7 @@ from kluster.components.apps import stdiscosrv as stdiscosrv_app
 from kluster.components.apps.stdiscosrv import Stdiscosrv
 from kluster.components.certificates import ISSUER
 from kluster.components.cilium import InternetPoolMembers
-from kluster.components.cilium.bgp import CONTROL_PLANE_LABEL
+from kluster.conventions import CONTROL_PLANE_LABEL
 from kluster.conventions.cluster import Transports
 from kluster.conventions.routes import (
     REWRITE,

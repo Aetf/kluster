@@ -7,9 +7,8 @@ Cilium's BGPv2 control plane, in its three objects
     names the instance's peer. It selects every node that is not a control
     plane node, which is the homelab worker alone: the control plane is the
     cloud nodes (nodes.md §4.2), Talos labels each node of that type
-    `node-role.kubernetes.io/control-plane`
-    ([`node_label_spec.go` L83–85](https://github.com/siderolabs/talos/blob/v1.13.9/internal/app/machined/pkg/controllers/k8s/node_label_spec.go#L83-L85)),
-    and the worker is the one node `physical` declares with any other role.
+    `conventions.CONTROL_PLANE_LABEL`, and the worker is the one node
+    `physical` declares with any other role.
     The peer is the gateway's leg on the cluster VLAN, the worker's default
     route, at the ASN the gateway's routing daemon is configured with, and the
     instance is the ASN that daemon expects of the worker
@@ -49,14 +48,10 @@ from putils import Component
 
 __all__ = (
     'ADVERTISEMENT_LABELS',
-    'CONTROL_PLANE_LABEL',
     'FAMILIES',
     'PEER',
     'BgpSession',
 )
-
-#: The label Talos puts on every control plane node, and on no other.
-CONTROL_PLANE_LABEL = 'node-role.kubernetes.io/control-plane'
 
 #: The name of the peer, of its configuration and of the cluster
 #: configuration: there is one session, and it is with the gateway.
@@ -141,7 +136,7 @@ class BgpSession(Component, pulumi_type='kluster:cilium:BgpSession'):
                 node_selector=crds.cilium.v2.CiliumBGPClusterConfigSpecNodeSelectorArgs(
                     match_expressions=[
                         crds.cilium.v2.CiliumBGPClusterConfigSpecNodeSelectorMatchExpressionsArgs(
-                            key=CONTROL_PLANE_LABEL, operator='DoesNotExist'
+                            key=conventions.CONTROL_PLANE_LABEL, operator='DoesNotExist'
                         )
                     ]
                 ),

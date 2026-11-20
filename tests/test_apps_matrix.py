@@ -43,7 +43,7 @@ from kluster.components.apps import Fronts
 from kluster.components.apps.matrix import NAMESPACE, OIDC, RECEIVE, Matrix, delegation, server_configuration
 from kluster.components.apps.storage import claim_name
 from kluster.components.cilium import InternetPoolMembers
-from kluster.components.cilium.bgp import CONTROL_PLANE_LABEL
+from kluster.conventions import CONTROL_PLANE_LABEL
 from kluster.conventions.backup import BACKED_NAMESPACES, PRECIOUS, BackupFamily
 from kluster.conventions.routes import PROXIED, REWRITE, Exposure, Gate, Held, Proxied, Route
 from kluster.lib.versions import ImagePin

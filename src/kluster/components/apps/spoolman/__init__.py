@@ -27,11 +27,11 @@ from collections.abc import Mapping
 import pulumi
 import pulumi_kubernetes as k8s
 
-from kluster.components.apps import WORKER_POD_AFFINITY, Backend, Exposed, Fronts, expose
+from kluster.components.apps import Backend, Exposed, Fronts, expose
 from kluster.components.apps.storage import Claim, claim
 from kluster.conventions.backup import STANDARD
 from kluster.conventions.routes import Exposure
-from kluster.lib.k8s import ApplicationNamespace, application_namespace
+from kluster.lib.k8s import WORKER_POD_AFFINITY, ApplicationNamespace, application_namespace
 from kluster.lib.versions import ImagePin
 from putils import Component
 

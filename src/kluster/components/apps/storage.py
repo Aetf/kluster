@@ -65,11 +65,10 @@ import pulumi_random as random
 
 from kluster import conventions
 from kluster.components.backup import s3_endpoint
-from kluster.components.monitoring import WORKER_AFFINITY
 from kluster.conventions.backup import RetentionClass
 from kluster.conventions.cluster import RETENTION_LABEL, WRITER_KEY_FIELDS
 from kluster.conventions.sealed import SealingScope
-from kluster.lib.k8s import SecretTemplate, sealed_secret
+from kluster.lib.k8s import WORKER_NODE_SELECTOR, SecretTemplate, sealed_secret
 
 __all__ = (
     'COPY_SECONDS_PER_GIB',
@@ -822,7 +821,6 @@ def nas_claim(
         raise ValueError(f'{resource_name}: a NAS path is relative to the export and stays under it, not {path!r}')
     access = 'ReadOnlyMany' if read_only else 'ReadWriteMany'
     volume_name = f'{namespace}-{name}'
-    worker = WORKER_AFFINITY['nodeAffinity']['requiredDuringSchedulingIgnoredDuringExecution']
     volume = k8s.core.v1.PersistentVolume(
         f'{resource_name}-nas',
         metadata=k8s.meta.v1.ObjectMetaArgs(name=volume_name),
@@ -837,7 +835,7 @@ def nas_claim(
                 path='/'.join([conventions.NAS_EXPORT, *parts]),
                 read_only=read_only,
             ),
-            node_affinity=k8s.core.v1.VolumeNodeAffinityArgs(required=worker),
+            node_affinity=k8s.core.v1.VolumeNodeAffinityArgs(required=WORKER_NODE_SELECTOR),
         ),
         opts=opts,
     )
