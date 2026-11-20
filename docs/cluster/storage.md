@@ -216,11 +216,47 @@ generation is made on, under any retention. A move is three merges:
 
 Every mover states its pod security context, without which `restricted`
 refuses it, as the user the workload runs as, so that it can read the
-data, and its resources (declarative/workloads.md §1). Every claim with a
-mover carries the allow for its movers' traffic, which reaches the
-claim's namespace, the cluster's DNS and, for a restic mover, the
-bucket's endpoint, and nothing else. **Unproven live**: the
-destination's mover placing a claim that is not yet bound, the
+data, and its resources (declarative/workloads.md §1).
+
+**A restic mover runs where the workload does.** A `local-path` claim
+binds on the node its first consumer is scheduled to, and VolSync
+0.16.0 places a `Direct` mover beside a pod that uses the claim and
+gives it no node selection at all while no pod does. So a source that
+reaches a claim before the workload's pod would bind the claim wherever
+its mover landed, which may be a node the workload can never run on.
+`claim` therefore takes the workload's `placement`, which the `Claim`
+it returns records and the workload's pod takes as its affinity, so the
+two are one value. Every restic mover of the claim carries the
+placement's node affinity as `moverAffinity`, term for term: the
+required terms, which decide the nodes the claim may bind on, and the
+preferred ones, which weigh the scheduler's choice among them as they
+weigh the workload's own pod, and the node chosen is the workload's for
+the claim's whole life. Whichever of the mover and the workload's pod
+is scheduled first, whether on the claim's first sync or after the
+claim is made again, the claim binds on a node the placement admits,
+weighed by its preferences.
+
+**New rule:** the placement is every node constraint the workload is
+under, stated as its pod's affinity. A pod that a volume already holds
+to one node, as a `nas_claim` does, states that node's pool too, since
+otherwise its claim's mover may bind the claim on a node the volume
+never reaches. A placement stated against other pods, pod affinity or
+anti-affinity, is refused for a backed claim, since the mover does not
+reproduce those pods. During a copy, the placement is the workload's on
+the claim being copied; it names the target in the finish.
+
+**New rule:** a pod that mounts more than one backed claim is placed on
+one node, and hands each claim that placement, the second as
+`placement=<first>.placement`. Each claim's mover binds its own claim
+and is scheduled apart from the others, so under a placement that
+admits several nodes, two movers can bind one pod's claims on two of
+them, and the pod, which needs both, then runs on neither.
+
+Every claim with a mover carries the allow for its movers' traffic,
+which reaches the claim's namespace, the cluster's DNS and, for a restic
+mover, the bucket's endpoint, and nothing else. **Unproven live**: the
+destination's mover placing a claim that is not yet bound, a restic
+mover's affinity holding such a claim to its workload's placement, the
 destination's Service resolving by its DNS name in the source's
 `address`, the copy's timeout per GiB, the movers' resource figures,
 restic's calls on the bucket itself under a key scoped to one prefix,

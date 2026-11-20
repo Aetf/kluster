@@ -11,7 +11,8 @@ container runs (`image_busybox`).
 
 Literals written here are the upstream projects' contracts: syncthing's
 listener schemes and the elements of its configuration, Kubernetes' Pod
-Security label, and the Gateway API's spellings.
+Security label, the Gateway API's spellings, and the label Talos gives a
+control plane node.
 """
 
 from __future__ import annotations
@@ -447,6 +448,54 @@ def test_a_new_folder_lands_on_the_nas(declared: Recorder) -> None:
 
 
 # -- the claims ------------------------------------------------------------------
+
+#: The label Talos gives a control plane node, which every cloud node is and the worker is not.
+TALOS_CONTROL_PLANE_LABEL = 'node-role.kubernetes.io/control-plane'
+
+#: The cluster's nodes, by the labels Talos gives them.
+NODES: dict[str, dict[str, str]] = {
+    **{node: {TALOS_CONTROL_PLANE_LABEL: ''} for node in conventions.CLOUD_NODES},
+    conventions.HOMELAB_NODE: {},
+}
+
+
+def schedulable(affinity: Mapping[str, Any]) -> set[str]:
+    """The nodes an affinity admits, by its required node affinity, as the scheduler reads it."""
+    required = affinity.get('nodeAffinity', {}).get('requiredDuringSchedulingIgnoredDuringExecution')
+    if required is None:
+        return set(NODES)
+
+    def holds(expression: Mapping[str, Any], labels: Mapping[str, str]) -> bool:
+        match expression['operator']:
+            case 'Exists':
+                return expression['key'] in labels
+            case 'DoesNotExist':
+                return expression['key'] not in labels
+            case operator:
+                raise AssertionError(f'no reading of {operator!r} here')
+
+    def admits(term: Mapping[str, Any], labels: Mapping[str, str]) -> bool:
+        # A term with no requirement matches no node; one on fields is not read here.
+        if 'matchFields' in term:
+            raise AssertionError(f'no reading of field requirements here: {term!r}')
+        expressions = term.get('matchExpressions', [])
+        return bool(expressions) and all(holds(it, labels) for it in expressions)
+
+    return {
+        node for node, labels in NODES.items() if any(admits(term, labels) for term in required['nodeSelectorTerms'])
+    }
+
+
+@pytest.mark.parametrize('namespace', [syncthing_app.NAME, webdav_app.NAME])
+def test_each_pod_and_its_claims_mover_run_on_the_worker_alone(declared: Recorder, namespace: str) -> None:
+    """The NAS is reached from the worker alone, so a mover that bound the node claim elsewhere would strand the pod."""
+    pod = pod_of(declared, namespace)
+    sources = in_namespace(declared, SOURCE, namespace)
+
+    assert schedulable(pod['spec'].get('affinity', {})) == {conventions.HOMELAB_NODE}
+    assert sources
+    for source in sources:
+        assert schedulable(source['spec']['restic'].get('moverAffinity', {})) == {conventions.HOMELAB_NODE}
 
 
 @pytest.mark.parametrize('namespace', [syncthing_app.NAME, webdav_app.NAME])

@@ -139,6 +139,7 @@ class Golinks(Component, pulumi_type='kluster:apps:Golinks'):
             namespace=NAME,
             uid=USER,
             writer_key=writer_key,
+            placement=WORKER_POD_AFFINITY,
             opts=self.child_opts(depends_on=[self.namespace.namespace]),
         )
 
@@ -157,7 +158,7 @@ class Golinks(Component, pulumi_type='kluster:apps:Golinks'):
                     spec=k8s.core.v1.PodSpecArgs(
                         # It speaks HTTP to its clients alone, and never Kubernetes.
                         automount_service_account_token=False,
-                        affinity=WORKER_POD_AFFINITY,
+                        affinity=self.data.placement,
                         security_context=k8s.core.v1.PodSecurityContextArgs(
                             run_as_non_root=True,
                             run_as_user=USER,

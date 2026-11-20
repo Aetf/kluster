@@ -2,7 +2,8 @@
 
 One syncthing instance, the NAS's, with its folders on the host's export and
 its device identity in its configuration. It runs on the worker, the one node
-that reaches the export (`nas_claim`), and is reached two ways: its interface
+that reaches the export (`nas_claim`), which its pod's affinity states and its
+claim's movers follow (`claim`), and is reached two ways: its interface
 by name, through the Gateways, and its peer port raw, at the balancer for a
 roaming device and at the LAN VIP for one at home. Both are rows of the
 exposure the component receives, and `expose` declares them.
@@ -81,7 +82,7 @@ from dataclasses import dataclass
 import pulumi
 import pulumi_kubernetes as k8s
 
-from kluster.components.apps import Backend, Exposed, Fronts, dialed_names, expose
+from kluster.components.apps import WORKER_POD_AFFINITY, Backend, Exposed, Fronts, dialed_names, expose
 from kluster.components.apps.storage import Claim, NasClaim, claim, nas_claim
 from kluster.conventions.backup import STANDARD
 from kluster.conventions.cluster import Transports
@@ -311,6 +312,7 @@ class Syncthing(Component, pulumi_type='kluster:apps:Syncthing'):
             namespace=NAME,
             uid=USER,
             writer_key=writer_key,
+            placement=WORKER_POD_AFFINITY,
             opts=in_namespace,
         )
         self.sync = nas_claim(f'{name}-sync', 'sync', SYNC, namespace=NAME, read_only=False, opts=in_namespace)
@@ -370,6 +372,7 @@ class Syncthing(Component, pulumi_type='kluster:apps:Syncthing'):
             # It speaks to its peers and its interface's clients alone, and
             # never to Kubernetes.
             automount_service_account_token=False,
+            affinity=self.state.placement,
             security_context=k8s.core.v1.PodSecurityContextArgs(
                 run_as_non_root=True,
                 run_as_user=USER,

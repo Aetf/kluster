@@ -21,6 +21,17 @@ under the base name that carries the namespace's sealed writer key, with the
 password and the repository in its template: in state, and in clear in the
 SealedSecret object, which is the residual the security audit records.
 
+**A restic mover runs where the workload does.** A `local-path` claim binds
+on the node its first consumer is scheduled to, and VolSync places a `Direct`
+mover beside the claim's running consumer and anywhere at all while it has
+none. So a source that reaches the claim before the workload's pod would bind
+it wherever its mover landed, which may be a node the workload can never run
+on. `claim` takes the workload's `placement`, every node constraint the
+workload is under, and records it on the `Claim`, whose `placement` is what
+the workload's pod states as its affinity; the restic mover carries that
+placement's node affinity. Whichever of the mover and the pod is scheduled
+first, the claim binds on a node the placement admits.
+
 **A move is asked for, and it backs nothing up.** A claim's name and its restic
 source's carry a generation, while its repository, its password and its Secret
 are keyed by the base name and survive every move. Raising the generation with
@@ -44,7 +55,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 from urllib.parse import urlsplit
 
 import pulumi
@@ -148,6 +159,8 @@ class Claim:
     repository: crds.bitnami.v1alpha1.SealedSecret | None
     move: Move | None
     movers: crds.cilium.v2.CiliumNetworkPolicy | None
+    placement: k8s.core.v1.AffinityArgs
+    """The placement `claim` was handed, which the workload's pod states as its affinity."""
 
 
 def claim(
@@ -159,6 +172,7 @@ def claim(
     namespace: str,
     uid: int,
     writer_key: Mapping[str, pulumi.Input[str]],
+    placement: k8s.core.v1.AffinityArgs,
     generation: int = 0,
     moving_to: Mapping[str, str] | None = None,
     stopped: pulumi.Resource | None = None,
@@ -190,6 +204,21 @@ def claim(
     :param writer_key: The ciphertext of the namespace's sealed writer key, as
         the program read it, sealed namespace-wide so that it opens under the
         repository Secret's name (`kluster.lib.k8s.sealed_ciphertext`).
+    :param placement: Every node constraint the workload is under, stated as
+        its pod's affinity: a pod that a volume already holds to one node, as
+        a `nas_claim` does, states that node's pool too, and a pod that
+        mounts more than one backed claim is placed on one node and hands
+        each claim that placement, the second as `<first>.placement`, since
+        each claim's mover binds its own claim apart from the others. The
+        `Claim` records it, and the workload's pod takes its affinity from
+        there, so the two are one value. Every restic mover of the claim
+        carries its node affinity, required and preferred, term for term, so
+        that a mover binds the claim only on a node the placement admits,
+        weighed as the workload's pod is. Under a retention class, a placement with pod
+        affinity or anti-affinity is refused, since the mover does not
+        reproduce the pods it is stated against. During a copy it is the
+        workload's placement on the claim being copied: the workload moves to
+        the target in the finish.
     :param generation: The claim's generation, raised by one for each move.
     :param moving_to: The node labels the new generation's claim is made on,
         which the destination's mover selects; set for the copy alone.
@@ -213,6 +242,8 @@ def claim(
             f'{resource_name}: the writer key of {namespace!r} holds {sorted(writer_key)}, '
             f'and a repository Secret carries {sorted(WRITER_KEY_FIELDS)}'
         )
+
+    affinity = _mover_affinity(resource_name, placement) if isinstance(retention, RetentionClass) else None
 
     child = pulumi.ResourceOptions.merge(opts, pulumi.ResourceOptions(protect=protect))
     target = _claim(resource_name, name, generation, size, storage_class, namespace=namespace, opts=child)
@@ -262,10 +293,23 @@ def claim(
         # filled, on its first reconcile.
         if isinstance(retention, RetentionClass):
             sources.append(
-                _restic(resource_name, name, generation - 1, retention, namespace=namespace, uid=uid, opts=opts)
+                _restic(
+                    resource_name,
+                    name,
+                    generation - 1,
+                    retention,
+                    namespace=namespace,
+                    uid=uid,
+                    affinity=affinity,
+                    opts=opts,
+                )
             )
     elif isinstance(retention, RetentionClass):
-        sources.append(_restic(resource_name, name, generation, retention, namespace=namespace, uid=uid, opts=opts))
+        sources.append(
+            _restic(
+                resource_name, name, generation, retention, namespace=namespace, uid=uid, affinity=affinity, opts=opts
+            )
+        )
 
     backed = isinstance(retention, RetentionClass)
     movers = (
@@ -281,6 +325,7 @@ def claim(
         repository=repository,
         move=move,
         movers=movers,
+        placement=placement,
     )
 
 
@@ -404,9 +449,10 @@ def _restic(
     *,
     namespace: str,
     uid: int,
+    affinity: crds.volsync.v1alpha1.ReplicationSourceSpecResticMoverAffinityArgs | None,
     opts: pulumi.ResourceOptions | None,
 ) -> crds.volsync.v1alpha1.ReplicationSource:
-    """A claim's restic source, scheduled by its class, to the repository of its base name."""
+    """A claim's restic source, scheduled by its class, to the repository of its base name, its mover held by `affinity`."""
     v = crds.volsync.v1alpha1
     return v.ReplicationSource(
         f'{resource_name}-restic-g{generation}',
@@ -432,9 +478,144 @@ def _restic(
                 ),
                 mover_resources=_resources(v.ReplicationSourceSpecResticMoverResourcesArgs),
                 mover_pod_labels={MOVER_LABEL: name},
+                mover_affinity=affinity,
             ),
         ),
         opts=opts,
+    )
+
+
+def _stated[T](resource_name: str, value: object, cls: type[T], what: str) -> T:
+    """`value` as the `cls` it has to be, refused when it is anything else, such as an output."""
+    if not isinstance(value, cls):
+        raise ValueError(f'{resource_name}: a placement states its {what} as a value, not {value!r}')
+    return value
+
+
+def _listed(resource_name: str, value: object, what: str) -> list[object]:
+    """A list a placement states, none where it states none, refused when it is anything but one."""
+    if value is None:
+        return []
+    if not isinstance(value, list | tuple):
+        raise ValueError(f'{resource_name}: a placement states its {what} as a list, not {value!r}')
+    return list(cast('list[object] | tuple[object, ...]', value))
+
+
+def _requirements(
+    resource_name: str, term: k8s.core.v1.NodeSelectorTermArgs
+) -> tuple[list[k8s.core.v1.NodeSelectorRequirementArgs], list[k8s.core.v1.NodeSelectorRequirementArgs]]:
+    """A node selector term's requirements: on the node's labels, then on its fields."""
+
+    def each(value: object, what: str) -> list[k8s.core.v1.NodeSelectorRequirementArgs]:
+        return [
+            _stated(resource_name, it, k8s.core.v1.NodeSelectorRequirementArgs, what)
+            for it in _listed(resource_name, value, f'{what}s')
+        ]
+
+    return each(term.match_expressions, 'label requirement'), each(term.match_fields, 'field requirement')
+
+
+def _mover_affinity(
+    resource_name: str, placement: k8s.core.v1.AffinityArgs
+) -> crds.volsync.v1alpha1.ReplicationSourceSpecResticMoverAffinityArgs | None:
+    """The restic mover's affinity: the node affinity of the workload's `placement`, term for term, if it states one.
+
+    Both parts are carried. The required terms decide the nodes the mover may
+    bind the claim on, and the preferred terms weigh the scheduler's choice
+    among them as the workload's pod is weighed, since for a claim that is
+    not yet bound the node chosen is the workload's from then on.
+    """
+    v = crds.volsync.v1alpha1
+    if placement.pod_affinity is not None or placement.pod_anti_affinity is not None:
+        raise ValueError(
+            f'{resource_name}: a placement with pod affinity or anti-affinity is not one a mover can follow, since '
+            'the mover does not reproduce the pods it is stated against'
+        )
+    if placement.node_affinity is None:
+        return None
+    node = _stated(resource_name, placement.node_affinity, k8s.core.v1.NodeAffinityArgs, 'node affinity')
+
+    required: (
+        v.ReplicationSourceSpecResticMoverAffinityNodeAffinityRequiredDuringSchedulingIgnoredDuringExecutionArgs | None
+    ) = None
+    if node.required_during_scheduling_ignored_during_execution is not None:
+        selector = _stated(
+            resource_name,
+            node.required_during_scheduling_ignored_during_execution,
+            k8s.core.v1.NodeSelectorArgs,
+            'required node affinity',
+        )
+        terms: list[
+            v.ReplicationSourceSpecResticMoverAffinityNodeAffinityRequiredDuringSchedulingIgnoredDuringExecutionNodeSelectorTermsArgs
+        ] = []
+        for stated in _listed(resource_name, selector.node_selector_terms, 'node selector terms'):
+            expressions, fields = _requirements(
+                resource_name, _stated(resource_name, stated, k8s.core.v1.NodeSelectorTermArgs, 'node selector term')
+            )
+            terms.append(
+                v.ReplicationSourceSpecResticMoverAffinityNodeAffinityRequiredDuringSchedulingIgnoredDuringExecutionNodeSelectorTermsArgs(
+                    match_expressions=[
+                        v.ReplicationSourceSpecResticMoverAffinityNodeAffinityRequiredDuringSchedulingIgnoredDuringExecutionNodeSelectorTermsMatchExpressionsArgs(
+                            key=it.key, operator=it.operator, values=it.values
+                        )
+                        for it in expressions
+                    ]
+                    or None,
+                    match_fields=[
+                        v.ReplicationSourceSpecResticMoverAffinityNodeAffinityRequiredDuringSchedulingIgnoredDuringExecutionNodeSelectorTermsMatchFieldsArgs(
+                            key=it.key, operator=it.operator, values=it.values
+                        )
+                        for it in fields
+                    ]
+                    or None,
+                )
+            )
+        required = (
+            v.ReplicationSourceSpecResticMoverAffinityNodeAffinityRequiredDuringSchedulingIgnoredDuringExecutionArgs(
+                node_selector_terms=terms
+            )
+        )
+
+    preferred: list[
+        v.ReplicationSourceSpecResticMoverAffinityNodeAffinityPreferredDuringSchedulingIgnoredDuringExecutionArgs
+    ] = []
+    for stated in _listed(
+        resource_name, node.preferred_during_scheduling_ignored_during_execution, 'preferred node affinity'
+    ):
+        preference = _stated(resource_name, stated, k8s.core.v1.PreferredSchedulingTermArgs, 'preferred term')
+        expressions, fields = _requirements(
+            resource_name,
+            _stated(resource_name, preference.preference, k8s.core.v1.NodeSelectorTermArgs, 'preference'),
+        )
+        preferred.append(
+            v.ReplicationSourceSpecResticMoverAffinityNodeAffinityPreferredDuringSchedulingIgnoredDuringExecutionArgs(
+                weight=preference.weight,
+                preference=v.ReplicationSourceSpecResticMoverAffinityNodeAffinityPreferredDuringSchedulingIgnoredDuringExecutionPreferenceArgs(
+                    match_expressions=[
+                        v.ReplicationSourceSpecResticMoverAffinityNodeAffinityPreferredDuringSchedulingIgnoredDuringExecutionPreferenceMatchExpressionsArgs(
+                            key=it.key, operator=it.operator, values=it.values
+                        )
+                        for it in expressions
+                    ]
+                    or None,
+                    match_fields=[
+                        v.ReplicationSourceSpecResticMoverAffinityNodeAffinityPreferredDuringSchedulingIgnoredDuringExecutionPreferenceMatchFieldsArgs(
+                            key=it.key, operator=it.operator, values=it.values
+                        )
+                        for it in fields
+                    ]
+                    or None,
+                ),
+            )
+        )
+
+    if required is None and not preferred:
+        return None
+    return v.ReplicationSourceSpecResticMoverAffinityArgs(
+        node_affinity=v.ReplicationSourceSpecResticMoverAffinityNodeAffinityArgs(
+            required_during_scheduling_ignored_during_execution=required,
+            preferred_during_scheduling_ignored_during_execution=preferred or None,
+        )
     )
 
 

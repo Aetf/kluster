@@ -155,6 +155,10 @@
     live in `conventions.schedule` only where two components declare its
     CronJob and its rules (operations.md §4, ruled by the operator,
     [Aetf/kluster#877](https://github.com/Aetf/kluster/pull/877)).
+*   **Updated:** 2026-11-19. §4.2's `claim` takes the workload's
+    `placement`, which its restic mover carries, since a `local-path`
+    claim binds where its first consumer is scheduled
+    ([Aetf/kluster-ops#874](https://github.com/Aetf/kluster-ops/issues/874)).
 *   **Authority:** AGENTS.md,
     [framework/dispatch.md](../framework/dispatch.md),
     [framework/rfc.md](../framework/rfc.md) and the style rules
@@ -1359,9 +1363,12 @@ canary cluster-infra.md §2 requires lands with Authelia's component
 
 **One claim on a node, one on the NAS, and a class for a node volume:**
 
-*   **`claim(name, size, retention, *, uid, generation=0,
+*   **`claim(name, size, retention, *, uid, placement, generation=0,
     moving_to=None, storage_class=local-path)`** is the one claim on a
-    node. `retention` is required, and it is a retention class or
+    node. `placement` is the workload's pod affinity, which the claim's
+    restic mover carries, so that a mover reaching the claim before the
+    pod binds it on a node the placement admits (storage.md §3.1).
+    `retention` is required, and it is a retention class or
     `off('<reason>')`, so that an unbacked claim is a decision on
     record, as workloads.md §2's `backup=None` has it. A class is a row
     of `conventions.backup`, so a new retention is one row, and a claim

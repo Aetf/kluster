@@ -180,6 +180,7 @@ class Shoko(Component, pulumi_type='kluster:apps:Shoko'):
             namespace=NAME,
             uid=USER,
             writer_key=writer_key,
+            placement=WORKER_POD_AFFINITY,
             opts=in_namespace,
         )
         self.library = nas_claim(
@@ -229,7 +230,7 @@ class Shoko(Component, pulumi_type='kluster:apps:Shoko'):
             # It speaks HTTP to its clients and to AniDB alone, and never to
             # Kubernetes.
             automount_service_account_token=False,
-            affinity=WORKER_POD_AFFINITY,
+            affinity=self.configuration.placement,
             security_context=k8s.core.v1.PodSecurityContextArgs(
                 run_as_non_root=True,
                 run_as_user=USER,

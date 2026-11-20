@@ -112,7 +112,7 @@ be preserved (see the worked example).
 (`kluster.components.apps.storage`), and the class is a name:
 
 -   **`claim(resource_name, name, size, retention, *, namespace, uid,
-    writer_key, generation=0, moving_to=None, stopped=None,
+    writer_key, placement, generation=0, moving_to=None, stopped=None,
     storage_class=local-path, protect=False)`** is the one claim on a
     node, of `size` GiB. `retention` is a retention class (§3) or
     `off('<reason>')`, which emits the claim alone. `uid` is the user
@@ -120,7 +120,13 @@ be preserved (see the worked example).
     that it reads and writes the data as the workload does.
     `writer_key` is the ciphertext of the namespace's sealed writer key
     as the program read it, which a stack that does not hold it stops at
-    (§3, `kluster.lib.k8s.sealed_ciphertext`). The
+    (§3, `kluster.lib.k8s.sealed_ciphertext`). `placement` is every
+    node constraint the workload is under, stated as its pod's affinity,
+    a node a volume already holds the pod to included; the returned
+    `Claim` records it, the pod takes its affinity from there, and every
+    restic mover of the claim carries its node affinity, so that a mover
+    that reaches the claim before the pod binds it only on a node the
+    placement admits (storage.md §3.1). The
     generation, `moving_to` and `stopped`, the workload the copy's
     source is applied after, are how the claim moves (storage.md §3.1).
     `protect` protects the claim, for precious data and for a node
