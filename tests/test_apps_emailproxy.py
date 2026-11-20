@@ -31,7 +31,6 @@ from kluster.components.apps import Fronts
 from kluster.components.apps import emailproxy as emailproxy_app
 from kluster.components.apps.emailproxy import EmailProxy
 from kluster.components.cilium import InternetPoolMembers
-from kluster.conventions import CONTROL_PLANE_LABEL
 from kluster.conventions.backup import BACKED_NAMESPACES, BackupFamily
 from kluster.conventions.cluster import Transports
 from kluster.conventions.routes import REWRITE, Dedicated, Exposure, Port, Route, Vip
@@ -173,14 +172,6 @@ def test_the_pod_runs_as_a_numeric_user_that_is_not_root_and_escalates_nothing(d
 
 def test_the_container_runs_the_pin_it_is_handed(declared: Recorder) -> None:
     assert serving(declared)['image'] == str(IMAGE)
-
-
-def test_the_pod_runs_on_the_worker(declared: Recorder) -> None:
-    """Its clients are at home, and a cloud node's resources are the control plane's and the internet pool's."""
-    affinity = pod_of(declared)['spec']['affinity']['nodeAffinity']
-    (term,) = affinity['requiredDuringSchedulingIgnoredDuringExecution']['nodeSelectorTerms']
-
-    assert {'key': CONTROL_PLANE_LABEL, 'operator': 'DoesNotExist'} in term['matchExpressions']
 
 
 def test_the_cache_never_has_two_writers(declared: Recorder) -> None:

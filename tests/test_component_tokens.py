@@ -11,17 +11,15 @@ gives, and the SDK fills in `Resource` for a class that gives none, so the
 census is the only thing that refuses one.
 """
 
-import importlib
 import inspect
-import pkgutil
 import re
 from collections import Counter
 from pathlib import Path
 
 import pytest
+from component_census import components, dynamic_resources, stated
 from pulumi import dynamic
 
-import kluster
 from kluster.components.dns.zone import ManagedZone
 from kluster.components.forge import ManagedRepository
 from kluster.components.gateway import Gateway
@@ -51,35 +49,6 @@ ROOT = Path(__file__).parent.parent
 #: A URN as the documents spell one, up to the first type of its chain: stack,
 #: project, then the type of the resource or of its outermost component.
 URN = re.compile(r'urn:pulumi:[^:\s]+::[^:\s]+::([^$\s\']+?)(?:\$|::)')
-
-
-def _below[T](cls: type[T]) -> list[type[T]]:
-    return [each for sub in cls.__subclasses__() for each in (sub, *_below(sub))]
-
-
-def _defined[T](base: type[T]) -> list[type[T]]:
-    """Every subclass of `base` the installation defines, found by importing every module under `kluster`."""
-    for module in pkgutil.walk_packages(kluster.__path__, f'{kluster.__name__}.'):
-        if module.name.rpartition('.')[2] != '__main__':
-            importlib.import_module(module.name)
-    found = dict.fromkeys(cls for cls in _below(base) if cls.__module__.startswith(f'{kluster.__name__}.'))
-    return list(found)
-
-
-def components() -> list[type[Component]]:
-    """Every component class the installation defines."""
-    return _defined(Component)
-
-
-def dynamic_resources() -> list[type[dynamic.Resource]]:
-    """Every dynamic resource class the installation defines."""
-    return _defined(dynamic.Resource)
-
-
-def stated(cls: type[Component]) -> str | None:
-    """The token `cls` states in its own class statement, never one a base states."""
-    token = vars(cls).get('__pulumi_type__')
-    return token if isinstance(token, str) else None
 
 
 def dynamic_stated(cls: type[dynamic.Resource]) -> str:

@@ -43,7 +43,7 @@ import pytest_asyncio
 from client_kubeconfig import NOT_AFTER, USER, certificate_user, kubeconfig
 from k8s_base_installation import Run, applied
 from mock_monitor import Recorder, declaring, run_with, the_run_failed_with
-from node_selection import ARCHITECTURE_LABEL, NODES, schedulable
+from node_selection import ARCHITECTURE_LABEL, CLOUD, NODES, schedulable, selected
 from ruamel.yaml import YAML
 
 from kluster import conventions
@@ -51,14 +51,20 @@ from kluster.conventions import Transports
 from kluster.lib.config import Shape, ShapeRefused
 from kluster.lib.install_order import DEPENDS_ON
 from kluster.lib.k8s import (
+    HOME_NODE_SELECTOR,
+    HOME_NODE_SELECTOR_JSON,
     KUBECONFIG_KEY,
     UNCONSTRAINED,
     AbsentSealedValue,
+    BackedVolumeBesideNodeVolume,
     Constraints,
+    Keeper,
     PortedSecret,
+    TwoBackedVolumes,
     UnusableKubeconfig,
     at_home,
     client_certificate_expiry,
+    kept,
     on_architecture,
     sealed_ciphertext,
     sealed_value,
@@ -1518,8 +1524,9 @@ async def test_an_unconstrained_pod_carries_no_affinity_toleration_or_priority()
         HOME,
         on_architecture('amd64', 'an image built for amd64 alone'),
         HOME & on_architecture('amd64', 'an image built for amd64 alone'),
+        kept(Keeper.DEVICE, 'requests a device one node offers'),
     ],
-    ids=['free', 'home', 'amd64', 'both'],
+    ids=['free', 'home', 'amd64', 'both', 'kept'],
 )
 async def test_the_typed_and_json_forms_place_a_pod_alike(constraints: Constraints) -> None:
     """A chart's values and a typed pod read the same constraints, so neither form may say what the other does not."""
@@ -1582,3 +1589,72 @@ def test_constraints_of_one_kind_that_no_node_could_meet_are_refused_naming_both
 def test_a_constraint_says_what_implies_it() -> None:
     with pytest.raises(ValueError, match='declaration'):
         _ = at_home(' ')
+
+
+@pytest.mark.parametrize('keeper', list(Keeper), ids=str)
+def test_a_pod_kept_to_one_node_by_what_it_mounts_or_requests_is_held_with_no_affinity_or_toleration(
+    keeper: Keeper,
+) -> None:
+    """The scheduler reads the volume's node affinity or the device request from the pod; the priority keeps free pods from crowding it out."""
+    spec = kept(keeper, 'keeps it to one node').pod_fields_json()
+
+    assert spec == {'priorityClassName': conventions.HELD_PRIORITY_CLASS}
+    assert schedulable(spec) == set(NODES)
+
+
+def test_holds_compose_with_a_site_and_each_one_is_kept_once() -> None:
+    volume = kept(Keeper.VOLUME, 'its claim is bound on a node')
+    both = HOME & volume & volume
+
+    assert schedulable(both.pod_fields_json()) == set(NODES) - CLOUD
+    assert both.kept == volume.kept
+    assert both.pod_fields_json()['priorityClassName'] == conventions.HELD_PRIORITY_CLASS
+
+
+def test_two_backed_volumes_of_one_pod_are_refused_naming_both() -> None:
+    """Another pod may bind each first, so the two could bind on two nodes and the pod run on neither."""
+    with pytest.raises(TwoBackedVolumes) as refused:
+        _ = kept(Keeper.BACKED_VOLUME, 'the first claim') & kept(Keeper.BACKED_VOLUME, 'the second claim')
+
+    assert 'the first claim' in str(refused.value)
+    assert 'the second claim' in str(refused.value)
+
+
+def test_a_backed_volume_beside_a_node_volume_is_refused_naming_both() -> None:
+    """Another pod may bind the backed one first, off the node the node volume is on."""
+    with pytest.raises(BackedVolumeBesideNodeVolume) as refused:
+        _ = kept(Keeper.NODE_VOLUME, 'the cache') & kept(Keeper.BACKED_VOLUME, 'the data')
+
+    assert 'the cache' in str(refused.value)
+    assert 'the data' in str(refused.value)
+
+
+def test_a_backed_volume_beside_a_volume_and_a_device_is_not_refused() -> None:
+    """A volume that binds where this pod is placed follows the backed one's node; a device is not refused, though it can part from it.
+
+    Another pod may bind the backed volume first on a node without the
+    device, and the pod would then run nowhere. The pair is safe today only
+    because the pod that composes it, jellyfin's, is held at the home site,
+    which is one node, and that node offers the device. The composition is
+    not refused.
+    """
+    both = kept(Keeper.BACKED_VOLUME, 'a claim') & kept(Keeper.VOLUME, 'a claim') & kept(Keeper.DEVICE, 'a device')
+
+    assert {it.keeper for it in both.kept} == {Keeper.BACKED_VOLUME, Keeper.VOLUME, Keeper.DEVICE}
+
+
+def test_a_hold_says_what_keeps_the_pod() -> None:
+    with pytest.raises(ValueError, match='declaration'):
+        _ = kept(Keeper.VOLUME, ' ')
+
+
+def test_the_home_sites_selector_selects_the_home_nodes_alone_in_both_forms() -> None:
+    """A volume only the home site reaches states it, typed or as JSON, and the two cannot part."""
+    (term,) = HOME_NODE_SELECTOR_JSON['nodeSelectorTerms']
+    (typed,) = cast('list[k8s.core.v1.NodeSelectorTermArgs]', HOME_NODE_SELECTOR.node_selector_terms)
+    (requirement,) = cast('list[k8s.core.v1.NodeSelectorRequirementArgs]', typed.match_expressions)
+
+    assert selected(term, NODES) == set(NODES) - CLOUD
+    assert {'key': requirement.key, 'operator': requirement.operator, 'values': requirement.values} == term[
+        'matchExpressions'
+    ][0]

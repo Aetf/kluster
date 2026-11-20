@@ -1,4 +1,4 @@
-"""immich on the worker, declared against mocks.
+"""immich, declared against mocks.
 
 Every row here is the test's own: a route held while the legacy VPS keeps its
 name, direct on `internet` and rewritten at home, under a name no census row
@@ -290,10 +290,6 @@ def configuration(monitor: Recorder) -> dict[str, Any]:
     return loaded
 
 
-def node_terms(affinity: dict[str, Any]) -> Any:
-    return affinity['nodeAffinity']['requiredDuringSchedulingIgnoredDuringExecution']
-
-
 def selected(selector: str, labels: dict[str, str]) -> bool:
     """Whether a `key=value,…` label selector selects a pod carrying `labels`."""
     return all(labels.get(key) == value for key, value in (term.split('=', 1) for term in selector.split(',')))
@@ -360,15 +356,17 @@ def test_each_workload_stops_before_its_successor_starts(declared: Recorder) -> 
         assert deployment['spec']['strategy']['type'] == 'Recreate', deployment['metadata']['name']
 
 
-def test_every_pod_and_the_database_run_on_the_node_the_library_is_reachable_from(declared: Recorder) -> None:
-    """Each states the placement the NAS volume's node affinity forces, so it is placed by its own declaration."""
-    (library,) = [it.inputs for it in declared.of_type(VOLUME)]
-    worker = library['spec']['nodeAffinity']['required']
-    (cluster,) = in_namespace(declared, CLUSTER)
+def test_each_pod_that_requests_the_gpu_is_held_where_the_device_keeps_it(declared: Recorder) -> None:
+    """The request keeps it to the node offering the device, so it outranks free pods there."""
+    requesting = [
+        pod
+        for pod in every_pod(declared)
+        if any(GPU_RESOURCE in container['resources'].get('requests', {}) for container in pod['spec']['containers'])
+    ]
 
-    for pod in every_pod(declared):
-        assert node_terms(pod['spec']['affinity']) == worker
-    assert node_terms(cluster['spec']['affinity']) == worker
+    assert requesting
+    for pod in requesting:
+        assert pod['spec']['priorityClassName'] == conventions.HELD_PRIORITY_CLASS
 
 
 # -- the server's peers --------------------------------------------------------------

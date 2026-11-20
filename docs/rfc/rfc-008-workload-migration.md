@@ -201,6 +201,17 @@
     the portal's grant as a gated namespace is, so its request takes
     the path across namespaces every gated route takes
     ([Aetf/kluster#885](https://github.com/Aetf/kluster/pull/885)).
+*   **Updated:** 2026-11-20. Placement is the scheduler's
+    ([Aetf/kluster-ops#78](https://github.com/Aetf/kluster-ops/issues/78),
+    the operator's rulings of 2026-11-19 and 2026-11-20). A pod states
+    only the constraints a node fact or its component's declaration
+    forces (workloads.md §1); splitpro, matrix and stdiscosrv are held to
+    no site, the claims of the first two keeping them to their nodes and
+    writing in the boot volume's class (nodes.md §1.2), and the portal
+    declares that it keeps working while the uplink is down. §6.1's table
+    is an estimate by an assumed placement. §4.1, §4.2's `claim`, §4.3,
+    §4.5, §5's image rule and data technique, §5.2, §5.3, §5.5 and §6.1
+    follow it.
 *   **Authority:** AGENTS.md,
     [framework/dispatch.md](../framework/dispatch.md),
     [framework/rfc.md](../framework/rfc.md) and the style rules
@@ -1394,9 +1405,9 @@ public name it rides this cluster's relay from the cut until
 kluster-code's last deploy, as it rides the legacy cluster today.
 
 Alertmanager's post stays direct, at Home Assistant's own address, which
-only the worker reaches. rfc-007 §7.1 already runs monitoring on the
-worker, and this route makes that placement a requirement, so its slice
-11 gains the reason and a placement test (§10). **New rule**, landing in
+only the home site reaches, so Alertmanager is held at home by that reach
+(workloads.md §1), and rfc-007's slice 11 gains the reason and a
+placement test (§10). **New rule**, landing in
 operations.md §4 and physical/gateway.md §2.1, §2.3 and §2.6; slice 46
 builds it, and the handler's join step is the operations repository's
 (Aetf/kluster-ops#715).
@@ -1452,11 +1463,12 @@ canary cluster-infra.md §2 requires lands with Authelia's component
 
 **One claim on a node, one on the NAS, and a class for a node volume:**
 
-*   **`claim(name, size, retention, *, uid, placement, generation=0,
+*   **`claim(name, size, retention, *, uid, constraints, generation=0,
     moving_to=None, storage_class=local-path)`** is the one claim on a
-    node. `placement` is the workload's pod affinity, which the claim's
-    restic mover carries, so that a mover reaching the claim before the
-    pod binds it on a node the placement admits (storage.md §3.1).
+    node. `constraints` are the workload's node constraints
+    (workloads.md §1), whose node affinity the claim's restic mover
+    carries, so that a mover reaching the claim before the pod binds it
+    on a node the workload may run on (storage.md §3.1).
     `retention` is required, and it is a retention class or
     `off('<reason>')`, so that an unbacked claim is a decision on
     record, as workloads.md §2's `backup=None` has it. A class is a row
@@ -1621,18 +1633,17 @@ with its scheduled backup and retention taken from a retention class
 (workloads.md §3). Three decisions are taken here.
 
 **One instance, `instances: 1`, with no standby, and the shape takes no
-instance count.** The second instance a CNPG cluster can run would be
-scheduled to the same machine as the first: every database here is
-pinned to one site, and the homelab site has one worker. It would share
-the primary's node, disk and failure domain, and add no availability
-against any failure the installation plans for, while costing its whole
+instance count.** A second instance would cost the database's whole
 memory request a second time — legacy immich's database runs two
-instances on one node, the VPS, each requesting 2 GiB. Durability is barman
-to the backup bucket, and the restore drill below is what proves it.
-**One cluster shared by both databases** would not fit their placement
-either: splitpro's database runs on the cloud pool beside it (Wave A2),
-immich's on the worker (Wave C), and immich's needs the `vchord` image,
-splitpro's the `pg_cron` one. **New rule**, landing in workloads.md §4.
+instances on one node, the VPS, each requesting 2 GiB — and add a writer
+to the boot volume's cap wherever it lands (nodes.md §1.2); for a
+database held at home it would share the primary's node, disk and
+failure domain, and for a free one it would guard against the loss of
+one node, which the restore drill covers. Durability is barman to the
+backup bucket, and the restore drill below is what proves it. **One
+cluster shared by both databases** would not fit either: immich's needs
+the `vchord` image, splitpro's the `pg_cron` one. **New rule**, landing
+in workloads.md §4.
 
 **A migrated database bootstraps by recovery from the legacy object
 store.** The legacy databases archive to Google Cloud Storage, one
@@ -1702,10 +1713,11 @@ content source.
 
 *   **A git source** pulls a built branch through a git-sync sidecar
     into an empty directory. The blog instance runs more than one
-    replica, spread across the cloud nodes, and carries the matrix
+    replica, spread across the nodes, and carries the matrix
     delegation's static files and the CORS header the route adds to
     them with a `ResponseHeaderModifier`.
-*   **A NAS source** mounts its dataset read-only (§4.2), on the worker.
+*   **A NAS source** mounts its dataset read-only (§4.2), at the home
+    site, which alone reaches the export.
     The doors instance serves its hostnames from it.
 
 The apex of each website zone is the `dns` stack's web origin (§4.1),
@@ -1864,20 +1876,24 @@ it is verified, what the cut deletes, and what its rollback costs. Each
 application's row is §4.1's, and its storage §4.2's.
 
 **A component's image is the legacy one**, pinned in `Pulumi.yaml`'s
-`versions:` block (§10, slices 2 and 48) — or, for a component on the cloud
-pool, which is arm64, the oldest release after the legacy one that
-publishes that architecture, where the legacy one does not. **The
+`versions:` block (§10, slices 2 and 48) — or, where the legacy image
+publishes no arm64, the oldest release after it that does, since the
+scheduler may place a pod with no site constraint on a cloud node, which
+is arm64. A
+component that keeps an amd64-only image holds its pods to amd64
+(`on_architecture`), as exim does. **The
 components declare their workloads directly rather than through the
 legacy charts**: the immich chart and the Bitnami Redis chart carry no
 security context that meets `restricted`, and the Bitnami images have
 moved to a legacy namespace of their own.
 
 **Data technique for a legacy `local-path` claim**, here and in every
-later wave. A claim bound for the worker is copied onto the NAS on the
-host and read from there by a pod that mounts both, because the data is
-already on the machine that serves the NAS. A claim bound for the cloud
-pool is streamed with `tar` through the new cluster's API server into a
-pod that mounts the target claim (`kubectl exec -i … tar -x`).
+later wave. A legacy claim on the homelab host is copied onto the NAS on
+the host and read from there by a pod that mounts both, because the data
+is already on the machine that serves the NAS; that pod binds the new
+claim at the home site. A legacy claim on the VPS is streamed with `tar`
+through the new cluster's API server into a pod that mounts the target
+claim (`kubectl exec -i … tar -x`).
 migration.md §3's "over SSH" has no second end, since a Talos node runs
 no SSH server.
 
@@ -1904,9 +1920,9 @@ sealed (§4.6). Beyond it:
 **exim moves to the head of Wave A.** Authelia sends its notifications
 — password resets and second-factor enrollment — through it, as immich
 and Grafana do later, so a relay that moves in Wave B leaves the
-authentication service without mail for a wave. Its placement is free
-(workloads.md §5), and it runs on the worker, the architecture its
-legacy image is built for.
+authentication service without mail for a wave. It is held to amd64
+nodes, the architecture its legacy image is built for (workloads.md
+§1).
 
 *   **exim** declares its relay as workloads.md §5 does: the `dkim-exim`
     value mounted where exim reads `tls.key`, no `Certificate`, the
@@ -1977,9 +1993,10 @@ relay, in Wave B's verification (slice 26).
 
 ### 5.3 Wave A2: blog, splitpro, matrix, syncthing, stdiscosrv
 
-**This wave reaches the worker as well as the cloud pool.** The balancer's
-peer port moves to syncthing the moment the VPS's replica stops, so the
-NAS instance and the WebDAV server move here rather than in Wave C.
+**This wave reaches the home site as well as the cloud nodes.** The
+balancer's peer port moves to syncthing the moment the VPS's replica
+stops, so the NAS instance and the WebDAV server move here rather than in
+Wave C.
 
 **The wave's land brings the website co-host zone into the served
 zones**, through the blog's rows, so the cluster's DNS-01 token is
@@ -1991,7 +2008,7 @@ branch.
     **Verified** at the balancer for every hostname, including both
     delegation files with their header. **Cut**: the web origin's served
     apex, and `www` in both website zones.
-*   **splitpro**: its server on the cloud pool, its database by recovery
+*   **splitpro**: its server, its database by recovery
     from the legacy store (§4.3), its client from the census. It sends
     no mail. **Data**: the database by recovery, once the legacy server
     is stopped and a final backup has run, and the uploads claim copied
@@ -1999,7 +2016,7 @@ branch.
     through the single sign-on flow and a recent expense read back.
     **Cut**: `split`. **Rollback** loses the expenses entered since the
     cut.
-*   **matrix**: continuwuity on the cloud pool, its client from the
+*   **matrix**: continuwuity, its client from the
     census. **Data**: the claim by stream, after the server is stopped.
     matrix moves in three merges. The land wires it with `receiver`,
     the static site's pin, and the legacy claim is streamed into the
@@ -2013,7 +2030,7 @@ branch.
     with that as its reason. **Cut**: `matrix`, and its identity SRV goes
     (§4.7). **Rollback** loses the events since the cut, which federation
     partners retry.
-*   **syncthing** on the worker, with the WebDAV server beside it, and
+*   **syncthing** at the home site, with the WebDAV server beside it, and
     the `syncthing` row on both transports, where the legacy Service
     exposed TCP alone, at the balancer and at the LAN VIP. It keeps the
     NAS instance's device identity, as ruled (§11.4), which lives in its
@@ -2045,9 +2062,9 @@ branch.
 *   **stdiscosrv**: its raw port on 8443, at the balancer and at the
     LAN VIP, dialed at `syncapi` and terminating its own TLS with a
     certificate the cluster's issuer gives it for the name. It keeps its
-    reason with the replica gone, on the cloud pool: it is how a device
-    learns the balancer's address, and how devices find each other with
-    the homelab down, and retiring it would be a change on every device. **Data**: none; its
+    reason with the replica gone: it is how a device learns the
+    balancer's address, and how two devices at home on different VLANs
+    find each other, and retiring it would be a change on every device. **Data**: none; its
     announcements are rebuilt within minutes. **Verified** by a client's
     announcement and lookup on 8443, at the balancer and at the LAN VIP,
     and on 443 through the redirect. After the cut, a device still on
@@ -2120,8 +2137,8 @@ are refused by the network:
 
 ### 5.5 Wave B
 
-Every application of Wave B runs on the worker, and its requests fit the
-worker as it booted (§6.1), so the wave needs no window.
+Every application of Wave B, assumed at the home site (§6.1), has
+requests that fit the worker as it booted, so the wave needs no window.
 
 *   **golinks**: its row, with its bare name `go`, which is how it is
     used. **Data**: its store through the NAS. **Verified** by a link
@@ -2430,8 +2447,9 @@ workloads.md §1 asks; the legacy requests, immich's 4 GiB among them,
 were not. The database of immich is on the VPS today, so its move adds to the
 host, where the rest of the table replaces what legacy releases.
 
-| What runs on the worker | Today, peak | Request | Limit |
+| At the home site, assumed | Today, peak | Request | Limit |
 | --- | --- | --- | --- |
+| authelia and its Redis | 0.40 GiB | about 0.14 GiB | |
 | Monitoring, from M2 | | 0.7 GiB | |
 | Monitoring's history store | | 0.15 GiB | |
 | exim, and Wave B's applications | | 0.3 GiB | |
@@ -2441,12 +2459,15 @@ host, where the rest of the table replaces what legacy releases.
 | jellyfin | 0.4, 3.3 GiB | 0.5 GiB | 4 GiB |
 | syncthing, the WebDAV server, qbittorrent, seedwatch | 0.4 GiB | 0.4 GiB | |
 | shoko | 0.7 GiB | 0.3 GiB | 1 GiB |
-| **Total** | **every peak at once: about 15 GiB** | **about 6.5 GiB** | |
+| **Total** | **every peak at once: about 15.1 GiB** | **about 6.6 GiB** | |
 
 The requests take less than half of the allocatable, and every peak at
-once comes to about the allocatable itself, 14.7 against 14.5 GiB, with
-shoko staying. Those peaks are 30-day maxima that do not fall together,
-and the limits bound each. VolSync's movers stand outside the table:
+once comes to about the allocatable itself, about 15.1 against 14.5 GiB,
+with shoko staying. Those peaks are 30-day maxima that do not fall
+together, and the limits bound each. The table is an estimate by an
+assumed placement (nodes.md §1.1): a pod a fact or a declaration holds
+at home is counted there, and the scheduler may place a pod with no
+site constraint elsewhere. VolSync's movers stand outside the table:
 about a dozen run at 03:00 for minutes, a few hundred MB each by
 estimate, which the first week reads. **So the per-app sizing does not
 trigger the conditional ruling of §11.2**, on these numbers; Wave C's

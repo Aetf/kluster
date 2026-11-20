@@ -1,8 +1,8 @@
 """`perf`: the control planes' peaks that the cluster cannot see of itself, recorded outside it and imported.
 
 A from-scratch `up` installs the monitoring component partway through, and a
-rebuild replaces the worker its stores live on, so the first minutes of every
-bring-up and rebuild, which carry the peak, reach no store in the cluster
+rebuild replaces a node a store's claim is bound on, so the first minutes of
+every bring-up and rebuild, which carry the peak, reach no store in the cluster
 (Aetf/kluster-ops#790 §4.5). The operator runs `perf record` around such a
 run, and `perf import` once the history store is back:
 

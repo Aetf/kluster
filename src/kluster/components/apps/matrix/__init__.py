@@ -1,7 +1,9 @@
 """The Matrix homeserver: continuwuity, signing its users in through the portal (rfc-008 §5.3).
 
-One server on the cloud pool, with its database and media store on one claim,
-`PRECIOUS` and protected. An account comes into being only through the
+One server, with its database and media store on one claim, `PRECIOUS` and
+protected. It declares nothing that holds it to a site, so the scheduler
+places it (`kluster.lib.k8s.UNCONSTRAINED`); the claim keeps it to the claim's
+node once bound, and it writes in the claim's blockio class. An account comes into being only through the
 portal's sign-in: continuwuity provisions one for whoever the portal lets
 through, so the client's policy in `conventions.sso.CLIENTS` is the one gate on
 who has one. Its route carries no gate, since federation and the sign-in flow
@@ -51,12 +53,12 @@ import pulumi_crds as crds
 import pulumi_kubernetes as k8s
 
 from kluster import conventions
-from kluster.components.apps import Backend, Exposed, Fronts, expose
+from kluster.components.apps import Backend, Exposed, Fronts, declared_constraints, expose
 from kluster.components.apps.storage import Claim, claim
 from kluster.conventions.backup import PRECIOUS
 from kluster.conventions.routes import Exposure, Held, Proxied, Route
 from kluster.lib import templates
-from kluster.lib.k8s import CLOUD_POD_AFFINITY, ApplicationNamespace, PortedSecret, application_namespace, sealed_value
+from kluster.lib.k8s import ApplicationNamespace, PortedSecret, application_namespace, sealed_value
 from kluster.lib.versions import ImagePin
 from putils import Component
 
@@ -335,7 +337,7 @@ def _server(image: ImagePin, oidc_secret: pulumi.Input[str], data: Claim) -> k8s
         # It speaks Matrix and OpenID Connect, and never Kubernetes.
         automount_service_account_token=False,
         enable_service_links=False,
-        affinity=data.placement,
+        **data.constraints.pod_fields(),
         security_context=_POD_SECURITY,
         containers=[container],
         volumes=[
@@ -371,7 +373,7 @@ def _server(image: ImagePin, oidc_secret: pulumi.Input[str], data: Claim) -> k8s
 # Deployment runs a receiver in the server's place: an idle container of an
 # image that has `tar`, mounting the claim where the server does. A second
 # merge, without `receiver`, starts the server on what was streamed. The
-# receiver is a running pod with the server's placement, never zero replicas,
+# receiver is a running pod with the server's constraints, never zero replicas,
 # since the land execs the stream into it. It runs as the server's user, so
 # what it extracts is the server's to write, whoever owned it before.
 #
@@ -407,7 +409,7 @@ def _receiver(image: ImagePin, data: Claim) -> k8s.core.v1.PodSpecArgs:
     return k8s.core.v1.PodSpecArgs(
         automount_service_account_token=False,
         enable_service_links=False,
-        affinity=data.placement,
+        **data.constraints.pod_fields(),
         security_context=_POD_SECURITY,
         containers=[container],
         volumes=[_data_volume(data.claim.metadata.name)],
@@ -461,6 +463,7 @@ class Matrix(Component, pulumi_type='kluster:apps:Matrix'):
         super().__init__(name, opts=opts)
 
         self.namespace = application_namespace(f'{name}-namespace', name=NAMESPACE, opts=self.child_opts())
+        self.constraints = declared_constraints(exposure, self.namespace)
         # Read off the namespace, so each object in it waits for it.
         namespace = self.namespace.namespace.metadata.name
         # A value or a claim names its namespace as a string, so its object
@@ -482,7 +485,7 @@ class Matrix(Component, pulumi_type='kluster:apps:Matrix'):
             namespace=NAMESPACE,
             uid=MATRIX_USER,
             writer_key=writer_key,
-            placement=CLOUD_POD_AFFINITY,
+            constraints=self.constraints,
             protect=True,
             opts=behind,
         )
@@ -502,7 +505,9 @@ class Matrix(Component, pulumi_type='kluster:apps:Matrix'):
                 strategy=k8s.apps.v1.DeploymentStrategyArgs(type='Recreate'),
                 selector=k8s.meta.v1.LabelSelectorArgs(match_labels=dict(LABELS)),
                 template=k8s.core.v1.PodTemplateSpecArgs(
-                    metadata=k8s.meta.v1.ObjectMetaArgs(labels=dict(LABELS)),
+                    metadata=k8s.meta.v1.ObjectMetaArgs(
+                        labels=dict(LABELS), annotations=dict(self.data.pod_annotations)
+                    ),
                     spec=_server(image, self.oidc.metadata.name, self.data)
                     if receiver is None
                     else _receiver(receiver, self.data),

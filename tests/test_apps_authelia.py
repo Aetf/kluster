@@ -45,6 +45,7 @@ import pytest
 import pytest_asyncio
 import yaml
 from mock_monitor import Recorder, declaring, run_with
+from node_selection import CLOUD, NODES, schedulable
 from pinned_image import COMMAND_TIMEOUT, CONTAINER_TIMEOUT, pinned, pulled, require_podman
 from pulumi import runtime
 from section_numbers import sections
@@ -72,7 +73,6 @@ from kluster.components.apps.exim import PORT as SMTP_PORT
 from kluster.components.apps.storage import claim_name
 from kluster.components.cilium import InternetPoolMembers
 from kluster.components.monitoring.operator_objects import type_token
-from kluster.conventions import CONTROL_PLANE_LABEL
 from kluster.conventions.backup import BACKED_NAMESPACES, PRECIOUS, BackupFamily, duration, max_age
 from kluster.conventions.routes import PROXIED, REWRITE, Exposure, Gate, Held, Proxied, Route
 from kluster.conventions.sso import Factor
@@ -246,18 +246,6 @@ def sealed_secret(monitor: Recorder, name: str) -> dict[str, Any]:
     return found
 
 
-def holds(expression: Mapping[str, Any], labels: Mapping[str, str]) -> bool:
-    """Whether `labels` satisfy one requirement of a Kubernetes node selector."""
-    present = expression['key'] in labels
-    match expression['operator']:
-        case 'Exists':
-            return present
-        case 'DoesNotExist':
-            return not present
-        case operator:
-            raise AssertionError(f'no reading of {operator!r} here')
-
-
 # -- what the gate names ---------------------------------------------------------
 
 
@@ -372,17 +360,17 @@ def test_a_pod_whose_image_names_no_numeric_user_states_one(declared: Recorder) 
         assert context['runAsUser'] == int(context['runAsUser']) > 0
 
 
-def test_every_pod_is_placed_on_the_cloud_pool_with_cpu_and_memory_limits(declared: Recorder) -> None:
-    """Etcd shares a cloud node's cores, so every workload there is held to both (declarative/workloads.md §1)."""
-    cloud_node = {CONTROL_PLANE_LABEL: '', 'kubernetes.io/hostname': 'cp-1'}
-    worker = {'kubernetes.io/hostname': 'worker'}
+def test_every_pod_keeps_working_while_the_uplink_is_down_at_home_with_cpu_and_memory_limits(
+    declared: Recorder,
+) -> None:
+    """The portal declares it: every pod admits no cloud node and tolerates its node's unreachability.
 
+    Every pod carries both limits, since a pod may be placed on a cloud node,
+    where etcd shares the cores (declarative/workloads.md §1).
+    """
     for pod in every_pod(declared):
-        (term,) = pod['spec']['affinity']['nodeAffinity']['requiredDuringSchedulingIgnoredDuringExecution'][
-            'nodeSelectorTerms'
-        ]
-        assert all(holds(expression, cloud_node) for expression in term['matchExpressions'])
-        assert not all(holds(expression, worker) for expression in term['matchExpressions'])
+        assert schedulable(pod['spec']) == set(NODES) - CLOUD
+        assert {it['key'] for it in pod['spec']['tolerations']} == {'node.kubernetes.io/unreachable'}
         (container,) = pod['spec']['containers']
         assert {'cpu', 'memory'} <= container['resources']['limits'].keys()
         assert {'cpu', 'memory'} <= container['resources']['requests'].keys()
@@ -426,10 +414,7 @@ def test_the_claims_movers_are_placed_where_the_server_runs(declared: Recorder) 
     """A mover binds the claim on a node first when it is scheduled first, so it is held to the server's nodes."""
     (source,) = [it.inputs for it in declared.of_type(SOURCE)]
 
-    assert (
-        source['spec']['restic']['moverAffinity']['nodeAffinity']
-        == pod_of(declared)['spec']['affinity']['nodeAffinity']
-    )
+    assert schedulable({'affinity': source['spec']['restic']['moverAffinity']}) == schedulable(pod_of(declared)['spec'])
 
 
 def test_the_claims_movers_run_as_the_server_so_they_read_and_write_its_files(portal: Recorder) -> None:
@@ -1358,7 +1343,7 @@ def test_the_receiver_mounts_the_claim_where_the_server_reads_its_data(portal: R
 
 
 def test_the_receiver_runs_as_the_server_and_is_placed_as_the_server(portal: Recorder, receiving: Recorder) -> None:
-    for key in ('securityContext', 'affinity'):
+    for key in ('securityContext', 'affinity', 'tolerations', 'priorityClassName'):
         assert pod_of(receiving)['spec'][key] == pod_of(portal)['spec'][key]
 
 

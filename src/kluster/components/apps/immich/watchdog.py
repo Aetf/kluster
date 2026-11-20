@@ -69,6 +69,7 @@ from kluster.components.monitoring.rules import RuleGroup, rule_group_spec, sche
 from kluster.conventions.alert import Playbook
 from kluster.conventions.schedule import ScheduledJob
 from kluster.lib import templates
+from kluster.lib.k8s import Constraints
 from kluster.lib.versions import ImagePin
 
 __all__ = (
@@ -171,7 +172,7 @@ def job_slot_watchdog(
     redis_port: int,
     redis_password: k8s.core.v1.SecretKeySelectorArgs,
     user: int,
-    affinity: k8s.core.v1.AffinityArgs,
+    constraints: Constraints,
     opts: pulumi.ResourceOptions | None = None,
 ) -> Watchdog:
     """The CronJob that restarts the server whose worker holds a slot it will never release, its role, and the rules over it.
@@ -186,8 +187,9 @@ def job_slot_watchdog(
     :param redis_host: The name the queues' Redis is reached at, and its port.
     :param redis_password: The Secret's key the Redis password is in.
     :param user: The user the pod runs as, the server's.
-    :param affinity: Where the pod runs: the server's site, whose node holds
-        its image.
+    :param constraints: What the pod states: its component's constraints,
+        since it reaches the server and its Redis through their Services
+        wherever they run.
     """
     script = k8s.core.v1.ConfigMap(
         f'{resource_name}-script',
@@ -251,7 +253,7 @@ def job_slot_watchdog(
         automount_service_account_token=True,
         enable_service_links=False,
         restart_policy='Never',
-        affinity=affinity,
+        **constraints.pod_fields(),
         security_context=k8s.core.v1.PodSecurityContextArgs(
             run_as_non_root=True,
             run_as_user=user,

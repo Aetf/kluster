@@ -4,9 +4,10 @@ A WebDAV server over two trees in one: its own files, which are in no
 syncthing folder and live in a claim backed up under `STANDARD`, and, at
 `STUFF_MOUNT` under them, the `Stuff` folder syncthing keeps on the NAS, which
 the server writes to as a peer of the instance would. The folder is the
-export's `Sync/Stuff`, so the server runs on the worker beside the instance
-(`nas_claim`), which its pod's affinity states and its claim's mover follows
-(`claim`), and what it writes there the instance finds at its next scan.
+export's `Sync/Stuff`, so the server runs at the home site, which alone
+reaches the export (`nas_claim`): its pod states the NAS claim's constraints,
+and its claim's mover follows them (`claim`). What it writes there the
+instance finds at its next scan.
 
 **The gate is all that guards it.** The server allows every operation to every
 client and checks no credential: its route's `internet` side asks the portal
@@ -28,12 +29,12 @@ from collections.abc import Mapping
 import pulumi
 import pulumi_kubernetes as k8s
 
-from kluster.components.apps import Backend, Exposed, Fronts, expose
+from kluster.components.apps import Backend, Exposed, Fronts, declared_constraints, expose
 from kluster.components.apps.storage import Claim, NasClaim, claim, nas_claim
 from kluster.components.apps.syncthing import SYNC
 from kluster.conventions.backup import STANDARD
 from kluster.conventions.routes import Exposure
-from kluster.lib.k8s import WORKER_POD_AFFINITY, ApplicationNamespace, application_namespace
+from kluster.lib.k8s import ApplicationNamespace, application_namespace
 from kluster.lib.versions import ImagePin
 from putils import Component
 
@@ -97,11 +98,15 @@ class WebDav(Component, pulumi_type='kluster:apps:WebDav'):
         super().__init__(name, opts=opts)
 
         self.namespace = application_namespace(f'{name}-namespace', name=NAME, opts=self.child_opts())
+        self.constraints = declared_constraints(exposure, self.namespace)
         # Read off the namespace, so each object in it waits for it; the
         # claims take the plain name, and wait for the namespace through opts.
         namespace = self.namespace.namespace.metadata.name
         in_namespace = self.child_opts(depends_on=[self.namespace.namespace])
 
+        self.stuff = nas_claim(
+            f'{name}-stuff', 'stuff', f'{SYNC}/Stuff', namespace=NAME, read_only=False, opts=in_namespace
+        )
         self.files = claim(
             f'{name}-files',
             'files',
@@ -110,11 +115,8 @@ class WebDav(Component, pulumi_type='kluster:apps:WebDav'):
             namespace=NAME,
             uid=USER,
             writer_key=writer_key,
-            placement=WORKER_POD_AFFINITY,
+            constraints=self.constraints & self.stuff.constraints,
             opts=in_namespace,
-        )
-        self.stuff = nas_claim(
-            f'{name}-stuff', 'stuff', f'{SYNC}/Stuff', namespace=NAME, read_only=False, opts=in_namespace
         )
 
         # Probed at dufs's own health path, which answers before any file is read.
@@ -126,11 +128,13 @@ class WebDav(Component, pulumi_type='kluster:apps:WebDav'):
                 replicas=1,
                 selector=k8s.meta.v1.LabelSelectorArgs(match_labels=dict(LABELS)),
                 template=k8s.core.v1.PodTemplateSpecArgs(
-                    metadata=k8s.meta.v1.ObjectMetaArgs(labels=dict(LABELS)),
+                    metadata=k8s.meta.v1.ObjectMetaArgs(
+                        labels=dict(LABELS), annotations=dict(self.files.pod_annotations)
+                    ),
                     spec=k8s.core.v1.PodSpecArgs(
                         # It speaks HTTP to its clients alone, and never Kubernetes.
                         automount_service_account_token=False,
-                        affinity=self.files.placement,
+                        **self.files.constraints.pod_fields(),
                         security_context=k8s.core.v1.PodSecurityContextArgs(
                             run_as_non_root=True,
                             run_as_user=USER,

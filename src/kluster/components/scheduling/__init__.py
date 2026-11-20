@@ -1,7 +1,8 @@
 """Scheduling: the `PriorityClass` a pod held by its constraints runs at (declarative/workloads.md §1).
 
 A pod is held by its constraints where a site or an architecture leaves it
-only some nodes to run on (`kluster.lib.k8s.Constraints`). The scheduler
+only some nodes to run on, or a volume bound on a node or a device one node
+offers keeps it to one (`kluster.lib.k8s.Constraints`). The scheduler
 fills a node by requests, so without a priority a free pod that reaches the
 node first can leave a held pod pending, since the held pod can run nowhere
 else. At this class the scheduler preempts the free pod instead, and the
@@ -59,8 +60,8 @@ class HeldPriority(Component, pulumi_type='kluster:scheduling:HeldPriority'):
             global_default=False,
             preemption_policy='PreemptLowerPriority',
             description=(
-                'A pod its constraints hold to some nodes, by a site or an architecture: '
-                'it preempts a free pod to take a node it fits (declarative/workloads.md §1).'
+                'A pod its constraints hold to some nodes, by a site or an architecture, or keep to one, by '
+                'a volume or a device: it preempts a free pod to take a node it fits (declarative/workloads.md §1).'
             ),
             opts=self.child_opts(depends_on=list(after)),
         )

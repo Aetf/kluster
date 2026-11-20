@@ -204,8 +204,10 @@
     ([declarative/workloads.md](../declarative/workloads.md) §1).
     Alertmanager is held at the home site by its reach to Home
     Assistant, and so is vmagent, which scrapes etcd on every control
-    plane; monitoring's other pods, the etcd snapshot, its
-    restore-verify and the state table's upkeep are free pods. The
+    plane; monitoring's two stores are kept to their nodes by their
+    claims, and so run at the held priority; its other pods, the etcd
+    snapshot, its restore-verify and the state table's upkeep are free
+    pods. The
     `PriorityClass` a held pod runs at joins the closed list
     ([declarative/cluster-infra.md](../declarative/cluster-infra.md) §1,
     item 11). The worker pin's reasons do not stand: etcd's CPU is

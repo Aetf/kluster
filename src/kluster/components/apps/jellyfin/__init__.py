@@ -1,4 +1,4 @@
-"""Jellyfin, the media server, on the worker (rfc-008 §5.6).
+"""Jellyfin, the media server, at the home site (rfc-008 §5.6).
 
 One server, in a namespace of its own, reached two ways: its interface by
 name through the Gateways, on `internet` behind the proxy and on `media` for a
@@ -10,11 +10,12 @@ with the client its census row is (`conventions.sso`), whose redirect
 addresses are under the route's name, so a row and a client that name two
 hosts are refused.
 
-**It runs on the worker** (`WORKER_POD_AFFINITY`): the library and the server's
-previews are on the NAS, which the worker alone reaches, and the GPU it
-transcodes on is the worker's. Its rollout is `Recreate`: the server's
-database is SQLite, one process's, and the GPU is one device, which a second
-pod would wait for.
+**It runs at the home site**: the library and the server's previews are on the
+NAS, which the home site alone reaches (`NasClaim.constraints`), and its data
+claim is handed the same, so its mover binds it there. The GPU it transcodes
+on keeps it to the node offering it (`kluster.components.apps.GPU_HOLD`). Its
+rollout is `Recreate`: the server's database is SQLite, one process's, and
+the GPU is one device, which a second pod would wait for.
 
 **What it keeps, and where** (rfc-008 §4.2):
 
@@ -126,7 +127,7 @@ import pulumi
 import pulumi_kubernetes as k8s
 
 from kluster import conventions
-from kluster.components.apps import Backend, Exposed, Fronts, expose
+from kluster.components.apps import GPU_HOLD, Backend, Exposed, Fronts, declared_constraints, expose
 from kluster.components.apps.storage import Claim, NasClaim, claim, nas_claim
 from kluster.components.gpu import GPU_RESOURCE
 from kluster.conventions.backup import STANDARD
@@ -134,7 +135,7 @@ from kluster.conventions.cluster import Transports
 from kluster.conventions.routes import Exposure, Held, Port, Route
 from kluster.conventions.sso import Client
 from kluster.lib import templates
-from kluster.lib.k8s import WORKER_POD_AFFINITY, ApplicationNamespace, application_namespace
+from kluster.lib.k8s import ApplicationNamespace, application_namespace
 from kluster.lib.versions import ImagePin
 from putils import Component
 
@@ -360,11 +361,16 @@ class Jellyfin(Component, pulumi_type='kluster:apps:Jellyfin'):
         super().__init__(name, opts=opts)
 
         self.namespace = application_namespace(f'{name}-namespace', name=NAME, opts=self.child_opts())
+        self.constraints = declared_constraints(exposure, self.namespace)
         # Read off the namespace, so each object in it waits for it; the
         # claims take the plain name, and wait for the namespace through opts.
         namespace = self.namespace.namespace.metadata.name
         in_namespace = self.child_opts(depends_on=[self.namespace.namespace])
 
+        self.derived = nas_claim(
+            f'{name}-derived', 'derived', NAS_DERIVED, namespace=NAME, read_only=False, opts=in_namespace
+        )
+        self.media = nas_claim(f'{name}-media', 'media', LIBRARY, namespace=NAME, read_only=True, opts=in_namespace)
         self.data = claim(
             f'{name}-data',
             'data',
@@ -373,13 +379,9 @@ class Jellyfin(Component, pulumi_type='kluster:apps:Jellyfin'):
             namespace=NAME,
             uid=USER,
             writer_key=writer_key,
-            placement=WORKER_POD_AFFINITY,
+            constraints=self.constraints & self.derived.constraints & self.media.constraints,
             opts=in_namespace,
         )
-        self.derived = nas_claim(
-            f'{name}-derived', 'derived', NAS_DERIVED, namespace=NAME, read_only=False, opts=in_namespace
-        )
-        self.media = nas_claim(f'{name}-media', 'media', LIBRARY, namespace=NAME, read_only=True, opts=in_namespace)
         # Autonamed, so a change to either file is a new ConfigMap, and the
         # Deployment that names it rolls.
         self.network = k8s.core.v1.ConfigMap(
@@ -397,7 +399,9 @@ class Jellyfin(Component, pulumi_type='kluster:apps:Jellyfin'):
                 strategy=k8s.apps.v1.DeploymentStrategyArgs(type='Recreate'),
                 selector=k8s.meta.v1.LabelSelectorArgs(match_labels=dict(LABELS)),
                 template=k8s.core.v1.PodTemplateSpecArgs(
-                    metadata=k8s.meta.v1.ObjectMetaArgs(labels=dict(LABELS)),
+                    metadata=k8s.meta.v1.ObjectMetaArgs(
+                        labels=dict(LABELS), annotations=dict(self.data.pod_annotations)
+                    ),
                     spec=self._pod(image=image, published_url=_published_url(route), discovery=discovery),
                 ),
             ),
@@ -436,7 +440,7 @@ class Jellyfin(Component, pulumi_type='kluster:apps:Jellyfin'):
             # `JELLYFIN_*` variables, the prefix the server reads its
             # configuration from.
             enable_service_links=False,
-            affinity=self.data.placement,
+            **(self.data.constraints & GPU_HOLD).pod_fields(),
             security_context=k8s.core.v1.PodSecurityContextArgs(
                 run_as_non_root=True,
                 run_as_user=USER,

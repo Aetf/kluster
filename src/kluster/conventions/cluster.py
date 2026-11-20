@@ -93,10 +93,9 @@ POOL_WORKER = 'worker'
 #: and on no other node
 #: ([`node_label_spec.go` L83–85](https://github.com/siderolabs/talos/blob/v1.13.9/internal/app/machined/pkg/controllers/k8s/node_label_spec.go#L83-L85)).
 #: It says which nodes run the control plane, which the etcd scrape selects
-#: by (`components.monitoring`). A pod that must be at one site states it
-#: against `SITE_LABEL` instead (`kluster.lib.k8s.Constraints`); the pool
-#: placements `kluster.lib.k8s` keeps beside it select by this label until
-#: their callers move to `Constraints`.
+#: by (`components.monitoring`). It says nothing about where a pod may run: a
+#: pod that must be at one site states it against `SITE_LABEL`
+#: (`kluster.lib.k8s.Constraints`).
 CONTROL_PLANE_LABEL = 'node-role.kubernetes.io/control-plane'
 
 
@@ -127,7 +126,8 @@ SITE_LABEL = 'topology.kubernetes.io/zone'
 #: The `PriorityClass` a held pod runs at, which `k8s-base` declares
 #: (`components.scheduling`) and the pod's constraints name
 #: (`kluster.lib.k8s.Constraints`): a pod a site or an architecture leaves
-#: only some nodes to run on (declarative/workloads.md §1). Its value is
+#: only some nodes to run on, or a volume bound on a node or a device one
+#: node offers keeps to one (declarative/workloads.md §1). Its value is
 #: above the default, 0, at which a pod that names no class runs, so the
 #: scheduler preempts a free pod to place a held one that fits nowhere else.
 HELD_PRIORITY_CLASS = 'held'

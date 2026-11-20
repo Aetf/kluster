@@ -1423,14 +1423,15 @@ rootfs).
 
 Upgrades over the legacy workflow, both mandatory now:
 
--   **Multi-arch is required** — the cloud pool is arm64 (splitpro's
-    CNPG operand runs there). Builds use GitHub's free native arm64
-    runners (public repos) + a manifest-stitch job; no qemu, whose
-    emulation multiplies the cost of every `RUN` step. The vchord
-    operand installs its extensions as prebuilt per-architecture
-    packages, so nothing compiles on either runner. Free arm64 runners
-    require a public repository: **this repo is public since
-    2026-08-25**, after the history scrub that removed the
+-   **Multi-arch is required** — the cloud nodes are arm64 and the
+    worker amd64, and the scheduler may place a pod on either, so an
+    image built here runs wherever its pod lands. Builds use GitHub's
+    free native arm64 runners (public repos) + a manifest-stitch job;
+    no qemu, whose emulation multiplies the cost of every `RUN` step.
+    The vchord operand installs its extensions as prebuilt
+    per-architecture packages, so nothing compiles on either runner.
+    Free arm64 runners require a public repository: **this repo is
+    public since 2026-08-25**, after the history scrub that removed the
     kluster-code-era `Pulumi.dev.yaml` ciphertext and encryption salt
     (cluster/security-audit.md L10). The same flip is what makes the
     branch protection and reviewer gates in §3 possible at all

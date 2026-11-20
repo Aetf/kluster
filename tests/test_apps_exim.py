@@ -39,13 +39,13 @@ import pytest
 import pytest_asyncio
 import yaml
 from mock_monitor import Recorder, declaring, run_with
+from node_selection import ARCHITECTURE_LABEL, NODES, matches, schedulable
 from pinned_image import COMMAND_TIMEOUT, CONTAINER_TIMEOUT, pinned, pulled, require_podman
 
 from kluster import conventions
 from kluster.components.apps.exim import CONFIGURATION, HOST, NAMESPACE, SMTP, Exim
 from kluster.components.dns import base as dns_base
 from kluster.components.dns.record import zone_records
-from kluster.conventions import CONTROL_PLANE_LABEL
 from kluster.lib.k8s import sealed_ciphertext
 from kluster.lib.versions import ImagePin
 
@@ -241,34 +241,12 @@ def test_the_account_and_the_password_reach_the_authenticators_in_their_places(r
 # -- the pod ---------------------------------------------------------------------
 
 
-def holds(expression: Mapping[str, Any], labels: Mapping[str, str]) -> bool:
-    """Whether `labels` satisfy one requirement of a Kubernetes label selector."""
-    present = expression['key'] in labels
-    match expression['operator']:
-        case 'Exists':
-            return present
-        case 'DoesNotExist':
-            return not present
-        case 'In':
-            return present and labels[expression['key']] in expression['values']
-        case operator:
-            raise AssertionError(f'no reading of {operator!r} here')
+def test_the_relay_runs_on_the_nodes_of_its_images_architecture_alone(relay: Recorder) -> None:
+    """The pinned image is built for amd64 alone, and the scheduler does not read an image's platforms."""
+    spec = pod_of(relay)['spec']
 
-
-def selects(expressions: list[dict[str, Any]], labels: Mapping[str, str]) -> bool:
-    return all(holds(it, labels) for it in expressions)
-
-
-def test_the_relay_runs_on_the_worker_and_on_no_control_plane_node(relay: Recorder) -> None:
-    """The worker is the one node of the cluster that is no control plane node (`kluster.lib.k8s.WORKER_POD_AFFINITY`)."""
-    affinity = pod_of(relay)['spec']['affinity']['nodeAffinity']
-    terms = affinity['requiredDuringSchedulingIgnoredDuringExecution']['nodeSelectorTerms']
-
-    def schedules_to(labels: dict[str, str]) -> bool:
-        return any(selects(term['matchExpressions'], labels) for term in terms)
-
-    assert schedules_to({'kubernetes.io/hostname': 'worker'})
-    assert not schedules_to({'kubernetes.io/hostname': 'cp-1', CONTROL_PLANE_LABEL: ''})
+    assert schedulable(spec) == {node for node, labels in NODES.items() if labels[ARCHITECTURE_LABEL] == 'amd64'}
+    assert spec['priorityClassName'] == conventions.HELD_PRIORITY_CLASS
 
 
 def test_the_relay_runs_restricted_as_a_numeric_user_on_a_read_only_root(relay: Recorder) -> None:
@@ -337,7 +315,7 @@ def peer_selects(selector: Mapping[str, Any], policy_namespace: str, labels: Map
     expressions = [{**it, 'key': resolved(it['key'])} for it in written]
     if not any(it['key'] == NAMESPACE_LABEL for it in expressions):
         expressions.append({'key': NAMESPACE_LABEL, 'operator': 'In', 'values': [policy_namespace]})
-    return selects(expressions, labels)
+    return matches({'matchExpressions': expressions}, labels)
 
 
 def rule_admits(

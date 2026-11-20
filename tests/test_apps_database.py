@@ -36,6 +36,7 @@ import yaml
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.serialization import Encoding, NoEncryption, PrivateFormat, PublicFormat
 from mock_monitor import Recorder, declaring, run_with
+from node_selection import matches, schedulable
 from talos_images import default_images
 
 from kluster import conventions
@@ -57,7 +58,7 @@ from kluster.components.apps.database import (
 )
 from kluster.components.monitoring.operator_objects import type_token
 from kluster.conventions.backup import RetentionClass, duration
-from kluster.lib.k8s import application_namespace
+from kluster.lib.k8s import UNCONSTRAINED, application_namespace, at_home
 from kluster.lib.versions import ImagePin
 
 CLUSTER = 'crds:postgresql.cnpg.io/v1:Cluster'
@@ -86,11 +87,8 @@ RESOURCES = Resources(requests={'cpu': '100m', 'memory': '256Mi'}, limits={'cpu'
 #: A node volume's class, which a database may be claimed under.
 NODE_VOLUME_CLASS = 'cloud-block-example'
 
-AFFINITY = {
-    'requiredDuringSchedulingIgnoredDuringExecution': {
-        'nodeSelectorTerms': [{'matchExpressions': [{'key': 'example.com/site', 'operator': 'In', 'values': ['a']}]}]
-    }
-}
+#: The application's constraints, which its database is handed.
+CONSTRAINTS = at_home('mounts something only the home site reaches')
 
 #: The legacy store a migrated database recovers from, as the land hands it.
 LEGACY = Recovery(
@@ -114,7 +112,7 @@ def declare(name: str, namespace: str, cluster: str | None = None, **overrides: 
         'image': OPERAND,
         'dbname': 'app',
         'resources': RESOURCES,
-        'node_affinity': AFFINITY,
+        'constraints': CONSTRAINTS,
         'writer_key': writer_key(namespace),
         'drill': Drill(table='Expense', extensions=('pg_cron', 'cube')),
         'drill_image': DRILL_IMAGE,
@@ -125,7 +123,7 @@ def declare(name: str, namespace: str, cluster: str | None = None, **overrides: 
 
 @pytest_asyncio.fixture(scope='module', loop_scope='module')
 async def declared() -> Recorder:
-    """An empty database, a migrated one, one on a node volume, one at two generations, two in one namespace, and the drills' policy."""
+    """An empty database, a migrated one, one on a node volume, a free one, one at two generations, two in one namespace, and the drills' policy."""
     monitor = await run_with(Recorder(), stack='apps')
     async with declaring():
         declare(
@@ -138,6 +136,7 @@ async def declared() -> Recorder:
         )
         declare('photos', 'photos', recovery=LEGACY)
         declare('volume', 'volume', storage_class=NODE_VOLUME_CLASS)
+        declare('free', 'free', constraints=UNCONSTRAINED)
         declare('retry-g1', 'retry', generation=1)
         declare('retry-g2', 'retry', generation=2)
         declare('pair-a', 'pair', 'alpha')
@@ -199,23 +198,6 @@ def drill_container(cronjob: dict[str, Any]) -> dict[str, Any]:
 
 def environment(container: dict[str, Any]) -> dict[str, str]:
     return {it['name']: it['value'] for it in container['env']}
-
-
-def selects(selector: Mapping[str, Any], labels: Mapping[str, str]) -> bool:
-    """Whether a label selector selects a pod carrying `labels`."""
-    if any(labels.get(key) != value for key, value in selector.get('matchLabels', {}).items()):
-        return False
-    for expression in selector.get('matchExpressions', []):
-        key, values = expression['key'], expression.get('values', [])
-        held = {
-            'In': labels.get(key) in values,
-            'NotIn': labels.get(key) not in values,
-            'Exists': key in labels,
-            'DoesNotExist': key not in labels,
-        }[expression['operator']]
-        if not held:
-            return False
-    return True
 
 
 # -- The archive -----------------------------------------------------------------------
@@ -329,12 +311,22 @@ def test_a_database_that_migrates_nothing_is_initialized_with_its_sql(declared: 
     assert of(declared, OBJECT_STORE, 'ledger') == [one(declared, OBJECT_STORE, 'ledger')]
 
 
-def test_a_database_runs_one_instance_on_its_site_with_its_resources(declared: Recorder) -> None:
+def instance_pod(spec: Mapping[str, Any]) -> dict[str, Any]:
+    """What the operator puts on an instance's pod from a `Cluster`'s spec: its node affinity, tolerations and priority."""
+    affinity = spec.get('affinity', {})
+    return {
+        **({'affinity': {'nodeAffinity': affinity['nodeAffinity']}} if 'nodeAffinity' in affinity else {}),
+        **({'tolerations': affinity['tolerations']} if 'tolerations' in affinity else {}),
+        **({'priorityClassName': spec['priorityClassName']} if 'priorityClassName' in spec else {}),
+    }
+
+
+def test_a_database_runs_one_instance_where_its_application_may_with_its_resources(declared: Recorder) -> None:
     spec = one(declared, CLUSTER, 'ledger')['spec']
 
     assert declared.options_of('ledger', CLUSTER).protect is True
     assert spec['instances'] == 1
-    assert spec['affinity']['nodeAffinity'] == AFFINITY
+    assert schedulable(instance_pod(spec)) == schedulable(CONSTRAINTS.pod_fields_json())
     assert spec['resources'] == {'requests': RESOURCES.requests, 'limits': RESOURCES.limits}
     assert spec['imageName'] == str(OPERAND)
     assert spec['storage'] == {'storageClass': conventions.SC_LOCAL_PATH, 'size': '3Gi'}
@@ -345,6 +337,49 @@ def test_a_database_on_a_node_volume_is_claimed_under_its_class_and_drilled_on_l
     """The drill's claim is removed with it, which `local-path` reclaims and a node volume's class keeps."""
     assert one(declared, CLUSTER, 'volume')['spec']['storage']['storageClass'] == NODE_VOLUME_CLASS
     assert drill_manifest(declared, 'volume')['spec']['storage']['storageClass'] == conventions.SC_LOCAL_PATH
+
+
+@pytest.mark.parametrize('namespace', ['ledger', 'volume', 'free'])
+def test_an_instance_is_held_where_its_claim_keeps_it(declared: Recorder, namespace: str) -> None:
+    """Its claim keeps it to its node, so it outranks free pods, whatever its application's constraints."""
+    assert (
+        instance_pod(one(declared, CLUSTER, namespace)['spec'])['priorityClassName'] == conventions.HELD_PRIORITY_CLASS
+    )
+
+
+def test_an_instance_held_at_home_stays_through_an_outage_of_the_uplink(declared: Recorder) -> None:
+    pod = instance_pod(one(declared, CLUSTER, 'ledger')['spec'])
+
+    assert pod['tolerations'] == CONSTRAINTS.pod_fields_json()['tolerations']
+
+
+@pytest.mark.parametrize('namespace', ['ledger', 'free'])
+def test_the_drills_recovered_instance_states_its_applications_constraints_and_no_hold(
+    declared: Recorder, namespace: str
+) -> None:
+    """Its claim is made fresh each run, so nothing keeps it to a node: at the held priority a drill would preempt a serving pod."""
+    application = CONSTRAINTS if namespace == 'ledger' else UNCONSTRAINED
+
+    assert instance_pod(drill_manifest(declared, namespace)['spec']) == application.pod_fields_json()
+
+
+def test_an_instance_on_local_path_writes_in_the_class_that_caps_the_disk_etcd_shares(declared: Recorder) -> None:
+    """The operator copies `inheritedMetadata` onto the instance's pod; a node volume is a disk of its own and takes none."""
+
+    def annotations(spec: Mapping[str, Any]) -> dict[str, str]:
+        return spec['inheritedMetadata'].get('annotations') or {}
+
+    assert annotations(one(declared, CLUSTER, 'ledger')['spec']) == dict(conventions.ETCD_DISK_WRITER.pod_annotation)
+    assert annotations(one(declared, CLUSTER, 'volume')['spec']) == {}
+    assert annotations(drill_manifest(declared, 'volume')['spec']) == dict(conventions.ETCD_DISK_WRITER.pod_annotation)
+
+
+def test_the_drills_pod_states_its_applications_constraints_and_no_hold(declared: Recorder) -> None:
+    """It mounts no claim, so it is held only where its application is."""
+    spec = drill_pod(one(declared, CRONJOB, 'ledger'))['spec']
+
+    assert schedulable(spec) == schedulable(CONSTRAINTS.pod_fields_json())
+    assert spec['tolerations'] == CONSTRAINTS.pod_fields_json()['tolerations']
 
 
 @pytest.mark.parametrize('namespace', ['ledger', 'photos'])
@@ -359,7 +394,7 @@ def test_a_database_and_its_drill_hold_one_instance_with_no_disruption_budget(
 
 @pytest.mark.parametrize('namespace', ['ledger', 'photos'])
 def test_every_store_holds_the_plugins_sidecar_to_a_cpu_limit(declared: Recorder, namespace: str) -> None:
-    """The sidecar runs in every instance and every recovery, on the cloud pool beside etcd too."""
+    """The sidecar runs in every instance and every recovery, on a cloud node beside etcd too."""
     stores = of(declared, OBJECT_STORE, namespace)
 
     assert stores
@@ -379,7 +414,7 @@ def _api_denied(monitor: Recorder, namespace: str, labels: Mapping[str, str]) ->
     for spec in block['specs']:
         for deny in spec.get('egressDeny', []):
             ports = [it['port'] for rule in deny.get('toPorts', []) for it in rule['ports']]
-            if deny.get('toEntities') and ports == [port] and selects(spec['endpointSelector'], labels):
+            if deny.get('toEntities') and ports == [port] and matches(spec['endpointSelector'], labels):
                 return True
     return False
 
@@ -413,9 +448,9 @@ def test_the_operator_reaches_every_instance_on_the_status_port_alone(declared: 
     (rule,) = spec['ingress']
     (peer,) = rule['fromEndpoints']
 
-    assert selects(spec['endpointSelector'], instances)
-    assert selects(spec['endpointSelector'], recovered)
-    assert not selects(spec['endpointSelector'], drill)
+    assert matches(spec['endpointSelector'], instances)
+    assert matches(spec['endpointSelector'], recovered)
+    assert not matches(spec['endpointSelector'], drill)
     assert peer == {'matchLabels': {'io.kubernetes.pod.namespace': conventions.CNPG_NAMESPACE}}
     assert rule['toPorts'] == [{'ports': [{'port': '8000', 'protocol': 'TCP'}]}]
 
@@ -568,7 +603,7 @@ def _refused(size: int = 1, name: str = 'refused', **overrides: Any) -> None:
         'image': OPERAND,
         'dbname': 'app',
         'resources': RESOURCES,
-        'node_affinity': AFFINITY,
+        'constraints': CONSTRAINTS,
         'writer_key': writer_key('refused'),
         'drill': Drill(table='asset'),
         'drill_image': DRILL_IMAGE,

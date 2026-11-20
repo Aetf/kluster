@@ -7,8 +7,8 @@ the one nginx, reading its files from a directory under the content: the
 one the call names for it (`directories`), or the content's root. So one
 instance serves several sites, and a name no row serves is answered 404.
 
-**Where the content comes from is the instance's source**, which decides its
-placement:
+**Where the content comes from is the instance's source**, which decides the
+constraints on its pods:
 
 -   **A git source** (`GitSource`) is a built branch, which git-sync pulls
     into an empty directory the server reads, as the git-sync sidecar
@@ -17,12 +17,14 @@ placement:
     there. Afterwards the sidecar retries a failed fetch for as long as it
     fails, since a sidecar that exits makes the pod unready, and the content
     already synced is still the branch's last state. The instance holds no
-    state, so it runs `GIT_REPLICAS` pods, spread across the cloud nodes, one
-    per node: a node's drain or loss leaves the site served.
+    state, so it runs `GIT_REPLICAS` pods, one per node, wherever the
+    scheduler places them (`kluster.lib.k8s.UNCONSTRAINED`): a node's drain
+    or loss leaves the site served.
 -   **A NAS source** (`NasSource`) is a directory under the host's export,
     mounted read-only through `nas_claim`, so the files are edited on the NAS
     share and the cluster deploys nothing for it. The export is reachable from
-    the worker alone, so the instance runs one pod there.
+    the home site alone, so the instance runs one pod there
+    (`kluster.components.apps.storage.NasClaim.constraints`).
 
 **An apex serves documents of its own** (`documents`): JSON a browser reads
 across origins. They are not part of the content: the program hands them in,
@@ -47,15 +49,14 @@ import pulumi_crds as crds
 import pulumi_kubernetes as k8s
 
 from kluster import conventions
-from kluster.components.apps import Backend, Exposed, Fronts, expose
+from kluster.components.apps import Backend, Exposed, Fronts, declared_constraints, expose
 from kluster.components.apps.storage import NasClaim, nas_claim
 from kluster.components.cilium.gateways import apex_listener
 from kluster.conventions.routes import Apex, Exposure, Held, Passthrough, PortRedirect, Route
 from kluster.lib import templates
 from kluster.lib.k8s import (
-    CLOUD_POD_AFFINITY,
-    WORKER_POD_AFFINITY,
     ApplicationNamespace,
+    Constraints,
     application_namespace,
     identity_stripped,
 )
@@ -389,8 +390,9 @@ def _pod(
     image: ImagePin,
     content: k8s.core.v1.VolumeArgs,
     documents: Mapping[str, str],
+    constraints: Constraints,
 ) -> k8s.core.v1.PodSpecArgs:
-    """The pod: the server reading `content`, and for a git source the sync before it and beside it."""
+    """The pod, under `constraints`: the server reading `content`, and for a git source the sync before it and beside it."""
     probe = k8s.core.v1.HTTPGetActionArgs(path=HEALTH, port='http')
     mounts = [
         k8s.core.v1.VolumeMountArgs(name='config', mount_path=_SERVER_CONF_DIR, read_only=True),
@@ -435,7 +437,7 @@ def _pod(
             return k8s.core.v1.PodSpecArgs(
                 automount_service_account_token=False,
                 enable_service_links=False,
-                affinity=CLOUD_POD_AFFINITY,
+                **constraints.pod_fields(),
                 topology_spread_constraints=[
                     k8s.core.v1.TopologySpreadConstraintArgs(
                         max_skew=1,
@@ -456,7 +458,7 @@ def _pod(
             return k8s.core.v1.PodSpecArgs(
                 automount_service_account_token=False,
                 enable_service_links=False,
-                affinity=WORKER_POD_AFFINITY,
+                **constraints.pod_fields(),
                 security_context=_POD_SECURITY,
                 containers=[server],
                 volumes=volumes,
@@ -523,6 +525,7 @@ class StaticSite(Component, pulumi_type='kluster:apps:StaticSite'):
         super().__init__(name, opts=opts)
 
         self.namespace = application_namespace(f'{name}-namespace', name=name, opts=self.child_opts())
+        self.constraints = declared_constraints(exposure, self.namespace)
         # Read off the namespace, so each object in it waits for it.
         namespace = self.namespace.namespace.metadata.name
 
@@ -579,7 +582,14 @@ class StaticSite(Component, pulumi_type='kluster:apps:StaticSite'):
                 selector=k8s.meta.v1.LabelSelectorArgs(match_labels=labels),
                 template=k8s.core.v1.PodTemplateSpecArgs(
                     metadata=k8s.meta.v1.ObjectMetaArgs(labels=labels),
-                    spec=_pod(name, source, image=image, content=content, documents=documents),
+                    spec=_pod(
+                        name,
+                        source,
+                        image=image,
+                        content=content,
+                        documents=documents,
+                        constraints=self.constraints if self.nas is None else self.constraints & self.nas.constraints,
+                    ),
                 ),
             ),
             opts=self.child_opts(),

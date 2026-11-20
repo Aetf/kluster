@@ -43,7 +43,6 @@ from kluster.components.apps import Fronts
 from kluster.components.apps.matrix import NAMESPACE, OIDC, RECEIVE, Matrix, delegation, server_configuration
 from kluster.components.apps.storage import claim_name
 from kluster.components.cilium import InternetPoolMembers
-from kluster.conventions import CONTROL_PLANE_LABEL
 from kluster.conventions.backup import BACKED_NAMESPACES, PRECIOUS, BackupFamily
 from kluster.conventions.routes import PROXIED, REWRITE, Exposure, Gate, Held, Proxied, Route
 from kluster.lib.versions import ImagePin
@@ -172,18 +171,6 @@ def sealed_secret(monitor: Recorder, name: str) -> dict[str, Any]:
     return found
 
 
-def holds(expression: Mapping[str, Any], labels: Mapping[str, str]) -> bool:
-    """Whether `labels` satisfy one requirement of a Kubernetes node selector."""
-    present = expression['key'] in labels
-    match expression['operator']:
-        case 'Exists':
-            return present
-        case 'DoesNotExist':
-            return not present
-        case operator:
-            raise AssertionError(f'no reading of {operator!r} here')
-
-
 # -- the pod ---------------------------------------------------------------------
 
 
@@ -209,20 +196,8 @@ def test_the_namespace_enforces_restricted(homeserver: Recorder) -> None:
     assert namespace['metadata']['labels']['pod-security.kubernetes.io/enforce'] == 'restricted'
 
 
-def test_the_server_is_placed_on_the_cloud_pool_and_not_on_the_worker(homeserver: Recorder) -> None:
-    """A node carrying the control-plane label, which every cloud node does, is the only kind the pod may land on."""
-    (term,) = pod_of(homeserver)['spec']['affinity']['nodeAffinity']['requiredDuringSchedulingIgnoredDuringExecution'][
-        'nodeSelectorTerms'
-    ]
-    cloud_node = {CONTROL_PLANE_LABEL: '', 'kubernetes.io/hostname': 'cp-1'}
-    worker = {'kubernetes.io/hostname': 'worker'}
-
-    assert all(holds(expression, cloud_node) for expression in term['matchExpressions'])
-    assert not all(holds(expression, worker) for expression in term['matchExpressions'])
-
-
-def test_the_server_carries_cpu_and_memory_limits_on_the_cloud_pool(homeserver: Recorder) -> None:
-    """Etcd shares a cloud node's cores, so every workload there is held to both (declarative/workloads.md §1)."""
+def test_the_server_carries_cpu_and_memory_limits(homeserver: Recorder) -> None:
+    """The scheduler may place it on a cloud node, where etcd shares the cores, so it is held to both (declarative/workloads.md §1)."""
     resources = container_of(homeserver)['resources']
 
     assert {'cpu', 'memory'} <= resources['limits'].keys()
@@ -674,7 +649,7 @@ def test_the_receiver_runs_as_the_server_and_is_placed_as_the_server(homeserver:
     """What it extracts is the server's to write, and the claim binds where the server is placed.
 
     The claim binds to the node its first consumer is scheduled on, so the
-    receiver is a running pod with the server's affinity, never zero
+    receiver is a running pod with the server's constraints, never zero
     replicas.
     """
     server = pod_of(homeserver)['spec']
@@ -682,11 +657,12 @@ def test_the_receiver_runs_as_the_server_and_is_placed_as_the_server(homeserver:
 
     for field in ('runAsUser', 'runAsGroup'):
         assert receiver['securityContext'][field] == server['securityContext'][field]
-    assert receiver['affinity'] == server['affinity']
+    for key in ('affinity', 'tolerations', 'priorityClassName'):
+        assert receiver.get(key) == server.get(key), key
     assert the_one(receiving, DEPLOYMENT)['spec']['replicas'] == 1
 
 
-def test_the_receiver_meets_restricted_and_carries_limits_on_the_cloud_pool(receiving: Recorder) -> None:
+def test_the_receiver_meets_restricted_and_carries_limits(receiving: Recorder) -> None:
     spec = pod_of(receiving)['spec']
     context = spec['securityContext']
     container = container_of(receiving)

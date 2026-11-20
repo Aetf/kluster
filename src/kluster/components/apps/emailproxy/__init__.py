@@ -23,9 +23,10 @@ namespace is the legacy proxy's.
 **The token cache is the claim's**, backed up under `STANDARD`, so the account
 needs no fresh consent after a move or a restore. The proxy encrypts each token
 with the password the client presents. One process writes it, so a rollout
-stops the old pod before it starts the new one. The pod runs on the worker: its
-clients are at home, and a cloud node's resources are budgeted to the control
-plane and the internet-pool workloads (cluster/nodes.md §1.1).
+stops the old pod before it starts the new one. The pod declares nothing that
+holds it to a site, so the scheduler places it wherever it fits
+(`kluster.lib.k8s.UNCONSTRAINED`); its claim keeps it to the claim's node
+once bound, and it writes in the claim's blockio class.
 
 **Authorizing the account afresh**, when its refresh token is revoked, is a
 browser's. The proxy serves its authorization page in the pod on
@@ -55,13 +56,13 @@ import pulumi
 import pulumi_crds as crds
 import pulumi_kubernetes as k8s
 
-from kluster.components.apps import Exposed, Fronts, dialed_names, expose
+from kluster.components.apps import Exposed, Fronts, declared_constraints, dialed_names, expose
 from kluster.components.apps.storage import Claim, claim
 from kluster.conventions.backup import STANDARD
 from kluster.conventions.cluster import Transports
 from kluster.conventions.routes import Exposure, Port
 from kluster.lib import templates
-from kluster.lib.k8s import WORKER_POD_AFFINITY, ApplicationNamespace, PortedSecret, application_namespace, sealed_value
+from kluster.lib.k8s import ApplicationNamespace, PortedSecret, application_namespace, sealed_value
 from kluster.lib.versions import ImagePin
 from putils import Component
 
@@ -219,6 +220,7 @@ class EmailProxy(Component, pulumi_type='kluster:apps:EmailProxy'):
         super().__init__(name, opts=opts)
 
         self.namespace = application_namespace(f'{name}-namespace', name=NAMESPACE, opts=self.child_opts())
+        self.constraints = declared_constraints(exposure, self.namespace)
         # Read off the namespace, so each object in it waits for it; the claim
         # and the sealed configuration take the plain name, and wait for the
         # namespace through opts.
@@ -257,7 +259,7 @@ class EmailProxy(Component, pulumi_type='kluster:apps:EmailProxy'):
             namespace=NAMESPACE,
             uid=USER,
             writer_key=writer_key,
-            placement=WORKER_POD_AFFINITY,
+            constraints=self.constraints,
             opts=in_namespace,
         )
 
@@ -277,7 +279,9 @@ class EmailProxy(Component, pulumi_type='kluster:apps:EmailProxy'):
                 strategy=k8s.apps.v1.DeploymentStrategyArgs(type='Recreate'),
                 selector=k8s.meta.v1.LabelSelectorArgs(match_labels=dict(LABELS)),
                 template=k8s.core.v1.PodTemplateSpecArgs(
-                    metadata=k8s.meta.v1.ObjectMetaArgs(labels=dict(LABELS)),
+                    metadata=k8s.meta.v1.ObjectMetaArgs(
+                        labels=dict(LABELS), annotations=dict(self.cache.pod_annotations)
+                    ),
                     spec=self._pod(row, image=image, config_file=config_file),
                 ),
             ),
@@ -301,7 +305,7 @@ class EmailProxy(Component, pulumi_type='kluster:apps:EmailProxy'):
         return k8s.core.v1.PodSpecArgs(
             # It speaks IMAP to its clients and to Gmail alone, and never Kubernetes.
             automount_service_account_token=False,
-            affinity=self.cache.placement,
+            **self.cache.constraints.pod_fields(),
             security_context=k8s.core.v1.PodSecurityContextArgs(
                 run_as_non_root=True,
                 run_as_user=USER,

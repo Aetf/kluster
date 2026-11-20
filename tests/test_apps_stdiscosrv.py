@@ -25,7 +25,6 @@ from kluster.components.apps import stdiscosrv as stdiscosrv_app
 from kluster.components.apps.stdiscosrv import Stdiscosrv
 from kluster.components.certificates import ISSUER
 from kluster.components.cilium import InternetPoolMembers
-from kluster.conventions import CONTROL_PLANE_LABEL
 from kluster.conventions.cluster import Transports
 from kluster.conventions.routes import (
     REWRITE,
@@ -263,12 +262,8 @@ def test_the_server_runs_the_image_it_is_handed(declared: Recorder) -> None:
     assert server(declared)['image'] == str(IMAGE)
 
 
-def test_the_server_runs_on_the_cloud_pool_with_a_limit_of_cpu_and_of_memory(declared: Recorder) -> None:
-    """Devices find each other with the homelab down, and a pod on the cloud pool carries both limits (nodes.md §1.1)."""
-    spec = pod_of(declared)['spec']
-    (term,) = spec['affinity']['nodeAffinity']['requiredDuringSchedulingIgnoredDuringExecution']['nodeSelectorTerms']
-
-    assert term['matchExpressions'] == [{'key': CONTROL_PLANE_LABEL, 'operator': 'Exists'}]
+def test_the_server_carries_a_limit_of_cpu_and_of_memory(declared: Recorder) -> None:
+    """The scheduler may place it on a cloud node, where etcd shares the cores (declarative/workloads.md §1)."""
     assert server(declared)['resources']['limits'].keys() == {'cpu', 'memory'}
 
 

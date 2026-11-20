@@ -28,7 +28,7 @@ Every app is a `Component` subclass (putils, RFC-001) that owns:
 | Exposure | the component receives its application's `Exposure`, its row of `conventions.routes.EXPOSURES`, and makes one call, `expose(exposure)` on the application base (`kluster.components.apps`), with the Service its routes forward to, the pods its raw ports select and the fronts the `apps` program read (dns.md §5). Per `Route`, one `HTTPRoute` for each Gateway its fields set (`kluster.lib.k8s.route`); the gate is a field of its `internet` side and puts the ExternalAuth filter → Authelia on that route alone, so the home side is ungated (cluster-infra.md §2, which holds the gate's Cilium floor); every route that forwards a request without a gate removes the portal's identity headers from it; `media` on the row is the explicit "IoT may reach this" decision, recorded on the row rather than at a call site (jellyfin; physical/gateway.md §4.2). A `Passthrough` row is refused by name: Cilium drops a passthrough listener together with the zone's wildcard listener on the same port (cluster-infra.md §2). Per `PortRedirect`, one `HTTPRoute` for each Gateway it sets, whose one rule is a `308` to the same name at a raw port of the exposure, with no backend and no gate: how a client that names a pod's own TLS with no port reaches its raw port (the discovery server, [Aetf/kluster-ops#723](https://github.com/Aetf/kluster-ops/issues/723)). Per `Port`, one shape whatever its fronts: a LoadBalancer Service for each Gateway it sets, at that front's addresses, under the `Cluster` traffic policy every Service on a shared address takes (architecture.md §3.1) and with `allocateLoadBalancerNodePorts: false`, a home side at its Gateway's VIP under that Gateway's sharing key; the row's NLB listener, the site's forward and its pinhole are `physical`'s (physical.md §1); and one allow admitting the world on the port and its transports alone. A component merges unwired, and is wired into the `apps` program by its application's land (sources-of-truth.md §3), with the fronts and the `dns` stack's zone identifiers the program read | architecture.md §3.6, dns.md §5 |
 | DNS | `expose` declares, for each name the exposure publishes, one CNAME to the cluster anchor, proxied exactly where its row is, in the zone whose identifier the `dns` stack exports (dns.md §5); the split-horizon rewrite a row implies is applied by the `dns` stack from the same declaration, not by this one (dns.md §3) | dns.md |
 | Secrets | SealedSecret first choice, `template.data` pattern | cluster-infra.md §1.1 |
-| Placement | the constraints a node fact forces or the component declares: a device, by its request, and data on a node, by its volume, which the scheduler reads from the pod itself; and through `Constraints` (`kluster.lib.k8s`), each built from the declaration that implies it: the home site, for a component that declares it keeps working while the uplink is down, and for a pod that mounts the NAS, reaches a home address, leaves by bulk egress or answers on the worker's own address; an architecture, where an image lacks one. An audience on `lan` holds nothing. A pod its `Constraints` hold runs at the held priority, and one they hold at home stays on its node while the control plane cannot reach the node. Where a pod runs is the scheduler's, and an assumed placement lives in a plan alone (nodes.md §1.1) | architecture.md §1.1, §3.6 |
+| Placement | the constraints a node fact forces or the component declares, through `Constraints` (`kluster.lib.k8s`), each built from the declaration that implies it: the home site, for a component that declares it keeps working while the uplink is down, and for a pod that mounts the NAS, reaches a home address, answers on the worker's own address or leaves by bulk egress, which the application base derives from what the component declares: the requirement, the device its exposure relays to, the reaches its namespace declares, a raw port the site forwards to the worker (`SiteForward`) and bulk egress through `declared_constraints` (`kluster.components.apps`), which takes the exposure and the namespace themselves, and the NAS through the claim (`NasClaim.constraints`); an architecture, where an image lacks one; and a pod kept to one node by the device it requests, or by the volume it mounts once bound, stated with no affinity, since the scheduler reads the request and the volume from the pod itself (`kept`). An audience on `lan` holds nothing. A pod its `Constraints` hold or keep runs at the held priority, and one they hold at home stays on its node while the control plane cannot reach the node. Where a pod runs is the scheduler's, and an assumed placement lives in a plan alone (nodes.md §1.1) | architecture.md §1.1, §3.6 |
 | Network policy | per-namespace default-deny + explicit allows, part of the component. `application_namespace` declares two policies. The default-deny: every pod in the namespace admits the namespace's own pods and the `ingress` entity, the identity of what a Gateway's Envoy forwards, and no other peer but the pod's own node, which Cilium admits whatever the policies say; another peer is admitted by a policy the component declares beside it, as `expose` does for a raw port's clients. The default-deny is on ingress alone. The egress block: deny rules alone, with default-deny off, which deny every pod private space outside the pod, Service and `lan` pool ranges, a node's listeners and the kube-apiserver, and leave the rest of its egress open; a reach (`Reach`) and the namespace's API clients (`ApiClients`) are its exceptions, declared on the namespace as below. Restricting egress to an allow-list is the component's: its first egress rule switches its pods to default-deny on egress, so that policy carries the allow to the cluster's DNS too, and the block still applies beneath it, since a deny outranks every allow | architecture.md §4.1, cluster-infra.md §2 |
 | Monitoring | scrape/dashboard labels per the legacy conventions (`release`, `grafana_dashboard`) so VictoriaMetrics/grafana pick them up | cluster-infra.md §1 |
 
@@ -111,13 +111,14 @@ be preserved (see the worked example).
 
 **A claim's pod writes in its component's `blockio` class.** `local-path`
 is held to no site, and on a control plane the class caps what the pod
-writes to the disk etcd shares (nodes.md §1.2).
+writes to the disk etcd shares (nodes.md §1.2). The `Claim` carries the
+annotation its pod takes (`pod_annotations`); a mover carries none.
 
 **The calls.** The two calls are on the application base
 (`kluster.components.apps.storage`), and the class is a name:
 
 -   **`claim(resource_name, name, size, retention, *, namespace, uid,
-    writer_key, placement, generation=0, moving_to=None, stopped=None,
+    writer_key, constraints, generation=0, moving_to=None, stopped=None,
     storage_class=local-path, protect=False)`** is the one claim on a
     node, of `size` GiB. `retention` is a retention class (§3) or
     `off('<reason>')`, which emits the claim alone. `uid` is the user
@@ -125,13 +126,18 @@ writes to the disk etcd shares (nodes.md §1.2).
     that it reads and writes the data as the workload does.
     `writer_key` is the ciphertext of the namespace's sealed writer key
     as the program read it, which a stack that does not hold it stops at
-    (§3, `kluster.lib.k8s.sealed_ciphertext`). `placement` is every
-    node constraint the workload is under, stated as its pod's affinity,
-    a node a volume already holds the pod to included; the returned
-    `Claim` records it, the pod takes its affinity from there, and every
-    restic mover of the claim carries its node affinity, so that a mover
-    that reaches the claim before the pod binds it only on a node the
-    placement admits (storage.md §3.1). The
+    (§3, `kluster.lib.k8s.sealed_ciphertext`). `constraints` are the
+    workload's (`kluster.lib.k8s.Constraints`), the home site a NAS claim
+    beside it forces included (`NasClaim.constraints`); the returned
+    `Claim` records them with the claim's own hold composed in, which
+    keeps the pod to the claim's node at the held priority, the pod
+    states them from there, and every restic mover of the claim carries
+    their node affinity, so that a mover that reaches the claim before
+    the pod binds it only on a node the workload may run on (storage.md
+    §3.1). A workload mounts at most one backed claim, and none beside a
+    node volume's claim, since a mover could bind its claim on another
+    node than the pod's other claim; a backed claim handed such a claim's
+    constraints is refused. The
     generation, `moving_to` and `stopped`, the workload the copy's
     source is applied after, are how the claim moves (storage.md §3.1).
     `protect` protects the claim, for precious data and for a node
@@ -143,9 +149,10 @@ writes to the disk etcd shares (nodes.md §1.2).
     over `path` under the host's one export (`conventions.NAS_EXPORT`)
     and its claim, for data the cluster does not own. It takes no
     retention: the source's own regime is its safety net. The volume's
-    node affinity is the worker's, the one node that reaches the export
+    node affinity is the home site's, which alone reaches the export
     (physical/homelab-host.md §5), so every pod that mounts it lands
-    there. The export is one filesystem with no dataset boundary under
+    there, and states the home site itself (`NasClaim.constraints`), so
+    that it is held there as a pod at home is. The export is one filesystem with no dataset boundary under
     it, so a new path needs no census and no change to the export.
 -   **`cloud-block-<row>`**, `conventions.node_volume_class(row)`, is the
     class a node volume's data is claimed under: an ordinary `claim`
@@ -279,16 +286,21 @@ per-app number:
     filesystem between the app and its data.
 -   **CNPG-backed app (immich, splitpro, …)**: one call on the
     application base, **`database(resource_name, name, size, retention,
-    *, namespace, image, dbname, resources, node_affinity, writer_key,
+    *, namespace, image, dbname, resources, constraints, writer_key,
     drill, drill_image, generation=0, recovery=None, …)`**
     (`kluster.components.apps.database`), which emits the rest
     (storage.md §5):
     -   **One instance, and the call takes no count**: a CNPG `Cluster`
         with `instances: 1` and no standby, on a claim of `size` GiB the
         operator makes under `local-path` or a node volume's class,
-        placed in its site's pool by `node_affinity`, and protected.
-        A second instance would share the first's site, node and disk,
-        so the archive is the durability and the drill its proof. It
+        under its application's `constraints` with its claim's hold
+        composed in, in the claim's `blockio` class on `local-path`
+        (through `inheritedMetadata`), and protected. The drill's
+        recovered instance states the application's `constraints` and no
+        hold, since its claim is made fresh each run. A second instance
+        would cost the database's whole memory request again and add a
+        writer to the boot volume's cap wherever it lands, so the
+        archive is the durability and the drill its proof. It
         has no disruption budget, which over one instance would refuse
         every eviction and hang each drain of its node.
     -   **The archive**: the Barman Cloud plugin as its WAL archiver,
@@ -377,8 +389,8 @@ per-app number:
         Properties: **zero cross-system credentials** (the cluster
         pulls; blog CI holds nothing of the cluster's), push-to-live in
         ~a sync interval, rollback = git revert on the built branch, no
-        PVC (truly stateless → 2 replicas, one per cloud node by a
-        topology spread over the cloud pool, ingress HA for the blog). A
+        PVC (truly stateless → 2 replicas, one per node by a topology
+        spread over the nodes, wherever the scheduler places them). A
         private repo would work too (git-sync + a read-only deploy-key
         SealedSecret) — noted, not currently used.
     -   **NAS source** (the "doors" instance: `door-jiahui` on the
@@ -386,7 +398,7 @@ per-app number:
         instance): frozen low-traffic assets whose content must not
         live in a public repo (decided 2026-08-23). They are fixed
         assets, and fixed assets live on the NAS (§2): a read-only
-        `nas_claim`, one pod on the worker, ingress still via
+        `nas_claim`, one pod at the home site, ingress still via
         `internet-gw` (cloud → KubeSpan → homelab). Editing = dropping
         files on the existing NAS share — no deploy chain at all, which
         beats both a public repo and an inconvenient image/hostPath

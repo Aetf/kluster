@@ -6,22 +6,21 @@ the test's own too, with a schedule and counts no class of `conventions`
 carries, so a source scheduled from anything but the class it is handed reads
 differently. The writer keys are the test's own ciphertext, one per namespace.
 
-Each namespace's workload is a pod of the test's own, pinned by a placement of
-the test's own to one pool of the cluster's nodes, or to none, so that where a
-mover may run is read against where the workload may, both as the scheduler
-reads them.
+Each namespace's workload is a pod of the test's own, under constraints of the
+test's own that hold it to some of the cluster's nodes, or to none, and that
+state what its claim records for it, so that where a mover may run is read
+against where the workload may, both as the scheduler reads them against the
+nodes as they are labelled (`node_selection`).
 
 Literals written here are the upstream projects' contracts: VolSync's fields
 and the key its manual trigger is reported under, restic's environment, the
-Pulumi Kubernetes provider's await annotations, Cilium's policy fields, the
-label Talos gives a control plane node and the one Kubernetes gives every
-node its name in.
+Pulumi Kubernetes provider's await annotations, and Cilium's policy fields.
 """
 
 from __future__ import annotations
 
 import datetime as dt
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator
 from typing import Any, cast
 from urllib.parse import urlsplit
 
@@ -30,13 +29,21 @@ import pulumi_kubernetes as k8s
 import pytest
 import pytest_asyncio
 from mock_monitor import Recorder, declaring, run_with
+from node_selection import CLOUD, NODES, schedulable, selected
 from pulumi import runtime
 
 from kluster import conventions
-from kluster.components.apps.storage import claim, nas_claim, off
+from kluster.components.apps.storage import Off, claim, nas_claim, off
 from kluster.components.backup import s3_endpoint
 from kluster.conventions.backup import RetentionClass
-from kluster.lib.k8s import WORKER_AFFINITY_JSON
+from kluster.lib.k8s import (
+    UNCONSTRAINED,
+    BackedVolumeBesideNodeVolume,
+    Constraints,
+    TwoBackedVolumes,
+    at_home,
+    on_architecture,
+)
 
 CLAIM = 'kubernetes:core/v1:PersistentVolumeClaim'
 VOLUME = 'kubernetes:core/v1:PersistentVolume'
@@ -57,117 +64,23 @@ TARGET = {'example.com/disk': 'fast'}
 
 UID = 1234
 
-#: The label Talos gives a control plane node, and the one Kubernetes gives every node its name in.
-TALOS_CONTROL_PLANE_LABEL = 'node-role.kubernetes.io/control-plane'
-HOSTNAME_LABEL = 'kubernetes.io/hostname'
+#: A node volume's class, the first the table holds.
+NODE_VOLUME_CLASS = conventions.node_volume_class(next(iter(conventions.NODE_VOLUMES)))
 
-#: The cluster's nodes, labeled as Talos labels them: every cloud node is a control plane node, the worker is not.
-NODES: dict[str, dict[str, str]] = {
-    **{node: {HOSTNAME_LABEL: node, TALOS_CONTROL_PLANE_LABEL: ''} for node in conventions.CLOUD_NODES},
-    conventions.HOMELAB_NODE: {HOSTNAME_LABEL: conventions.HOMELAB_NODE},
-}
+#: The constraints of a workload the home site holds.
+HOME = at_home('mounts something only the home site reaches')
 
+#: The constraints of a workload held to the cloud's nodes by their architecture.
+ARM64 = on_architecture('arm64', 'runs an image built for arm64 alone')
 
-def pinned(operator: str) -> k8s.core.v1.AffinityArgs:
-    """A placement on the control plane nodes (`Exists`) or off them (`DoesNotExist`)."""
-    return k8s.core.v1.AffinityArgs(
-        node_affinity=k8s.core.v1.NodeAffinityArgs(
-            required_during_scheduling_ignored_during_execution=k8s.core.v1.NodeSelectorArgs(
-                node_selector_terms=[
-                    k8s.core.v1.NodeSelectorTermArgs(
-                        match_expressions=[
-                            k8s.core.v1.NodeSelectorRequirementArgs(key=TALOS_CONTROL_PLANE_LABEL, operator=operator)
-                        ]
-                    )
-                ]
-            )
-        )
-    )
-
-
-CLOUD = pinned('Exists')
-WORKER = pinned('DoesNotExist')
-
-
-def requirement(key: str, *values: str) -> k8s.core.v1.NodeSelectorRequirementArgs:
-    return k8s.core.v1.NodeSelectorRequirementArgs(key=key, operator='In', values=list(values))
-
-
-#: Two terms, one on a node's label and one on its name, which admit the first
-#: cloud node and the worker, and a preference among them for the worker.
-TWO_TERMS = k8s.core.v1.AffinityArgs(
-    node_affinity=k8s.core.v1.NodeAffinityArgs(
-        required_during_scheduling_ignored_during_execution=k8s.core.v1.NodeSelectorArgs(
-            node_selector_terms=[
-                k8s.core.v1.NodeSelectorTermArgs(
-                    match_expressions=[requirement(HOSTNAME_LABEL, conventions.CLOUD_NODES[0])]
-                ),
-                k8s.core.v1.NodeSelectorTermArgs(match_fields=[requirement('metadata.name', conventions.HOMELAB_NODE)]),
-            ]
-        ),
-        preferred_during_scheduling_ignored_during_execution=[
-            k8s.core.v1.PreferredSchedulingTermArgs(
-                weight=10,
-                preference=k8s.core.v1.NodeSelectorTermArgs(
-                    match_expressions=[requirement(HOSTNAME_LABEL, conventions.HOMELAB_NODE)]
-                ),
-            )
-        ],
-    )
-)
-
-#: A placement stated against other pods: none of the workload's replicas beside another.
-APART = k8s.core.v1.AffinityArgs(
-    pod_anti_affinity=k8s.core.v1.PodAntiAffinityArgs(
-        required_during_scheduling_ignored_during_execution=[
-            k8s.core.v1.PodAffinityTermArgs(topology_key=HOSTNAME_LABEL)
-        ]
-    )
-)
-
-#: A placement on one node, which a pod mounting more than one backed claim takes.
-ONE_NODE = k8s.core.v1.AffinityArgs(
-    node_affinity=k8s.core.v1.NodeAffinityArgs(
-        required_during_scheduling_ignored_during_execution=k8s.core.v1.NodeSelectorArgs(
-            node_selector_terms=[
-                k8s.core.v1.NodeSelectorTermArgs(
-                    match_expressions=[requirement(HOSTNAME_LABEL, conventions.CLOUD_NODES[0])]
-                )
-            ]
-        )
-    )
-)
-
-#: Preferences alone, of two weights: the heavier on a node's name, the lighter on a label.
-PREFERS = k8s.core.v1.AffinityArgs(
-    node_affinity=k8s.core.v1.NodeAffinityArgs(
-        preferred_during_scheduling_ignored_during_execution=[
-            k8s.core.v1.PreferredSchedulingTermArgs(
-                weight=90,
-                preference=k8s.core.v1.NodeSelectorTermArgs(
-                    match_fields=[requirement('metadata.name', conventions.CLOUD_NODES[1])]
-                ),
-            ),
-            k8s.core.v1.PreferredSchedulingTermArgs(
-                weight=10,
-                preference=k8s.core.v1.NodeSelectorTermArgs(
-                    match_expressions=[requirement(HOSTNAME_LABEL, conventions.HOMELAB_NODE)]
-                ),
-            ),
-        ]
-    )
-)
-
-#: The placement each namespace's workload states.
-PLACEMENTS: dict[str, k8s.core.v1.AffinityArgs] = {
-    'notes': ONE_NODE,
-    'models': WORKER,
-    'copying': WORKER,
-    'moved': CLOUD,
-    'cache': WORKER,
-    'anywhere': k8s.core.v1.AffinityArgs(),
-    'two': TWO_TERMS,
-    'prefers': PREFERS,
+#: The constraints each namespace's workload states, before its claims' holds.
+CONSTRAINTS: dict[str, Constraints] = {
+    'notes': ARM64,
+    'models': HOME,
+    'copying': HOME,
+    'moved': ARM64,
+    'cache': HOME,
+    'anywhere': UNCONSTRAINED,
 }
 
 
@@ -189,15 +102,8 @@ async def declared() -> Recorder:
     monitor = await run_with(Generating(), stack='apps')
     async with declaring():
         workload = k8s.core.v1.ConfigMap('workload')
-        for namespace, placement in PLACEMENTS.items():
-            _ = k8s.core.v1.Pod(
-                f'{namespace}-workload',
-                metadata=k8s.meta.v1.ObjectMetaArgs(name='workload', namespace=namespace),
-                spec=k8s.core.v1.PodSpecArgs(
-                    affinity=placement, containers=[k8s.core.v1.ContainerArgs(name='app', image='example.com/app')]
-                ),
-            )
-        # Two backed claims of one pod, on one node, the second handed the first's placement.
+        # Two backed claims in one namespace, of two workloads, each handed
+        # its own workload's constraints.
         notes = claim(
             'notes',
             'data',
@@ -206,7 +112,7 @@ async def declared() -> Recorder:
             namespace='notes',
             uid=UID,
             writer_key=writer_key('notes'),
-            placement=PLACEMENTS['notes'],
+            constraints=CONSTRAINTS['notes'],
         )
         _ = claim(
             'notes-index',
@@ -216,9 +122,9 @@ async def declared() -> Recorder:
             namespace='notes',
             uid=UID,
             writer_key=writer_key('notes'),
-            placement=notes.placement,
+            constraints=CONSTRAINTS['notes'],
         )
-        _ = claim(
+        models = claim(
             'models',
             'models',
             11,
@@ -226,10 +132,11 @@ async def declared() -> Recorder:
             namespace='models',
             uid=UID,
             writer_key=writer_key('models'),
-            placement=PLACEMENTS['models'],
+            constraints=CONSTRAINTS['models'],
+            storage_class=NODE_VOLUME_CLASS,
         )
         # The copy of a backed claim, and the finish of the same move.
-        _ = claim(
+        copying = claim(
             'copying',
             'data',
             3,
@@ -237,13 +144,13 @@ async def declared() -> Recorder:
             namespace='copying',
             uid=UID,
             writer_key=writer_key('copying'),
-            placement=PLACEMENTS['copying'],
+            constraints=CONSTRAINTS['copying'],
             generation=1,
             moving_to=TARGET,
             stopped=workload,
             protect=True,
         )
-        _ = claim(
+        moved = claim(
             'moved',
             'data',
             3,
@@ -251,11 +158,11 @@ async def declared() -> Recorder:
             namespace='moved',
             uid=UID,
             writer_key=writer_key('moved'),
-            placement=PLACEMENTS['moved'],
+            constraints=CONSTRAINTS['moved'],
             generation=1,
         )
         # The copy of a claim that nothing backs up.
-        _ = claim(
+        cache = claim(
             'cache',
             'cache',
             50,
@@ -263,13 +170,13 @@ async def declared() -> Recorder:
             namespace='cache',
             uid=UID,
             writer_key=writer_key('cache'),
-            placement=PLACEMENTS['cache'],
+            constraints=CONSTRAINTS['cache'],
             generation=2,
             moving_to=TARGET,
             stopped=workload,
         )
-        # A backed claim whose workload states no placement.
-        _ = claim(
+        # A backed claim whose workload states no constraint.
+        anywhere = claim(
             'anywhere',
             'data',
             1,
@@ -277,35 +184,40 @@ async def declared() -> Recorder:
             namespace='anywhere',
             uid=UID,
             writer_key=writer_key('anywhere'),
-            placement=PLACEMENTS['anywhere'],
+            constraints=CONSTRAINTS['anywhere'],
         )
-        # A backed claim whose workload's placement has two terms and a preference.
-        _ = claim(
-            'two', 'data', 1, WEEKDAY, namespace='two', uid=UID, writer_key=writer_key('two'), placement=TWO_TERMS
+        # Each workload states what its claims record.
+        mounted = {
+            'notes': (notes,),
+            'models': (models,),
+            'copying': (copying,),
+            'moved': (moved,),
+            'cache': (cache,),
+            'anywhere': (anywhere,),
+        }
+        for namespace, claims in mounted.items():
+            constraints = UNCONSTRAINED
+            annotations: dict[str, str] = {}
+            for it in claims:
+                constraints &= it.constraints
+                annotations |= it.pod_annotations
+            _ = k8s.core.v1.Pod(
+                f'{namespace}-workload',
+                metadata=k8s.meta.v1.ObjectMetaArgs(name='workload', namespace=namespace, annotations=annotations),
+                spec=k8s.core.v1.PodSpecArgs(
+                    **constraints.pod_fields(),
+                    containers=[k8s.core.v1.ContainerArgs(name='app', image='example.com/app')],
+                ),
+            )
+        library = nas_claim('library', 'library', 'Photos/Library', namespace='photos', read_only=False)
+        _ = k8s.core.v1.Pod(
+            'photos-workload',
+            metadata=k8s.meta.v1.ObjectMetaArgs(name='workload', namespace='photos'),
+            spec=k8s.core.v1.PodSpecArgs(
+                **library.constraints.pod_fields(),
+                containers=[k8s.core.v1.ContainerArgs(name='app', image='example.com/app')],
+            ),
         )
-        # A backed claim whose workload's placement states preferences alone.
-        _ = claim(
-            'prefers',
-            'data',
-            1,
-            WEEKDAY,
-            namespace='prefers',
-            uid=UID,
-            writer_key=writer_key('prefers'),
-            placement=PREFERS,
-        )
-        # A claim nothing backs up, whose workload keeps apart from its own replicas.
-        _ = claim(
-            'apart',
-            'data',
-            1,
-            off('rebuilt on start'),
-            namespace='apart',
-            uid=UID,
-            writer_key=writer_key('apart'),
-            placement=APART,
-        )
-        _ = nas_claim('library', 'library', 'Photos/Library', namespace='photos', read_only=False)
     return monitor
 
 
@@ -393,7 +305,7 @@ def test_the_repository_secret_carries_the_namespaces_writer_key_and_a_password_
 def test_a_claim_of_less_than_a_gib_is_refused() -> None:
     with pytest.raises(ValueError, match='1 GiB'):
         _ = claim(
-            'empty', 'data', 0, WEEKDAY, namespace='empty', uid=UID, writer_key=writer_key('empty'), placement=WORKER
+            'empty', 'data', 0, WEEKDAY, namespace='empty', uid=UID, writer_key=writer_key('empty'), constraints=HOME
         )
 
 
@@ -419,140 +331,111 @@ def test_a_writer_key_of_other_fields_is_refused() -> None:
             namespace='bad',
             uid=UID,
             writer_key={'AWS_ACCESS_KEY_ID': 'only-half'},
-            placement=WORKER,
+            constraints=HOME,
         )
 
 
-def schedulable(spec: Mapping[str, Any]) -> set[str]:
-    """The nodes a pod of `spec` may be scheduled to, by its affinity, as the scheduler reads it.
-
-    Kubernetes' rule for the required part: at least one `nodeSelectorTerm` has
-    every requirement hold, a field requirement read against the node's
-    `metadata.name`, and a term with no requirement matches no node; a pod with
-    no required node affinity may go to any node.
-    """
-    required = spec.get('affinity', {}).get('nodeAffinity', {}).get('requiredDuringSchedulingIgnoredDuringExecution')
-    if required is None:
-        return set(NODES)
-    return {node for node in NODES if any(admits(term, node) for term in required['nodeSelectorTerms'])}
+def pods(monitor: Recorder) -> dict[str, dict[str, Any]]:
+    """Each namespace's workload, by its namespace."""
+    return {it.inputs['metadata']['namespace']: it.inputs for it in monitor.of_type('kubernetes:core/v1:Pod')}
 
 
-def holds(expression: Mapping[str, Any], labels: Mapping[str, str]) -> bool:
-    """Whether one node selector requirement holds of `labels`."""
-    key, operator, values = expression['key'], expression['operator'], expression.get('values', [])
-    match operator:
-        case 'In':
-            return labels.get(key) in values
-        case 'NotIn':
-            return labels.get(key) not in values
-        case 'Exists':
-            return key in labels
-        case 'DoesNotExist':
-            return key not in labels
-        case _:
-            raise AssertionError(f'no reading of {operator!r} here')
-
-
-def admits(term: Mapping[str, Any], node: str) -> bool:
-    """Whether a node selector term matches `node`: its label requirements and its field requirements all hold."""
-    expressions, fields = term.get('matchExpressions', []), term.get('matchFields', [])
-    if not expressions and not fields:
-        return False
-    return all(holds(it, NODES[node]) for it in expressions) and all(
-        holds(it, {'metadata.name': node}) for it in fields
-    )
-
-
-def preferred(spec: Mapping[str, Any]) -> set[str]:
-    """The nodes the scheduler picks among those `spec` may go to, by its preferred node affinity alone.
-
-    Each preferred term a node matches adds the term's weight to the node's
-    score, and the nodes of the highest score are the ones it picks.
-    """
-    terms = spec.get('affinity', {}).get('nodeAffinity', {}).get('preferredDuringSchedulingIgnoredDuringExecution', [])
-    scores = {node: sum(it['weight'] for it in terms if admits(it['preference'], node)) for node in schedulable(spec)}
-    best = max(scores.values(), default=0)
-    return {node for node, score in scores.items() if score == best}
-
-
-def test_a_restic_mover_runs_only_where_its_claims_workload_can(declared: Recorder) -> None:
+def test_a_restic_mover_runs_exactly_where_its_claims_workload_can(declared: Recorder) -> None:
     """Whichever of the two reaches a claim that is not yet bound binds it on a node the other can run on.
 
     A `local-path` claim binds where its first consumer is scheduled, and
     VolSync gives a mover of a claim no running pod uses no node selection of
     its own, so the affinity the source states is all that holds its mover.
     """
-    pods = {it.inputs['metadata']['namespace']: it.inputs['spec'] for it in declared.of_type('kubernetes:core/v1:Pod')}
+    workloads = pods(declared)
     restic = [(it.name, it.inputs) for it in declared.of_type(SOURCE) if 'restic' in it.inputs['spec']]
 
-    assert {source['metadata']['namespace'] for _, source in restic} == set(PLACEMENTS) - {'models', 'cache'}
+    assert {source['metadata']['namespace'] for _, source in restic} == {'notes', 'copying', 'moved', 'anywhere'}
     for name, source in restic:
-        mover = {'affinity': source['spec']['restic'].get('moverAffinity', {})}
-        pod = pods[source['metadata']['namespace']]
+        mover = {'affinity': source['spec']['restic'].get('moverAffinity')}
+        pod = workloads[source['metadata']['namespace']]['spec']
         assert schedulable(mover) == schedulable(pod), name
-        assert preferred(mover) == preferred(pod), name
-    # The pools are what the placements pin to: each a proper part of the cluster.
-    assert schedulable(pods['notes']) == {conventions.CLOUD_NODES[0]}
-    assert schedulable(pods['moved']) == set(conventions.CLOUD_NODES)
-    assert schedulable(pods['copying']) == {conventions.HOMELAB_NODE}
-    assert schedulable(pods['anywhere']) == set(NODES)
-    # Two terms admit what each admits, and the preference weighs the worker above the cloud node.
-    assert schedulable(pods['two']) == {conventions.CLOUD_NODES[0], conventions.HOMELAB_NODE}
-    assert preferred(pods['two']) == {conventions.HOMELAB_NODE}
-    # Preferences alone weigh every node, the heavier term's above the lighter's.
-    assert preferred(pods['prefers']) == {conventions.CLOUD_NODES[1]}
+    # The constraints are each a proper part of the cluster, or none of it.
+    assert schedulable(workloads['moved']['spec']) == CLOUD
+    assert schedulable(workloads['copying']['spec']) == set(NODES) - CLOUD
+    assert schedulable(workloads['anywhere']['spec']) == set(NODES)
 
 
-@pytest.mark.parametrize(
-    'placement',
-    [
-        k8s.core.v1.AffinityArgs(
-            node_affinity=CLOUD.node_affinity,
-            pod_anti_affinity=k8s.core.v1.PodAntiAffinityArgs(
-                required_during_scheduling_ignored_during_execution=[
-                    k8s.core.v1.PodAffinityTermArgs(topology_key=HOSTNAME_LABEL)
-                ]
-            ),
-        ),
-        k8s.core.v1.AffinityArgs(
-            pod_affinity=k8s.core.v1.PodAffinityArgs(
-                required_during_scheduling_ignored_during_execution=[
-                    k8s.core.v1.PodAffinityTermArgs(topology_key=HOSTNAME_LABEL)
-                ]
-            )
-        ),
-    ],
-    ids=['anti-affinity', 'affinity'],
-)
-def test_a_placement_stated_against_other_pods_is_refused(placement: k8s.core.v1.AffinityArgs) -> None:
-    """The mover is not those pods, so it could bind the claim where the workload could then never run."""
-    with pytest.raises(ValueError, match='pod affinity'):
-        _ = claim(
-            'beside',
-            'data',
-            1,
-            WEEKDAY,
-            namespace='beside',
-            uid=UID,
-            writer_key=writer_key('beside'),
-            placement=placement,
-        )
+def test_an_unconstrained_workloads_mover_states_no_affinity(declared: Recorder) -> None:
+    (source,) = [it for it in in_namespace(declared, SOURCE, 'anywhere') if 'restic' in it['spec']]
+
+    assert 'moverAffinity' not in source['spec']['restic']
+
+
+@pytest.mark.parametrize('namespace', ['notes', 'models', 'copying', 'moved', 'cache', 'anywhere'])
+def test_a_claims_pod_is_held_where_its_claim_keeps_it_with_no_affinity_of_its_own(
+    declared: Recorder, namespace: str
+) -> None:
+    """A bound claim keeps its pod to its node, which the scheduler reads from the volume: the pod outranks free ones.
+
+    The claim states no affinity for it, so the pod admits what its
+    workload's constraints admit and no fewer nodes.
+    """
+    spec = pods(declared)[namespace]['spec']
+
+    assert spec['priorityClassName'] == conventions.HELD_PRIORITY_CLASS
+    assert schedulable(spec) == schedulable(CONSTRAINTS[namespace].pod_fields_json())
+
+
+@pytest.mark.parametrize('namespace', ['notes', 'copying', 'moved', 'cache', 'anywhere'])
+def test_a_local_path_claims_pod_writes_in_the_class_that_caps_the_disk_etcd_shares_and_its_movers_in_none(
+    declared: Recorder, namespace: str
+) -> None:
+    """The class caps what the pod writes where its node is a control plane; VolSync gives a mover labels alone."""
+    annotations = pods(declared)[namespace]['metadata']['annotations']
+
+    assert annotations[conventions.BLOCKIO_POD_ANNOTATION] == conventions.ETCD_DISK_WRITER.name
+    for name, mover in movers(declared, namespace):
+        assert conventions.ETCD_DISK_WRITER.name not in str(mover), name
+
+
+def test_a_node_volumes_pod_writes_in_no_class(declared: Recorder) -> None:
+    """A node volume is a disk of its own, apart from the one etcd shares."""
+    assert conventions.BLOCKIO_POD_ANNOTATION not in pods(declared)['models']['metadata'].get('annotations', {})
 
 
 @pytest.mark.asyncio
-async def test_a_placement_known_only_at_apply_is_refused() -> None:
-    """The mover's affinity is built from the placement's terms, which an output does not hold yet."""
-    placement = k8s.core.v1.AffinityArgs(node_affinity=pulumi.Output.from_input(CLOUD.node_affinity))
-    with pytest.raises(ValueError, match='as a value'):
-        _ = claim(
-            'later', 'data', 1, WEEKDAY, namespace='later', uid=UID, writer_key=writer_key('later'), placement=placement
+@pytest.mark.parametrize(
+    ('first_class', 'first_retention', 'refusal'),
+    [
+        (conventions.SC_LOCAL_PATH, WEEKDAY, TwoBackedVolumes),
+        (NODE_VOLUME_CLASS, off('a cache'), BackedVolumeBesideNodeVolume),
+    ],
+    ids=['beside a backed claim', 'beside a node volume'],
+)
+async def test_a_backed_claim_beside_a_claim_its_mover_could_bind_it_away_from_is_refused(
+    first_class: str, first_retention: RetentionClass | Off, refusal: type[ValueError]
+) -> None:
+    """The mover binds the backed claim apart from the first claim, so the two could bind on two nodes, and the pod run on neither."""
+    _ = await run_with(Recorder(), stack='apps')
+    async with declaring():
+        first = claim(
+            'pair',
+            'one',
+            1,
+            first_retention,
+            namespace='pair',
+            uid=UID,
+            writer_key=writer_key('pair'),
+            constraints=UNCONSTRAINED,
+            storage_class=first_class,
         )
-
-
-def test_a_claim_with_no_mover_takes_a_placement_stated_against_other_pods(declared: Recorder) -> None:
-    """The refusal is the mover's, and a claim nothing backs up has none: its claim is declared alone."""
-    assert names(declared, CLAIM, 'apart') == ['data-g0']
-    assert in_namespace(declared, SOURCE, 'apart') == []
+        with pytest.raises(refusal):
+            _ = claim(
+                'pair-two',
+                'two',
+                1,
+                WEEKDAY,
+                namespace='pair',
+                uid=UID,
+                writer_key=writer_key('pair'),
+                constraints=first.constraints,
+            )
 
 
 # -- a move -------------------------------------------------------------------
@@ -594,7 +477,7 @@ def test_a_copy_is_ordered_after_a_workload_it_is_handed() -> None:
             namespace='early',
             uid=UID,
             writer_key=writer_key('early'),
-            placement=WORKER,
+            constraints=HOME,
             generation=1,
             moving_to=TARGET,
         )
@@ -611,7 +494,7 @@ def test_a_copy_names_where_it_moves_to() -> None:
             namespace='nowhere',
             uid=UID,
             writer_key=writer_key('nowhere'),
-            placement=WORKER,
+            constraints=HOME,
             generation=1,
             moving_to={},
             stopped=stopped,
@@ -630,7 +513,7 @@ def test_a_copy_of_a_name_too_long_for_the_destinations_service_is_refused() -> 
             namespace='long',
             uid=UID,
             writer_key=writer_key('long'),
-            placement=WORKER,
+            constraints=HOME,
             generation=1,
             moving_to=TARGET,
             stopped=stopped,
@@ -647,7 +530,7 @@ def test_a_copy_raises_the_generation() -> None:
             namespace='flat',
             uid=UID,
             writer_key=writer_key('flat'),
-            placement=WORKER,
+            constraints=HOME,
             moving_to=TARGET,
         )
 
@@ -710,8 +593,6 @@ def test_every_mover_states_its_security_context_and_resources_and_copies_direct
             'notes-restic-g0',
             'notes-index-restic-g0',
             'anywhere-restic-g0',
-            'two-restic-g0',
-            'prefers-restic-g0',
             'moved-restic-g1',
             'copying-restic-g0',
             'copying-move-g1',
@@ -792,13 +673,15 @@ def test_a_restic_mover_reaches_the_bucket_and_a_copy_alone_does_not(declared: R
 # -- the NAS ------------------------------------------------------------------
 
 
-def test_a_nas_claim_is_scheduled_to_the_worker_alone(declared: Recorder) -> None:
-    """The volume's node affinity is the worker's, which every pod that mounts it is placed by."""
+def test_a_nas_claims_pod_admits_exactly_the_nodes_its_volume_does_and_those_are_at_home(declared: Recorder) -> None:
+    """The export is reachable from home alone; the pod states what the volume's node affinity forces, and is held there."""
     (volume,) = [it.inputs for it in declared.of_type(VOLUME)]
+    at_volume = selected(volume['spec']['nodeAffinity']['required']['nodeSelectorTerms'][0], NODES)
+    spec = pods(declared)['photos']['spec']
 
-    assert volume['spec']['nodeAffinity'] == {
-        'required': WORKER_AFFINITY_JSON['nodeAffinity']['requiredDuringSchedulingIgnoredDuringExecution']
-    }
+    assert at_volume == set(NODES) - CLOUD
+    assert schedulable(spec) == at_volume
+    assert spec['priorityClassName'] == conventions.HELD_PRIORITY_CLASS
 
 
 def test_a_nas_claim_is_its_volume_under_the_export_bound_to_it_alone(declared: Recorder) -> None:

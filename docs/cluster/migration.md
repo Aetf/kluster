@@ -275,8 +275,8 @@ spends its way back (rfc-008 §5.9).
 
 -   **Wave A1 — exim and authelia.** **exim moves at the head of Wave
     A**: authelia sends its notifications through it, as immich and
-    Grafana do later. It runs on the worker, the architecture its legacy
-    image is built for (workloads.md §5); its DKIM key is in the `apps`
+    Grafana do later. It is held to amd64 nodes, the architecture its
+    legacy image is built for (workloads.md §1); its DKIM key is in the `apps`
     stack's config before the wave, by
     `credentials derived dkim-exim record`, and once `apps` is up,
     sources-of-truth.md §X, run against the new cluster's `dkim-exim`
@@ -291,7 +291,7 @@ spends its way back (rfc-008 §5.9).
     which deletes the receiver (rfc-008 §5.2). The authentication canary
     ships with it, in a namespace of its own.
 -   **Wave A2 — blog, splitpro, matrix, syncthing, stdiscosrv.** This
-    wave reaches the worker as well as the cloud pool. **blog/static
+    wave reaches the home site as well as the cloud nodes. **blog/static
     sites** (prerequisite: blog CI publishes the built branch; cluster
     side is static server + git-sync, workloads.md §4 — the rsync
     `deploy:` config and the SSH pinhole retire with it) → splitpro
@@ -304,12 +304,13 @@ spends its way back (rfc-008 §5.9).
     which deletes the receiver, rfc-008 §5.3; its `.well-known`
     delegation rides the blog instance, workloads.md §4, so it is
     already serving by this point) →
-    **syncthing, with the WebDAV server beside it, on the worker**: no
+    **syncthing, with the WebDAV server beside it, at the home site**,
+    which alone reaches the NAS: no
     cloud replica moves, since its one role was an always-reachable
     port for roaming devices, and the balancer's peer port now reaches
     the NAS instance, which keeps its own device identity; so the NAS
     instance and the WebDAV server move here rather than in Wave C →
-    **stdiscosrv** on `syncapi`, on the cloud pool, at a raw port on
+    **stdiscosrv** on `syncapi`, at a raw port on
     8443, which a redirect on 443 sends each device to, so no device's
     discovery address changes
     ([Aetf/kluster-ops#723](https://github.com/Aetf/kluster-ops/issues/723)).
@@ -591,7 +592,7 @@ The history's earliest sample, which the rebuild's baseline reads
 | Kind | Technique |
 | --- | --- |
 | CNPG databases | recovery from the legacy object store, not dump/restore reinvention. The legacy databases archive to Google Cloud Storage, one bucket per database, and the new cluster bootstraps from it through the barman plugin once, at the land, with the legacy credential ported; it then archives to the backup bucket, under a server name carrying a generation, so that a land retried after a revert archives to a path of its own. The drill that stands behind this path is the legacy cluster's: its quarterly `immich-restore-drill` CronJob recovers a scratch cluster (`immich-db-restore`) from the same barman backup, on the legacy operator and against the legacy bucket. That is evidence the backup restores, not that a restore has run on this cluster — none has (operations.md §4) |
-| Legacy local-path PVCs | a claim bound for the worker is copied onto the NAS on the host, where the data already is, and read from there by a pod that mounts both; a claim bound for the cloud pool is streamed with `tar` through the new cluster's API server into a pod that mounts the target claim (`kubectl exec -i … tar -x`), since a Talos node runs no SSH server (VolSync takes over *after* landing) |
+| Legacy local-path PVCs | a legacy claim on the homelab host is copied onto the NAS on the host, where the data already is, and read from there by a pod that mounts both, which binds the new claim at the home site; a legacy claim on the VPS is streamed with `tar` through the new cluster's API server into a pod that mounts the target claim (`kubectl exec -i … tar -x`), since a Talos node runs no SSH server (VolSync takes over *after* landing) |
 | NAS-backed data | **no movement** — PVs re-point at the same datasets; the NAS backup regime is untouched |
 | Legacy shared-JuiceFS data | **the cloud syncthing replica goes**, uncopied: the NAS instance holds the full set and serves roaming devices through the balancer. **Two copies are made**, each from the legacy pod's mount: the WebDAV server's own files (Wave A2) and spoolman's single database file (Wave B) |
 | hath cache | copied warm ahead of its land, then the final delta + client state at the land (preserved, not backed — workloads.md §2) |
