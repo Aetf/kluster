@@ -38,11 +38,13 @@ import pytest
 import pytest_asyncio
 from fake_b2_shell import AUTHORIZATION_V4, BUCKET, FAKE_KEY
 from k8s_base_installation import Run, applied
+from k8s_quantity import MIB, quantity
 
 from kluster import conventions
 from kluster.components.backup.etcd import (
     VERIFY_IDENTITY_DIR,
     VERIFY_KEY,
+    VERIFY_PROCESS_MEMORY_MIB,
     VERIFY_SHELL,
     VERIFY_SHELL_CONFIGMAP,
     VERIFY_SHELL_DIR,
@@ -111,11 +113,6 @@ def _volume(pod: Mapping[str, Any], container: Mapping[str, Any], path: str) -> 
     (mount,) = [it for it in container['volumeMounts'] if it['mountPath'] == path]
     (volume,) = [it for it in pod['volumes'] if it['name'] == mount['name']]
     return volume
-
-
-def _mib(quantity: str) -> int:
-    assert quantity.endswith('Mi'), quantity
-    return int(quantity.removesuffix('Mi'))
 
 
 # -- The declaration -----------------------------------------------------------------------
@@ -192,18 +189,35 @@ def test_the_verify_runs_off_the_control_planes(applied: Run) -> None:
 def test_the_working_directory_is_in_memory_and_fills_before_the_pods_memory_does(applied: Run) -> None:
     """The plaintext keyspace never reaches a disk, and a database that outgrows the directory fails naming the directory.
 
-    A memory-backed directory is charged to the pod, so a limit at or under
-    its bound would end an outgrown run as an out-of-memory kill, which names
-    nothing, rather than as `no space left on device`.
+    A memory-backed directory is charged to the pod, so a limit under the
+    directories' bounds and the processes' share would end an outgrown run
+    as an out-of-memory kill, which names nothing, rather than as
+    `no space left on device`.
     """
     pod = _pod(applied)
     container = _container(applied)
     work = _volume(pod, container, _environment(container)['WORK'])['emptyDir']
-    resources = container['resources']
+    in_memory = sum(
+        quantity(it['emptyDir']['sizeLimit'])
+        for it in pod['volumes']
+        if it.get('emptyDir', {}).get('medium') == 'Memory'
+    )
 
     assert work['medium'] == 'Memory'
-    assert _mib(work['sizeLimit']) < _mib(resources['limits']['memory'])
-    assert _mib(resources['requests']['memory']) <= _mib(resources['limits']['memory'])
+    assert quantity(container['resources']['limits']['memory']) >= in_memory + VERIFY_PROCESS_MEMORY_MIB * MIB
+
+
+def test_every_container_requests_and_is_limited_in_cpu_and_memory(applied: Run) -> None:
+    """The pod may be scheduled to the cloud pool, where etcd shares the cores (workloads.md §1)."""
+    pod = _pod(applied)
+    containers = [*pod.get('initContainers', []), *pod['containers']]
+
+    assert containers
+    for container in containers:
+        resources = container['resources']
+        for resource in ('cpu', 'memory'):
+            request, limit = resources['requests'][resource], resources['limits'][resource]
+            assert quantity(request) <= quantity(limit), (container['name'], resource)
 
 
 # -- The script, run -----------------------------------------------------------------------

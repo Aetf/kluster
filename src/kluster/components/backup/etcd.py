@@ -40,7 +40,11 @@ the run's user cannot write, so the working directory is an empty directory of
 the pod's own. It is held in memory, since a control plane's disk is etcd's own
 (cluster/nodes.md §1.2), and bounded (`WORK_SIZE`), since a run holds two copies
 of the database at once. The root filesystem is read-only: the run writes only
-there and to the Talos client's own directory.
+there and to the Talos client's own directory. The pod carries CPU and memory
+limits, as anything the cloud pool may hold does (declarative/workloads.md §1):
+its memory is the directory's bound and the processes' share above it
+(`MEMORY`), since the directory is charged to the pod, and its CPU a quarter of
+a core, which leaves the control plane's cores to etcd.
 
 **The restore-verify reads the newest snapshot back daily**
 (`EtcdRestoreVerify`, its row `conventions.schedule.ETCD_RESTORE_VERIFY`). A
@@ -67,7 +71,8 @@ holds, and a scratch etcd with its data in memory would draw on the memory
 nodes.md §1.1 keeps there for the control plane's own. Its working directory
 is in memory, so the plaintext keyspace never reaches a disk, and is bounded
 (`VERIFY_WORK_SIZE`); the pod's memory is bounded above that by the processes'
-own share (`VERIFY_MEMORY`).
+own share (`VERIFY_MEMORY`), and its CPU at half a core, which holds the
+scratch etcd's start well inside its bound (`VERIFY_CPU`).
 """
 
 from __future__ import annotations
@@ -88,16 +93,24 @@ from kluster.lib.versions import ImagePin
 from putils import Component
 
 __all__ = (
+    'CPU',
+    'CPU_REQUEST',
+    'MEMORY',
+    'MEMORY_REQUEST',
+    'PROCESS_MEMORY_MIB',
     'SERVICE_ACCOUNT',
     'TALOS_SECRET_DIR',
     'TALOS_SERVICE_ACCOUNT',
     'TALOS_SERVICE_ACCOUNT_API_VERSION',
     'VERIFY_CLIENT_PORT',
+    'VERIFY_CPU',
+    'VERIFY_CPU_REQUEST',
     'VERIFY_IDENTITY_DIR',
     'VERIFY_KEY',
     'VERIFY_MEMORY',
     'VERIFY_MEMORY_REQUEST',
     'VERIFY_PEER_PORT',
+    'VERIFY_PROCESS_MEMORY_MIB',
     'VERIFY_SHELL',
     'VERIFY_SHELL_CONFIGMAP',
     'VERIFY_SHELL_DIR',
@@ -146,7 +159,37 @@ _TALOS_HOME = '/.talos'
 #: many times the one etcd holds today. A database grown past that fails every
 #: run with `no space left on device`, which the failed alert reports
 #: (operations.md §7.1).
-WORK_SIZE = '512Mi'
+_WORK_SIZE_MIB = 512
+WORK_SIZE = f'{_WORK_SIZE_MIB}Mi'
+
+#: The processes' memory beside the working directory, in MiB. The snapshot
+#: and the encryption stream from file to file (`pkg/talos`, `pkg/encryption`
+#: at v0.1.0). The upload buffers its parts: up to 16 MiB read ahead, then six
+#: parts of 8 MiB (`feature/s3/transfermanager` v0.5.2, `UploadObject`), so
+#: the processes' memory is bounded whatever the database's size. The
+#: container's working set peaked at 112.6 MiB over the seven days to
+#: 2026-11-19, and that peak counts the directory's two copies as well, since
+#: the directory is charged to the container that writes it; the term holds
+#: the buffers and the runtime with room above them.
+PROCESS_MEMORY_MIB = 128
+
+#: The pod's memory. The request is the working set's peak with room above
+#: it. The limit is the working directory's bound and the processes' term, so
+#: a database that outgrows the directory fails on the directory, with an
+#: error that names it, rather than on the limit.
+MEMORY_REQUEST = '128Mi'
+MEMORY = f'{_WORK_SIZE_MIB + PROCESS_MEMORY_MIB}Mi'
+
+#: The pod's CPU. A run is shorter than the metrics' scrape interval, so no
+#: rate of it has been read; the most CPU time a scrape saw a run hold is
+#: 0.59 s, a lower bound on a run's. What it does is copy a database of tens
+#: of MB three times, through TLS, `age` and TLS again. At the limit, a quarter
+#: of a core, ten times that CPU time takes under half a minute against the
+#: run's deadline of 15 minutes (`conventions.schedule.ETCD_SNAPSHOT`), and the
+#: run leaves the rest of the control plane's cores to etcd, which serves the
+#: stream.
+CPU_REQUEST = '50m'
+CPU = '250m'
 
 
 #: The restore-verify's scripts, by file name, as its ConfigMap carries them:
@@ -189,18 +232,37 @@ VERIFY_START_BOUND = dt.timedelta(minutes=2)
 #: allocates ahead of writing them. So the bound fits a database of about
 #: 220 MB, several times the one etcd holds today; a database grown past it
 #: fails the run with `no space left on device` (operations.md §7.2).
-VERIFY_WORK_SIZE = '512Mi'
+_VERIFY_WORK_SIZE_MIB = 512
+VERIFY_WORK_SIZE = f'{_VERIFY_WORK_SIZE_MIB}Mi'
+
+#: The processes' memory beside the working directory, in MiB: the scratch
+#: etcd's own, which is the one that grows with the database. Serving a 41 MB
+#: snapshot in the pinned image, measured under podman, the processes held
+#: 22 MiB beside the directory's 161 MiB; the term is ten times that, for a
+#: database up to the largest the directory fits.
+VERIFY_PROCESS_MEMORY_MIB = 256
 
 #: The pod's memory. The tmpfs is charged to the pod, so its peak is the
-#: working directory's plus the processes': the scratch etcd's own, a few tens
-#: of MiB at today's database, which is the one that grows with it. The
-#: request is the peak at the database etcd holds today, a 30 MB snapshot
-#: and about 200 MiB in all, with room above it; the limit is the working
-#: directory's bound and as much again for the processes, so a database that
-#: outgrows the bound fails on the directory first, with an error that names
-#: it, rather than on the limit.
+#: working directory's plus the processes'. The request is the peak at the
+#: database etcd holds today, a 30 MB snapshot and about 200 MiB in all, with
+#: room above it. On a 41 MB snapshot, larger than today's, the steps after
+#: the download peaked at 208 to 257 MiB in the pinned image, measured under
+#: podman, the upper end page cache that the kernel reclaims ahead of the
+#: limit. The limit is the working directory's bound and the processes'
+#: term, so a database that outgrows the bound fails on the directory first,
+#: with an error that names it, rather than on the limit.
 VERIFY_MEMORY_REQUEST = '256Mi'
-VERIFY_MEMORY = '768Mi'
+VERIFY_MEMORY = f'{_VERIFY_WORK_SIZE_MIB + VERIFY_PROCESS_MEMORY_MIB}Mi'
+
+#: The pod's CPU. The steps after the download, the decrypt, the restore and
+#: the scratch etcd's start and read, took 0.3 to 0.6 s of CPU time on a 41 MB
+#: snapshot in the pinned image on x86-64, measured under podman with its CPU
+#: limited to between 0.1 and 1 core, and 7 s of wall time at 0.1 core. At the
+#: limit, half a core, five times that CPU time, for about the largest
+#: database the working directory fits, takes 6 s against the two minutes of
+#: `VERIFY_START_BOUND`.
+VERIFY_CPU_REQUEST = '50m'
+VERIFY_CPU = '500m'
 
 #: The user and group it runs as: the base image's unprivileged one. Nothing in
 #: the image is written; the run writes only its working directory.
@@ -283,6 +345,10 @@ def _pod(image: ImagePin, recipients: Sequence[str]) -> k8s.core.v1.PodSpecArgs:
                 command=['/talos-backup'],
                 working_dir=_WORK_DIR,
                 env=_environment(recipients),
+                resources=k8s.core.v1.ResourceRequirementsArgs(
+                    requests={'cpu': CPU_REQUEST, 'memory': MEMORY_REQUEST},
+                    limits={'cpu': CPU, 'memory': MEMORY},
+                ),
                 security_context=k8s.core.v1.SecurityContextArgs(
                     allow_privilege_escalation=False,
                     read_only_root_filesystem=True,
@@ -445,7 +511,8 @@ def _verify_pod(image: ImagePin) -> k8s.core.v1.PodSpecArgs:
                 command=['/bin/sh', f'{VERIFY_SHELL_DIR}/{_VERIFY_SCRIPT}'],
                 env=_verify_environment(),
                 resources=k8s.core.v1.ResourceRequirementsArgs(
-                    requests={'memory': VERIFY_MEMORY_REQUEST}, limits={'memory': VERIFY_MEMORY}
+                    requests={'cpu': VERIFY_CPU_REQUEST, 'memory': VERIFY_MEMORY_REQUEST},
+                    limits={'cpu': VERIFY_CPU, 'memory': VERIFY_MEMORY},
                 ),
                 security_context=k8s.core.v1.SecurityContextArgs(
                     allow_privilege_escalation=False,
