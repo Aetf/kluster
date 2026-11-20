@@ -145,9 +145,10 @@ rfc-008 §4.2 gives a backed claim, they are today:
 -   authelia, jellyfin's database and settings, and spoolman, each on
     SQLite.
 
-The engines of shoko, qbittorrent's resume data and seedwatch's history
-are not read, and each of them that turns out to be embedded joins the
-list.
+The engines of shoko and of qbittorrent's resume data are not read, and
+each of them that turns out to be embedded joins the list. seedwatch's
+history is two JSON-lines files the application appends to itself
+(`docker/seedwatch.Containerfile`), which the definition above leaves out.
 
 What answers the case is a procedure, not a driver. The spot-restore of
 such a claim opens the database rather than comparing checksums
