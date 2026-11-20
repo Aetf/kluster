@@ -1608,6 +1608,7 @@ Owning docs keep the content — the index only locates it.
 | Upgrades (Talos serial, Cilium canary); the cluster credential's copies near their expiry (`KubeconfigCopyExpiring`) | §2 here |
 | Backup restores (CNPG, VolSync, etcd) | storage.md §5; the drills are §4 here |
 | The databases (a restore drill that failed or went stale) | §9 here |
+| The applications (immich's job-slot watchdog: a run that failed, a leak it released, or the watchdog gone stale) | §10 here |
 | Alert-channel failure (HA push down → meta-alert; GitHub leg down; a scheduled ops-repo workflow that stopped checking in) | architecture.md §4.3; the contract and the dead-man are §4 here |
 | CI alerts (a red `checks` or `images` run; a drift diff) | framework/ci.md §3.1 and §3.2 |
 | The metrics stores (rows a store ignores; a backup run that failed, a backup gone stale or refused, or a store that does not restore; a pull of OCI's block-volume series that failed or went stale; a scrape job that reports nothing, or no scrape job at all) | §6 here |
@@ -2620,3 +2621,82 @@ from which the database's backups are not known to restore.
    success, which
    `mise x -- kubectl -n <namespace> get cronjob <name>-restore-drill -o jsonpath='{.status.lastSuccessfulTime}'`
    reads.
+
+## 10. The applications' playbooks
+
+What to do when a scheduled job of an application's own reports on
+itself. Each is declared by its application's component, in the
+application's namespace, beside the scheduled-job family's rules over
+it (§4). The commands below run from the root of the checkout.
+
+### 10.1 immich's job-slot watchdog failed or is stale
+
+**Trigger**: the scheduled-job family's two alerts on the CronJob
+`immich-job-slot-watchdog` in the namespace `immich`, both
+`actionable`, which the watchdog's layer declares beside it from its
+`ScheduledJob`,
+`kluster.components.apps.immich.watchdog.watchdog_job`.
+`ImmichJobSlotWatchdogFailed`: its last run, scheduled after its last
+success, has not succeeded within the three minutes a run is cut off at.
+`ImmichJobSlotWatchdogStale`: it has not succeeded for one and a half of
+its periods, or has never succeeded since it was created that long ago. A run reads immich's job queues in their
+Redis, and where an active job has held its lock for longer than any
+legitimate job runs, it deletes the server's pods, which the server's
+Deployment starts again, and fails, so that the failed alert reports the
+leak. The layer works around a bug of postgres.js,
+`porsager/postgres#1195`, which leaks a job slot when a database
+connection closes under a queued query; why it exists, and when it goes,
+is the module's docstring.
+
+**Gist**:
+
+1. **Read the last run.**
+   `mise x -- kubectl -n immich get jobs --sort-by=.metadata.creationTimestamp`
+   lists the runs from the oldest, and
+   `mise x -- kubectl -n immich logs job/<run>` holds what it found.
+   The steps below go by its lines.
+2. **`the worker holds job slots it will never release
+   (porsager/postgres#1195): …`, then `deleting pod …`.** The watchdog
+   did its job: the line names each job it released, by its queue, its
+   name and since when it ran. Read
+   `mise x -- kubectl -n immich get pods -l app.kubernetes.io/name=immich-server`
+   for the new server pod's start, and the alert resolves at the next
+   run that finds no leak. A leak that follows a restart of the
+   database's instance is the bug's remaining trigger and needs nothing
+   more. A leak with no restart before it, or one found again right
+   after the watchdog's restart, is a slot that leaks for another cause,
+   and is an issue.
+3. **`postgres.js <version> carries the fix for porsager/postgres#1195,
+   so this watchdog is obsolete …`.** Every run fails from here on. The
+   pinned server image ships the fix, and the layer is removed in a
+   pull request, as the line and the module's docstring say.
+4. **`<variable> is not set`, an error from Redis, or `GET …: <status>`
+   or `DELETE …: <status>` from the API.** The run could not read the
+   queues or could not delete a pod. A Redis error is the queues' Redis,
+   `immich-redis`, down or refusing the password its pod and the
+   watchdog read from the Secret `immich`:
+   `mise x -- kubectl -n immich get pods -l app.kubernetes.io/name=immich-redis`.
+   A `403` is the watchdog's role, `immich-job-slot-watchdog`, which
+   lists and deletes pods and does nothing else:
+   `mise x -- kubectl -n immich get role immich-job-slot-watchdog -o yaml`
+   against what the component declares. `ENOENT` on the `package.json`
+   of postgres.js is a server image that keeps it elsewhere, which the
+   watchdog's pinned-image case reports on the bump that moves it; the
+   layer's `POSTGRES_PACKAGE` follows the image.
+5. **A pod that never started**, `ImmichJobSlotWatchdogStale` with no
+   run behind it. It waits on its `ConfigMap`,
+   `immich-job-slot-watchdog`, or on the server's image, which it runs;
+   `mise x -- kubectl -n immich describe pod` names which.
+   `mise x -- kubectl -n immich get cronjob immich-job-slot-watchdog`
+   shows whether the CronJob is suspended, and its last schedule; a run
+   the controller could not start within a minute of its time is
+   skipped and leaves no Job.
+6. **A run cut off at its deadline**, `DeadlineExceeded` in
+   `mise x -- kubectl -n immich describe job <run>`: a scan of the
+   queues, or a call to the API, that did not return in three minutes,
+   which the run's last line says it was waiting on.
+7. **Confirm**: a manual run,
+   `mise x -- kubectl -n immich create job --from=cronjob/immich-job-slot-watchdog immich-job-slot-watchdog-manual-<stamp>`,
+   reads `Complete`, its log ends in the `checked …` line with none
+   stuck, and both alerts resolve at the next evaluation after the
+   CronJob records a success.

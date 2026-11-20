@@ -182,6 +182,10 @@
     edited. The row is a removable layer: when the pinned Cilium serves an
     exact passthrough beside a wildcard (cilium/cilium#48092), it becomes
     the `Passthrough` it stands in for and the port goes.
+*   **Updated:** 2026-11-19. immich's recovery from the legacy store is
+    a migration layer of its component's own, as splitpro's is, and slice
+    41 deletes it, with the component and its tests among its owned paths
+    (§10.3).
 *   **Authority:** AGENTS.md,
     [framework/dispatch.md](../framework/dispatch.md),
     [framework/rfc.md](../framework/rfc.md) and the style rules
@@ -3272,7 +3276,7 @@ ended, and slice 45 carries the rest.
 | 38 | B | **Cut**: `spool`, `haos`, `mon`, `games`, `game`, `jiahui.love`'s apex, and the B rows of `LEGACY_VHOSTS`, with the UPS card's; R13 loses thread-dashboard; kluster-code drops the transitional target of the legacy forward-auth checks | as slice 32, and `src/kluster/conventions/gateway.py`, `docs/physical/gateway.md`, `docs/cluster/security-audit.md`, `docs/cluster/architecture.md`; kluster-code |
 | 39 | C | The head: the library re-owned on the host; Home Assistant's configured addresses read; Wave B's legacy applications and the JuiceFS stack removed; the legacy GPU plugin onto the iGPU; kluster-code stops legacy immich, jellyfin, shoko, the legacy monitoring and the legacy mail relay; the legacy proxy's address out of Home Assistant's trusted proxies; the host's unit for the `jellyfin-discovery` row pointed at the media VIP, with no `k3s` dependency, a task ceiling and a restart; then the window: growth and the A380's bind | `src/kluster/conventions/homelab.py`, `src/kluster/components/homelab/`, `tests/test_homelab.py`, `docs/physical/homelab-host.md`; aconfmgr; yadm; kluster-code |
 | 40 | C | **Land**: immich, jellyfin and shoko | as slice 28 |
-| 41 | C | **Cut**: `photos`, `tube`, their rewrite rules, and the `tube` vhost row | as slice 38 |
+| 41 | C | **Cut**: `photos`, `tube`, their rewrite rules, and the `tube` vhost row; immich's recovery from the legacy store deleted, once its database has archived a base backup of its own | as slice 38, and `src/kluster/components/apps/immich/`, `tests/test_apps_immich.py` |
 | 42 | D | The head: Home Assistant's configured addresses read; the host units stopped | aconfmgr; yadm |
 | 43 | D | **Land**: qbittorrent and seedwatch, and `qbittorrentOnWorker`, whose apply waits at `physical`'s gate | as slice 28, and `Pulumi.physical.yaml` |
 | 44 | D | **Cut**: `bt`, and the `bt` and `seedwatch` vhost rows, the last of `LEGACY_VHOSTS` | as slice 38 |
