@@ -24,10 +24,9 @@ import tomllib
 from pathlib import Path
 from typing import Any
 
-import pinned_tools
-import process_sessions
 import pytest
 from renovate_text import allowed_versions, listed, next_line, package_rules
+from talos_images import default_images
 
 ROOT = Path(__file__).parent.parent
 
@@ -37,10 +36,6 @@ KUBECTL = 'kubectl'
 
 #: Every pin held to a line, by its `[tools]` key.
 CLIENTS = (KUBECTL, 'cmctl')
-
-#: The bound one `talosctl images default` runs under; it reads the release's
-#: own constants and takes well under a second.
-TIMEOUT = 12
 
 
 def pins() -> dict[str, Any]:
@@ -65,11 +60,8 @@ def bound(key: str) -> re.Pattern[str]:
 
 
 def test_kubectl_is_on_the_minor_the_pinned_talos_release_defaults_to() -> None:
-    talosctl = pinned_tools.located('talosctl')
-    images = process_sessions.run([talosctl, 'images', 'default'], text=True, timeout=TIMEOUT, check=True).stdout
-    found = re.search(r'/kube-apiserver:(v\d+\.\d+\.\d+)$', images, re.MULTILINE)
-    assert found is not None, f'{talosctl} names no kube-apiserver image:\n{images}'
-    assert minor(str(pins()[KUBECTL])) == minor(found[1]), f'the pinned Talos release defaults to Kubernetes {found[1]}'
+    release = default_images()['kube-apiserver'].tag
+    assert minor(str(pins()[KUBECTL])) == minor(release), f'the pinned Talos release defaults to Kubernetes {release}'
 
 
 @pytest.mark.parametrize('key', CLIENTS)

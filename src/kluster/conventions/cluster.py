@@ -118,9 +118,14 @@ API_CLIENT_LABEL: Mapping[str, str] = MappingProxyType({f'{LABEL_DOMAIN}/api-cli
 #: `Cluster`'s `inheritedMetadata`. So a compromised application pod
 #: (threat-model.md §2.6, §2.9) sends as the relay's account only where its
 #: own declaration labels its pods, as long as no application pod holds such
-#: a role. A restore drill's role creates `Cluster`s under any name, which is
-#: such a role, and whether that stands is
-#: [Aetf/kluster-ops#876](https://github.com/Aetf/kluster-ops/issues/876).
+#: a role. A restore drill's role creates `Cluster`s under any name, which
+#: is such a role, and the guarantee holds for it at admission: the drill's
+#: admission policy, `database-restore-drill` (`drill_admission` in
+#: `kluster.components.apps.database`), holds the name, labels, annotations
+#: and `inheritedMetadata` of a cluster from a drill's account to the
+#: drill's manifest, which carries no such label. The rest of its `spec` is
+#: not held
+#: ([Aetf/kluster-ops#889](https://github.com/Aetf/kluster-ops/issues/889)).
 MAIL_SENDER_LABEL: Mapping[str, str] = MappingProxyType({f'{LABEL_DOMAIN}/mail-sender': 'true'})
 
 #: The label a restic source carries its retention class's name under.

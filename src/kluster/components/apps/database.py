@@ -36,6 +36,21 @@ One call, `database` (declarative/workloads.md §4, rfc-008 §4.3), which emits:
     .scheduled_job_rules`), which the shape declares beside the CronJob as a
     `VMRule` in the database's namespace. vmalert selects rules in every
     namespace, which the monitoring component declares.
+-   **The drill's admission parameters**: the drill's role creates
+    `Cluster`s under any name, and a `Cluster`'s labels, annotations and
+    `inheritedMetadata` reach the pods the operator starts for it, so the
+    role alone would let a poisoned drill image start a pod carrying any
+    label a grant is keyed on (threat-model.md §2.6). One policy for every
+    database, `drill_admission`, holds the name, the labels, the
+    annotations and the `inheritedMetadata` of each `Cluster` a drill's
+    account creates or changes to the ones the drill's manifest gives, and
+    not the rest of its `spec` (Aetf/kluster-ops#889). The shape declares
+    what the policy reads, a `ConfigMap` derived from the manifest
+    (`_drill_parameters`) and labelled `DRILL_ADMISSION_LABEL`. The policy
+    and its one binding are cluster-scoped, and an application declares no
+    cluster-scoped object (declarative/workloads.md §1), so `k8s-base`
+    declares them, with the database operator
+    (`kluster.components.postgres.PostgresOperator`).
 -   **The operator's reach to its instances**: the namespace's default-deny
     admits no other namespace, and the operator reads each instance's status
     on the instance manager's port (`STATUS_PORT`).
@@ -78,7 +93,9 @@ from kluster.lib.versions import ImagePin
 __all__ = (
     'API_CLIENTS',
     'DATABASE_LABEL',
+    'DRILL_ADMISSION_LABEL',
     'DRILL_PLAYBOOK',
+    'DRILL_POLICY',
     'DRILL_USER',
     'PLUGIN',
     'SIDECAR_RESOURCES',
@@ -86,11 +103,13 @@ __all__ = (
     'Database',
     'DatabaseRefused',
     'Drill',
+    'DrillAdmission',
     'Recovery',
     'Refusal',
     'Resources',
     'barman_schedule',
     'database',
+    'drill_admission',
     'drill_job',
     'recovery_window',
     'server_name',
@@ -104,6 +123,16 @@ PLUGIN = 'barman-cloud.cloudnative-pg.io'
 #: instances and the drill's recovered instance, through `inheritedMetadata`.
 #: What the operator's reach selects.
 DATABASE_LABEL = f'{conventions.LABEL_DOMAIN}/database'
+
+#: The admission policy that holds the name, labels, annotations and
+#: `inheritedMetadata` of every database drill's cluster to the drill's
+#: manifest, and its one binding, which shares its name (`drill_admission`).
+DRILL_POLICY = 'database-restore-drill'
+
+#: The label a database's drill admission parameters carry, with the
+#: database's name: what the binding of `DRILL_POLICY` selects them by, in
+#: the namespace of the request it judges.
+DRILL_ADMISSION_LABEL = f'{conventions.LABEL_DOMAIN}/restore-drill'
 
 #: The instance manager's port, where the operator reads each instance's
 #: status: "The operator needs to communicate to each instance on TCP port
@@ -154,6 +183,39 @@ _DRILL_SCRIPT = 'drill.py'
 _PYTHON = '/usr/bin/python3'
 _DRILL_MANIFEST = 'cluster.json'
 
+#: What a database's name takes to name its drill's CronJob, and the
+#: service account the drill runs as, which `DRILL_POLICY` matches by it.
+_DRILL_SUFFIX = '-restore-drill'
+#: The user name of a service account, ahead of `<namespace>:<name>`: "the
+#: service account username, system:serviceaccount:(NAMESPACE):(SERVICEACCOUNT)"
+#: (Kubernetes' `docs/reference/access-authn-authz/authentication.md`).
+_SERVICE_ACCOUNT_USER = 'system:serviceaccount:'
+#: What a drill's cluster carries that reaches the pods the operator starts
+#: for it, each held exactly to the drill's manifest by `DRILL_POLICY`: the
+#: parameter's key, and its path in the `Cluster`. The operator copies
+#: `inheritedMetadata` onto every pod, and the `Cluster`'s own labels and
+#: annotations onto them by the patterns its `INHERITED_LABELS` and
+#: `INHERITED_ANNOTATIONS` name (CloudNativePG's `docs/src/operator_conf.md`);
+#: and it applies the `Cluster`'s `cnpg.io/podPatch` annotation to each
+#: instance pod as a JSON patch, which writes the pod's labels as freely as
+#: `inheritedMetadata` does (`buildInstance` in CloudNativePG's
+#: `pkg/specs/pods.go`, at v1.30.0).
+_HELD: Mapping[str, tuple[str, ...]] = {
+    'labels': ('metadata', 'labels'),
+    'annotations': ('metadata', 'annotations'),
+    'inheritedLabels': ('spec', 'inheritedMetadata', 'labels'),
+    'inheritedAnnotations': ('spec', 'inheritedMetadata', 'annotations'),
+}
+#: The annotation client-side `kubectl apply` writes the configuration it
+#: applied under, which the drill's apply of its manifest therefore carries.
+_LAST_APPLIED = 'kubectl.kubernetes.io/last-applied-configuration'
+#: What a held map may carry beside the manifest's own entries, by its key in
+#: `_HELD`: the annotation the drill's own `kubectl apply` writes, with any
+#: value. CloudNativePG's defaulting webhook, which runs before the policy,
+#: writes no annotation and no label (`api/v1/cluster_defaults.go`, at
+#: v1.30.0).
+_TOLERATED: Mapping[str, tuple[str, ...]] = {'annotations': (_LAST_APPLIED,)}
+
 #: The name the drill's recovered cluster gives the store it recovers from.
 _DRILL_SOURCE = 'backup'
 #: The name a migrated database gives the store it recovers from.
@@ -193,6 +255,8 @@ class Refusal(StrEnum):
     """A table or an extension for the drill that is no plain SQL name, which its queries would quote wrongly."""
     STORE = 'store'
     """A store to recover from that the Google credential cannot read."""
+    HELD_VALUE = 'held-value'
+    """A label or annotation the drill's cluster carries whose value holds a newline, which its parameters cannot carry."""
 
 
 class DatabaseRefused(ValueError):
@@ -208,7 +272,7 @@ def drill_job(namespace: str, name: str) -> ScheduledJob:
     return ScheduledJob(
         alert='DatabaseRestoreDrill',
         namespace=namespace,
-        cronjob=f'{name}-restore-drill',
+        cronjob=f'{name}{_DRILL_SUFFIX}',
         period=_DRILL_PERIOD,
         deadline=_DRILL_DEADLINE,
         starting_deadline=_DRILL_STARTING_DEADLINE,
@@ -307,6 +371,8 @@ class Database:
     operator_reach: crds.cilium.v2.CiliumNetworkPolicy
     drill: k8s.batch.v1.CronJob
     drill_role: k8s.rbac.v1.Role
+    drill_parameters: k8s.core.v1.ConfigMap
+    """What `DRILL_POLICY` holds the drill's account to, derived from its manifest."""
     drill_rules: k8s.apiextensions.CustomResource
     """The scheduled-job family's two rules over the drill."""
 
@@ -407,6 +473,9 @@ def database(
         shared_preload_libraries=tuple(shared_preload_libraries),
         parameters=dict(parameters or {}),
     )
+    job = drill_job(namespace, name)
+    manifest = _drill_manifest(name, instance, dbname=dbname, server=server, namespace=namespace)
+    admitted = _drill_parameters(resource_name, manifest, account=f'{_SERVICE_ACCOUNT_USER}{namespace}:{job.cronjob}')
 
     credential = _credential(resource_name, name, namespace=namespace, writer_key=writer_key, opts=opts)
     store = _store(resource_name, name, retention, namespace=namespace, opts=opts)
@@ -472,10 +541,17 @@ def database(
         opts=pulumi.ResourceOptions.merge(opts, pulumi.ResourceOptions(depends_on=[cluster])),
     )
     reach = _operator_reach(resource_name, name, namespace=namespace, opts=opts)
-    job = drill_job(namespace, name)
-    manifest = _drill_manifest(name, instance, dbname=dbname, server=server, namespace=namespace)
-    role, cronjob = _drill(
-        resource_name, name, job, drill, manifest, image=drill_image, dbname=dbname, server=server, opts=opts
+    role, cronjob, drill_parameters = _drill(
+        resource_name,
+        name,
+        job,
+        drill,
+        manifest,
+        admitted,
+        image=drill_image,
+        dbname=dbname,
+        server=server,
+        opts=opts,
     )
     rules = operator_object(
         f'{resource_name}-restore-drill',
@@ -494,6 +570,7 @@ def database(
         operator_reach=reach,
         drill=cronjob,
         drill_role=role,
+        drill_parameters=drill_parameters,
         drill_rules=rules,
     )
 
@@ -785,8 +862,11 @@ def _drill_rules(drill: str) -> list[k8s.rbac.v1.PolicyRuleArgs]:
     Every verb that changes or enters an object names the drill's own, the
     cluster and its one instance's pod, `<drill>-1` as the operator names
     it; `create` of a cluster cannot name one, since the object does not
-    exist yet. The cluster's claims go with it by the foreground cascade, as
-    the operator's dependents, so the role holds no verb on claims.
+    exist yet, so `DRILL_POLICY` holds the name, labels, annotations and
+    `inheritedMetadata` of what it creates to the drill's manifest at
+    admission (`drill_admission`). The cluster's claims go with it by the
+    foreground cascade, as the operator's dependents, so the role holds no
+    verb on claims.
     """
 
     def rule(
@@ -805,19 +885,197 @@ def _drill_rules(drill: str) -> list[k8s.rbac.v1.PolicyRuleArgs]:
     ]
 
 
+def _held(manifest: Mapping[str, Any], path: Sequence[str]) -> Mapping[str, str]:
+    """The map at `path` in the drill's manifest, empty where the manifest sets none."""
+    found: Any = manifest
+    for key in path:
+        found = found.get(key, {})
+    return found
+
+
+def _drill_parameters(resource_name: str, manifest: Mapping[str, Any], *, account: str) -> dict[str, str]:
+    """What `DRILL_POLICY` holds `account` to, read off the drill's manifest.
+
+    The account; the manifest's name; and each map `_HELD` names, as one
+    `<key>=<value>` line per entry, since a `ConfigMap` holds strings and a
+    label's key holds a `/`. A key holds no `=` and no newline, so a line's
+    first `=` ends its key; an annotation's value may hold a newline, which
+    a line cannot carry, so a held entry that does is refused here.
+    """
+    for key, path in _HELD.items():
+        for entry, value in _held(manifest, path).items():
+            if '\n' in value:
+                raise DatabaseRefused(
+                    Refusal.HELD_VALUE,
+                    f"{resource_name}: the drill's {'.'.join(path)}, its parameter {key!r}, holds {entry!r} "
+                    'with a newline in its value, which a parameter line cannot carry',
+                )
+    return {
+        'account': account,
+        'name': manifest['metadata']['name'],
+        **{
+            key: '\n'.join(sorted(f'{label}={value}' for label, value in _held(manifest, path).items()))
+            for key, path in _HELD.items()
+        },
+    }
+
+
+@dataclass(frozen=True)
+class DrillAdmission:
+    """What `drill_admission` emitted: the policy every database's drill is judged by, and its one binding."""
+
+    policy: k8s.admissionregistration.v1.ValidatingAdmissionPolicy
+    binding: k8s.admissionregistration.v1.ValidatingAdmissionPolicyBinding
+
+
+def drill_admission(resource_name: str, *, opts: pulumi.ResourceOptions | None = None) -> DrillAdmission:
+    """The policy that holds a drill's cluster's name, labels, annotations and `inheritedMetadata` to its manifest, and its binding.
+
+    A drill's account creates `Cluster`s under any name, since `create`
+    names no object, and patches its own. The policy judges every create
+    and update of a `Cluster` by a service account named as a drill's
+    (`_DRILL_SUFFIX`), against each `ConfigMap` labelled
+    `DRILL_ADMISSION_LABEL` in the request's namespace: the parameters a
+    database's shape derives from its drill's manifest. Under the
+    parameters of the requesting account the cluster is admitted only by
+    the manifest's name and with exactly its labels, annotations and
+    `inheritedMetadata`, the maps `_HELD` names, beside the annotation
+    `kubectl apply` writes (`_TOLERATED`); under another database's
+    parameters the request is that database's no business. The binding
+    ANDs every parameter it selects, so a namespace holding two databases
+    holds each drill to its own manifest. The rest of the `Cluster`'s
+    `spec` is not held (Aetf/kluster-ops#889).
+
+    **It fails closed, on drills alone.** An expression that cannot be
+    evaluated refuses the request (`failurePolicy: Fail`), and the drill
+    fails, reported as any failed run is (operations.md §9.1). The match on
+    the account's name keeps that to drills: every other writer of a
+    `Cluster`, the operator and the program included, passes unjudged.
+
+    **A namespace with no parameters is not judged.** The server looks the
+    parameters up before it reads the match on the account, so parameters
+    not found, were they refused, would refuse every writer of a `Cluster`
+    there, the program's first create of a database among them, which
+    nothing orders behind the parameters beside it. A drill runs only
+    beside its parameters: the shape declares its CronJob behind them, and
+    the drill's role holds no verb on a `ConfigMap`.
+    """
+    a = k8s.admissionregistration.v1
+    requester = 'request.userInfo.username'
+
+    def expected(key: str) -> str:
+        return f"params.data.?{key}.orValue('').split('\\n').filter(entry, entry != '')"
+
+    def actual(path: Sequence[str]) -> str:
+        return f'object{"".join(f".?{key}" for key in path)}.orValue({{}})'
+
+    def exact(key: str) -> str:
+        """The map `key` holds the manifest's entries and no others, beside those `_TOLERATED` lets through."""
+        held, wanted = f'variables.{key}', f'variables.{key}Expected'
+        entry = f"k + '=' + {held}[k] in {wanted}"
+        tolerated = _TOLERATED.get(key, ())
+        if not tolerated:
+            return f'!variables.drill || (size({held}) == size({wanted}) && {held}.all(k, {entry}))'
+        listed = json.dumps(list(tolerated))
+        return (
+            f'!variables.drill || (size({held}.filter(k, !(k in {listed}))) == size({wanted})'
+            f' && {held}.all(k, k in {listed} || {entry}))'
+        )
+
+    def held_message(key: str, path: Sequence[str]) -> str:
+        beside = ''.join(f', beside {it}' for it in _TOLERATED.get(key, ()))
+        return f"the restore drill's cluster carries its manifest's {'.'.join(path)}, exactly{beside}"
+
+    variables = [
+        a.VariableArgs(name='drill', expression=f'{requester} == params.data.account'),
+        *(a.VariableArgs(name=key, expression=actual(path)) for key, path in _HELD.items()),
+        *(a.VariableArgs(name=f'{key}Expected', expression=expected(key)) for key in _HELD),
+    ]
+    validations = [
+        a.ValidationArgs(
+            expression='!variables.drill || object.metadata.name == params.data.name',
+            message_expression="'the restore drill creates ' + params.data.name + ' alone, not ' + object.metadata.name",
+            reason='Forbidden',
+        ),
+        *(
+            a.ValidationArgs(expression=exact(key), message=held_message(key, path), reason='Forbidden')
+            for key, path in _HELD.items()
+        ),
+    ]
+    policy = a.ValidatingAdmissionPolicy(
+        resource_name,
+        metadata=k8s.meta.v1.ObjectMetaArgs(name=DRILL_POLICY),
+        spec=a.ValidatingAdmissionPolicySpecArgs(
+            failure_policy='Fail',
+            param_kind=a.ParamKindArgs(api_version='v1', kind='ConfigMap'),
+            match_constraints=a.MatchResourcesArgs(
+                resource_rules=[
+                    a.NamedRuleWithOperationsArgs(
+                        api_groups=['postgresql.cnpg.io'],
+                        api_versions=['*'],
+                        operations=['CREATE', 'UPDATE'],
+                        resources=['clusters'],
+                    )
+                ]
+            ),
+            match_conditions=[
+                a.MatchConditionArgs(
+                    name='restore-drill-account',
+                    expression=(
+                        f"{requester}.startsWith('{_SERVICE_ACCOUNT_USER}') && {requester}.endsWith('{_DRILL_SUFFIX}')"
+                    ),
+                )
+            ],
+            variables=variables,
+            validations=validations,
+        ),
+        opts=opts,
+    )
+    binding = a.ValidatingAdmissionPolicyBinding(
+        resource_name,
+        metadata=k8s.meta.v1.ObjectMetaArgs(name=DRILL_POLICY),
+        spec=a.ValidatingAdmissionPolicyBindingSpecArgs(
+            policy_name=DRILL_POLICY,
+            validation_actions=['Deny'],
+            # No namespace: the parameters are read in the request's own.
+            # Parameters not found are let through, not refused: the API
+            # server looks the parameters up before it evaluates the
+            # policy's `matchConditions`, so `Deny` here refuses every
+            # writer of a `Cluster` in a namespace with no parameters --
+            # the program and the operator as well as a drill, and the
+            # program's first create of a database, which nothing orders
+            # behind its parameters, among them (measured on the
+            # `kube-apiserver` the cluster runs, which
+            # tests/test_apps_database.py runs). A drill runs only beside
+            # its parameters.
+            param_ref=a.ParamRefArgs(
+                selector=k8s.meta.v1.LabelSelectorArgs(
+                    match_expressions=[
+                        k8s.meta.v1.LabelSelectorRequirementArgs(key=DRILL_ADMISSION_LABEL, operator='Exists')
+                    ]
+                ),
+                parameter_not_found_action='Allow',
+            ),
+        ),
+        opts=pulumi.ResourceOptions.merge(opts, pulumi.ResourceOptions(depends_on=[policy])),
+    )
+    return DrillAdmission(policy=policy, binding=binding)
+
+
 def _drill(
     resource_name: str,
     name: str,
     job: ScheduledJob,
     drill: Drill,
     manifest: Mapping[str, Any],
+    admitted: Mapping[str, str],
     *,
     image: ImagePin,
     dbname: str,
     server: str,
     opts: pulumi.ResourceOptions | None,
-) -> tuple[k8s.rbac.v1.Role, k8s.batch.v1.CronJob]:
-    """The drill's CronJob, the ConfigMap holding its script and its cluster, and the role it runs as, in its namespace."""
+) -> tuple[k8s.rbac.v1.Role, k8s.batch.v1.CronJob, k8s.core.v1.ConfigMap]:
+    """The drill's CronJob, the ConfigMap holding its script and its cluster, the role it runs as, and its admission's parameters."""
     namespace = job.namespace
     resource = f'{resource_name}-restore-drill'
     metadata = k8s.meta.v1.ObjectMetaArgs(name=job.cronjob, namespace=namespace)
@@ -839,6 +1097,14 @@ def _drill(
         metadata=metadata,
         role_ref=k8s.rbac.v1.RoleRefArgs(api_group='rbac.authorization.k8s.io', kind='Role', name=job.cronjob),
         subjects=[k8s.rbac.v1.SubjectArgs(kind='ServiceAccount', name=job.cronjob, namespace=namespace)],
+        opts=opts,
+    )
+    parameters = k8s.core.v1.ConfigMap(
+        f'{resource}-admission',
+        metadata=k8s.meta.v1.ObjectMetaArgs(
+            name=f'{job.cronjob}-admission', namespace=namespace, labels={DRILL_ADMISSION_LABEL: name}
+        ),
+        data=dict(admitted),
         opts=opts,
     )
     environment = {
@@ -910,6 +1176,8 @@ def _drill(
                 )
             ),
         ),
-        opts=pulumi.ResourceOptions.merge(opts, pulumi.ResourceOptions(depends_on=[files, account, role, binding])),
+        opts=pulumi.ResourceOptions.merge(
+            opts, pulumi.ResourceOptions(depends_on=[files, account, role, binding, parameters])
+        ),
     )
-    return role, cronjob
+    return role, cronjob, parameters

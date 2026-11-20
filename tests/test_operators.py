@@ -5,8 +5,9 @@ The program runs whole, against a `physical` that has published its addresses
 CloudNativePG and its Barman Cloud plugin, VolSync and the volume snapshot
 definitions it watches, NFD and the Intel GPU plugin (rfc-007 §8), the
 namespaces each creates, the order they are installed
-in (declarative/cluster-infra.md §1), and what keeps the GPU plugin inert until
-the worker's GPU is bound.
+in (declarative/cluster-infra.md §1), the policy that holds the name, labels,
+annotations and `inheritedMetadata` of a database drill's cluster to its
+manifest, which the database operator declares, and what keeps the GPU plugin inert until the worker's GPU is bound.
 
 Literals written here are upstream contracts: the charts' value names, the
 label the GPU plugin chart's `NodeFeatureRule` sets. What the program derives
@@ -24,6 +25,8 @@ from kluster.lib.versions import versions
 CHART = 'kubernetes:helm.sh/v4:Chart'
 NAMESPACE = 'kubernetes:core/v1:Namespace'
 CONFIG_GROUP = 'kubernetes:yaml/v2:ConfigGroup'
+ADMISSION_POLICY = 'kubernetes:admissionregistration.k8s.io/v1:ValidatingAdmissionPolicy'
+ADMISSION_BINDING = 'kubernetes:admissionregistration.k8s.io/v1:ValidatingAdmissionPolicyBinding'
 
 #: The label the GPU plugin chart's `NodeFeatureRule` puts on a node with an
 #: Intel display-class PCI device whose kernel has `i915` or `xe`
@@ -189,3 +192,26 @@ def test_the_snapshot_definitions_are_the_files_of_their_pin(applied: Run) -> No
 def test_a_plugin_chart_is_installed_behind_its_operators(applied: Run, chart: str, after: str) -> None:
     """The backup plugin is the database operator's; the `GpuDevicePlugin` is the device-plugin operator's definition."""
     assert applied.urn(CHART, after) in applied.dependencies(CHART, chart)
+
+
+# -- The drills' admission policy ----------------------------------------------
+
+
+def test_the_database_operator_declares_the_drills_policy_and_its_binding_behind_its_chart(applied: Run) -> None:
+    """Both are cluster-scoped, so `k8s-base`'s, and judge `Cluster`s, whose definition the operator's chart serves.
+
+    What the policy admits is judged by the API server in
+    `tests/test_apps_database.py`; here, that the program declares it at all,
+    and its binding binds it.
+    """
+    children = {(typ, name): dependencies for typ, name, dependencies in applied.children(POSTGRES_OPERATOR)}
+    (policy,) = (name for typ, name in children if typ == ADMISSION_POLICY)
+    (binding,) = (name for typ, name in children if typ == ADMISSION_BINDING)
+    behind = applied.urn(CHART, CNPG)
+
+    assert behind in children[ADMISSION_POLICY, policy]
+    assert behind in children[ADMISSION_BINDING, binding]
+    assert (
+        applied.inputs(ADMISSION_BINDING, binding)['spec']['policyName']
+        == applied.inputs(ADMISSION_POLICY, policy)['metadata']['name']
+    )
