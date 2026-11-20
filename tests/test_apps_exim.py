@@ -1,7 +1,7 @@
 """The mail relay, declared against mocks, and its configuration run by the pinned image's own exim.
 
-The relay is declared with an image pin, ciphertexts and senders of the
-test's own, so what is held is how the component composes what it is handed.
+The relay is declared with an image pin and ciphertexts of the test's own,
+so what is held is how the component composes what it is handed.
 Its configuration is the one the declared ConfigMap carries. The cases that
 need exim to read it run the image `Pulumi.yaml` pins, with podman, as the
 pod runs it: as its user and group, with every capability dropped, on a
@@ -42,7 +42,7 @@ from mock_monitor import Recorder, declaring, run_with
 from pinned_image import COMMAND_TIMEOUT, CONTAINER_TIMEOUT, pinned, pulled, require_podman
 
 from kluster import conventions
-from kluster.components.apps.exim import CONFIGURATION, HOST, SMTP, Exim
+from kluster.components.apps.exim import CONFIGURATION, HOST, NAMESPACE, SMTP, Exim
 from kluster.components.cilium.bgp import CONTROL_PLANE_LABEL
 from kluster.components.dns import base as dns_base
 from kluster.components.dns.record import zone_records
@@ -61,6 +61,18 @@ POLICY = 'crds:cilium.io/v2:CiliumNetworkPolicy'
 #: The label Cilium gives every endpoint, naming its pod's namespace.
 NAMESPACE_LABEL = 'k8s:io.kubernetes.pod.namespace'
 
+#: The source Cilium gives the labels a pod carries, and the label it adds
+#: naming the pod's namespace.
+K8S_SOURCE = 'k8s'
+
+#: The prefix under which Cilium gives an endpoint its namespace's labels,
+#: which the endpoints built here do not carry.
+NAMESPACE_LABELS_PREFIX = 'io.cilium.k8s.namespace.labels.'
+
+#: The entities a policy here may admit that hold no application pod: the
+#: identity a request a Gateway forwards arrives with.
+POD_LESS_ENTITIES = frozenset({'ingress'})
+
 #: The pin the relay is declared with here: a reference that is no published
 #: image, so a container carrying it carries the pin.
 IMAGE = ImagePin('registry.example.invalid/exim-relay', 'v9.9.9', f'sha256:{"e" * 64}')
@@ -68,9 +80,6 @@ IMAGE = ImagePin('registry.example.invalid/exim-relay', 'v9.9.9', f'sha256:{"e" 
 #: The ciphertexts it is handed, each naming what it stands for.
 SMTP_CIPHERTEXT = {'smtp_user': 'sealed-account', 'smtp_pass': 'sealed-app-password'}
 DKIM = {'tls.key': 'sealed-dkim-key'}
-
-#: The namespaces it is handed as its senders.
-SENDERS = ('first-sender', 'second-sender')
 
 #: The label a container started here carries, and so the census of what a run
 #: has left: `podman ps --all --filter label=kluster-test=test_apps_exim`.
@@ -83,17 +92,13 @@ WHY = 'the configuration is run by the exim of the pinned image with it'
 SPOOL = '/var/spool/exim'
 
 
-async def declared(senders: tuple[str, ...]) -> Recorder:
-    monitor = await run_with(Recorder(), stack='apps')
-    async with declaring():
-        _ = Exim('exim', image=IMAGE, smtp=SMTP_CIPHERTEXT, dkim=DKIM, senders=senders)
-    return monitor
-
-
 @pytest_asyncio.fixture(scope='module', loop_scope='module')
 async def relay() -> Recorder:
-    """The relay, declared with the test's pin, ciphertexts and senders."""
-    return await declared(SENDERS)
+    """The relay, declared with the test's pin and ciphertexts."""
+    monitor = await run_with(Recorder(), stack='apps')
+    async with declaring():
+        _ = Exim('exim', image=IMAGE, smtp=SMTP_CIPHERTEXT, dkim=DKIM)
+    return monitor
 
 
 def the_one(monitor: Recorder, typ: str) -> dict[str, Any]:
@@ -296,31 +301,125 @@ def test_the_service_forwards_to_the_port_the_daemon_listens_on(relay: Recorder)
     assert named[port['targetPort']] == port['port'] == int(option(configuration(relay), 'daemon_smtp_ports'))
 
 
-def test_the_senders_pods_may_reach_the_smtp_port_and_no_other_namespaces_may(relay: Recorder) -> None:
-    """The namespace's default-deny admits no other namespace's pods; this admits the senders' alone, on SMTP alone."""
-    (policy,) = [it.inputs for it in relay.of_type(POLICY) if it.inputs['metadata']['name'] == 'senders']
-    (rule,) = policy['spec']['ingress']
-    (ports,) = rule['toPorts']
+def endpoint(namespace: str, labels: Mapping[str, str]) -> dict[str, str]:
+    """The labels Cilium gives a pod of `namespace` carrying `labels`: each under its source, and its namespace's."""
+    return {NAMESPACE_LABEL: namespace} | {f'{K8S_SOURCE}:{key}': value for key, value in labels.items()}
 
-    def admitted(namespace: str) -> bool:
-        pod = {NAMESPACE_LABEL: namespace, 'app': 'a-sender'}
-        return any(selects(peer.get('matchExpressions', []), pod) for peer in rule['fromEndpoints'])
 
-    assert policy['spec']['endpointSelector']['matchLabels'].items() <= pod_of(relay)['metadata']['labels'].items()
-    assert all(admitted(namespace) for namespace in SENDERS)
-    assert not admitted('another-application')
-    assert 'fromEntities' not in rule
-    assert ports['ports'] == [
-        {'port': str(int(the_one(relay, SERVICE)['spec']['ports'][0]['port'])), 'protocol': 'TCP'}
+def peer_selects(selector: Mapping[str, Any], policy_namespace: str, labels: Mapping[str, str]) -> bool:
+    """Whether a selector of a `CiliumNetworkPolicy` in `policy_namespace` selects an endpoint with `labels`.
+
+    A key with no source, or the source `any`, matches its label under any
+    source, and a selector that names neither the namespace nor a namespace
+    label selects in the policy's own
+    ([`utils.go` L136-148](https://github.com/cilium/cilium/blob/v1.20.4/pkg/k8s/apis/cilium.io/utils/utils.go#L136-L148)).
+    The endpoints built here carry neither their namespace's labels nor a
+    reserved label, so a key naming either is refused rather than read: the
+    evaluator fails closed on what it does not model.
+    """
+    unread = set(selector) - {'matchLabels', 'matchExpressions'}
+    assert not unread, f'the evaluator reads no {sorted(unread)}'
+
+    def resolved(key: str) -> str:
+        source, colon, name = key.partition(':')
+        if not colon:
+            source, name = '', key
+        assert source != 'reserved', f'the evaluator reads no reserved label: {key!r}'
+        assert not name.startswith(NAMESPACE_LABELS_PREFIX), f'the evaluator reads no namespace label: {key!r}'
+        if source in ('', 'any'):
+            return next((it for it in labels if it.partition(':')[2] == name), key)
+        return key
+
+    written: list[dict[str, Any]] = [
+        *({'key': key, 'operator': 'In', 'values': [value]} for key, value in selector.get('matchLabels', {}).items()),
+        *selector.get('matchExpressions', []),
     ]
+    expressions = [{**it, 'key': resolved(it['key'])} for it in written]
+    if not any(it['key'] == NAMESPACE_LABEL for it in expressions):
+        expressions.append({'key': NAMESPACE_LABEL, 'operator': 'In', 'values': [policy_namespace]})
+    return selects(expressions, labels)
 
 
-@pytest.mark.asyncio
-async def test_a_relay_handed_no_senders_admits_no_other_namespace() -> None:
-    """With no sender, nothing beyond the namespace's default-deny admits a pod."""
-    monitor = await declared(())
+def rule_admits(
+    rule: Mapping[str, Any], policy_namespace: str, client: Mapping[str, str], protocol: str, port: int
+) -> bool:
+    """Whether one ingress rule admits an endpoint with `client`'s labels on `protocol` and `port`."""
+    unread = set(rule) - {'fromEndpoints', 'fromEntities', 'toPorts'}
+    assert not unread, f'the evaluator reads no {sorted(unread)}'
+    entities = set(rule.get('fromEntities', []))
+    assert entities <= POD_LESS_ENTITIES, f'the evaluator reads no entity in {sorted(entities - POD_LESS_ENTITIES)}'
+    if not any(peer_selects(peer, policy_namespace, client) for peer in rule.get('fromEndpoints', [])):
+        return False
+    if 'toPorts' not in rule:
+        return True
+    for port_rule in rule['toPorts']:
+        assert set(port_rule) <= {'ports'}, port_rule
+        for entry in port_rule['ports']:
+            assert set(entry) <= {'port', 'endPort', 'protocol'}, entry
+            first = int(entry['port'])
+            last = int(entry.get('endPort', first))
+            if (first == 0 or first <= port <= last) and entry.get('protocol', 'ANY') in (protocol, 'ANY', ''):
+                return True
+    return False
 
-    assert not [it for it in monitor.of_type(POLICY) if it.inputs['metadata']['name'] == 'senders']
+
+def admitted(
+    relay: Recorder, namespace: str, labels: Mapping[str, str], *, protocol: str = 'TCP', port: int | None = None
+) -> bool:
+    """Whether a pod of `namespace` carrying `labels` reaches the relay's pod, on its SMTP port unless told another.
+
+    Cilium admits what any policy selecting a pod allows, so every recorded
+    policy whose endpoint selector selects the relay's pod is read, the
+    namespace's default-deny among them, and their rules are a union.
+    """
+    relay_pod = endpoint(NAMESPACE, pod_of(relay)['metadata']['labels'])
+    client = endpoint(namespace, labels)
+    port = int(the_one(relay, SERVICE)['spec']['ports'][0]['port']) if port is None else port
+    read = 0
+    for policy in (it.inputs for it in relay.of_type(POLICY)):
+        policy_namespace = policy['metadata']['namespace']
+        for spec in [policy['spec']] if 'spec' in policy else policy['specs']:
+            if not peer_selects(spec['endpointSelector'], policy_namespace, relay_pod):
+                continue
+            read += 1
+            assert 'ingressDeny' not in spec, 'the evaluator reads no ingress deny'
+            if any(rule_admits(rule, policy_namespace, client, protocol, port) for rule in spec.get('ingress', [])):
+                return True
+    assert read, "no policy selects the relay's pod"
+    return False
+
+
+#: A namespace the relay names nowhere, and the relay's own.
+SENDER_NAMESPACES = ('another-application', NAMESPACE)
+
+
+@pytest.mark.parametrize('namespace', SENDER_NAMESPACES)
+def test_a_pod_labelled_as_a_mail_sender_reaches_the_relay_from_any_namespace(relay: Recorder, namespace: str) -> None:
+    """A sending component puts the label on its pods, and is named nowhere in the relay."""
+    assert admitted(relay, namespace, {**conventions.MAIL_SENDER_LABEL, 'app': 'a-sender'})
+
+
+def test_a_pod_of_another_namespace_without_the_label_is_refused_beside_a_sender(relay: Recorder) -> None:
+    """The label admits a pod, not its namespace: a pod beside a sender is refused unless it carries the label.
+
+    The relay's own namespace is not one of these: its default-deny admits
+    every pod of the namespace, on every port.
+    """
+    (key,) = conventions.MAIL_SENDER_LABEL
+
+    assert admitted(relay, 'another-application', conventions.MAIL_SENDER_LABEL)
+    assert not admitted(relay, 'another-application', {'app': 'a-sender'})
+    assert not admitted(relay, 'another-application', {key: 'false'})
+
+
+def test_a_sender_of_another_namespace_reaches_the_relays_smtp_port_alone(relay: Recorder) -> None:
+    """The label opens SMTP, over TCP, and no other port of the relay's pod."""
+    port = int(the_one(relay, SERVICE)['spec']['ports'][0]['port'])
+    sender = {**conventions.MAIL_SENDER_LABEL}
+
+    assert admitted(relay, 'another-application', sender, port=port)
+    assert not admitted(relay, 'another-application', sender, port=port + 1)
+    assert not admitted(relay, 'another-application', sender, protocol='UDP', port=port)
 
 
 # -- the pinned image's exim -----------------------------------------------------

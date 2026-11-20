@@ -64,6 +64,12 @@ port on a node and no other port there. The device relay declares its
 device as its namespace's reach, and the database shape declares its
 instances and its restore drill as API clients (rfc-008 §4.1, §4.3).
 
+A pod that sends mail through the cluster's relay carries
+`conventions.MAIL_SENDER_LABEL`, which its own component puts on it: the
+relay admits a pod carrying it, from any namespace, to its SMTP port
+alone, and refuses a pod of another namespace without it
+(`kluster.components.apps.exim`).
+
 ## 2. Choosing storage: two axes, then the data's character
 
 The storage.md §2 classes are the *menu*; this is how a workload
