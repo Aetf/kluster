@@ -26,13 +26,14 @@ Per architecture.md §1.1 the cloud site is **three combined
 CP+ingress+worker nodes**: the etcd/apiserver quorum, the Envoy that
 answers `internet-gw` on each of them, the shared-VIP raw TCP/UDP
 services behind the NLB,
-KubeSpan endpoints, hath (pinned to one node), and the internet-pool
-workloads. This means the cloud pool needs:
+KubeSpan endpoints, hath, held to one node by its cache's volume, and
+the pods the scheduler places there, which fit the allocatable the
+control plane leaves (§1.1). This means the cloud pool needs:
 
 -   **Per node**: ~2–2.5 GB for etcd+apiserver+controllers, ~1.5 GB
     platform floor (Talos/kubelet/Cilium), leaving ~4 GB of an 8 GB
-    node for Envoy, hath and the workloads — the budget of §1.1, per
-    load class and per resource. **Two dedicated Ampere cores (2 OCPU) per
+    node for Envoy, hath and the pods the scheduler places there, which
+    fit the allocatable the control plane leaves (§1.1). **Two dedicated Ampere cores (2 OCPU) per
     node**: the fewest Talos documents for a control plane, two cores
     minimum and four recommended
     ([system requirements](https://docs.siderolabs.com/talos/v1.13/getting-started/system-requirements)),
@@ -45,9 +46,12 @@ workloads. This means the cloud pool needs:
     pressure at 21–45% (avg60) against 2–4% for IO, and etcd on every
     member logged `slow fdatasync` warnings, requests that took too
     long and leader changes, until requests timed out
-    (Aetf/kluster-ops#780). Workload CPU limits keep bursts away from
-    etcd, capped per node by §1.1 (architecture.md §6.5 for why this
-    budget, honestly kept, avoids the legacy CP-starvation failure).
+    (Aetf/kluster-ops#780). The control plane's reservation keeps bursts
+    away from etcd: the pods the scheduler places on the node fit the
+    allocatable it leaves, and the kubelet weighs them below
+    `/podruntime`, the group etcd runs in (§1.1; architecture.md §6.5
+    for why a reservation, honestly kept, avoids the legacy
+    CP-starvation failure).
 -   **Stable public dual-stack IPs** per node (their on-the-wire forms —
     the v4 *private* primaries behind OCI's 1:1 NAT, plus the v6 GUAs —
     double as the `internet` pool VIPs, architecture.md §3.2) plus the
@@ -63,64 +67,96 @@ workloads. This means the cloud pool needs:
     its own (§1.2), and the bring-up reads etcd's fsync latency against
     it before any application moves (declarative/physical.md §6).
 
-### 1.1 The budget, per load class
+### 1.1 The control plane's reservation
 
-**A control plane's resources are budgeted per load class.** The
-budget comes from the sizing above. The readings below support it or
+**A control plane's resources are budgeted by its node allocatable.**
+Its machine configuration reserves what the control plane runs on, and
+the scheduler fits every pod into the rest; no class of pods carries a
+budget of its own. The kubelet reserves 1000m of CPU and 0.5 GiB on a
+control plane, the API server requests 500m and 1.25 GiB
+(`components.talos`), and a control plane reports 1.0 core and about
+6.2 GiB allocatable. The readings below support the reservation or
 contradict it, and a reading that contradicts it goes to the operator
-rather than moving the budget.
+rather than moving it.
+
+The classes below are how a control plane's consumption is read.
 
 | Class | Members | Where its consumption is read |
 | --- | --- | --- |
 | Control-plane slice | etcd (a Talos service, not a pod), `kube-apiserver`, `kube-controller-manager`, `kube-scheduler` | etcd's own `process_*` series on its metrics listener, since `cAdvisor` reports no control group for it on Talos; the three pods by name |
 | Platform | Talos (`machined`, `apid`, `trustd`, `udevd`), the kubelet, containerd, the Cilium agent, the node exporter, the node-feature-discovery worker, `coredns`, and any controller scheduled there | the node's totals less the other classes; each DaemonSet by namespace |
-| Front and workloads | Envoy (`cilium-envoy`, which answers `internet-gw`), hath (on the node holding the dedicated VIP), and the internet-pool workloads | `cAdvisor`, per pod |
+| Pods | `cilium-envoy` and every pod outside the platform's namespaces | `cAdvisor`, per pod |
 
-**The internet-pool workloads** are what migration.md §2 and rfc-008
-§5 place on the cloud pool: the blog's static site, more than one
-replica spread across the cloud nodes (rfc-008 §4.5); splitpro's server
-and its database (rfc-008 §5.3, §4.3); matrix; stdiscosrv; and hath,
-after Wave A2 has soaked (rfc-008 §5.4). authelia, whose pool neither
-document sets, is counted in the class, which is the conservative
-reading.
-
-**The peaks the classes meet**: a bring-up or a rebuild, in which every
-image is pulled and every object created at once; a Talos or Kubernetes
-upgrade, one node at a time; a wave's land, with its images and a claim
-streamed through the API server (rfc-008 §5); hath's 50 GiB warm copy;
-and VolSync's movers at 03:00.
+**The peaks a control plane meets**: a bring-up or a rebuild, in which
+every image is pulled and every object created at once; a Talos or
+Kubernetes upgrade, one node at a time; a wave's land, with its images
+and a claim streamed through the API server (rfc-008 §5); hath's
+50 GiB warm copy; and VolSync's movers at 03:00.
 
 **The node** is A1.Flex at 2 OCPU (two Ampere cores), 8 GB and a 50 GB
-boot volume. The kubelet reserves 200m of CPU and 0.5 GiB of memory
-(`SYSTEM_RESERVED`, `components.talos`), and a control plane reports
-1.8 cores and 7.11 GiB allocatable.
+boot volume.
 
 **CPU.**
 
--   **Rule: the CPU limits of the front-and-workloads class on one node
-    sum to at most 0.5 core**, so the control-plane slice and the
-    platform keep at least 1.5 cores at every moment. Envoy is a
-    platform DaemonSet without a limit: its share is read, not capped,
-    and the sum is over every other member of the class.
--   Evidence: the legacy counterparts of the class (the table below)
-    have 30-day peaks of 5-minute rates that sum to 0.49 core across
-    the whole legacy pool, which the cloud pool spreads over three
-    nodes.
+-   **Rule: a control plane reserves the CPU that etcd, the kubelet,
+    containerd and Talos run on**, outside the pods' control group
+    (`systemReserved`), **and the control-plane static pods request
+    what they run at.** The kubelet weighs `/kubepods` by the
+    allocatable left, 39 against `/podruntime`'s 79, which keeps
+    `/podruntime`, the group etcd runs in beside the kubelet and
+    containerd, 1.34 cores against pods that saturate the node. Talos fixes
+    its own groups' weights, so they are read after every Talos or
+    Kubernetes upgrade (operations.md §2.1).
+-   How the weights arise: on Talos, etcd runs in `/podruntime/etcd`,
+    beside the kubelet and containerd, and the pods run in `/kubepods`,
+    a sibling of `/podruntime` at the root, and the kernel divides a
+    contended core between siblings by their `cpu.weight`. Talos writes
+    its own groups' weights from constants, and the machine
+    configuration has no field for them. The kubelet writes
+    `/kubepods`' from the node's allocatable CPU, by a linear formula,
+    and sets no CPU quota on it, so the reservation is enforced by
+    weight alone. Weights give an idle group's share to the busy ones,
+    so 1.34 cores is a floor under contention, not a cap on the pods.
+-   The controller manager and the scheduler keep Talos' requests,
+    50m and 10m. The API server's request is its share inside
+    `/kubepods`, where a pod's weight follows its CPU request: 500m
+    weighs ten times a pod that requests 50m.
+-   Evidence: on all three control planes, read on 2026-11-19 and
+    2026-11-20 with 200m reserved, every weight was the one the two
+    formulas give: `init` 79, `system` 59, `podruntime` 79,
+    `podruntime/etcd` 79, `podruntime/kubelet` and `podruntime/runtime`
+    39, `kubepods` 71. At 71 the pods' group stood at parity with
+    `/podruntime`, which kept 1.05 cores against saturating pods.
+-   Evidence: over the seven days to 2026-11-20, the bring-up among
+    them, etcd's own CPU peaked at 0.044–0.055 core and the API
+    server's container at 0.107, 0.333 and 0.085 core on the three
+    nodes. With 200m reserved, a control plane reported 1.8 cores
+    allocatable, and the pods' requests summed to 565m, 465m and 365m;
+    with the API server's request raised by 300m, each still fits the
+    1.0 core left.
+-   Evidence: the legacy counterparts (the table below) have 30-day
+    peaks of 5-minute rates that sum to 0.49 core across the whole
+    legacy pool.
 
 **Memory.** The sizing above gives about 2–2.5 GiB to the
-control-plane slice, about 1.5 GiB of platform floor, and about 4 GiB
-of the 8 GB node to Envoy, hath and the workloads.
+control-plane slice, about 1.5 GiB of platform floor, and the rest of
+the 8 GB node to the pods.
 
--   **Rule: the memory limits of the front-and-workloads class on one
-    node sum to at most 3.5 GiB**, the 4 GiB less the 0.5 GiB the
-    kubelet reserves, Envoy excepted as for CPU; **and the node's
-    available memory never falls under 1 GiB.**
+-   **Rule: a control plane's kubelet evicts at 1 GiB available**
+    (`evictionHard`), so the node's available memory never falls under
+    1 GiB for long. It evicts workload pods by their usage over their
+    requests, and never a static pod. The kubelet's other hard
+    thresholds keep their defaults beside it, the space on the disk
+    etcd writes to among them. The kubelet's `memory.max` on `/kubepods`
+    keeps the pods as a whole off the 0.5 GiB it reserves.
 -   Evidence: on the empty cluster, which does not count toward sizing,
     nodes' working sets read 1.9–2.1 GiB, kube-apiserver 1.05–1.2 GiB,
     etcd's resident set 0.13 GiB, the Cilium agent 0.33–0.6 GiB and
     Envoy 0.1 GiB (2026-11-17). Nothing contradicts the floors.
--   Evidence: the class's legacy counterparts have 30-day peaks that
-    sum to 2.1 GiB across the legacy pool, traefik included.
+-   Evidence: the legacy counterparts have 30-day peaks that sum to
+    2.1 GiB across the legacy pool, traefik included, and the pods'
+    memory requests on a control plane read 0.9–1.06 GiB on
+    2026-11-20.
 
 **Disk.** §1.2.
 
@@ -135,7 +171,14 @@ page, VM shapes).
 -   Evidence: traefik's busiest 5 minutes in 30 days moved 7.3 MB/s,
     hath's 0.43 MB/s; doubled, that is under a tenth of the line.
 
-**The legacy counterparts**, from the legacy cluster's Prometheus over
+**Planning.** A plan estimates by an assumed placement and says that
+it assumes it. The pods a site holds (declarative/workloads.md §1) fit
+that site's allocatable, and every pod fits the cluster's. The
+assumption lives in the plan alone.
+
+**The legacy counterparts of what a plan assumes on the cloud nodes**
+(rfc-008 §5's assumed placement; the scheduler may place a free pod
+elsewhere), from the legacy cluster's Prometheus over
 the 30 days to 2026-11-17, `cAdvisor` rates over 5 minutes: CPU in cores,
 memory as working set in GiB, network on the pod's interface.
 
@@ -150,12 +193,13 @@ memory as working set in GiB, network on the pod's interface.
 | authelia and its Redis | 0.031 / 0.050 / 0.108 | 0.07 / 0.40 | 1.9 / 1.5 GB | 0.02 MB/s | none |
 
 -   **Every one of them writes a few kilobytes a second in the steady
-    state**, so the claims bound for the cloud pool are negligible
+    state**, so their claims, wherever they bind, are negligible
     beside the boot volume's 24 MB/s (§1.2). What the disk has to
     answer for is the peaks.
 -   **hath's 30-day peak is 0.50 GiB**, against a mean of 0.31. Limits
     come from the 30-day peak (rfc-008 §6.1), so hath's memory limit is
-    at least 0.5 GiB, which fits the class.
+    at least 0.5 GiB, which the allocatable a control plane leaves
+    holds.
 
 ### 1.2 The boot volume's disk budget
 
@@ -800,8 +844,9 @@ size is set by the fixed floors, not by workloads**. Platform floor
 (etcd+apiserver+controllers) another ~2–2.5 GiB — before the first app
 pod. This is what made 2–4 GB paid instances structurally cramped and
 what the 8 GB A1 nodes absorb, billed at A1's memory rate (§3.2): each still keeps ~4 GiB for
-Envoy, hath (a 30-day peak of 0.5 GiB, §1.1) and the internet-pool
-workloads. Meanwhile, the homelab
+Envoy, hath (a 30-day peak of 0.5 GiB, §1.1, held to its node by its
+cache's volume) and the pods the scheduler places there, which fit the
+allocatable the control plane leaves (§1.1). Meanwhile, the homelab
 side, though tighter on paper, is the flexible one: workloads can be
 trimmed, ARC squeezed, and RAM added (§4.2) — memory pressure there is
 real but manageable.

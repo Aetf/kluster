@@ -99,6 +99,10 @@ class Refusal(enum.Enum):
     INSTALLER_STRANGER = enum.auto()
     #: Nodes with no installer of their own.
     INSTALLER_MISSING = enum.auto()
+    #: Sites keyed by nodes the cluster does not have.
+    SITE_STRANGER = enum.auto()
+    #: Nodes with no site.
+    SITE_MISSING = enum.auto()
     #: Day 1 addresses keyed by nodes the cluster does not have.
     ADDRESS_STRANGER = enum.auto()
     #: Day 1 secondary addresses keyed by nodes the cluster does not have.
@@ -128,9 +132,83 @@ class RollRefused(ValueError):
         self.volumes: tuple[str, ...] = tuple(volumes)
 
 
-#: Kubelet reservations exist so eviction has something to work with: an
-#: unreserved node starves its own control plane before the kubelet notices.
-SYSTEM_RESERVED = {'cpu': '200m', 'memory': '512Mi', 'ephemeral-storage': '1Gi'}
+#: What the kubelet keeps outside the pods' control group on every node
+#: (`systemReserved`), apart from CPU: memory for Talos, the kubelet and
+#: containerd, and a share of the system disk. The scheduler fits the pods'
+#: requests into what is left, the node's allocatable, and eviction has
+#: something to work with: an unreserved node starves its own control plane
+#: before the kubelet notices. CPU is each role's (`WORKER_RESERVED_CPU`,
+#: `ControlPlaneReservation.cpu`), and each role's patch writes the whole
+#: `systemReserved` from this and its CPU.
+SYSTEM_RESERVED: Mapping[str, str] = {'memory': '512Mi', 'ephemeral-storage': '1Gi'}
+
+#: The CPU a worker's kubelet keeps outside the pods' control group. A
+#: worker runs no etcd, so this is room for Talos, the kubelet and
+#: containerd alone.
+WORKER_RESERVED_CPU = '200m'
+
+
+@dataclass(frozen=True, kw_only=True)
+class ControlPlaneReservation:
+    """What a control plane reserves for its own control plane, which the scheduler fits every pod around (nodes.md §1.1).
+
+    Three parts that are right only together: the CPU the kubelet keeps
+    outside the pods' control group, the API server's requests inside it,
+    and the memory the kubelet keeps available by evicting pods. The API
+    server's request has to fit what the reserved CPU leaves of the node.
+    """
+
+    cpu: str
+    """The CPU the kubelet keeps outside `/kubepods`, beside `SYSTEM_RESERVED`.
+
+    On Talos etcd runs in `/podruntime/etcd`, beside the kubelet and
+    containerd, and the pods in `/kubepods`, a sibling of `/podruntime` at
+    the root; a contended core is divided between siblings by their
+    `cpu.weight`. Talos fixes `/podruntime`'s from constants, 79 on a
+    two-core node, and the kubelet writes `/kubepods`' from the node's
+    allocatable CPU by its linear shares-to-weight formula. Read on all three
+    control planes on 2026-11-19 and 2026-11-20 with 200m reserved, every
+    weight was the one the two formulas give: `init` 79, `system` 59,
+    `podruntime` 79, `podruntime/etcd` 79, `podruntime/kubelet` and
+    `podruntime/runtime` 39, `kubepods` 71. At 1000m `/kubepods` falls to
+    39, so against pods that saturate the node `/podruntime` keeps
+    79 / (79 + 39) of its two cores, 1.34, where 71 left it 1.05. etcd's own
+    CPU peaked at 0.044–0.055 core over the seven days to 2026-11-20, the
+    cluster's bring-up among them. A control plane reports 1.0 core
+    allocatable, which the pods' requests on each, read the same day, fit.
+    An upgrade of Talos or of Kubernetes can move either formula, so the
+    weights are read again after each one (operations.md §2.1).
+    """
+    api_server_requests: Mapping[str, str]
+    """What the API server, a static pod, requests, where Talos would give it 200m and 512 MiB.
+
+    Inside `/kubepods` a pod's CPU weight follows its CPU request, so the
+    request is the API server's share against the pods beside it: 500m
+    weighs ten times a pod that requests 50m. Its container's CPU peaked at
+    0.107, 0.333 and 0.085 core on the three control planes over the seven
+    days to 2026-11-20. 1.25 GiB covers its working set on the empty
+    cluster, 1.05–1.2 GiB (nodes.md §1.1). Talos sets no limit unless one is
+    named, and none is: a static pod is never evicted. The controller
+    manager and the scheduler keep Talos' requests, 50m and 10m of CPU,
+    which no reading contradicts.
+    """
+    eviction_hard: Mapping[str, str]
+    """The memory the kubelet keeps available by evicting pods (`evictionHard`).
+
+    nodes.md §1.1's floor, "the node's available memory never falls under
+    1 GiB", held by the kubelet. It evicts workload pods by their usage over
+    their requests and never a static pod. The threshold counts against the
+    node's allocatable beside `SYSTEM_RESERVED`, so a control plane reports
+    about 6.2 GiB.
+    """
+
+
+#: The control planes' reservation.
+CONTROL_PLANE_RESERVATION = ControlPlaneReservation(
+    cpu='1000m',
+    api_server_requests={'cpu': '500m', 'memory': '1280Mi'},
+    eviction_hard={'memory.available': '1Gi'},
+)
 
 #: The write rate, in MB/s, a control plane's boot volume takes beside etcd
 #: with etcd's syncs intact: writes held to it kept an etcd-shaped
@@ -320,10 +398,15 @@ def etcd_metrics_url() -> str:
     return f'http://{IPv4Address(0)}:{conventions.ETCD_METRICS_PORT}'
 
 
-def node_patch() -> dict[str, Any]:
-    """What every machine in the cluster carries, whatever its role."""
+def node_patch(site: conventions.Site) -> dict[str, Any]:
+    """What every machine in the cluster carries; the site label takes the node's `site`.
+
+    Talos applies `machine.nodeLabels` to a running node without a reboot
+    (`CanApplyImmediate`).
+    """
     return {
         'machine': {
+            'nodeLabels': {conventions.SITE_LABEL: site.value},
             'features': {
                 # There is no kube-proxy to fall back on, so the node-local
                 # apiserver front is mandatory rather than an optimization.
@@ -335,9 +418,6 @@ def node_patch() -> dict[str, Any]:
                 # them, so they are stated rather than inherited, and
                 # forwarding is refused without the resolver it forwards to.
                 'hostDNS': {'enabled': True, 'forwardKubeDNSToHost': True},
-            },
-            'kubelet': {
-                'extraConfig': {'systemReserved': SYSTEM_RESERVED},
             },
         },
         'cluster': {
@@ -449,7 +529,7 @@ def hostname_document(hostname: str) -> dict[str, Any]:
 
 
 def control_plane_patch(*, cert_sans: Sequence[str], secretbox_secret: str | None = None) -> dict[str, Any]:
-    """What only a control plane has: the apiserver, etcd and its disk, the CNI, the service proxy, apid's SANs, the Talos grant.
+    """What only a control plane has: the apiserver, etcd and its disk, its reservation, the CNI, the service proxy, apid's SANs, the Talos grant.
 
     A worker's configuration has no apiserver to harden and no etcd to
     encrypt or read, and the CNI and kube-proxy are installed by the control
@@ -466,6 +546,22 @@ def control_plane_patch(*, cert_sans: Sequence[str], secretbox_secret: str | Non
     `machine.kubelet` is among the fields Talos applies immediately
     (`CanApplyImmediate`), and the kubelet restarts under the new
     configuration. A worker's disk holds no etcd, so its pulls stay unbounded.
+
+    The control plane's reservation is here whole
+    (`CONTROL_PLANE_RESERVATION`, nodes.md §1.1): the kubelet's
+    `systemReserved`, `SYSTEM_RESERVED` with the control plane's CPU, written
+    as one map so that it does not depend on how Talos merges a nested one;
+    the API server's requests; and the eviction threshold. Under
+    `evictionHard` the kubelet sets to zero every signal the field does not
+    name, so a threshold for memory alone would turn off eviction on the
+    system disk's space, which is etcd's; `mergeDefaultEvictionSettings`
+    keeps the kubelet's defaults for the others (`KubeletConfiguration`,
+    Kubernetes v1.36). Each field is among those Talos applies immediately,
+    and a changed `cluster.apiServer` replaces the API server's static pod on
+    each control plane: the applies wait for one another's acceptance and
+    not for the API server, so the control planes' API servers restart
+    together, and the API goes unanswered for as long as one restart takes.
+    etcd, a Talos service, is untouched.
 
     `cert_sans` go into two certificates, which read two fields: the
     Kubernetes API server's (`cluster.apiServer.certSANs`) and apid's
@@ -516,6 +612,9 @@ def control_plane_patch(*, cert_sans: Sequence[str], secretbox_secret: str | Non
             'kubelet': {
                 'extraConfig': {
                     'maxParallelImagePulls': image_pull_bound(BOOT_VOLUME_SAFE_WRITE_MBPS, BOOT_VOLUME_ONE_WRITER_MBPS),
+                    'systemReserved': {**SYSTEM_RESERVED, 'cpu': CONTROL_PLANE_RESERVATION.cpu},
+                    'evictionHard': dict(CONTROL_PLANE_RESERVATION.eviction_hard),
+                    'mergeDefaultEvictionSettings': True,
                 },
             },
         },
@@ -527,6 +626,7 @@ def control_plane_patch(*, cert_sans: Sequence[str], secretbox_secret: str | Non
                 'certSANs': list(cert_sans),
                 # A public 6443 warrants both, defaults notwithstanding.
                 'extraArgs': {'anonymous-auth': 'false', 'audit-log-path': '/var/log/audit/kube/kube-apiserver.log'},
+                'resources': {'requests': dict(CONTROL_PLANE_RESERVATION.api_server_requests)},
             },
             'etcd': {
                 'advertisedSubnets': [str(conventions.VCN_CIDR)],
@@ -544,6 +644,18 @@ def control_plane_patch(*, cert_sans: Sequence[str], secretbox_secret: str | Non
         # do.
         config['cluster']['secretboxEncryptionSecret'] = secretbox_secret
     return config
+
+
+def worker_patch() -> dict[str, Any]:
+    """What only a worker has: the kubelet's `systemReserved` at a worker's CPU.
+
+    A control plane writes its own, whole, in `control_plane_patch`. Each
+    role writes the map in one piece rather than overriding a shared one, so
+    no node's configuration holds a reservation it does not apply.
+    """
+    return {
+        'machine': {'kubelet': {'extraConfig': {'systemReserved': {**SYSTEM_RESERVED, 'cpu': WORKER_RESERVED_CPU}}}}
+    }
 
 
 def local_path_volume_document() -> dict[str, Any]:
@@ -829,6 +941,7 @@ def ingress_firewall_documents(extra: Sequence[Opening] = ()) -> list[dict[str, 
 def patches(
     *,
     installer: str,
+    site: conventions.Site,
     role: Role = 'controlplane',
     hostname: str | None = None,
     cert_sans: Sequence[str] = (),
@@ -844,6 +957,11 @@ def patches(
     has no default, because the default the provider fills in is the stock
     installer, which would drop the node's extensions on the upgrade that
     took it.
+
+    `site` is the site the node is at, which it carries as
+    `conventions.SITE_LABEL` (`node_patch`). It has no default either: a
+    label the program does not state would leave the node outside every
+    constraint a pod states against a site.
 
     `hostname` is the name the node takes (`hostname_document`). The
     program's own call, `TalosCluster`, passes every node's; a list rendered
@@ -862,7 +980,7 @@ def patches(
     has; no node has both, and a node with neither is configured by its lease.
     """
     documents: list[Mapping[str, Any]] = [
-        node_patch(),
+        node_patch(site),
         installer_patch(installer),
         kubespan_document(),
         local_path_volume_document(),
@@ -873,6 +991,8 @@ def patches(
         documents.append(node_volume_label_patch(volume))
     if role == 'controlplane':
         documents.append(control_plane_patch(cert_sans=cert_sans, secretbox_secret=secretbox_secret))
+    else:
+        documents.append(worker_patch())
     if static_address is not None:
         documents += static_address_documents(static_address)
     if secondary_address is not None:
@@ -922,6 +1042,11 @@ class TalosCluster(Component, pulumi_type='kluster:talos:TalosCluster'):
         names as its own (`installer_patch`). Every node needs one, and from
         the artifact it boots: the installer is built from a schematic, and
         only the boot image's schematic carries what the node runs.
+    :param sites: node name to the site the node is at, which the node carries
+        as `conventions.SITE_LABEL` (`node_patch`). Every node needs one, and
+        it is the declaration's rather than the role's: where a machine is
+        and what it does for the cluster are two facts, and a pod held to a
+        site states it against the label.
     :param volumes: the node volumes, by name (`conventions.NODE_VOLUMES`).
         Each is mounted, and its node labelled, in the configuration of the
         node it attaches to, so the volume is part of what that machine boots
@@ -950,6 +1075,7 @@ class TalosCluster(Component, pulumi_type='kluster:talos:TalosCluster'):
         talos_version: str,
         bgp_peers: Mapping[str, pulumi.Input[str]],
         installers: Mapping[str, pulumi.Input[str]],
+        sites: Mapping[str, conventions.Site],
         volumes: Mapping[str, conventions.NodeVolumeEntry],
         opts: pulumi.ResourceOptions | None = None,
     ) -> None:
@@ -1011,6 +1137,21 @@ class TalosCluster(Component, pulumi_type='kluster:talos:TalosCluster'):
                 refusal=Refusal.INSTALLER_MISSING,
                 nodes=missing,
             )
+        self._sites = dict(sites)
+        unknown = sorted(set(self._sites) - set(self.roles))
+        if unknown:
+            raise RollRefused(
+                f'sites name nodes that are not in the cluster: {unknown}',
+                refusal=Refusal.SITE_STRANGER,
+                nodes=unknown,
+            )
+        missing = sorted(set(self.roles) - set(self._sites))
+        if missing:
+            raise RollRefused(
+                f'every node is at a site, and {missing} name none',
+                refusal=Refusal.SITE_MISSING,
+                nodes=missing,
+            )
         self._volumes = _volumes_by_node(volumes, self.roles)
 
         self.secrets = machine.Secrets(
@@ -1070,6 +1211,7 @@ class TalosCluster(Component, pulumi_type='kluster:talos:TalosCluster'):
     async def _patches(self, node: str, role: Role, secondary_address: pulumi.Input[str] | None) -> list[str]:
         return patches(
             installer=str(await resolve(self._installers[node])),
+            site=self._sites[node],
             role=role,
             # The node's name in the declaration is its hostname.
             hostname=node,

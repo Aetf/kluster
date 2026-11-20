@@ -86,9 +86,10 @@ PLATFORM_MODES: dict[str, Mode] = {'oracle': 'cloud', 'nocloud': 'cloud'}
 
 @dataclass(frozen=True)
 class Shape:
-    """One node shape: its role, the platform it boots, and the inputs `talos.patches` renders it from."""
+    """One node shape: its role, the site it is at, the platform it boots, and the inputs `talos.patches` renders it from."""
 
     role: talos.Role
+    site: conventions.Site
     platform: str
     inputs: dict[str, Any] = field(default_factory=dict[str, Any])
 
@@ -127,14 +128,18 @@ def plain_control_plane() -> str:
 #: the volume that follows the VIP as well;
 #: the homelab worker states its own address and takes BGP from its gateway.
 SHAPES: dict[str, Shape] = {
-    'control-plane': Shape('controlplane', image.CLOUD_PLATFORM, {'hostname': plain_control_plane()}),
+    'control-plane': Shape(
+        'controlplane', conventions.Site.CLOUD, image.CLOUD_PLATFORM, {'hostname': plain_control_plane()}
+    ),
     'dedicated-vip': Shape(
         'controlplane',
+        conventions.Site.CLOUD,
         image.CLOUD_PLATFORM,
         {'hostname': conventions.DEDICATED_VIP_NODE, 'secondary_address': str(conventions.VCN_CIDR[42])},
     ),
     'dedicated-vip-volume': Shape(
         'controlplane',
+        conventions.Site.CLOUD,
         image.CLOUD_PLATFORM,
         {
             'hostname': conventions.DEDICATED_VIP_NODE,
@@ -144,6 +149,7 @@ SHAPES: dict[str, Shape] = {
     ),
     'homelab-worker': Shape(
         'worker',
+        conventions.Site.HOME,
         image.HOMELAB_PLATFORM,
         {
             'hostname': conventions.HOMELAB_NODE,
@@ -209,6 +215,7 @@ def patches(shape: Shape, bundle: Path) -> list[str]:
     return talos.patches(
         installer=f'factory.talos.dev/{shape.platform}-installer/{SCHEMATIC}:{pinned_release()}',
         role=shape.role,
+        site=shape.site,
         cert_sans=[BALANCER],
         secretbox_secret=secretbox_secret(bundle) if shape.role == 'controlplane' else None,
         **shape.inputs,

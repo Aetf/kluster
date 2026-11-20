@@ -251,6 +251,12 @@ async def main() -> None:
             **dict.fromkeys(conventions.CLOUD_NODES, image.installer),
             conventions.HOMELAB_NODE: worker_image.installer,
         },
+        # Where each node is: the fleet this stack creates as OCI instances is
+        # the cloud site, and the domain on the homelab host is the home one.
+        sites={
+            **dict.fromkeys(conventions.CLOUD_NODES, conventions.Site.CLOUD),
+            conventions.HOMELAB_NODE: conventions.Site.HOME,
+        },
         # The same table the attachments below are declared from: the machine
         # mounts each volume its node will be handed, and is labelled with it.
         # It is the table rather than the attachments because those need the

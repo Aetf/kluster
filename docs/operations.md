@@ -240,6 +240,24 @@ preview with `denydefaultprovider not registered`.
 
     After the worker's upgrade, `mise x -- talosctl -n <node> get extensions`
     still lists both extensions.
+
+    **After the Talos upgrade, and again after `upgrade-k8s`, each
+    control plane's CPU weights are read** (cluster/nodes.md §1.1). The
+    control plane's reservation keeps `/podruntime`, the group etcd runs
+    in, ahead of the pods through two upstream formulas, the weights
+    Talos gives its own groups and the one the kubelet gives
+    `/kubepods`, and either release can move them. On each control
+    plane:
+
+        for g in init system podruntime podruntime/etcd podruntime/kubelet podruntime/runtime kubepods; do printf '%s ' "$g"; mise x -- talosctl -n <node> read "/sys/fs/cgroup/$g/cpu.weight"; done
+
+    With 1000m reserved on a two-core node the formulas give `init` 79,
+    `system` 59, `podruntime` 79, `podruntime/etcd` 79,
+    `podruntime/kubelet` 39, `podruntime/runtime` 39 and `kubepods` 39.
+    A reading that differs means a formula moved: the share
+    `/podruntime` keeps against saturating pods is derived again from
+    what was read, and a share under nodes.md §1.1's 1.34 cores goes to
+    the operator with the reading.
 -   **§2.2 Cilium upgrade.** Trigger: chart PR. Gist: the riskiest
     bump in the system — before merge, re-run the affected subset of
     the bootstrap verifications on the preview environment of one
@@ -2337,13 +2355,15 @@ are the per-wave gate's own windows (migration.md §0 rule 6).
 
 1.  **Which class.** On the dashboard's Load classes row, CPU and memory
     used by class on the node, and the CPU and memory limits of the
-    front and the workloads against the 0.5 core and 3.5 GiB nodes.md
-    §1.1 allows them.
-2.  **CPU.** A workload class past its limits is a workload's limit to
-    correct, in the `apps` declaration of its own. The control-plane
-    slice grows with what the API server is asked: an apply's burst of
-    creates, which the deploy chain's parallelism bounds (nodes.md
-    §1.2). The platform is the node less the two, Cilium's agent and the
+    pods there. A control plane is budgeted by its allocatable
+    (nodes.md §1.1), so the classes are read here, not held to a
+    budget.
+2.  **CPU.** A pod that uses more than it requests is a workload's
+    request to correct, in the `apps` declaration of its own, since the
+    scheduler fits requests alone into what the control plane's
+    reservation leaves. The control-plane slice grows with what the API
+    server is asked: an apply's burst of creates, which the deploy
+    chain's parallelism bounds (nodes.md §1.2). The platform is the node less the two, Cilium's agent and the
     controllers among it.
 3.  **I/O.** As §8.1 steps 1 and 3: the boot volume's readings say how
     hard it was written, and the node's events what wrote it.

@@ -1,10 +1,10 @@
-"""Inside the cluster: its address ranges, its ports, its mesh's MTU, its routing session, its pools, its namespaces, its metrics history, its storage classes, the renewal of its admin credential."""
+"""Inside the cluster: its address ranges, its ports, its mesh's MTU, its routing session, its pools, its nodes' sites, its namespaces, its metrics history, its storage classes, the renewal of its admin credential."""
 
 from __future__ import annotations
 
 import datetime as dt
 from collections.abc import Mapping
-from enum import Enum
+from enum import Enum, StrEnum
 from ipaddress import IPv4Network, IPv6Network
 from types import MappingProxyType
 from typing import Literal, NamedTuple
@@ -95,6 +95,31 @@ POOL_WORKER = 'worker'
 #: what tells the cloud pool from the worker, which the placements in
 #: `kluster.lib.k8s` select by.
 CONTROL_PLANE_LABEL = 'node-role.kubernetes.io/control-plane'
+
+
+class Site(StrEnum):
+    """Which site a node is at, as the value of `SITE_LABEL` on it.
+
+    The cluster spans two sites (architecture.md §1.1): the cloud, which holds
+    the control planes, and home, where the worker runs beside the gateway and
+    the NAS. Whether a node can be reached from home while the home uplink is
+    down, and what its traffic costs on the way out, follow from its site,
+    and the scheduler sees neither; a pod that must be at one site states it
+    against this label rather than against a node or a role.
+    """
+
+    HOME = 'home'
+    CLOUD = 'cloud'
+
+
+#: The label every node carries its `Site` under, which `components.talos` sets
+#: in the machine configuration from the site the `physical` stack declares for
+#: each node. It is the key Kubernetes gives a node's failure domain, because
+#: what reads a site reads that key: a topology spread over sites, and the zone
+#: hints the EndpointSlice controller writes for a Service's
+#: `trafficDistribution`. Talos sets no topology label of its own, and the
+#: kubelet's node restriction admits this one.
+SITE_LABEL = 'topology.kubernetes.io/zone'
 
 #: A Service opts into a pool by carrying this label; the pools'
 #: `serviceSelector` matches on it.

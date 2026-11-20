@@ -271,12 +271,12 @@ classes its objects fall into (§1.2):
     their records: the API server's request latency, whose histogram is
     the largest family the store holds, and the worker's scrapes of the
     control planes, which read `up`. The load classes are nodes.md
-    §1.1's, read where its table reads them: the control-plane slice is
-    etcd's own series and the API server's, the controller manager's
-    and the scheduler's pods; the front and the workloads are Envoy's
-    pods and every pod outside the namespaces `k8s-base` places objects
-    in, which a test holds to the program; and the platform is the node
-    less the two. A pod is read by its own control group, apart from
+    §1.1's, read where its table reads them, and carry no budget: the
+    control-plane slice is etcd's own series and the API server's, the
+    controller manager's and the scheduler's pods; the pods class is
+    Envoy's pods and every pod outside the namespaces `k8s-base` places
+    objects in, which a test holds to the program; and the platform is
+    the node less the two. A pod is read by its own control group, apart from
     its sandbox's, and a pod's limits count while it is pending or
     running. etcd's I/O is its WAL's bytes alone, since nothing counts
     its backend's, so the slice's I/O is a lower bound; the same

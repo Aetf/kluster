@@ -1550,16 +1550,50 @@ def test_every_volume_the_program_attaches_is_mounted_by_a_machine_configuration
             for document in documents
             if document.get('kind') == 'UserVolumeConfig' and document['volumeType'] == 'partition'
         ]
-        labels = [
-            label
+        labels = {
+            key: value
             for document in documents
             if 'kind' not in document
-            for label in cast('dict[str, str]', document.get('machine', {}).get('nodeLabels', {})).items()
-        ]
+            for key, value in cast('dict[str, str]', document.get('machine', {}).get('nodeLabels', {})).items()
+        }
         assert len(names) <= 1, names
-        assert labels == [(conventions.NODE_VOLUME_LABEL, name) for name in names]
+        assert labels.get(conventions.NODE_VOLUME_LABEL) == next(iter(names), None)
         mounted |= set(names)
     assert mounted == set(conventions.NODE_VOLUMES)
+
+
+def test_each_node_is_labelled_with_the_site_the_stack_creates_it_at(ran: Run) -> None:
+    """A node this stack creates as an OCI instance is at the cloud site, and the libvirt domain is at home.
+
+    The machines are read from what the run declared, each under the node's
+    name, and the label from every configuration the run rendered, named by
+    its hostname, so a node the stack put at one site and labelled with the
+    other fails here whichever role it has.
+    """
+    prefix = f'{conventions.CLUSTER_NAME}-'
+    machines = {
+        **{
+            name.removeprefix(prefix): conventions.Site.CLOUD
+            for name in ran.recorded.by_name('oci:Core/instance:Instance')
+        },
+        **{
+            name.removeprefix(prefix): conventions.Site.HOME
+            for name in ran.recorded.by_name('libvirt:index/domain:Domain')
+        },
+    }
+    assert set(machines) == set(conventions.ALL_NODES)
+    labelled: dict[str, set[str]] = {}
+    for configuration in ran.recorded.configurations:
+        documents = [json.loads(str(patch)) for patch in cast('list[Any]', configuration['configPatches'])]
+        (hostname,) = [str(document['hostname']) for document in documents if document.get('kind') == 'HostnameConfig']
+        labelled.setdefault(hostname, set()).update(
+            str(value)
+            for document in documents
+            if 'kind' not in document
+            for key, value in cast('dict[str, str]', document.get('machine', {}).get('nodeLabels', {})).items()
+            if key == conventions.SITE_LABEL
+        )
+    assert labelled == {node: {site.value} for node, site in machines.items()}
 
 
 @on_the_runs_loop

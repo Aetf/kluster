@@ -159,11 +159,13 @@ owns sequencing, data movement, and teardown.
             hourly; I/O pressure (some) at most 10 % in every 10
             minutes.
         3.  **CPU**: CPU pressure (some) at most 20 % in every 10
-            minutes and at most 10 % over the window; the class's CPU
-            limits on the node sum to at most 0.5 core.
+            minutes and at most 10 % over the window; and no pod is
+            left Pending for want of CPU (`FailedScheduling`,
+            `Insufficient cpu`) over the window.
         4.  **Memory**: available memory at least 1 GiB at its lowest;
-            no memory pressure (full); the class's memory limits on the
-            node sum to at most 3.5 GiB.
+            no memory pressure (full); and no pod is left Pending for
+            want of memory (`FailedScheduling`, `Insufficient memory`)
+            over the window.
         5.  **Network**: public and KubeSpan traffic at most 62.5 MB/s
             at the 99th percentile of 5-minute rates; no KubeSpan peer
             down.
