@@ -571,7 +571,12 @@ def test_the_worker_listens_on_the_port_its_firewall_opens_to_the_gateway(applie
     (peer,) = instance['peers']
     documents = [
         json.loads(document)
-        for document in talos.patches(installer='an-installer', role='worker', bgp_peer=f'{peer["peerAddress"]}/32')
+        for document in talos.patches(
+            installer='an-installer',
+            site=conventions.Site.HOME,
+            role='worker',
+            bgp_peer=f'{peer["peerAddress"]}/32',
+        )
     ]
 
     opened = [

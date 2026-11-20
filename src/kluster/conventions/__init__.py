@@ -52,9 +52,13 @@ overlay
     Not: zt.
 
 site
-    The home LANs the gateway routes, collectively (`conventions.site`;
-    rfc-002 §3.2): a site network is one of them (`SiteNetwork`,
-    `SITE_NETWORKS`), and the untagged one is the server LAN (`SERVER_LAN`).
+    One of the two places the cluster's nodes are at, home and the cloud,
+    which every node carries as a label (`cluster.Site`,
+    `cluster.SITE_LABEL`; cluster/architecture.md §1.1): the home site, the
+    cloud site. Unqualified, the home one, and its LANs, which the gateway
+    routes, collectively (`conventions.site`; rfc-002 §3.2): a site network
+    is one of them (`SiteNetwork`, `SITE_NETWORKS`), and the untagged one is
+    the server LAN (`SERVER_LAN`).
 
 LAN
     On its own, the side an application is reachable from, and the pool that
@@ -113,7 +117,9 @@ zone
     One of the DNS zones the installation holds (`conventions.dns`;
     declarative/dns.md §2): served (`WEB_ZONES`) or parked (`PARKED_ZONES`),
     and a record is published in a zone only where something answers for the
-    name there — nothing mirrors (rfc-003 §11).
+    name there — nothing mirrors (rfc-003 §11). The node label
+    `topology.kubernetes.io/zone` is Kubernetes' key, and what it carries
+    is a site (`cluster.SITE_LABEL`).
     Not: mirrored, alias zone.
 
 installation
@@ -284,11 +290,13 @@ from kluster.conventions.cluster import (
     SEALING_NAMESPACE,
     SERVICE_CIDR_V4,
     SERVICE_CIDR_V6,
+    SITE_LABEL,
     UDM_ASN,
     VOLSYNC_NAMESPACE,
     WRITER_KEY_FIELDS,
     GatewayPorts,
     ManagementPorts,
+    Site,
     TalosGrant,
     Transports,
     node_volume_class,
@@ -460,6 +468,7 @@ __all__ = (
     'SERVER_LAN',
     'SERVICE_CIDR_V4',
     'SERVICE_CIDR_V6',
+    'SITE_LABEL',
     'SITE_NETWORKS',
     'SITE_ULA',
     'STACK_NAMES',
@@ -489,6 +498,7 @@ __all__ = (
     'OciTenancy',
     'PhysicalOutputs',
     'RetentionClass',
+    'Site',
     'SiteHost',
     'SiteNetwork',
     'StackNames',

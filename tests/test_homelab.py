@@ -136,6 +136,7 @@ def build_cluster(worker_nodes: tuple[str, ...] = (WORKER,)) -> Any:
         # Any image reference serves: no case here reads the installer, and
         # every node has to name one.
         installers={node: f'factory.talos.dev/installer/{node}:v1.11.0' for node in ('cp1', *worker_nodes)},
+        sites={'cp1': conventions.Site.CLOUD, **dict.fromkeys(worker_nodes, conventions.Site.HOME)},
         volumes={},
         talos_version='v1.11.0',
     )

@@ -12,6 +12,7 @@ from typing import Any, cast
 from urllib.parse import urlsplit
 
 import pytest
+from k8s_quantity import quantity
 
 from kluster import conventions
 from kluster.components import cilium, talos
@@ -30,6 +31,7 @@ INSTALLER = 'factory.talos.dev/example-installer/0123abcd:v1.13.9'
 
 def documents(**kwargs: Any) -> list[dict[str, Any]]:
     kwargs.setdefault('installer', INSTALLER)
+    kwargs.setdefault('site', conventions.Site.CLOUD)
     kwargs.setdefault('cert_sans', SANS)
     kwargs.setdefault('secretbox_secret', SECRETBOX)
     return [json.loads(patch) for patch in talos.patches(**kwargs)]
@@ -87,6 +89,7 @@ SHAPES: dict[str, dict[str, Any]] = {
     'node-volume': {'volume': VOLUME},
     'homelab-worker': {
         'role': 'worker',
+        'site': conventions.Site.HOME,
         'static_address': talos.STATIC_ADDRESSES[conventions.HOMELAB_NODE],
         'bgp_peer': PEER,
     },
@@ -234,6 +237,78 @@ def test_a_worker_puts_no_sans_into_either_certificate() -> None:
 
 def test_the_kubelet_reserves_room_for_the_node() -> None:
     assert merged('machine')['kubelet']['extraConfig']['systemReserved']
+
+
+@pytest.mark.parametrize('site', list(conventions.Site))
+@pytest.mark.parametrize('shape', list(SHAPES))
+def test_every_node_carries_the_site_it_is_declared_at(shape: str, site: conventions.Site) -> None:
+    """The label says the site the node is handed, whatever else the node is.
+
+    The label is what a pod that has to be at one site, and a spread over
+    sites, are stated against (architecture.md §1.1); a node without it is
+    at neither, so a pod held to either one never lands there.
+    """
+    labels = merged('machine', **{**SHAPES[shape], 'site': site})['nodeLabels']
+    assert labels[conventions.SITE_LABEL] == site
+
+
+def test_a_control_plane_reserves_more_cpu_than_a_worker_and_leaves_its_api_server_room() -> None:
+    """etcd's CPU is reserved on the node that runs it, outside the pods' group (nodes.md §1.1).
+
+    The kubelet weighs the pods' control group by the CPU the node leaves
+    them, so what a control plane reserves beyond a worker is what keeps
+    `/podruntime`, where etcd runs, the larger share against pods that
+    saturate the node. The API server is a pod inside the pods' group, so
+    what is left still holds its request.
+    """
+    control_plane = merged('machine')['kubelet']['extraConfig']['systemReserved']
+    worker = merged('machine', role='worker')['kubelet']['extraConfig']['systemReserved']
+    assert quantity(control_plane['cpu']) > quantity(worker['cpu'])
+    requested = merged('cluster')['apiServer']['resources']['requests']
+    assert quantity(requested['cpu']) < conventions.NODE_OCPUS - quantity(control_plane['cpu'])
+
+
+def test_a_control_plane_requests_cpu_and_memory_for_its_api_server_and_no_limit() -> None:
+    """The API server's requests are stated, and it carries no limit (nodes.md §1.1).
+
+    Inside the pods' group a pod's CPU weight follows its request, so the
+    request is the API server's share against the pods beside it; a limit
+    would cap the control plane's own server under load, and a static pod is
+    never evicted, so none is needed to keep it off the node's floor.
+    """
+    resources = merged('cluster')['apiServer']['resources']
+    assert set(resources) == {'requests'}
+    assert quantity(resources['requests']['cpu']) > 0
+    assert quantity(resources['requests']['memory']) > 0
+
+
+def test_a_control_planes_memory_floor_reservation_and_api_server_fit_the_node() -> None:
+    """What a control plane keeps off the pods in memory, its API server's request among it, fits the node (nodes.md §1.1).
+
+    The eviction floor and the kubelet's reservation both count against the
+    node's allocatable, and the API server's request is scheduled into what
+    they leave, so the three together are under the node's memory.
+    """
+    kubelet = merged('machine')['kubelet']['extraConfig']
+    floor = quantity(kubelet['evictionHard']['memory.available'])
+    reserved = quantity(kubelet['systemReserved']['memory'])
+    api_server = quantity(merged('cluster')['apiServer']['resources']['requests']['memory'])
+    assert floor > 0
+    assert floor + reserved + api_server < conventions.NODE_MEMORY_GB * 10**9
+
+
+@pytest.mark.parametrize('shape', list(SHAPES))
+def test_a_node_that_names_an_eviction_threshold_keeps_the_kubelets_others(shape: str) -> None:
+    """A node whose kubelet names an `evictionHard` signal merges the kubelet's defaults back in.
+
+    `evictionHard` naming one signal sets every other to zero unless the
+    kubelet merges its defaults back in (`mergeDefaultEvictionSettings`,
+    `KubeletConfiguration` in Kubernetes v1.36), and one of those is the
+    space on the node's disk, etcd's on a control plane.
+    """
+    kubelet = merged('machine', **SHAPES[shape])['kubelet']['extraConfig']
+    if kubelet.get('evictionHard'):
+        assert kubelet.get('mergeDefaultEvictionSettings') is True
 
 
 @pytest.mark.parametrize('shape', [shape for shape, arguments in SHAPES.items() if arguments.get('role') != 'worker'])
@@ -507,7 +582,7 @@ def test_a_worker_carries_no_control_plane_configuration() -> None:
     assert 'etcd' not in cluster
     assert 'secretboxEncryptionSecret' not in cluster
     assert 'allowSchedulingOnControlPlanes' not in cluster
-    # What it does share: the mesh, the subnets, and the kubelet's reservation.
+    # What it does share: the mesh and the subnets. Its `systemReserved` is its own.
     assert ip_network(cluster['network']['podSubnets'][0]).version == 4
     assert of_kind('KubeSpanConfig', role='worker')[0]['enabled'] is True
     # Its disk holds no etcd, so nothing bounds the images its kubelet pulls.
@@ -739,13 +814,13 @@ def test_a_node_volume_is_one_partition_filling_the_disk_that_is_not_the_boot_di
 def test_a_node_volume_labels_its_node() -> None:
     # What the pod consuming the volume's class selects, so that no workload
     # names the node itself (rfc-002 §10.5).
-    assert merged('machine', volume=VOLUME)['nodeLabels'] == {conventions.NODE_VOLUME_LABEL: VOLUME}
+    assert merged('machine', volume=VOLUME)['nodeLabels'][conventions.NODE_VOLUME_LABEL] == VOLUME
 
 
 @pytest.mark.parametrize('shape', [shape for shape, arguments in SHAPES.items() if 'volume' not in arguments])
 def test_a_node_without_a_volume_mounts_no_node_volume_and_carries_no_label(shape: str) -> None:
     assert not node_volumes(**SHAPES[shape])
-    assert 'nodeLabels' not in merged('machine', **SHAPES[shape])
+    assert conventions.NODE_VOLUME_LABEL not in merged('machine', **SHAPES[shape])['nodeLabels']
 
 
 def test_a_node_volume_is_mounted_where_conventions_says_it_is() -> None:

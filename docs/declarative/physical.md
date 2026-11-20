@@ -250,12 +250,20 @@ machine_secrets
     cluster secrets in a $0-trust tenancy); on the control planes,
     **etcd's metrics listener**, plain HTTP on port
     `ETCD_METRICS_PORT` (2381) at every address of the node, both
-    families, which serves the fsync histogram §6 reads; kubelet system-reserved so
-    eviction actually works (the legacy CP-starvation lesson,
-    architecture.md §6.5); on the control planes, **one image pull at a
-    time**, because the images unpack onto the disk etcd syncs to and a
-    burst of unpacks stretches its syncs into seconds
-    (cluster/nodes.md §1.2, which sizes the bound); on the control
+    families, which serves the fsync histogram §6 reads; the kubelet's
+    `systemReserved`, without which eviction does not work (the legacy
+    CP-starvation lesson, architecture.md §6.5), and on the control
+    planes **the control plane's reservation**: enough CPU to keep
+    `/podruntime`, the group etcd runs in beside the kubelet and
+    containerd, ahead of the pods, the API server's requests, and
+    eviction at 1 GiB of available memory (cluster/nodes.md §1.1, which
+    sizes them); every node's **site label**, `conventions.SITE_LABEL`,
+    from the site the stack declares for it: `cloud` on the nodes it
+    creates as OCI instances and `home` on the homelab worker; on the
+    control planes, **one image pull at a time**, because the images
+    unpack onto the disk etcd syncs to and a burst of unpacks stretches
+    its syncs into seconds (cluster/nodes.md §1.2, which sizes the
+    bound); on the control
     planes, **Talos API access from Kubernetes** for the etcd snapshot's
     role alone (an item below); the **Talos ingress firewall** (the next
     item); kube-apiserver `anonymous-auth=false` pinned and audit
@@ -503,11 +511,19 @@ machine_secrets
     `tests/test_talos_config.py` holds the rule for every node shape.
 
     Everything else stays in `v1alpha1`, because v1.13 has no document
-    for it: the node label as `machine.nodeLabels` and the kubelet's
-    reservations and pull bound as `machine.kubelet.extraConfig` among it.
-    A change to `machine.kubelet` applies to a running node without a
-    reboot, since Talos applies that field immediately
-    (`CanApplyImmediate`), and the kubelet restarts under it. v1.14
+    for it: the node labels as `machine.nodeLabels`, the kubelet's
+    `systemReserved`, eviction threshold and pull bound as
+    `machine.kubelet.extraConfig`, and the API server's requests as
+    `cluster.apiServer.resources` among it.
+    A change to `machine.kubelet`, `machine.nodeLabels` or `cluster`
+    applies to a running node without a reboot, since Talos applies those
+    fields immediately (`CanApplyImmediate`). The kubelet restarts under
+    a changed `machine.kubelet`, and a changed `cluster.apiServer`
+    replaces the API server's static pod on each control plane. The
+    applies wait for one another's acceptance and not for the API server,
+    so the control planes' API servers restart together, and the API
+    goes unanswered for as long as one restart takes. etcd, a Talos service,
+    is untouched. v1.14
     deprecates much of that for documents of their own — the two named
     for a `KubeNodeConfig` and a `KubeletConfig` — and a base generated
     for its contract already carries those documents, so the move comes

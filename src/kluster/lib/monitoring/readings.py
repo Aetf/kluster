@@ -37,15 +37,19 @@ etcd member is its node. A reading is recorded for every node its series come fr
 binds the control planes alone (`CONTROL_PLANE`), and the dashboard shows
 them.
 
-**The load classes are the three of nodes.md §1.1**, each read where that
+**The load classes are nodes.md §1.1's**, each read where that
 table reads it: the control-plane slice is etcd's own series and the API
 server's, the controller manager's and the scheduler's pods by name;
-the front and the workloads are Envoy's pods and every pod outside the
-namespaces the platform's components run in (`PLATFORM_NAMESPACES`); the
-platform is the node's total less the other two, which is everything Talos,
-the kubelet, containerd and the platform's pods take. A class's limits are
-summed over its pods outside the platform's namespaces, so Envoy, which runs
-in Cilium's namespace with no limit, is excepted as nodes.md §1.1 excepts it.
+the pods are Envoy's pods and every pod outside the namespaces the
+platform's components run in (`PLATFORM_NAMESPACES`); the platform is the
+node's total less the other two, which is everything Talos, the kubelet,
+containerd and the platform's pods take. The pods' limits are summed over
+those outside the platform's namespaces, so Envoy, which runs in Cilium's
+namespace with no limit, is left out of the sum. The classes carry no
+budget: a control plane is budgeted by its allocatable, which the scheduler
+holds every pod's requests to, and a plan checks the pods against it by
+their requests (nodes.md §1.1), so the classes and the pods' limits are
+read, not bound.
 etcd's own series give its CPU and its memory whole, and of its I/O its
 WAL's bytes alone: no count of its backend's bytes exists, so its I/O is a
 lower bound and the platform's, the rest of the boot volume's writes, takes
@@ -156,7 +160,11 @@ CLASS_LABEL = 'class'
 
 
 class LoadClass(StrEnum):
-    """A load class of nodes.md §1.1, as the `class` label carries it."""
+    """A load class of nodes.md §1.1, as the `class` label carries it.
+
+    `WORKLOADS` is the table's pods class; its value is the label the
+    history already records it under.
+    """
 
     CONTROL_PLANE = 'control-plane'
     PLATFORM = 'platform'
@@ -781,9 +789,8 @@ def _by_class(metric: str, function: str, etcd: str, node: str) -> str:
     """A resource by load class on each control plane, from `cAdvisor`'s `metric` and etcd's and the node's totals.
 
     The control-plane slice is etcd's own series and its three pods; the
-    front and the workloads are Envoy's pods and every pod outside the
-    platform's namespaces, nothing where none runs; the platform is the
-    node's total less the two.
+    pods are Envoy's pods and every pod outside the platform's namespaces,
+    nothing where none runs; the platform is the node's total less the two.
     """
     platform = '|'.join(PLATFORM_NAMESPACES)
     control_plane = (
@@ -804,7 +811,7 @@ def _by_class(metric: str, function: str, etcd: str, node: str) -> str:
 
 
 def _limits(resource: str) -> str:
-    """The limits of the front and the workloads on each control plane, of the pods that hold them.
+    """The limits of the pods class on each control plane, of the pods that hold them.
 
     kube-state-metrics publishes each container's limits whatever its pod's
     phase, a finished Job's pod among them, which the scheduler no longer
@@ -887,20 +894,18 @@ def _load_classes() -> tuple[Reading, ...]:
             window=_FIVE,
             expr=_limits('cpu'),
             unit='short',
-            title='CPU limits of the front and the workloads (cores)',
+            title='CPU limits of the pods (cores)',
             resource=Resource.LOAD_CLASSES,
             per=('node',),
-            budget=Budget(limit=0.5, bound=Bound.AT_MOST, stated='sum to at most 0.5 core', source=_NODES_LOAD),
         ),
         Reading(
             name='workloads_memory_limits',
             window=_FIVE,
             expr=_limits('memory'),
             unit='bytes',
-            title='Memory limits of the front and the workloads',
+            title='Memory limits of the pods',
             resource=Resource.LOAD_CLASSES,
             per=('node',),
-            budget=Budget(limit=3.5 * 2**30, bound=Bound.AT_MOST, stated='sum to at most 3.5 GiB', source=_NODES_LOAD),
         ),
     )
 

@@ -119,6 +119,13 @@ def build_cluster(name: str = 'kluster', **kwargs: Any) -> TalosCluster:
         'installers',
         {node: installer_of(node) for node in (*kwargs['control_plane_nodes'], *kwargs['worker_nodes'])},
     )
+    kwargs.setdefault(
+        'sites',
+        {
+            **dict.fromkeys(kwargs['control_plane_nodes'], conventions.Site.CLOUD),
+            **dict.fromkeys(kwargs['worker_nodes'], conventions.Site.HOME),
+        },
+    )
     kwargs.setdefault('volumes', {})
     return TalosCluster(
         name,
@@ -658,6 +665,48 @@ async def test_every_node_names_an_installer_and_only_nodes_do(fake: Talos) -> N
     assert (stranger.refusal, stranger.nodes) == (Refusal.INSTALLER_STRANGER, ('nowhere',))
 
 
+def site_in(patches: list[dict[str, Any]]) -> str | None:
+    """The site a node's patches label it with, if any."""
+    labels = {
+        key: value
+        for patch in patches
+        if 'kind' not in patch
+        for key, value in cast('dict[str, str]', patch.get('machine', {}).get('nodeLabels', {})).items()
+    }
+    return labels.get(conventions.SITE_LABEL)
+
+
+@pytest.mark.asyncio
+async def test_every_node_is_labelled_with_the_site_it_is_handed(fake: Talos) -> None:
+    # Sites unlike the roles', so a label that followed the role instead of
+    # the input would show: a control plane at home and a worker in the cloud.
+    sites = {
+        'cp1': conventions.Site.HOME,
+        'cp2': conventions.Site.CLOUD,
+        'cp3': conventions.Site.CLOUD,
+        'homelab': conventions.Site.CLOUD,
+    }
+    cluster = build_cluster(sites=sites)
+    for node, site in sites.items():
+        assert site_in(await patches_of(cluster, node)) == site, node
+
+
+@pytest.mark.asyncio
+async def test_every_node_is_at_a_site_and_only_nodes_are(fake: Talos) -> None:
+    every = {
+        **dict.fromkeys(('cp1', 'cp2', 'cp3'), conventions.Site.CLOUD),
+        'homelab': conventions.Site.HOME,
+    }
+    missing = refused(
+        lambda: build_cluster(
+            'kluster-missing', sites={node: site for node, site in every.items() if node != 'homelab'}
+        )
+    )
+    assert (missing.refusal, missing.nodes) == (Refusal.SITE_MISSING, ('homelab',))
+    stranger = refused(lambda: build_cluster('kluster-stranger', sites={**every, 'nowhere': conventions.Site.HOME}))
+    assert (stranger.refusal, stranger.nodes) == (Refusal.SITE_STRANGER, ('nowhere',))
+
+
 def volumes_in(patches: list[dict[str, Any]]) -> list[str]:
     """The node volumes a node's patches mount, by name: its `partition` user volumes."""
     return [
@@ -667,14 +716,15 @@ def volumes_in(patches: list[dict[str, Any]]) -> list[str]:
     ]
 
 
-def labels_in(patches: list[dict[str, Any]]) -> dict[str, str]:
-    """The node labels a node's patches set."""
-    return {
+def volume_label_in(patches: list[dict[str, Any]]) -> str | None:
+    """The node volume a node's patches label it with, if any; its other labels are left out."""
+    labels = {
         key: value
         for patch in patches
         if 'kind' not in patch
         for key, value in cast('dict[str, str]', patch.get('machine', {}).get('nodeLabels', {})).items()
     }
+    return labels.get(conventions.NODE_VOLUME_LABEL)
 
 
 @pytest.mark.asyncio
@@ -685,10 +735,10 @@ async def test_a_volume_is_booted_with_by_the_node_it_attaches_to_and_by_no_othe
     cluster = build_cluster(volumes={'data': conventions.NodeVolumeEntry(node='cp2', size_gb=1)})
     patches = await patches_of(cluster, 'cp2')
     assert volumes_in(patches) == ['data']
-    assert labels_in(patches) == {conventions.NODE_VOLUME_LABEL: 'data'}
+    assert volume_label_in(patches) == 'data'
     for node in ('cp1', 'cp3', 'homelab'):
         assert not volumes_in(await patches_of(cluster, node))
-        assert not labels_in(await patches_of(cluster, node))
+        assert volume_label_in(await patches_of(cluster, node)) is None
 
 
 @pytest.mark.asyncio
@@ -704,7 +754,7 @@ async def test_a_volume_that_follows_the_dedicated_vip_is_mounted_where_the_vip_
     # PersistentVolume's pod schedule onto a node without the path.
     for node in sorted(set(cluster.roles) - {conventions.DEDICATED_VIP_NODE}):
         assert not volumes_in(await patches_of(cluster, node)), node
-        assert not labels_in(await patches_of(cluster, node)), node
+        assert volume_label_in(await patches_of(cluster, node)) is None, node
     # And the second rendering, which day 1 applies to that node with its
     # extra address: applying it without the volume would unmount the disk.
     assert volumes_in(await patches_of(day1, conventions.DEDICATED_VIP_NODE)) == ['cache']
