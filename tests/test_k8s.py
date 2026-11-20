@@ -43,6 +43,7 @@ import pytest_asyncio
 from client_kubeconfig import NOT_AFTER, USER, certificate_user, kubeconfig
 from k8s_base_installation import Run, applied
 from mock_monitor import Recorder, declaring, run_with, the_run_failed_with
+from node_selection import ARCHITECTURE_LABEL, NODES, schedulable
 from ruamel.yaml import YAML
 
 from kluster import conventions
@@ -51,10 +52,14 @@ from kluster.lib.config import Shape, ShapeRefused
 from kluster.lib.install_order import DEPENDS_ON
 from kluster.lib.k8s import (
     KUBECONFIG_KEY,
+    UNCONSTRAINED,
     AbsentSealedValue,
+    Constraints,
     PortedSecret,
     UnusableKubeconfig,
+    at_home,
     client_certificate_expiry,
+    on_architecture,
     sealed_ciphertext,
     sealed_value,
 )
@@ -1468,3 +1473,112 @@ def test_a_kubeconfig_that_is_no_yaml_is_refused_without_repeating_it() -> None:
         _ = client_certificate_expiry(f'users: [{CREDENTIAL}')
     assert FILLED_BY in str(refused.value)
     assert CREDENTIAL not in reported(refused.value)
+
+
+# -- Node constraints ----------------------------------------------------------
+
+POD = 'kubernetes:core/v1:Pod'
+
+#: The fields `Constraints` sets on a pod, in a pod spec's JSON.
+PLACEMENT_FIELDS = ('affinity', 'tolerations', 'priorityClassName')
+
+
+async def _declared_pod(constraints: Constraints) -> dict[str, Any]:
+    """The spec of a pod declared with `constraints`'s typed fields, as it reaches the provider."""
+    monitor = await run_with(Recorder(), stack='apps')
+    async with declaring():
+        _ = k8s.core.v1.Pod(
+            'constrained',
+            spec=k8s.core.v1.PodSpecArgs(
+                containers=[k8s.core.v1.ContainerArgs(name='app', image='registry.example.invalid/app:v1')],
+                **constraints.pod_fields(),
+            ),
+        )
+    return monitor.inputs_of('constrained', POD)['spec']
+
+
+HOME = at_home('posts to an address at home')
+
+
+@pytest.mark.asyncio
+async def test_an_unconstrained_pod_carries_no_affinity_toleration_or_priority() -> None:
+    """A free pod is placed by the scheduler alone, names no priority class, and leaves on the default toleration."""
+    spec = await _declared_pod(UNCONSTRAINED)
+
+    assert UNCONSTRAINED.pod_fields_json() == {}
+    assert set(PLACEMENT_FIELDS).isdisjoint(spec)
+    assert schedulable(spec) == set(NODES)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    'constraints',
+    [
+        UNCONSTRAINED,
+        HOME,
+        on_architecture('amd64', 'an image built for amd64 alone'),
+        HOME & on_architecture('amd64', 'an image built for amd64 alone'),
+    ],
+    ids=['free', 'home', 'amd64', 'both'],
+)
+async def test_the_typed_and_json_forms_place_a_pod_alike(constraints: Constraints) -> None:
+    """A chart's values and a typed pod read the same constraints, so neither form may say what the other does not."""
+    spec = await _declared_pod(constraints)
+
+    assert {key: spec[key] for key in PLACEMENT_FIELDS if key in spec} == constraints.pod_fields_json()
+
+
+def test_a_pod_held_at_home_admits_no_cloud_node_and_stays_through_an_outage_of_the_uplink() -> None:
+    """The home site holds it there, it outranks a free pod, and its node's unreachability evicts it never.
+
+    The default toleration the admission plugin adds carries 300 s; one the
+    pod states for the same taint replaces it, and with no time limit the
+    pod stays bound while the control plane cannot reach its node.
+    """
+    spec = HOME.pod_fields_json()
+
+    assert schedulable(spec) == {conventions.HOMELAB_NODE}
+    assert spec['priorityClassName'] == conventions.HELD_PRIORITY_CLASS
+    (toleration,) = [it for it in spec['tolerations'] if it['key'] == 'node.kubernetes.io/unreachable']
+    assert toleration['effect'] == 'NoExecute'
+    assert toleration['operator'] == 'Exists'
+    assert 'tolerationSeconds' not in toleration
+
+
+def test_a_pod_held_to_an_architecture_alone_is_held_but_leaves_its_node_as_a_free_pod_does() -> None:
+    """The toleration is for a pod at home, whose replacement could run nowhere else; the priority is for any held pod."""
+    spec = on_architecture('amd64', 'an image built for amd64 alone').pod_fields_json()
+
+    assert schedulable(spec) == {node for node, labels in NODES.items() if labels[ARCHITECTURE_LABEL] == 'amd64'}
+    assert spec['priorityClassName'] == conventions.HELD_PRIORITY_CLASS
+    assert 'tolerations' not in spec
+
+
+def test_constraints_compose_into_every_one_of_them_with_every_declaration() -> None:
+    """A pod under two constraints admits only the nodes both admit, and says what implies each.
+
+    Two of different kinds are not refused when no node meets both: which
+    architecture the home site's nodes run is a fact about the nodes.
+    """
+    reach = at_home('reaches a device at home')
+    both = HOME & reach & on_architecture('arm64', 'an image built for arm64 alone')
+
+    assert schedulable(both.pod_fields_json()) == set()
+    assert both.site is not None
+    assert both.site.declarations == ('posts to an address at home', 'reaches a device at home')
+    assert (HOME & UNCONSTRAINED) == HOME == (UNCONSTRAINED & HOME)
+
+
+def test_constraints_of_one_kind_that_no_node_could_meet_are_refused_naming_both() -> None:
+    with pytest.raises(ValueError, match='no node is both') as refused:
+        _ = on_architecture('amd64', 'an image built for amd64 alone') & on_architecture(
+            'arm64', 'an image built for arm64 alone'
+        )
+
+    assert 'an image built for amd64 alone' in str(refused.value)
+    assert 'an image built for arm64 alone' in str(refused.value)
+
+
+def test_a_constraint_says_what_implies_it() -> None:
+    with pytest.raises(ValueError, match='declaration'):
+        _ = at_home(' ')

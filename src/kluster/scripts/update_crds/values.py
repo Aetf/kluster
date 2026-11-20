@@ -23,6 +23,10 @@ path below it is accepted. Three shapes say so:
     `patternProperties`, or the `x-kubernetes-preserve-unknown-fields` a
     custom resource definition marks an open object with.
 
+**A path the templates read that `values.yaml` only comments** is declared
+rather than guessed (`TEMPLATE_READ`): a chart's own comment that offers a key
+is no path a parser can read, while its templates render it all the same.
+
 **A spec the chart passes through** is a map the chart renders whole as the
 `spec` of one of its own custom resources, which the VictoriaMetrics stack
 does for each component it installs (`vmsingle.spec` becomes the `VMSingle`'s
@@ -80,9 +84,30 @@ SPEC_PASS_THROUGH: Mapping[str, Mapping[tuple[str, ...], CustomResourceSpec]] = 
     },
 }
 
+#: Each path a chart's templates read where its `values.yaml` only comments the
+#: key, so neither the values nor a schema declares it: by the chart's name,
+#: which is its `versions:chart-<name>` pin's, the path from the root of that
+#: chart, a subchart's below the key the chart passes its values under, and
+#: whether it is a free-form map. Read in each chart's templates at its pinned
+#: version: a bump that stops reading one is a change to this table.
+TEMPLATE_READ: Mapping[str, Mapping[tuple[str, ...], bool]] = {
+    # `templates/deployment.yaml` L109-112 at 3.14.0 renders `resources` whole,
+    # and `values.yaml` L176-182 sets its `requests` and comments `limits`, a
+    # map of resource names.
+    'metrics-server': {('resources', 'limits'): True},
+    # The `prometheus-node-exporter` subchart at 4.55.1, which 0.91.2 carries:
+    # `templates/daemonset.yaml` L38-39 renders `priorityClassName`, which
+    # `values.yaml` L486 comments.
+    'victoria-metrics-k8s-stack': {('prometheus-node-exporter', 'priorityClassName'): False},
+}
+
 
 class MissingDefinition(LookupError):
     """A map a chart is declared to pass through names a definition the chart does not ship."""
+
+
+class MissingParent(LookupError):
+    """A path a chart's templates are declared to read sits below a key the chart does not have."""
 
 
 @dataclass(frozen=True)
@@ -274,6 +299,22 @@ def _pass_through(directory: Path, found: dict[tuple[str, ...], bool]) -> None:
             found[path] = found.get(path, False) or free_form
 
 
+def _template_read(directory: Path, found: dict[tuple[str, ...], bool]) -> None:
+    """Add each path the chart at `directory` is declared to read in its templates where its values only comment it.
+
+    The key it sits below must be one the chart has, so an entry a bump left
+    behind stops the read rather than opening a key the chart dropped.
+    Matched at the root of the chart the pin names, not in its subcharts.
+    """
+    metadata = _yaml().load((directory / 'Chart.yaml').read_text())
+    name = metadata.get('name') if isinstance(metadata, Mapping) else None
+    for path, free_form in TEMPLATE_READ.get(str(name), {}).items():
+        parent = path[:-1]
+        if parent and parent not in found:
+            raise MissingParent(f'{directory.name} has no {SEPARATOR.join(parent)} to read {path[-1]} below')
+        found[path] = found.get(path, False) or free_form
+
+
 def read_chart(directory: Path) -> ValuePaths:
     """The paths the unpacked chart at `directory` has.
 
@@ -282,6 +323,7 @@ def read_chart(directory: Path) -> ValuePaths:
     """
     found = _read(directory)
     _pass_through(directory, found)
+    _template_read(directory, found)
     return ValuePaths(
         paths=frozenset(SEPARATOR.join(path) for path in found if path),
         free_form=frozenset(SEPARATOR.join(path) for path, free_form in found.items() if free_form),

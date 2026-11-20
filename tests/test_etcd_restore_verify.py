@@ -50,7 +50,6 @@ from kluster.components.backup.etcd import (
     VERIFY_SHELL_DIR,
     VERIFY_WORK_DIR,
 )
-from kluster.conventions import CONTROL_PLANE_LABEL
 from kluster.conventions.schedule import ETCD_RESTORE_VERIFY, ETCD_SNAPSHOT
 from kluster.scripts.credentials import age
 
@@ -167,25 +166,6 @@ def test_the_pod_holds_no_kubernetes_or_talos_credential(applied: Run) -> None:
     assert secrets == {IDENTITY.name}
 
 
-def test_the_verify_runs_off_the_control_planes(applied: Run) -> None:
-    """On the worker today, never on a node etcd's own memory budget is kept on."""
-    required = _pod(applied)['affinity']['nodeAffinity']['requiredDuringSchedulingIgnoredDuringExecution']
-    # As Talos labels the nodes: every cloud node is a control plane, the
-    # worker is not.
-    nodes: dict[str, dict[str, str]] = {
-        **{node: {CONTROL_PLANE_LABEL: ''} for node in conventions.CLOUD_NODES},
-        conventions.HOMELAB_NODE: {},
-    }
-
-    def holds(expression: Mapping[str, Any], labels: Mapping[str, str]) -> bool:
-        return {'Exists': True, 'DoesNotExist': False}[expression['operator']] == (expression['key'] in labels)
-
-    def admits(labels: Mapping[str, str]) -> bool:
-        return any(all(holds(it, labels) for it in term['matchExpressions']) for term in required['nodeSelectorTerms'])
-
-    assert {node for node, labels in nodes.items() if admits(labels)} == {conventions.HOMELAB_NODE}
-
-
 def test_the_working_directory_is_in_memory_and_fills_before_the_pods_memory_does(applied: Run) -> None:
     """The plaintext keyspace never reaches a disk, and a database that outgrows the directory fails naming the directory.
 
@@ -208,7 +188,7 @@ def test_the_working_directory_is_in_memory_and_fills_before_the_pods_memory_doe
 
 
 def test_every_container_requests_and_is_limited_in_cpu_and_memory(applied: Run) -> None:
-    """The pod may be scheduled to the cloud pool, where etcd shares the cores (workloads.md §1)."""
+    """The pod may be scheduled to a cloud node, where etcd shares the cores (workloads.md §1)."""
     pod = _pod(applied)
     containers = [*pod.get('initContainers', []), *pod['containers']]
 

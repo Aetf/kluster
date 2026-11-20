@@ -63,7 +63,8 @@ control plane leaves (§1.1). This means the cloud pool needs:
     the node holding the dedicated VIP (hath's cache). That overflows
     the 200 GB free block allowance by 55 GB, about $1.40 a month
     (§3.2). etcd lives on the boot volume, beside the images, the logs
-    and every cloud-pool claim, so the boot volume carries a budget of
+    and the claims of the pods the scheduler places on the node, each
+    written in `etcd-disk-writer`, so the boot volume carries a budget of
     its own (§1.2), and the bring-up reads etcd's fsync latency against
     it before any application moves (declarative/physical.md §6).
 
@@ -85,7 +86,7 @@ The classes below are how a control plane's consumption is read.
 | --- | --- | --- |
 | Control-plane slice | etcd (a Talos service, not a pod), `kube-apiserver`, `kube-controller-manager`, `kube-scheduler` | etcd's own `process_*` series on its metrics listener, since `cAdvisor` reports no control group for it on Talos; the three pods by name |
 | Platform | Talos (`machined`, `apid`, `trustd`, `udevd`), the kubelet, containerd, the Cilium agent, the node exporter, the node-feature-discovery worker, `coredns`, and any controller scheduled there | the node's totals less the other classes; each DaemonSet by namespace |
-| Pods | `cilium-envoy` and every pod outside the platform's namespaces | `cAdvisor`, per pod |
+| Pods | `cilium-envoy` and every other pod the scheduler places on the node | `cAdvisor`, per pod |
 
 **The peaks a control plane meets**: a bring-up or a rebuild, in which
 every image is pulled and every object created at once; a Talos or
@@ -228,8 +229,9 @@ memory as working set in GiB, network on the pod's interface.
 
 **What shares the boot volume**: one XFS filesystem, `sda4`, holds
 etcd's write-ahead log and database, containerd's content and
-snapshots, the kubelet's and Talos' logs, every cloud-pool claim
-(`/var/mnt/storage`) and VolSync's caches.
+snapshots, the kubelet's and Talos' logs, the claims of the pods the
+scheduler places on the node, each written in `etcd-disk-writer`
+(`/var/mnt/storage`, rule 5), and VolSync's caches.
 
 **The budget:**
 
@@ -254,9 +256,10 @@ snapshots, the kubelet's and Talos' logs, every cloud-pool claim
     containerd's `blockio` class `etcd-disk-writer`**, which caps each
     container's write bandwidth and write operations on every whole disk
     of a control plane, the system disk among them (`components.talos`). The class is on every node, and a pod runs
-    in it when its component declares the class. On 2026-11-20 no pod
-    does: Aetf/kluster-ops#78's slices P2a and P2b put the pods with a
-    `local-path` claim in it. The capped containers that could all be
+    in it when its component declares the class: monitoring's two stores
+    do (`components.monitoring`). On 2026-11-20 no application's pod is
+    in it; Aetf/kluster-ops#78's slice P2b puts there every pod with a
+    `local-path` claim. The capped containers that could all be
     placed on one control plane, those held at home left out, times the
     class's rates stay within 12 MB/s and 300 write operations a second;
     planning alone holds that sum. The class fails open on a device that
@@ -499,8 +502,9 @@ The legacy VPS NIC moved 1276 GB TX/30d, but decomposed:
 **Steady-state true public egress ≈ 150–220 GB/mo.** Design rules
 (reflected in architecture.md §3.4):
 
--   **Bulk-egress workloads (qbittorrent/seeding) are pinned to the
-    Homelab pool and egress directly via the home uplink**, never
+-   **Bulk-egress workloads (qbittorrent/seeding) are held at the home
+    site by the egress they declare and egress directly via the home
+    uplink** (declarative/workloads.md §1), never
     through a metered cloud path. **A roaming device's sync crosses
     one, by the operator's ruling**: no syncthing replica runs in
     the cloud, and the balancer's peer port reaches the NAS instance on
@@ -898,7 +902,7 @@ answered with `kubectl top` on the legacy cluster (2026-08-22), of
 | Infra component | Measured | Fate in the new cluster |
 | --- | --- | --- |
 | k3s server + containerd (host procs) | ~1.7 GiB | CP moved cloud-side; the homelab VM keeps only kubelet+containerd (~0.5 GiB). The CP cost re-appears as ~2–2.5 GiB × 3 on the cloud nodes — paid out of OCI RAM, not out of the 32 GB host |
-| Monitoring (prometheus 948 Mi, grafana 428 Mi, exporters/operator/alertmanager ~200 Mi) | ~1.6 GiB | **switch to VictoriaMetrics** (vmsingle + vmagent + vmalert): PromQL-compatible, typically ~1/5 the RAM at this scale; grafana stays. Target ≤0.7 GiB, held as requests on the worker: 0.65 GiB of them (`components/monitoring/memory.py`), against 0.9 GiB of working set measured 2026-11-17 under the charts' defaults. metrics-server, which the monitoring component installs beside it, is charged to the kube-system row below |
+| Monitoring (prometheus 948 Mi, grafana 428 Mi, exporters/operator/alertmanager ~200 Mi) | ~1.6 GiB | **switch to VictoriaMetrics** (vmsingle + vmagent + vmalert): PromQL-compatible, typically ~1/5 the RAM at this scale; grafana stays. Target ≤0.7 GiB, held as requests, planned at the home site: 0.65 GiB of them (`components/monitoring/memory.py`), against 0.9 GiB of working set measured 2026-11-17 under the charts' defaults. metrics-server, which the monitoring component installs beside it, is charged to the kube-system row below |
 | Monitoring's history store (none on the legacy cluster) | — | **a line of its own**, the second vmsingle that keeps the comparison's series for good (declarative/cluster-infra.md §1 item 6): a 150 Mi request beside monitoring's ≤0.7 GiB, its own line of `components/monitoring/memory.py`. Derived from the recent store's 225 Mi at 171,229 series, read 2026-11-17: the history holds 5,000–6,000 of them, so what it takes is the process's floor rather than its series' |
 | Shared-JuiceFS stack (CSI ×5, redis, 4 mount pods) | ~1.0 GiB | gone by design: no CSI driver, no shared metadata store, and no workload mounts JuiceFS (storage.md §6). A workload admitted later brings its own sidecar mount, **budgeted honestly at 0.5–1 GiB requests** — root cause (b) of the legacy instability was starving exactly this process |
 | Everything else in kube-system (coredns, metrics-server, cert-manager, sealed-secrets, nfd, local-path, reloader) | ~0.45 GiB | kept as-is — **sealed-secrets stays** (the secret-management model is unchanged from kluster-code); only the JuiceFS dashboard is dropped |
@@ -939,7 +943,7 @@ by construction; Tier 0 remains the foundation everything else sits on:
     with the etcd leg's keys — is declared by the `physical` stack
     (declarative/physical.md §5, storage.md §4). The legs: hourly etcd
     snapshots shipped to B2 (off-provider by the storage.md §4
-    placement rule) — a CronJob in the cluster, on the control planes
+    placement rule) — a CronJob in the cluster, a free pod
     (storage.md §5), which `k8s-base` declares; VolSync volume
     backups and CNPG barman to the same bucket (storage.md §5) —
     whose operators the `k8s-base` stack declares, with no backup
@@ -947,7 +951,7 @@ by construction; Tier 0 remains the foundation everything else sits on:
     `claim` under a retention class, so neither runs; and periodically
     *drilled* restores — the drill program of operations.md §4, of
     which the etcd restore-verify runs, daily, restoring the newest
-    snapshot into a scratch etcd on the worker, and none of the others
+    snapshot into a scratch etcd in a pod of its own, and none of the others
     has run.
     Target: RPO ≤ 1 h, RTO ~1–2 h hands-on. The **cold-standby drill**
     covers total-cloud-loss (tenancy termination included): bootstrap a

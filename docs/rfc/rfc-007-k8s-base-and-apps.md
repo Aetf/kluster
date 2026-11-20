@@ -86,11 +86,7 @@
     criterion of §14 slice 10 is a route in the gateway's kernel table
     for a VIP of each family.
 *   **Updated:** 2026-11-12 — §7.1, §11 and §14 slice 11, as slice 11
-    built it: monitoring's placement on the worker is a requirement,
-    because alertmanager posts to Home Assistant at an address only the
-    worker reaches ([rfc-008](rfc-008-workload-migration.md) §4.1), and
-    slice 11 ships a test that fails when alertmanager can schedule
-    elsewhere; the CRD bindings generate the VictoriaMetrics operator's
+    built it: the CRD bindings generate the VictoriaMetrics operator's
     kinds but cannot import them, so the monitoring component declares
     them untyped, as a layer that goes once they import; and the
     operator's pre-delete cleanup joins §7.1's defaults switched off.
@@ -201,6 +197,23 @@
     run at `kluster.lib.k8s.sealed_ciphertext` with `AbsentSealedValue`,
     naming the value, its namespace and the command that seals it, which
     its census row carries (`conventions.sealed.SealedValue.sealed_by`).
+*   **Updated:** 2026-11-20 — §7.1 and §14 slice 11, as
+    [Aetf/kluster-ops#78](https://github.com/Aetf/kluster-ops/issues/78)
+    built it: placement is the scheduler's, within the constraints a
+    node fact or a component's declaration forces
+    ([declarative/workloads.md](../declarative/workloads.md) §1).
+    Alertmanager is held at the home site by its reach to Home
+    Assistant, and so is vmagent, which scrapes etcd on every control
+    plane; monitoring's other pods, the etcd snapshot, its
+    restore-verify and the state table's upkeep are free pods. The
+    `PriorityClass` a held pod runs at joins the closed list
+    ([declarative/cluster-infra.md](../declarative/cluster-infra.md) §1,
+    item 11). The worker pin's reasons do not stand: etcd's CPU is
+    protected by the control planes' reservation
+    ([cluster/nodes.md](../cluster/nodes.md) §1.1), and the operator's
+    rulings of 2026-11-19 and 2026-11-20 on Aetf/kluster-ops#78 hold no
+    pod to a pool. This replaces the placement §7.1 and slice 11 gave
+    monitoring.
 *   **Authority:** AGENTS.md,
     [framework/dispatch.md](../framework/dispatch.md),
     [framework/rfc.md](../framework/rfc.md) and the style rules

@@ -52,6 +52,7 @@ from typing import Any
 import pulumi_kubernetes as k8s
 
 from kluster import conventions
+from kluster.components.monitoring import memory
 from kluster.conventions.backup import metrics_repo_path
 from kluster.conventions.providers import OCI_BLOCKSTORE_METRICS
 from kluster.conventions.schedule import METRICS_BACKUPS, ScheduledJob
@@ -361,6 +362,7 @@ def restore_containers(store: Store, *, images: Images, bucket: Bucket) -> list[
                 *_writer_env(bucket),
             ],
             'volumeMounts': _mounts(data=True),
+            'resources': memory.BUCKET_STEP.rendered(),
         },
         {
             'name': 'restore',
@@ -379,6 +381,7 @@ def restore_containers(store: Store, *, images: Images, bucket: Bucket) -> list[
                 *_writer_env(bucket),
             ],
             'volumeMounts': _mounts(data=True, data_read_only=False),
+            'resources': memory.VMRESTORE.rendered(),
         },
     ]
 
@@ -407,6 +410,11 @@ def _typed_mounts(mounts: list[dict[str, Any]]) -> list[k8s.core.v1.VolumeMountA
         k8s.core.v1.VolumeMountArgs(name=it['name'], mount_path=it['mountPath'], read_only=it.get('readOnly'))
         for it in mounts
     ]
+
+
+def _typed_resources(resources: memory.Resources) -> k8s.core.v1.ResourceRequirementsArgs:
+    rendered = resources.rendered()
+    return k8s.core.v1.ResourceRequirementsArgs(requests=rendered['requests'], limits=rendered['limits'])
 
 
 def backup_pod(
@@ -443,6 +451,7 @@ def backup_pod(
         ),
         # The store's data alone: `vmbackup` runs no script.
         volume_mounts=_typed_mounts([{'name': DATA_VOLUME, 'mountPath': DATA_DIR, 'readOnly': True}]),
+        resources=_typed_resources(memory.VMBACKUP),
     )
     data = k8s.core.v1.VolumeArgs(
         name=DATA_VOLUME,
@@ -479,6 +488,7 @@ def backup_pod(
             ),
             # The bucket and the store's address are all it reads: no data.
             volume_mounts=_typed_mounts(_mounts(data=False)),
+            resources=_typed_resources(memory.BUCKET_STEP),
         )
 
     return k8s.core.v1.PodSpecArgs(

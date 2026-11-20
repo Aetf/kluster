@@ -645,7 +645,7 @@ preview with `denydefaultprovider not registered`.
     **The peak recorder runs around the `up`** (§8.5): `mise x uv -- uv
     run perf record .claude/peaks`, from the root of the checkout in a
     terminal of its own, from before the `up` until both metrics
-    stores, which the worker holds, have restored themselves and run.
+    stores have restored themselves and run.
     The control planes keep their addresses, so it runs once. It is then
     stopped, `mise x uv -- uv run perf import .claude/peaks` writes the
     file into the history store once vmagent's queue has drained, and
@@ -1319,8 +1319,8 @@ control planes' addresses** (§8.5): a control plane's replacement and
 the worker's (§3.1, §3.2), the whole-cluster rebuild above, whose
 steps name it, and the bring-up
 ([physical/bring-up.md](physical/bring-up.md) §5). Such a run installs
-the monitoring partway through or replaces the worker the stores live
-on, so the cluster records none of its first minutes, which carry its
+the monitoring partway through or replaces a node a store's claim is
+bound on, so the cluster records none of its first minutes, which carry its
 peak, and the recording is what the per-wave gate and the dashboard
 read of them. What it cannot record is what comes before those
 addresses: a node's files until `physical`'s `up` has written its
@@ -1415,19 +1415,19 @@ for its place. The last column says which run, as of 2026-11-17:
 
 | Job | Runs in, and why | Credentials there | Liveness to Home Assistant | Built |
 | --- | --- | --- | --- | --- |
-| etcd snapshot, hourly | The cluster: `siderolabs/talos-backup` as a CronJob in `etcd-backup`, on the control planes (storage.md §5) | A certificate Talos issues for `os:etcd:backup` and renews itself; the `etcd` writer key, sealed | The family's rules (§7.1), then the cluster's check-in | No: declared once bring-up stage 6 seals the `etcd` key (storage.md §5) |
+| etcd snapshot, hourly | The cluster: `siderolabs/talos-backup` as a CronJob in `etcd-backup`, a free pod (storage.md §5) | A certificate Talos issues for `os:etcd:backup` and renews itself; the `etcd` writer key, sealed | The family's rules (§7.1), then the cluster's check-in | No: declared once bring-up stage 6 seals the `etcd` key (storage.md §5) |
 | Age of the newest object under `etcd/` | No job of its own: the snapshot job's stale rule stands in for it, since a run that succeeded is an object uploaded, and the daily restore-verify reads the newest object's age off the bucket as a second, independent reading | None | The snapshot job's rules, and the restore-verify's (§7.2) | Yes, with the restore-verify |
 | VolSync backups, one `ReplicationSource` per backed claim | The cluster: VolSync's own schedule, the claim's retention class (`conventions.backup.RETENTION_CLASSES`, storage.md §5) | The namespace's writer key and each repository's password, sealed | The backup-freshness family (declarative/workloads.md §3), then the cluster's check-in | No: none is declared until the first claim under a class lands |
 | CNPG barman backups, per database cluster | The cluster: the operator's own schedule, its retention class's, beside continuous WAL archiving (storage.md §5) | The namespace's writer key, sealed | The backup-freshness family, then the cluster's check-in | No: no series reports a barman backup's age, which the CNPG backup-freshness issue builds (`kluster-ops#872`), and no application declares a database yet |
 | The metrics stores' backups, hourly | The cluster: a CronJob per store, in `monitoring` (storage.md §5) | The `vm` writer key, sealed | The family's rules (§6.2), then the cluster's check-in | No: declared once bring-up stage 6 seals the `vm` key (storage.md §5) |
 | The block volumes' metrics, pulled hourly into the history store | The cluster: a CronJob in `monitoring` | The OCI metrics reader's key, sealed (credentials.md §3) | The family's rules (§6.3), then the cluster's check-in | No (`kluster-ops#790`) |
 | The authentication canary, every five minutes | The cluster: the CronJob `auth-canary` in a namespace of its own, `auth-canary`, which requests the canary's protected path with no credential and fails on anything but a refusal (declarative/cluster-infra.md §2) | None: it presents none | The family's rules (§10.2), whose failed alert is any answer but a refusal; then the cluster's check-in | No: Authelia's component declares it, and runs from Wave A1's land, which wires the component (rfc-008 §5.2) |
-| The state table's upkeep, daily: the census, the prune of the rows the retention rule expires, and the ceiling | The cluster: the CronJob `state-upkeep` in a namespace of its own, on the control planes, as the role `upkeep` (state-backend.md §2). It is no device's job: it deletes rows of the live table and checks the box, and a check never runs on what it watches. What it holds reads and deletes rows that an unmerged ref's runs already read and write (threat-model.md §3.1) | The `upkeep` client bundle, sealed (credentials.md §3) | The family's rules (state-backend.md §7.6), then the cluster's check-in | No: the first `up-k8s-base` after its merge declares it, its bundle sealed in ahead of it (`kluster-ops#784`) |
+| The state table's upkeep, daily: the census, the prune of the rows the retention rule expires, and the ceiling | The cluster: the CronJob `state-upkeep` in a namespace of its own, a free pod, as the role `upkeep` (state-backend.md §2). It is no device's job: it deletes rows of the live table and checks the box, and a check never runs on what it watches. What it holds reads and deletes rows that an unmerged ref's runs already read and write (threat-model.md §3.1) | The `upkeep` client bundle, sealed (credentials.md §3) | The family's rules (state-backend.md §7.6), then the cluster's check-in | No: the first `up-k8s-base` after its merge declares it, its bundle sealed in ahead of it (`kluster-ops#784`) |
 | State-backend dump age, hourly | The cluster: the CronJob `state-backend-dumps` in `monitoring`, listing `pulumi-state/` (state-backend.md §6) | The list-only `B2 freshness key (state dumps)`, sealed | The family's rules (state-backend.md §6), then the cluster's check-in | Yes |
 | State-backend server certificate's expiry, hourly | The cluster: the CronJob `state-backend-certificate` in `monitoring`, reading the leaf off a Postgres STARTTLS handshake with the appliance (state-backend.md §6) | None: the box sends its certificate before anything authenticates | The family's rules (state-backend.md §6), then the cluster's check-in | Yes |
 | The kubeconfig copies' expiry, `KubeconfigCopyExpiring` | The cluster: a rule vmalert evaluates against the expiry `k8s-base` reads off its own copy, `conventions.cluster.KUBECONFIG_ALERT_MARGIN` ahead of it. It holds no credential, and it watches a date in `k8s-base`'s configuration rather than the cluster it runs on (§2.5) | None: the date is the certificate's public half | The cluster's check-in | No: it runs from the first `k8s-base` apply that declares monitoring |
 | The other credential expiry tripwires | Each placed by the same rule. Two are checked in the cluster: the state backend's server certificate, by the CronJob above, and the kubeconfig copies' client certificate, by the rule above. The `ci` and `operator` client bundles report their expiry at their first `pulumi` command, and the `upkeep` bundle at the state table's upkeep's first run after it (state-backend.md §6); the destroy dates stay with the offline day | — | — | — |
-| etcd restore-verify, daily | The cluster: the CronJob `etcd-restore-verify` in `etcd-backup`, off the control planes (storage.md §5) | The snapshots' read-only key, `reader-etcd`, which lists and downloads and writes nothing, and an age identity of its own, `etcd-drill`, both sealed | The family's rules (§7.2), then the cluster's check-in | Yes: from the first `k8s-base` apply that declares it, its two values sealed in ahead of it |
+| etcd restore-verify, daily | The cluster: the CronJob `etcd-restore-verify` in `etcd-backup`, a free pod (storage.md §5) | The snapshots' read-only key, `reader-etcd`, which lists and downloads and writes nothing, and an age identity of its own, `etcd-drill`, both sealed | The family's rules (§7.2), then the cluster's check-in | Yes: from the first `k8s-base` apply that declares it, its two values sealed in ahead of it |
 | CNPG restore, monthly, one per database | The cluster: the CronJob `<database>-restore-drill` in the database's namespace, which recovers a throwaway cluster from the database's archive, checks it and removes it (§9.1) | The namespace's writer key, which reads the archive it was written with, sealed; a role in the namespace that drives the throwaway cluster | The family's rules (§9.1), then the cluster's check-in | No: it ships with each database, whose component declares the CronJob and the family's rules over it, and no application declares a database yet |
 | VolSync spot-restore, orphan-volume audit | The cluster (the drills above) | The writer keys of the backups the spot-restore reads, sealed; the audit needs none | The family's rules, then the cluster's check-in | No |
 | The state-backend appliance's dump, nightly (`state-dump.timer`) | The appliance itself: the job dumps the box's own database (state-backend.md §5) | The dump key, `writeFiles` alone, in the box's Ignition | The dump-age check above; the box's own failed-run notice reaches only a shell on it (state-backend.md §6) | Yes |
@@ -1520,8 +1520,8 @@ contract the Home Assistant side is built against:
     port and webhook path, which the SealedSecret renders into the
     Secret alertmanager reads, so the address is held once and a moved
     one needs no new seal. The post stays direct, at Home
-    Assistant's own address, which only the homelab worker reaches and
-    where monitoring therefore runs
+    Assistant's own address, which no cloud node reaches, so
+    Alertmanager is held at the home site
     ([rfc-008](rfc/rfc-008-workload-migration.md) §4.1); it never
     addresses Home Assistant by its name, and never rides the cluster's
     relay or the overlay. Every alert in the body
@@ -1731,7 +1731,7 @@ behind, and a rebuild would restore it only as far as its last success
    `mise x -- kubectl -n monitoring describe job <run>` reads
    `DeadlineExceeded`, and the run's log ends partway through the
    upload: it took longer than the 25 minutes a run is allowed, which a
-   store's first backup, a full upload from the worker, can. `vmbackup`
+   store's first backup, a full upload, can. `vmbackup`
    resumes from the parts a cut-off run already uploaded, so the runs
    after it converge on a complete backup with nothing done here. Until
    one of them completes, the store's copy in the bucket is a backup the
@@ -1774,7 +1774,7 @@ behind, and a rebuild would restore it only as far as its last success
    runs its restore containers again, and the next attempt that reads
    the bucket restores.
 
-   **A backup cut off part way**, by the worker's loss during a run or
+   **A backup cut off part way**, by the loss of the store's node during a run or
    by the run's deadline, is one `vmrestore` refuses. Where the store
    still runs, its next successful run completes the backup again and
    nothing more is needed. Where the store is to be restored from it,
@@ -1949,7 +1949,7 @@ after it. vmagent writes no marker when it stops, which is why
    last scrape met.
 3. **No target listed.** Service discovery finds nothing for the job:
    its workload is gone or scaled to nothing, its pod has no address
-   (`Pending`, waiting on the worker, §3), or its Service or its scrape
+   (`Pending`, waiting for a node, §3), or its Service or its scrape
    object is gone. `mise x -- kubectl -n monitoring get pods,svc` and
    the scrape objects (`vmservicescrape`, `vmpodscrape`, `vmnodescrape`)
    name which, and vmagent's `/service-discovery` page, beside the
@@ -1998,8 +1998,9 @@ What to do when the hourly etcd snapshot or its daily restore-verify
 reports on itself. Both are declared in `components.backup.etcd`, in the
 `etcd-backup` namespace ([cluster/storage.md](cluster/storage.md) §5):
 the snapshot is `siderolabs/talos-backup` as the CronJob
-`etcd-snapshot`, on the control planes, and the restore-verify the
-CronJob `etcd-restore-verify`, off them. The commands below run from the
+`etcd-snapshot`, and the restore-verify the CronJob
+`etcd-restore-verify`, each a free pod the scheduler places on any node.
+The commands below run from the
 root of the checkout.
 
 ### 7.1 The etcd snapshot failed or is stale
@@ -2136,9 +2137,9 @@ restore.
    success: read the CronJob as §6.2's first step does, in
    `etcd-backup` and with `etcd-restore-verify` for the job. A run the
    controller could not start within the hour after 04:40 is skipped
-   rather than run late, and leaves no Job. The CronJob runs on the
-   worker, so a worker that is down skips the day's run, and the
-   cluster's check-in reports that outage on its own.
+   rather than run late, and leaves no Job. A run is a free pod, which
+   any ready node can take, and the cluster's check-in reports an
+   outage of the nodes on its own.
 2. **Read the last run.**
    `mise x -- kubectl -n etcd-backup get jobs --sort-by=.metadata.creationTimestamp`
    lists the runs from the oldest, the verify's named
@@ -2280,7 +2281,8 @@ history all the same.
 The first three are the targets of etcd's FAQ, which bind at every
 moment, peaks included (nodes.md §1.2 rule 1). A fsync and a commit wait
 on the boot volume, which etcd shares with the images, the logs and
-every cloud-pool claim; an apply waits on the member's CPU as well.
+the claims of the pods the scheduler places on the node; an apply waits
+on the member's CPU as well.
 
 **Gist**:
 
@@ -2407,8 +2409,8 @@ addresses until the history store runs again: a bring-up
 ([physical/bring-up.md](physical/bring-up.md) §5), a control plane's
 replacement and the worker's (§3.1, §3.2), and the whole-cluster
 rebuild (§3.5), whose steps name it. Such a run installs
-the monitoring partway through, or replaces the worker the stores live
-on, so its first minutes, which carry its peak, reach no store in the
+the monitoring partway through, or replaces a node a store's claim is
+bound on, so its first minutes, which carry its peak, reach no store in the
 cluster. `perf` (`kluster.scripts.perf`) records them from the
 workstation and writes them into the history store afterward
 (the design of Aetf/kluster-ops#790).

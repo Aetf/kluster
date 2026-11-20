@@ -92,9 +92,11 @@ POOL_WORKER = 'worker'
 #: The label Talos puts on every control plane node, with an empty value,
 #: and on no other node
 #: ([`node_label_spec.go` L83–85](https://github.com/siderolabs/talos/blob/v1.13.9/internal/app/machined/pkg/controllers/k8s/node_label_spec.go#L83-L85)).
-#: The control plane is the cloud nodes (nodes.md §4.2), so its presence is
-#: what tells the cloud pool from the worker, which the placements in
-#: `kluster.lib.k8s` select by.
+#: It says which nodes run the control plane, which the etcd scrape selects
+#: by (`components.monitoring`). A pod that must be at one site states it
+#: against `SITE_LABEL` instead (`kluster.lib.k8s.Constraints`); the pool
+#: placements `kluster.lib.k8s` keeps beside it select by this label until
+#: their callers move to `Constraints`.
 CONTROL_PLANE_LABEL = 'node-role.kubernetes.io/control-plane'
 
 
@@ -121,6 +123,14 @@ class Site(StrEnum):
 #: `trafficDistribution`. Talos sets no topology label of its own, and the
 #: kubelet's node restriction admits this one.
 SITE_LABEL = 'topology.kubernetes.io/zone'
+
+#: The `PriorityClass` a held pod runs at, which `k8s-base` declares
+#: (`components.scheduling`) and the pod's constraints name
+#: (`kluster.lib.k8s.Constraints`): a pod a site or an architecture leaves
+#: only some nodes to run on (declarative/workloads.md §1). Its value is
+#: above the default, 0, at which a pod that names no class runs, so the
+#: scheduler preempts a free pod to place a held one that fits nowhere else.
+HELD_PRIORITY_CLASS = 'held'
 
 #: A Service opts into a pool by carrying this label; the pools'
 #: `serviceSelector` matches on it.
@@ -366,6 +376,12 @@ LOCAL_PATH_VOLUME = 'storage'
 LOCAL_PATH_ROOT = f'{USER_VOLUME_ROOT}/{LOCAL_PATH_VOLUME}'
 
 
+#: The pod annotation containerd reads a blockio class from, for every
+#: container of the pod (goresctrl's `pkg/kubernetes/annotations.go`, which
+#: containerd's `internal/cri/server/container_create.go` calls at v2.2.7).
+BLOCKIO_POD_ANNOTATION = 'blockio.resources.beta.kubernetes.io/pod'
+
+
 @dataclass(frozen=True, kw_only=True)
 class BlockioClass:
     """A containerd blockio class: the name a pod selects it by, and the write caps it puts on each of the pod's containers.
@@ -395,6 +411,11 @@ class BlockioClass:
         for field, rate in (('write_bps', self.write_bps), ('write_iops', self.write_iops)):
             if rate <= 0:
                 raise ValueError(f'{self.name}: {field} is {rate}, and a cap is a positive rate')
+
+    @property
+    def pod_annotation(self) -> Mapping[str, str]:
+        """The annotation that puts every container of a pod in this class, as the one entry a pod's metadata carries."""
+        return MappingProxyType({BLOCKIO_POD_ANNOTATION: self.name})
 
 
 #: The class for an application's writes to the disk etcd shares

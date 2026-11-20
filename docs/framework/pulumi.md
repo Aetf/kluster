@@ -964,7 +964,11 @@ the definition's verdict alone, so a `{}` or a null default the chart
 leaves there opens nothing. Which maps a chart passes through is a table
 in `update_crds/values.py`, keyed on the name of the chart a pin names
 and the map's path, and a declared map whose definition the chart does
-not ship stops the read. A free-form map is one whose
+not ship stops the read. A key the chart's templates render where its
+`values.yaml` only comments it, such as metrics-server's
+`resources.limits`, is a path too, declared in a second table there
+beside the template line that reads it, and an entry whose parent key the
+chart no longer has stops the read. A free-form map is one whose
 declaration fixes no keys, and any path below one is accepted: an empty
 `{}`, a key whose default is null, and a schema object open to further
 properties, whether by `additionalProperties`, `patternProperties` or a

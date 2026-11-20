@@ -79,7 +79,9 @@ that speaks the k8s API, consumed by `apps`.
 ## 1. Install order
 
 The order is a real dependency chain, so a single `up` converges from
-an empty cluster. Between components, it is encoded by Pulumi
+an empty cluster: each item is behind the items above it, and
+monitoring (item 6) behind item 11 too, the class its held pods name.
+Between components, it is encoded by Pulumi
 `depends_on` and parent relationships; inside every chart, by the
 classes its objects fall into (§1.2):
 
@@ -125,16 +127,23 @@ classes its objects fall into (§1.2):
     grafana, PromQL-compatible replacement for the legacy
     prometheus-operator stack at ~1/5 the RAM (nodes.md §4.4), from the
     VictoriaMetrics stack chart, with metrics-server beside it, both in
-    the one monitoring component (`components/monitoring`). **It runs
-    on the homelab worker**, the node exporter apart: alertmanager
-    posts to Home Assistant at Home Assistant's own address, which only
-    the worker reaches ([rfc-008](../rfc/rfc-008-workload-migration.md)
-    §4.1), and the rest goes with it for the worker's memory and local
-    disk. **Its memory there is budgeted at 0.7 GiB** (nodes.md §4.4),
-    which rfc-008 §6.1 reserves as a request. Every container the
-    component runs on the worker takes its request, and its limit where
-    its chart offers one, from one table,
-    `components/monitoring/memory.py`, which charges each container to
+    the one monitoring component (`components/monitoring`). **The
+    scheduler places it** within two constraints, each the home site
+    for a fact about nodes (declarative/workloads.md §1): alertmanager
+    posts to Home Assistant at Home Assistant's own address, which no
+    cloud node reaches ([rfc-008](../rfc/rfc-008-workload-migration.md)
+    §4.1), and vmagent scrapes etcd on every control plane, which a pod
+    on a control plane cannot do on its own node (below). Every other
+    pod is free, and the node exporter runs on every node, at
+    `system-node-critical`, so no free pod placed first leaves it
+    pending. **Its memory is budgeted at 0.7 GiB** (nodes.md §4.4),
+    planned at the home site, which rfc-008 §6.1 reserves as a request.
+    Every container the component runs, its jobs' and the ones that
+    restore each store before it starts among them, takes a request and a limit of CPU and of
+    memory from one table, `components/monitoring/memory.py`, since the
+    scheduler may place any of its pods on a cloud node: each CPU request
+    is the container's p99 and each limit above its peak, read over 24
+    hours on 2026-11-20. The table charges each container's memory to
     its line of nodes.md §4.4: the stack's containers to the monitoring
     line, and metrics-server to the line for the rest of kube-system,
     where that table counts it. A test holds the requests charged to the
@@ -165,8 +174,10 @@ classes its objects fall into (§1.2):
     (`versions:image-metrics-*`). Its memory, a 150 Mi request, is a line
     of its own in the same table, beside the monitoring line (nodes.md
     §4.4), and a test holds it to that line's 150 Mi. Each store's volume
-    is `local-path` on the worker, named rather than left to the default
-    class. **Each store is backed up hourly to the backup bucket** by
+    is `local-path`, named rather than left to the default class, and
+    each store's pod writes in the `blockio` class `etcd-disk-writer`,
+    which caps its writes where its claim binds on a control plane
+    (cluster/nodes.md §1.2). **Each store is backed up hourly to the backup bucket** by
     `vmbackup`, under `vm/monitoring/<store>/` and the monitoring
     namespace's writer key, which `k8s-base` holds sealed (§1.1): one
     CronJob per store, the two half an hour apart, mounting the store's
@@ -229,7 +240,7 @@ classes its objects fall into (§1.2):
     `OciMetricsPullFailed`, and a pull older than an hour and a half
     `OciMetricsPullStale` (operations.md §6.3).
     **The state backend is checked every hour**, each of its two checks
-    a CronJob of its own on the worker. Both run one program of this
+    a CronJob of its own, a free pod. Both run one program of this
     repository, rendered into a `ConfigMap` beside the settings it
     reads, in the same `oci-sdk`
     image, whose Debian base carries the `openssl` one of them runs
@@ -328,11 +339,11 @@ classes its objects fall into (§1.2):
     uses, and keeps their `_count` and `_sum`. **etcd is scraped** on
     its metrics listener (`ETCD_METRICS_PORT`) on every control plane,
     by a node scrape the component declares, which drops etcd's
-    gRPC-server and debugging families. vmagent runs on the worker, so
-    its request reaches a control plane over KubeSpan, which the node
-    firewall accepts ahead of every rule, and the port takes no
+    gRPC-server and debugging families. vmagent is held at the home
+    site, so its request reaches a control plane over KubeSpan, which
+    the node firewall accepts ahead of every rule, and the port takes no
     opening; that holds while vmagent never runs on a control plane,
-    which a test holds beside alertmanager's placement. **A row the
+    which its constraint holds and a test reads beside alertmanager's. **A row the
     store ignores raises an alert**, `MetricsDropped`
     ([operations.md](../operations.md) §6.1). **Each store's mutating
     endpoints take keys**: deleting series, taking snapshots and
@@ -452,7 +463,7 @@ classes its objects fall into (§1.2):
     Cilium.
 9.  **The hourly etcd snapshot** — Sidero's `talos-backup` as the
     CronJob `etcd-snapshot` in a namespace of its own, `etcd-backup`, at
-    `restricted`, on the control planes (`components.backup.etcd`,
+    `restricted`, a free pod (`components.backup.etcd`,
     cluster/storage.md §5). It reaches the Talos API with a certificate
     Talos issues to its `talos.dev/v1alpha1` `ServiceAccount` for
     `os:etcd:backup` alone, the grant `physical` states
@@ -462,16 +473,16 @@ classes its objects fall into (§1.2):
     SealedSecret. Each snapshot is
     encrypted to the escrowed backup generations and to the
     restore-verify's recipient. Beside it, the **daily restore-verify**
-    is the CronJob `etcd-restore-verify` in the same namespace, off the
-    control planes, in the `etcd-age` image this repository builds: it
+    is the CronJob `etcd-restore-verify` in the same namespace, a free
+    pod too, in the `etcd-age` image this repository builds: it
     restores the newest snapshot into a scratch etcd that has to serve
     it (cluster/storage.md §5). It lists and downloads with the
     snapshots' read-only key, sealed strict as `reader-etcd`, and
     decrypts with an age identity of its own, sealed strict as
     `etcd-drill` (§1.1), and holds no Kubernetes or Talos grant.
 10. **The state table's daily upkeep** — the CronJob `state-upkeep` in a
-    namespace of its own, `state-upkeep`, at `restricted`, on the control
-    planes (`components.state_upkeep`, physical/state-backend.md §2). It
+    namespace of its own, `state-upkeep`, at `restricted`, a free pod
+    (`components.state_upkeep`, physical/state-backend.md §2). It
     runs `kluster.lib.state_backend.table`, rendered into a `ConfigMap`
     with a settings file rendered from the state backend's settings, in
     the `postgres-client` image, which carries the interpreter and the
@@ -481,6 +492,17 @@ classes its objects fall into (§1.2):
     client bundle sealed strict as `state-backend-upkeep` (§1.1), and
     holds no Kubernetes grant. It is behind Cilium and the sealing
     controller, which defines the SealedSecret.
+11. **The held `PriorityClass`** — `held`
+    (`conventions.HELD_PRIORITY_CLASS`, `components.scheduling`), the
+    class a pod held by its constraints runs at, by a site or an
+    architecture (declarative/workloads.md §1). Its value is above 0,
+    the priority of every pod that names no class, since no class is
+    the global default, and below the classes the system reserves, which
+    some charts' pods name (metrics-server's), so the scheduler preempts
+    a free pod that names no class to place a held one that fits nowhere
+    else. It is behind Cilium, as every component is, and the API server
+    refuses a pod naming a class it does not hold, so monitoring, which
+    renders pods that name it, is installed behind it.
 
 Every chart this list installs is pinned in `Pulumi.yaml`'s `versions:`
 block as `versions:chart-<name>`, the Gateway API definitions as

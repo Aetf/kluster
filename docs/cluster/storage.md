@@ -63,8 +63,8 @@ resort, object storage used directly where an app supports it.
 | `local-path` (default) | directories under `/var/mnt/storage`, a Talos user volume on each node's system disk | RWO, node-pinned | Databases (CNPG), caches, anything an app replicates itself | anything that may need to change nodes |
 | `local-path` + VolSync | same local-path, plus a per-claim restic schedule to the backup bucket: `claim` under a retention class | RWO, node-pinned; **movable by copy** (§3.1) | stateful apps without built-in replication; any volume that plausibly moves | bulk media (NAS's job) |
 | ~~`longhorn`~~ (deferred, §3.2) | Longhorn v1 engine | RWO | — not in the initial build — | — |
-| NAS (`nas_claim`) | a static NFS PersistentVolume over a path of the host's one export, and its claim | RWX or read-only, the worker only | bulk media, large read-mostly sets | cloud-pool workloads; databases |
-| `cloud-block-<row>` | `local-path` served from an OCI block volume on a cloud node, one per node (`conventions.NODE_VOLUMES`), mounted at `/var/mnt/<name>` (§6) | RWO, node-pinned | the preserved cloud-pool dataset: the hath cache | homelab-pool workloads; anything a node may have to lose |
+| NAS (`nas_claim`) | a static NFS PersistentVolume over a path of the host's one export, and its claim | RWX or read-only, the worker only | bulk media, large read-mostly sets | a pod that may not be held at home; databases |
+| `cloud-block-<row>` | `local-path` served from an OCI block volume on a cloud node, one per node (`conventions.NODE_VOLUMES`), mounted at `/var/mnt/<name>` (§6) | RWO, node-pinned | the preserved dataset on a cloud node: the hath cache | a pod held at home; anything a node may have to lose |
 | Object storage (direct) | S3-compatible bucket (§4) | app-native | apps with first-class S3 support; all backups | POSIX pretenders |
 | JuiceFS (quarantined, no CSI — §6) | object storage + per-app metadata, mounted in-pod | RWX | last resort only, one app at a time | everything else; it is not selectable by `storageClassName` |
 
@@ -594,9 +594,10 @@ Per nodes.md §5, durability = declarative rebuild + backups + drills:
     `siderolabs/talos-backup`, the CronJob `etcd-snapshot` in a
     namespace of its own, `etcd-backup`, which `k8s-base` declares
     (`components.backup.etcd`).
-    -   **Placement**: on the control planes, so the snapshots go on
-        through an outage of the home site, the upload leaves from the
-        cloud, and the stream stays off the mesh to the worker. The run
+    -   **Placement**: a free pod, which the scheduler places on any
+        node (declarative/workloads.md §1). The snapshots go on through
+        an outage of the home site without a constraint, since the
+        scheduler places no new pod on a node that is not ready. The run
         works in a memory-backed directory of its pod, since a control
         plane's disk is etcd's own (nodes.md §1.2).
     -   **Credentials**: it speaks Talos with a certificate Talos issues
@@ -632,8 +633,8 @@ Per nodes.md §5, durability = declarative rebuild + backups + drills:
         do not; restores it with `etcdutl`, which checks etcd's hash; and
         starts a scratch etcd on the restored member, listening on
         `127.0.0.1` inside the pod, which has to answer healthy and hold
-        `/registry/namespaces/kube-system`. It runs off the control
-        planes, on the worker today, in the `etcd-age` image this
+        `/registry/namespaces/kube-system`. It is a free pod, which the
+        scheduler places on any node, in the `etcd-age` image this
         repository builds (`docker/etcd-age.conf`), with its working
         directory in memory, so the decrypted snapshot never reaches a
         disk. Its playbook is operations.md §7.2.
@@ -723,8 +724,8 @@ gate; the containment is what admission buys you.
 A workload may use it only if all of:
 
 1.  It needs POSIX semantics over object-storage capacity (too big for
-    local NVMe, not servable from NAS — e.g. cloud-pool workload needing
-    cheap bulk space).
+    local NVMe, not servable from NAS — e.g. a workload on a cloud node
+    needing cheap bulk space).
 2.  RWX/multi-node access or capacity is the actual requirement, not
     convenience.
 3.  It gets its **own** filesystem and its own metadata store (per-app
@@ -879,7 +880,7 @@ reason to write the criterion, not a license to skip it.
     for the one feature we're buying (S3 backup + detach/attach mobility);
     Mayastor's RAM/hugepages appetite is hostile to small nodes.
 -   **NFS for everything homelab-side**: simple, but couples every workload
-    to NAS uptime and punts on the cloud pool entirely; kept narrowly for
+    to NAS uptime and punts on the cloud nodes entirely; kept narrowly for
     bulk media where it already excels.
 -   **SeaweedFS / S3QL / s3backer** (from the 2025 vps-upgrade survey):
     unchanged verdicts — SeaweedFS's cloud modes lose either caching or

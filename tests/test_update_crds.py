@@ -52,7 +52,13 @@ from tqdm import tqdm
 from kluster.lib import source_files
 from kluster.lib.versions import CHART, MANIFEST, SOURCE, ChartPin, Floor, ProjectFile, Versions
 from kluster.scripts.update_crds import cli, pins, record, sources, values
-from kluster.scripts.update_crds.values import CustomResourceSpec, MissingDefinition, ValuePaths, read_chart
+from kluster.scripts.update_crds.values import (
+    CustomResourceSpec,
+    MissingDefinition,
+    MissingParent,
+    ValuePaths,
+    read_chart,
+)
 
 ROOT = Path(__file__).parent.parent
 
@@ -530,6 +536,49 @@ def test_a_declared_pass_through_whose_definition_the_chart_does_not_ship_stops_
 
     with pytest.raises(MissingDefinition):
         read_chart(directory)
+
+
+#: A chart whose `resources` sets `requests` and comments `limits`, and whose
+#: subchart comments `priorityClassName`, as metrics-server's and the node
+#: exporter's do.
+COMMENTED = 'resources:\n  requests:\n    cpu: 100m\n    # limits:\n    #   cpu:\n'
+
+
+def _commented_chart(directory: Path) -> Path:
+    parent = chart(directory, name='stack', values=COMMENTED, dependencies='dependencies:\n  - name: exporter\n')
+    _ = chart(parent / 'charts' / 'exporter', name='exporter', values='# priorityClassName: ""\nreplicas: 1\n')
+    return parent
+
+
+def test_a_key_values_only_comments_is_refused_until_its_template_read_is_declared(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A commented key is no path; declared, it is one, free-form where it is a map, and its neighbours stay refused."""
+    monkeypatch.setattr(values, 'TEMPLATE_READ', {})
+    undeclared = read_chart(_commented_chart(tmp_path / 'undeclared'))
+    monkeypatch.setattr(
+        values,
+        'TEMPLATE_READ',
+        {'stack': {('resources', 'limits'): True, ('exporter', 'priorityClassName'): False}},
+    )
+    declared = read_chart(_commented_chart(tmp_path / 'declared'))
+
+    assert not undeclared.accepts(('resources', 'limits', 'cpu'))
+    assert not undeclared.accepts(('exporter', 'priorityClassName'))
+    assert declared.accepts(('resources', 'limits', 'cpu'))
+    assert declared.accepts(('exporter', 'priorityClassName'))
+    assert not declared.accepts(('exporter', 'priorityClassName', 'below'))
+    assert not declared.accepts(('resources', 'limit', 'cpu'))
+
+
+def test_a_declared_template_read_below_a_key_the_chart_lacks_stops_the_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An entry a bump left behind is refused rather than opening a key the chart dropped."""
+    monkeypatch.setattr(values, 'TEMPLATE_READ', {'stack': {('resource', 'limits'): True}})
+
+    with pytest.raises(MissingParent):
+        read_chart(_commented_chart(tmp_path / 'stack'))
 
 
 def test_kubeseal_is_the_release_of_the_controller_the_sealed_secrets_chart_installs() -> None:
