@@ -47,6 +47,7 @@ import process_sessions
 import pytest
 import yaml
 from renovate_text import listed, package_rules, reaches, scalar
+from ruamel.yaml import YAML
 
 from kluster import conventions
 from kluster.components import talos
@@ -302,11 +303,12 @@ def test_talos_accepts_every_node_shape(name: str, talosctl: str, secrets: Path,
     applied = patches(shape, secrets)
     configuration = render(talosctl, secrets, shape, applied, tmp_path)
     # Every patch landed: a configuration that silently dropped one would
-    # validate while describing some other node.
+    # validate while describing some other node. Read as YAML 1.2, the
+    # version Talos writes: a file's `permissions` render as `0o644`, which
+    # 1.2 reads as the integer the patch states and 1.1 as a string.
+    loaded = YAML(typ='safe', pure=True).load_all(configuration.read_text())  # pyright: ignore[reportUnknownMemberType] -- ruamel's `load_all` is untyped
     rendered = {
-        identity(document): document
-        for document in cast('list[dict[str, Any] | None]', list(yaml.safe_load_all(configuration.read_text())))
-        if document
+        identity(document): document for document in cast('list[dict[str, Any] | None]', list(loaded)) if document
     }
     for patch in applied:
         document = cast('dict[str, Any]', json.loads(patch))

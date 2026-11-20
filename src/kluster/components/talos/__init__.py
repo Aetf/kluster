@@ -234,6 +234,34 @@ def image_pull_bound(safe_mbps: float, writer_mbps: float) -> int:
     return max(1, math.floor(safe_mbps / writer_mbps))
 
 
+#: Every whole disk of a control plane, as goresctrl's pattern of the device
+#: paths the kernel gives them, which the blockio class caps. The disk etcd
+#: shares is the boot volume, `sda` with `/var` on `sda4` (read on every
+#: control plane on 2026-11-19), but `sda` is the kernel's probe order rather
+#: than a name the boot volume owns, and the control plane holding a node
+#: volume has a second disk, `sdb`. So the class caps every whole disk, and
+#: the boot volume is among them whichever order the two are found in. That
+#: stays within the rule: only a container in the class is capped, and a
+#: node volume's pod takes no class (nodes.md §1.2). The pattern matches the
+#: first 26 SCSI disks, and a node holds the boot volume and at most one node
+#: volume. It never matches a partition, whose name ends in its number:
+#: `io.max` takes a whole disk and refuses a partition with `ENODEV`
+#: (`blkg_conf_open_bdev`).
+CONTROL_PLANE_DISKS = '/dev/sd[a-z]'
+
+#: Where every node keeps its blockio class file, which containerd loads.
+#: `machine.files` creates a file under `/var` alone.
+BLOCKIO_CLASS_FILE = '/var/lib/blockio/classes.yaml'
+
+#: The one file in `machine.files` Talos reads as a CRI configuration part:
+#: it merges the content into the configuration containerd imports, with the
+#: parts under `/etc/cri/conf.d/`, through its own `/etc` file resource
+#: rather than as a user file under `/var` (`WriteUserFiles`,
+#: `injectCRIConfigPatch` at v1.13.9). Whatever else the
+#: cluster sets in containerd's configuration goes into this same part.
+CRI_CUSTOMIZATION_PART = '/etc/cri/conf.d/20-customization.part'
+
+
 #: KubeSpan's WireGuard listen port. Talos fixes it (`KubeSpanDefaultPort`)
 #: and `KubeSpanConfig` has no field to move it; WireGuard runs over UDP.
 KUBESPAN_PORT = 51820
@@ -658,6 +686,87 @@ def worker_patch() -> dict[str, Any]:
     }
 
 
+def blockio_classes(capped: Sequence[str]) -> dict[str, Any]:
+    """The blockio class file, in goresctrl's format: `conventions.ETCD_DISK_WRITER`, capping writes to the disks `capped` names.
+
+    goresctrl v0.10.0, the release containerd v2.2.7 vendors, reads a
+    mapping of class names to lists of device parameters (`Config`,
+    `DevicesParameters`, `pkg/blockio/config.go`), and a device is a path or
+    a pattern of paths. Each rate is a string that goresctrl parses as a
+    Kubernetes quantity, and the class writes it as a plain number, which
+    parses to itself. A node with no disk to cap carries the class with no
+    parameters, so a pod in it starts there uncapped.
+    """
+    writer = conventions.ETCD_DISK_WRITER
+    caps = (
+        [
+            {
+                'Devices': list(capped),
+                'ThrottleWriteBps': str(writer.write_bps),
+                'ThrottleWriteIOPS': str(writer.write_iops),
+            }
+        ]
+        if capped
+        else []
+    )
+    return {'Classes': {writer.name: caps}}
+
+
+def blockio_patch(capped: Sequence[str]) -> dict[str, Any]:
+    """Every node's blockio class (nodes.md §1.2): the class file, and the CRI part that has containerd load it.
+
+    `capped` are the disks the class caps on the node: `CONTROL_PLANE_DISKS`
+    on a control plane, among which is the disk etcd shares, and none on the
+    worker, whose disk holds no etcd.
+
+    containerd v2.2.7 loads the file its tasks service's `blockio_config_file`
+    names once, when it starts, with goresctrl's `SetConfigFromFile` and
+    `force` set (`plugins/services/tasks/local.go`). It puts a container in
+    a class by the pod's `blockio.resources.beta.kubernetes.io/pod`
+    annotation, read when it creates the container
+    (`internal/cri/server/container_create.go`), and a container with no
+    annotation in none, uncapped. runc writes the class's caps to the
+    container's own `io.max` and fails the start if the write fails. So
+    the caps are each container's, and nothing caps a pod or `/kubepods` as
+    a whole.
+
+    How it fails: a class file that is missing or that goresctrl's strict
+    decoding refuses leaves blockio disabled, and a pod naming a class the
+    file lacks is refused at creation, as is a class naming a partition;
+    those fail closed. A device that matches nothing and a rate that does
+    not parse leave the class registered without that cap and a warning in
+    containerd's log; those fail open, and a live read of a pod's `io.max`
+    is what catches them (nodes.md §1.2).
+
+    Talos writes `machine.files` at boot alone: the field is not among those
+    it applies immediately (`CanApplyImmediate`), so an apply that changes
+    either file is staged, and a node takes the change when it reboots.
+    `create` writes the file again at every boot, which is how a changed
+    class reaches a node whose `/var` already holds the old one. A changed
+    rate changes the control planes' file alone, since the worker's class
+    is empty whatever the rates; a changed name or CRI part changes every
+    node's.
+    """
+    return {
+        'machine': {
+            'files': [
+                {
+                    'path': BLOCKIO_CLASS_FILE,
+                    'op': 'create',
+                    'permissions': 0o644,
+                    'content': json.dumps(blockio_classes(capped)),
+                },
+                {
+                    'path': CRI_CUSTOMIZATION_PART,
+                    'op': 'create',
+                    'content': f'[plugins."io.containerd.service.v1.tasks-service"]\n'
+                    f'blockio_config_file = "{BLOCKIO_CLASS_FILE}"\n',
+                },
+            ]
+        }
+    }
+
+
 def local_path_volume_document() -> dict[str, Any]:
     """The directory the `local-path` StorageClass hands out (storage.md §2).
 
@@ -991,8 +1100,10 @@ def patches(
         documents.append(node_volume_label_patch(volume))
     if role == 'controlplane':
         documents.append(control_plane_patch(cert_sans=cert_sans, secretbox_secret=secretbox_secret))
+        documents.append(blockio_patch([CONTROL_PLANE_DISKS]))
     else:
         documents.append(worker_patch())
+        documents.append(blockio_patch([]))
     if static_address is not None:
         documents += static_address_documents(static_address)
     if secondary_address is not None:

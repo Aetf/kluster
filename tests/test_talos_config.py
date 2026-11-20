@@ -5,17 +5,23 @@ These assertions are the design's load-bearing claims (declarative/physical.md
 come up or comes up quietly insecure.
 """
 
+import fnmatch
 import json
+import re
+import string
+import tomllib
 from collections.abc import Sequence
 from ipaddress import IPv4Interface, IPv4Network, IPv6Network, ip_address, ip_network
 from typing import Any, cast
 from urllib.parse import urlsplit
 
 import pytest
+import yaml
 from k8s_quantity import quantity
 
 from kluster import conventions
 from kluster.components import cilium, talos
+from kluster.lib.monitoring import readings
 
 SANS = ['203.0.113.10', 'api.example.test']
 SECRETBOX = 'c2VjcmV0Ym94LWtleS1tYXRlcmlhbC0zMi1ieXRlcw=='
@@ -829,3 +835,212 @@ def test_a_node_volume_is_mounted_where_conventions_says_it_is() -> None:
     # with its name, and nothing in the document can move it; the suite cannot
     # import Talos' constant, so this literal is it.
     assert conventions.node_volume_mount(VOLUME) == '/var/mnt/' + VOLUME
+
+
+#: The one path in `machine.files` Talos reads as a CRI configuration part,
+#: merged into the configuration containerd imports through its own `/etc`
+#: file resource rather than as a user file under `/var`: `/etc` joined with
+#: `constants.CRICustomizationConfigPart`, in
+#: `WriteUserFiles` at Talos v1.13.9. The suite cannot import Talos'
+#: constant, so this literal is it.
+CRI_PART = '/etc/cri/conf.d/20-customization.part'
+
+#: Where `WriteUserFiles` creates a file anywhere but `CRI_PART`: under
+#: `/var`, and nowhere else. A `create` outside it fails the boot task that
+#: writes the files.
+CREATABLE = '/var/'
+
+#: The names the kernel's SCSI disk driver gives the first 26 disks it finds,
+#: in the order it finds them (`sd_format_disk_name`); a partition's name is
+#: its disk's and its number. A cloud node's boot volume and node volume are
+#: SCSI disks, and a node holds at most one node volume.
+SCSI_DISKS = [f'sd{letter}' for letter in string.ascii_lowercase]
+
+#: containerd's tasks service, the plugin whose `blockio_config_file` names
+#: the class file (`plugins/services/tasks/local.go` at containerd v2.2.7).
+TASKS_SERVICE = 'io.containerd.service.v1.tasks-service'
+
+#: goresctrl's blockio configuration at v0.10.0, the release containerd
+#: v2.2.7 vendors: the fields of `Config` and of `DevicesParameters`
+#: ([`pkg/blockio/config.go`](https://github.com/intel/goresctrl/blob/v0.10.0/pkg/blockio/config.go)).
+#: containerd loads its class file with `SetConfigFromFile`, which decodes it
+#: with `sigs.k8s.io/yaml`'s `UnmarshalStrict`, so a key neither type declares
+#: refuses the whole file and leaves blockio disabled. Every field but
+#: `Devices` is a Go string, which the decoder fills from a YAML number too,
+#: and which goresctrl parses as a Kubernetes quantity
+#: (`parseAndValidateQuantity` in `pkg/blockio/blockio.go`).
+GORESCTRL_CONFIG = frozenset({'Classes'})
+GORESCTRL_DEVICES_PARAMETERS = frozenset(
+    {'Devices', 'ThrottleReadBps', 'ThrottleWriteBps', 'ThrottleReadIOPS', 'ThrottleWriteIOPS', 'Weight'}
+)
+
+#: The configuration example in goresctrl's package documentation at the same
+#: release (`pkg/blockio/blockio.go`), its comments dropped. The reader below
+#: has to accept it, which is what keeps the reader goresctrl's.
+GORESCTRL_EXAMPLE = """
+Classes:
+  LowPrioThrottled:
+    - Weight: 80
+    - Devices:
+        - /dev/sd[a-z]
+        - /dev/vd[a-z]
+      ThrottleReadBps: 50M
+      ThrottleWriteBps: 10M
+      ThrottleReadIOPS: 10k
+      ThrottleWriteIOPS: 5k
+      Weight: 50
+    - Devices:
+        - /dev/disk/by-id/*SSD*
+      ThrottleReadBps: 100M
+      ThrottleWriteBps: 40M
+      Weight: 50
+  HighPrioFullSpeed:
+    - Weight: 400
+"""
+
+#: A Kubernetes quantity as `resource.ParseQuantity` reads one, unsigned: a
+#: decimal number and at most one suffix, binary, decimal or an exponent.
+#: goresctrl reads a signed one too and drops a negative rate with a warning,
+#: leaving the class registered without that cap, so the reader refuses a
+#: sign.
+QUANTITY = re.compile(r'(\d+(\.\d*)?|\.\d+)(Ki|Mi|Gi|Ti|Pi|Ei|n|u|m|k|M|G|T|P|E|[eE][+-]?\d+)?')
+
+
+def goresctrl_classes(text: str) -> dict[str, list[dict[str, object]]]:
+    """The classes a class file declares, read as goresctrl reads it; a file goresctrl refuses raises.
+
+    Stricter than goresctrl in one respect: Go's decoder matches a key to a
+    field ignoring case, and this reader takes a field's own spelling alone.
+    """
+    loaded: object = yaml.safe_load(text)
+    if not isinstance(loaded, dict):
+        raise ValueError(f'the class file is no mapping: {loaded!r}')
+    config = cast('dict[str, object]', loaded)
+    unknown = set(config) - GORESCTRL_CONFIG
+    if unknown:
+        raise ValueError(f'goresctrl refuses the unknown keys {sorted(unknown)}')
+    classes: object = config.get('Classes') or {}
+    if not isinstance(classes, dict):
+        raise ValueError(f'`Classes` is no mapping: {classes!r}')
+    read: dict[str, list[dict[str, object]]] = {}
+    for name, entries in cast('dict[str, object]', classes).items():
+        if not isinstance(entries, list | None):
+            raise ValueError(f'class {name!r} is no list: {entries!r}')
+        read[name] = []
+        for entry in cast('list[object]', entries or []):
+            if not isinstance(entry, dict):
+                raise ValueError(f'an entry of {name!r} is no mapping: {entry!r}')
+            parameters = cast('dict[str, object]', entry)
+            unknown = set(parameters) - GORESCTRL_DEVICES_PARAMETERS
+            if unknown:
+                raise ValueError(f'goresctrl refuses the unknown keys {sorted(unknown)} in {name!r}')
+            devices = parameters.get('Devices')
+            if devices is not None and not (
+                isinstance(devices, list) and all(isinstance(device, str) for device in cast('list[object]', devices))
+            ):
+                raise ValueError(f'`Devices` of {name!r} is no list of paths: {devices!r}')
+            for field, value in parameters.items():
+                if field != 'Devices' and not (isinstance(value, str | int) and QUANTITY.fullmatch(str(value))):
+                    raise ValueError(f'`{field}` of {name!r} is no quantity: {value!r}')
+            read[name].append(parameters)
+    return read
+
+
+def written(**kwargs: Any) -> dict[str, dict[str, Any]]:
+    """The files a node's configuration has Talos write at boot, by path; two at one path are refused.
+
+    Talos fails the boot task that writes the files on a second CRI part,
+    and a second file at a path overwrites the first.
+    """
+    files = cast('list[dict[str, Any]]', merged('machine', **kwargs).get('files', []))
+    paths = [file['path'] for file in files]
+    assert len(set(paths)) == len(paths), f'two files at one path: {sorted(paths)}'
+    return {file['path']: file for file in files}
+
+
+def blockio_classes(**kwargs: Any) -> dict[str, list[dict[str, object]]]:
+    """The blockio classes a node's containerd loads: the file its CRI part names, read as goresctrl reads it."""
+    files = written(**kwargs)
+    part = tomllib.loads(files[CRI_PART]['content'])
+    return goresctrl_classes(files[part['plugins'][TASKS_SERVICE]['blockio_config_file']]['content'])
+
+
+def runs_etcd(shape: str) -> bool:
+    """Whether a node shape's configuration runs an etcd member."""
+    return 'etcd' in merged('cluster', **SHAPES[shape])
+
+
+def test_the_class_reader_reads_goresctrls_own_example_and_refuses_a_field_goresctrl_lacks() -> None:
+    """The control for the reader the class file is held to below."""
+    classes = goresctrl_classes(GORESCTRL_EXAMPLE)
+    assert set(classes) == {'LowPrioThrottled', 'HighPrioFullSpeed'}
+    assert classes['LowPrioThrottled'][1]['ThrottleWriteIOPS'] == '5k'
+    with pytest.raises(ValueError, match='ThrottleWriteBandwidth'):
+        _ = goresctrl_classes('Classes:\n  c:\n    - Devices: [/dev/sda]\n      ThrottleWriteBandwidth: 1M\n')
+    with pytest.raises(ValueError, match='no quantity'):
+        _ = goresctrl_classes('Classes:\n  c:\n    - Devices: [/dev/sda]\n      ThrottleWriteBps: fast\n')
+    with pytest.raises(ValueError, match='no quantity'):
+        _ = goresctrl_classes('Classes:\n  c:\n    - Devices: [/dev/sda]\n      ThrottleWriteBps: "-5"\n')
+
+
+@pytest.mark.parametrize('rates', [(0, 20), (800_000, 0), (-1, 20), (800_000, -1)])
+def test_a_class_refuses_a_rate_that_is_not_positive(rates: tuple[int, int]) -> None:
+    """goresctrl drops a negative cap and leaves the class without it, and a cap of zero stops every write."""
+    write_bps, write_iops = rates
+    with pytest.raises(ValueError, match='positive'):
+        _ = conventions.BlockioClass(name='example', write_bps=write_bps, write_iops=write_iops)
+
+
+@pytest.mark.parametrize('shape', list(SHAPES))
+def test_every_node_creates_its_files_where_talos_creates_one(shape: str) -> None:
+    """Each file is the CRI part or under `/var`: Talos creates none elsewhere, and fails its boot task on one."""
+    files = written(**SHAPES[shape])
+    assert files
+    for path, file in files.items():
+        assert path == CRI_PART or path.startswith(CREATABLE), path
+        assert file['op'] == 'create'
+
+
+@pytest.mark.parametrize('shape', list(SHAPES))
+def test_every_nodes_containerd_reads_the_class_file_the_node_writes(shape: str) -> None:
+    """The CRI part names a file the configuration writes, and that file declares the class a pod names, in goresctrl's format.
+
+    A pod naming a class its node's containerd lacks is refused at creation,
+    so every node carries the class, the worker included (nodes.md §1.2).
+    """
+    assert set(blockio_classes(**SHAPES[shape])) == {conventions.ETCD_DISK_WRITER.name}
+
+
+@pytest.mark.parametrize('shape', [shape for shape in SHAPES if runs_etcd(shape)])
+def test_a_node_that_runs_etcd_caps_writes_to_every_whole_disk_and_no_partition(shape: str) -> None:
+    """The class caps every whole disk, the disk etcd shares among them, at the rates `conventions` gives (nodes.md §1.2).
+
+    The kernel names a node's disks in the order it probes them, so the boot
+    volume the readings watch is `sda` only while it is found first; every
+    whole disk is capped, so it is capped whichever name it takes. No
+    partition is named: `io.max` refuses one. Python's `fnmatch` and Go's
+    `filepath.Glob`, which goresctrl matches with, agree on literals and on
+    a bracketed range.
+    """
+    (entry,) = blockio_classes(**SHAPES[shape])[conventions.ETCD_DISK_WRITER.name]
+    devices = cast('list[str]', entry['Devices'])
+
+    def capped(name: str) -> bool:
+        return any(fnmatch.fnmatchcase(f'/dev/{name}', device) for device in devices)
+
+    boot = readings.BOOT_DEVICE.removeprefix('device="').removesuffix('"')
+    assert boot in SCSI_DISKS
+    for disk in SCSI_DISKS:
+        assert capped(disk), disk
+        for partition in (1, 4, 15):
+            assert not capped(f'{disk}{partition}'), f'{disk}{partition}'
+    assert set(entry) == {'Devices', 'ThrottleWriteBps', 'ThrottleWriteIOPS'}
+    # Plain numbers, which `int` alone reads: a suffix would fail here.
+    assert int(str(entry['ThrottleWriteBps'])) == conventions.ETCD_DISK_WRITER.write_bps
+    assert int(str(entry['ThrottleWriteIOPS'])) == conventions.ETCD_DISK_WRITER.write_iops
+
+
+@pytest.mark.parametrize('shape', [shape for shape in SHAPES if not runs_etcd(shape)])
+def test_a_node_that_runs_no_etcd_carries_the_class_empty(shape: str) -> None:
+    """A pod in the class starts there and is not capped: the node's disk holds no etcd."""
+    assert blockio_classes(**SHAPES[shape]) == {conventions.ETCD_DISK_WRITER.name: []}
