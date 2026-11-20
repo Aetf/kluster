@@ -31,6 +31,7 @@ import process_sessions
 import pytest
 import pytest_asyncio
 from mock_monitor import Recorder, declaring, run_with
+from node_selection import schedulable
 from pinned_image import COMMAND_TIMEOUT, CONTAINER_TIMEOUT, PULL_TIMEOUT, pinned, pulled, require_podman
 
 from kluster import conventions
@@ -46,7 +47,6 @@ from kluster.components.apps.splitpro import (
 )
 from kluster.components.apps.storage import claim_name
 from kluster.components.cilium import InternetPoolMembers
-from kluster.conventions import CONTROL_PLANE_LABEL
 from kluster.conventions.backup import BACKED_NAMESPACES, PRECIOUS, BackupFamily
 from kluster.conventions.routes import PROXIED, REWRITE, Exposure, Gate, Held, Proxied, Route
 from kluster.lib.versions import ImagePin
@@ -185,18 +185,6 @@ def holds(expression: Mapping[str, Any], labels: Mapping[str, str]) -> bool:
             raise AssertionError(f'no reading of {operator!r} here')
 
 
-def placed_on(node_affinity: Mapping[str, Any], labels: Mapping[str, str]) -> bool:
-    """Whether a node labelled `labels` meets a required node affinity, whose terms are alternatives."""
-    terms = node_affinity['requiredDuringSchedulingIgnoredDuringExecution']['nodeSelectorTerms']
-    return any(all(holds(expression, labels) for expression in term['matchExpressions']) for term in terms)
-
-
-#: A cloud node, which carries the control-plane label, and the worker, which
-#: does not.
-CLOUD_NODE = {CONTROL_PLANE_LABEL: '', 'kubernetes.io/hostname': 'cp-1'}
-WORKER = {'kubernetes.io/hostname': 'worker'}
-
-
 # -- the pod ---------------------------------------------------------------------
 
 
@@ -219,18 +207,8 @@ def test_the_namespace_enforces_restricted(declared: Recorder) -> None:
     assert namespace['metadata']['labels']['pod-security.kubernetes.io/enforce'] == 'restricted'
 
 
-def test_the_server_and_its_database_are_placed_on_the_cloud_pool_and_not_on_the_worker(declared: Recorder) -> None:
-    """A node carrying the control-plane label, which every cloud node does, is the only kind either may land on."""
-    server = pod_of(declared)['spec']['affinity']['nodeAffinity']
-    database = the_one(declared, CLUSTER)['spec']['affinity']['nodeAffinity']
-
-    for affinity in (server, database):
-        assert placed_on(affinity, CLOUD_NODE)
-        assert not placed_on(affinity, WORKER)
-
-
-def test_the_server_and_its_database_carry_cpu_and_memory_limits_on_the_cloud_pool(declared: Recorder) -> None:
-    """Etcd shares a cloud node's cores, so every workload there is held to both (declarative/workloads.md §1)."""
+def test_the_server_and_its_database_carry_cpu_and_memory_limits(declared: Recorder) -> None:
+    """The scheduler may place either on a cloud node, where etcd shares the cores, so each is held to both (declarative/workloads.md §1)."""
     server = container_of(declared)['resources']
     database = the_one(declared, CLUSTER)['spec']['resources']
 
@@ -296,10 +274,12 @@ def test_the_receipts_are_backed_up_from_a_backed_namespace_with_its_writer_key(
 
 
 def test_the_claims_movers_are_placed_where_the_server_is(declared: Recorder) -> None:
-    """The claim binds on whichever of the server and a mover is scheduled first, so both are held to one placement."""
+    """The claim binds on whichever of the server and a mover is scheduled first, so both admit the same nodes."""
     (source,) = [it.inputs for it in declared.of_type(SOURCE)]
 
-    assert source['spec']['restic']['moverAffinity'] == pod_of(declared)['spec']['affinity']
+    assert schedulable({'affinity': source['spec']['restic'].get('moverAffinity')}) == schedulable(
+        pod_of(declared)['spec']
+    )
 
 
 def test_the_server_writes_nothing_else_it_keeps(declared: Recorder) -> None:

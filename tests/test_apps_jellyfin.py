@@ -1,4 +1,4 @@
-"""Jellyfin on the worker, declared against mocks, and its network configuration's merge and server run as the pod runs them.
+"""Jellyfin, declared against mocks, and its network configuration's merge and server run as the pod runs them.
 
 Every row here is the test's own: an interface route held while the legacy
 VPS keeps its name, on `internet` and on `media`, and a discovery port heard
@@ -345,14 +345,9 @@ def test_the_server_is_given_one_gpu(declared: Recorder) -> None:
     assert int(resources['limits'][GPU_RESOURCE]) == 1
 
 
-def test_the_pod_runs_on_the_node_its_nas_volumes_are_reachable_from(declared: Recorder) -> None:
-    """The pod states the placement the NAS volumes' node affinity forces, so it is placed by its own declaration."""
-    terms = pod_of(declared)['spec']['affinity']['nodeAffinity']['requiredDuringSchedulingIgnoredDuringExecution']
-    nas = [it.inputs for it in declared.of_type(VOLUME)]
-
-    assert nas
-    for volume in nas:
-        assert volume['spec']['nodeAffinity']['required'] == terms
+def test_the_pod_runs_at_the_held_priority(declared: Recorder) -> None:
+    """Its claim and the GPU it requests each keep it to one node, so it outranks free pods there."""
+    assert pod_of(declared)['spec']['priorityClassName'] == conventions.HELD_PRIORITY_CLASS
 
 
 # -- the exposure ------------------------------------------------------------------

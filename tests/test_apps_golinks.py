@@ -22,7 +22,6 @@ from kluster.components.apps import Fronts
 from kluster.components.apps import golinks as golinks_app
 from kluster.components.apps.golinks import Golinks
 from kluster.components.cilium import InternetPoolMembers
-from kluster.conventions import CONTROL_PLANE_LABEL
 from kluster.conventions.backup import BACKED_NAMESPACES, BackupFamily
 from kluster.conventions.cluster import Transports
 from kluster.conventions.routes import (
@@ -154,14 +153,6 @@ def test_the_service_binds_the_port_it_declares(declared: Recorder) -> None:
     (port,) = container['ports']
 
     assert flag(container['args'], 'addr') == f':{int(port["containerPort"])}'
-
-
-def test_the_pod_runs_on_the_worker(declared: Recorder) -> None:
-    """Its clients are at home, and a cloud node's resources are the control plane's and the internet pool's."""
-    affinity = pod_of(declared)['spec']['affinity']['nodeAffinity']
-    (term,) = affinity['requiredDuringSchedulingIgnoredDuringExecution']['nodeSelectorTerms']
-
-    assert {'key': CONTROL_PLANE_LABEL, 'operator': 'DoesNotExist'} in term['matchExpressions']
 
 
 def test_the_store_never_has_two_writers(declared: Recorder) -> None:

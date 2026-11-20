@@ -31,12 +31,12 @@ of the server's to pin, so it checks the certificate against the public roots,
 as it would any HTTPS server's. The server reads the certificate at its start
 alone, so Reloader rolls the pod when a renewal rewrites the Secret.
 
-**It runs on the cloud pool**, so devices away from home find each other with
-the homelab down. Behind a raw port's `Cluster` policy it sees the client's
-address only when the balancer hands the connection to the node it runs on,
-the forwarding node's address otherwise, and at the LAN VIP the worker's. So no
-address it saw can be relied on, and a device announces names of its own
-instead, which is syncthing's side.
+**The scheduler places it** (`kluster.lib.k8s.UNCONSTRAINED`): it declares
+nothing that holds it to a site. Behind a raw port's `Cluster` policy it sees
+the client's address only when the balancer hands the connection to the node
+it runs on, the forwarding node's address otherwise, and at the LAN VIP the
+worker's. So no address it saw can be relied on, and a device announces names
+of its own instead, which is syncthing's side.
 
 **It keeps nothing worth keeping**: its database is an `emptyDir`, which the
 devices' announcements rebuild within minutes (rfc-008 §4.2).
@@ -55,11 +55,11 @@ import pulumi
 import pulumi_crds as crds
 import pulumi_kubernetes as k8s
 
-from kluster.components.apps import Exposed, Fronts, dialed_names, expose
+from kluster.components.apps import Exposed, Fronts, declared_constraints, dialed_names, expose
 from kluster.components.certificates import ISSUER
 from kluster.conventions.cluster import Transports
 from kluster.conventions.routes import Exposure, Port, PortRedirect, unwrapped
-from kluster.lib.k8s import CLOUD_POD_AFFINITY, ApplicationNamespace, application_namespace
+from kluster.lib.k8s import ApplicationNamespace, application_namespace
 from kluster.lib.versions import ImagePin
 from putils import Component
 
@@ -124,7 +124,8 @@ def _container(image: ImagePin, row: Port) -> k8s.core.v1.ContainerArgs:
         readiness_probe=probe,
         liveness_probe=probe,
         # The legacy server's 30-day peak is 0.003 core and 0.03 GiB of working
-        # set (nodes.md §1.1); the cloud pool asks a limit of each.
+        # set (nodes.md §1.1); every pod carries a limit of each, since it may
+        # be placed on a cloud node (declarative/workloads.md §1).
         resources=k8s.core.v1.ResourceRequirementsArgs(
             requests={'cpu': '10m', 'memory': '32Mi'},
             limits={'cpu': '20m', 'memory': '64Mi'},
@@ -171,6 +172,7 @@ class Stdiscosrv(Component, pulumi_type='kluster:apps:Stdiscosrv'):
         super().__init__(name, opts=opts)
 
         self.namespace = application_namespace(f'{name}-namespace', name=NAME, opts=self.child_opts())
+        self.constraints = declared_constraints(exposure, self.namespace)
         # Read off the namespace, so each object in it waits for it.
         namespace = self.namespace.namespace.metadata.name
 
@@ -203,7 +205,7 @@ class Stdiscosrv(Component, pulumi_type='kluster:apps:Stdiscosrv'):
                     spec=k8s.core.v1.PodSpecArgs(
                         # It speaks HTTPS to devices alone, and never Kubernetes.
                         automount_service_account_token=False,
-                        affinity=CLOUD_POD_AFFINITY,
+                        **self.constraints.pod_fields(),
                         security_context=k8s.core.v1.PodSecurityContextArgs(
                             run_as_non_root=True,
                             run_as_user=USER,

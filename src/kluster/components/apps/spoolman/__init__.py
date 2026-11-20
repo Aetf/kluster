@@ -8,9 +8,9 @@ for the name and speaks plain HTTP to the pod.
 **Its data is one SQLite file in the claim**, beside the backups and the log
 spoolman writes there, backed up under `STANDARD`. One process holds the
 database, so a rollout stops the old pod before it starts the new one. The pod
-runs on the worker: its clients, the printer and Home Assistant, are at home,
-and a cloud node's resources are budgeted to the control plane and the
-internet-pool workloads (cluster/nodes.md §1.1).
+declares nothing that holds it to a site, so the scheduler places it wherever
+it fits (`kluster.lib.k8s.UNCONSTRAINED`); its claim keeps it to the claim's
+node once bound, and it writes in the claim's blockio class.
 
 The image is `donkie/spoolman`, pinned as `versions:image-spoolman`. Its image
 config names no user: its entrypoint starts as root, moves its `app` user to
@@ -27,11 +27,11 @@ from collections.abc import Mapping
 import pulumi
 import pulumi_kubernetes as k8s
 
-from kluster.components.apps import Backend, Exposed, Fronts, expose
+from kluster.components.apps import Backend, Exposed, Fronts, declared_constraints, expose
 from kluster.components.apps.storage import Claim, claim
 from kluster.conventions.backup import STANDARD
 from kluster.conventions.routes import Exposure
-from kluster.lib.k8s import WORKER_POD_AFFINITY, ApplicationNamespace, application_namespace
+from kluster.lib.k8s import ApplicationNamespace, application_namespace
 from kluster.lib.versions import ImagePin
 from putils import Component
 
@@ -93,6 +93,7 @@ class Spoolman(Component, pulumi_type='kluster:apps:Spoolman'):
         super().__init__(name, opts=opts)
 
         self.namespace = application_namespace(f'{name}-namespace', name=NAME, opts=self.child_opts())
+        self.constraints = declared_constraints(exposure, self.namespace)
         # Read off the namespace, so each object in it waits for it; the claim
         # takes the plain name, and waits for the namespace through opts.
         namespace = self.namespace.namespace.metadata.name
@@ -105,7 +106,7 @@ class Spoolman(Component, pulumi_type='kluster:apps:Spoolman'):
             namespace=NAME,
             uid=USER,
             writer_key=writer_key,
-            placement=WORKER_POD_AFFINITY,
+            constraints=self.constraints,
             opts=self.child_opts(depends_on=[self.namespace.namespace]),
         )
 
@@ -120,11 +121,13 @@ class Spoolman(Component, pulumi_type='kluster:apps:Spoolman'):
                 strategy=k8s.apps.v1.DeploymentStrategyArgs(type='Recreate'),
                 selector=k8s.meta.v1.LabelSelectorArgs(match_labels=dict(LABELS)),
                 template=k8s.core.v1.PodTemplateSpecArgs(
-                    metadata=k8s.meta.v1.ObjectMetaArgs(labels=dict(LABELS)),
+                    metadata=k8s.meta.v1.ObjectMetaArgs(
+                        labels=dict(LABELS), annotations=dict(self.data.pod_annotations)
+                    ),
                     spec=k8s.core.v1.PodSpecArgs(
                         # It speaks HTTP to its clients alone, and never Kubernetes.
                         automount_service_account_token=False,
-                        affinity=self.data.placement,
+                        **self.data.constraints.pod_fields(),
                         security_context=k8s.core.v1.PodSecurityContextArgs(
                             run_as_non_root=True,
                             run_as_user=USER,

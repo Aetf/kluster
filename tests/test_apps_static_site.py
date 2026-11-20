@@ -29,12 +29,12 @@ import process_sessions
 import pytest
 import pytest_asyncio
 from mock_monitor import Recorder, declaring, run_with
+from node_selection import CLOUD, NODES, schedulable
 from pinned_image import COMMAND_TIMEOUT, CONTAINER_TIMEOUT, pinned, pulled, require_podman
 
 from kluster.components.apps import Fronts
 from kluster.components.apps.static_site import GitSource, NasSource, StaticSite
 from kluster.components.cilium import InternetPoolMembers
-from kluster.conventions import CONTROL_PLANE_LABEL
 from kluster.conventions.cluster import Transports
 from kluster.conventions.routes import PROXIED, Apex, Balancer, Device, Direct, Exposure, Held, Passthrough, Port, Route
 from kluster.lib.versions import ImagePin
@@ -98,10 +98,6 @@ FRONTS = Fronts(
     worker_gua='2001:db8:70::10',
 )
 ZONE_IDS = {zone: f'{zone}-id' for zone in (*BLOG_ZONES, DOORS_APEX, DOORS_ZONE)}
-
-#: The labels of a cloud node and of the worker, as the node selectors read them.
-CLOUD_NODE = {CONTROL_PLANE_LABEL: '', 'kubernetes.io/hostname': 'cp-1'}
-WORKER = {'kubernetes.io/hostname': 'worker'}
 
 
 def declare_blog(**overrides: Any) -> StaticSite:
@@ -213,26 +209,6 @@ def roots(monitor: Recorder) -> dict[str, str]:
     return found
 
 
-def holds(expression: Mapping[str, Any], labels: Mapping[str, str]) -> bool:
-    """Whether `labels` satisfy one requirement of a Kubernetes node selector."""
-    present = expression['key'] in labels
-    match expression['operator']:
-        case 'Exists':
-            return present
-        case 'DoesNotExist':
-            return not present
-        case operator:
-            raise AssertionError(f'no reading of {operator!r} here')
-
-
-def admits(monitor: Recorder, labels: Mapping[str, str]) -> bool:
-    """Whether the pod's required node affinity admits a node carrying `labels`."""
-    terms = pod_of(monitor)['affinity']['nodeAffinity']['requiredDuringSchedulingIgnoredDuringExecution'][
-        'nodeSelectorTerms'
-    ]
-    return any(all(holds(it, labels) for it in term['matchExpressions']) for term in terms)
-
-
 # -- the git source ----------------------------------------------------------------
 
 
@@ -256,7 +232,9 @@ def test_a_git_source_syncs_its_branch_into_an_empty_directory_the_server_reads(
     assert content.get('readOnly') is True
 
 
-def test_a_git_source_runs_more_than_one_replica_one_per_cloud_node(blog: Recorder) -> None:
+def test_a_git_source_runs_more_than_one_replica_one_per_node_wherever_the_scheduler_places_them(
+    blog: Recorder,
+) -> None:
     deployment = the_one(blog, DEPLOYMENT)
     labels = deployment['spec']['template']['metadata']['labels']
     (spread,) = pod_of(blog)['topologySpreadConstraints']
@@ -266,8 +244,7 @@ def test_a_git_source_runs_more_than_one_replica_one_per_cloud_node(blog: Record
     assert spread['maxSkew'] == 1
     assert spread['whenUnsatisfiable'] == 'DoNotSchedule'
     assert spread['labelSelector']['matchLabels'].items() <= labels.items()
-    assert admits(blog, CLOUD_NODE)
-    assert not admits(blog, WORKER)
+    assert schedulable(pod_of(blog)) == set(NODES)
 
 
 def test_a_failed_fetch_never_stops_the_sidecar(blog: Recorder) -> None:
@@ -290,10 +267,10 @@ def test_a_nas_source_mounts_its_directory_read_only(doors: Recorder) -> None:
     assert persistent['spec']['claimRef']['name'] == claim['claimName']
 
 
-def test_a_nas_source_runs_one_pod_on_the_worker(doors: Recorder) -> None:
+def test_a_nas_source_runs_one_pod_at_the_home_site(doors: Recorder) -> None:
+    """The export is reachable from home alone."""
     assert the_one(doors, DEPLOYMENT)['spec']['replicas'] == 1
-    assert admits(doors, WORKER)
-    assert not admits(doors, CLOUD_NODE)
+    assert schedulable(pod_of(doors)) == set(NODES) - CLOUD
 
 
 def test_each_name_is_read_from_its_own_directory(doors: Recorder) -> None:

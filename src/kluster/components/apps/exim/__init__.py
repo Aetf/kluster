@@ -26,9 +26,9 @@ under the legacy Secret's name (`SMTP`). That is why the namespace is the
 legacy relay's, which the DKIM key's row names too.
 
 The configuration is `templates/exim.conf.j2`, rendered with the pod ranges,
-the primary zone, the smarthost and the DKIM selector and key path. It runs on
-the worker, the architecture the pinned image is built for (rfc-008 §5.2),
-and holds no data: a queued message lives in the spool, an `emptyDir`, until
+the primary zone, the smarthost and the DKIM selector and key path. Its pod is
+held to amd64 nodes (`CONSTRAINTS`), since the pinned image is built for amd64
+alone (rfc-008 §5.2), and holds no data: a queued message lives in the spool, an `emptyDir`, until
 it is delivered. The image's user is a name, `exim`, so the pod states its
 number (rfc-008 §10.2); exim starts its daemon for an administrative user
 alone, and that one is.
@@ -45,12 +45,20 @@ import pulumi_kubernetes as k8s
 
 from kluster import conventions
 from kluster.lib import templates
-from kluster.lib.k8s import WORKER_POD_AFFINITY, ApplicationNamespace, PortedSecret, application_namespace, sealed_value
+from kluster.lib.k8s import (
+    ApplicationNamespace,
+    Constraints,
+    PortedSecret,
+    application_namespace,
+    on_architecture,
+    sealed_value,
+)
 from kluster.lib.versions import ImagePin
 from putils import Component
 
 __all__ = (
     'CONFIGURATION',
+    'CONSTRAINTS',
     'DKIM_SELECTOR',
     'EXIM_GROUP',
     'EXIM_USER',
@@ -196,6 +204,11 @@ def _container(image: ImagePin, smtp_secret: pulumi.Input[str]) -> k8s.core.v1.C
     )
 
 
+#: What the relay's pod states: amd64 nodes alone, since its pinned image is
+#: built for amd64 and the scheduler does not read an image's platforms.
+CONSTRAINTS: Constraints = on_architecture('amd64', 'runs an image built for amd64 alone (rfc-008 §5.2)')
+
+
 class Exim(Component, pulumi_type='kluster:apps:Exim'):
     """The relay's namespace, its two Secrets, its configuration, its Deployment and Service, and who may send.
 
@@ -226,6 +239,7 @@ class Exim(Component, pulumi_type='kluster:apps:Exim'):
     ) -> None:
         super().__init__(name, opts=opts)
 
+        self.constraints = CONSTRAINTS
         self.namespace = application_namespace(f'{name}-namespace', name=NAMESPACE, opts=self.child_opts())
         # Read off the namespace, so each object in it waits for it.
         namespace = self.namespace.namespace.metadata.name
@@ -257,7 +271,7 @@ class Exim(Component, pulumi_type='kluster:apps:Exim'):
                     spec=k8s.core.v1.PodSpecArgs(
                         # It speaks SMTP alone, and never Kubernetes.
                         automount_service_account_token=False,
-                        affinity=WORKER_POD_AFFINITY,
+                        **self.constraints.pod_fields(),
                         security_context=k8s.core.v1.PodSecurityContextArgs(
                             run_as_non_root=True,
                             run_as_user=EXIM_USER,

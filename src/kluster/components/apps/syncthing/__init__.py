@@ -1,9 +1,10 @@
 """syncthing on the NAS, and the WebDAV server beside it (rfc-008 §5.3).
 
 One syncthing instance, the NAS's, with its folders on the host's export and
-its device identity in its configuration. It runs on the worker, the one node
-that reaches the export (`nas_claim`), which its pod's affinity states and its
-claim's movers follow (`claim`), and is reached two ways: its interface
+its device identity in its configuration. It runs at the home site, which
+alone reaches the export (`nas_claim`): its pod states the NAS claim's
+constraints, and its claim's movers follow them (`claim`). It is reached two
+ways: its interface
 by name, through the Gateways, and its peer port raw, at the balancer for a
 roaming device and at the LAN VIP for one at home. Both are rows of the
 exposure the component receives, and `expose` declares them.
@@ -82,13 +83,13 @@ from dataclasses import dataclass
 import pulumi
 import pulumi_kubernetes as k8s
 
-from kluster.components.apps import Backend, Exposed, Fronts, dialed_names, expose
+from kluster.components.apps import Backend, Exposed, Fronts, declared_constraints, dialed_names, expose
 from kluster.components.apps.storage import Claim, NasClaim, claim, nas_claim
 from kluster.conventions.backup import STANDARD
 from kluster.conventions.cluster import Transports
 from kluster.conventions.routes import Exposure, Port
 from kluster.lib import templates
-from kluster.lib.k8s import WORKER_POD_AFFINITY, ApplicationNamespace, application_namespace
+from kluster.lib.k8s import ApplicationNamespace, application_namespace
 from kluster.lib.versions import ImagePin
 from putils import Component
 
@@ -299,11 +300,13 @@ class Syncthing(Component, pulumi_type='kluster:apps:Syncthing'):
         super().__init__(name, opts=opts)
 
         self.namespace = application_namespace(f'{name}-namespace', name=NAME, opts=self.child_opts())
+        self.constraints = declared_constraints(exposure, self.namespace)
         # Read off the namespace, so each object in it waits for it; the
         # claims take the plain name, and wait for the namespace through opts.
         namespace = self.namespace.namespace.metadata.name
         in_namespace = self.child_opts(depends_on=[self.namespace.namespace])
 
+        self.sync = nas_claim(f'{name}-sync', 'sync', SYNC, namespace=NAME, read_only=False, opts=in_namespace)
         self.state = claim(
             f'{name}-state',
             'state',
@@ -312,10 +315,9 @@ class Syncthing(Component, pulumi_type='kluster:apps:Syncthing'):
             namespace=NAME,
             uid=USER,
             writer_key=writer_key,
-            placement=WORKER_POD_AFFINITY,
+            constraints=self.constraints & self.sync.constraints,
             opts=in_namespace,
         )
-        self.sync = nas_claim(f'{name}-sync', 'sync', SYNC, namespace=NAME, read_only=False, opts=in_namespace)
         # Autonamed, so a change to either file is a new ConfigMap, and the
         # Deployment that names it rolls.
         self.config = k8s.core.v1.ConfigMap(
@@ -335,7 +337,9 @@ class Syncthing(Component, pulumi_type='kluster:apps:Syncthing'):
                 strategy=k8s.apps.v1.DeploymentStrategyArgs(type='Recreate'),
                 selector=k8s.meta.v1.LabelSelectorArgs(match_labels=dict(LABELS)),
                 template=k8s.core.v1.PodTemplateSpecArgs(
-                    metadata=k8s.meta.v1.ObjectMetaArgs(labels=dict(LABELS)),
+                    metadata=k8s.meta.v1.ObjectMetaArgs(
+                        labels=dict(LABELS), annotations=dict(self.state.pod_annotations)
+                    ),
                     spec=self._pod(peer, retired, image=image, config_image=config_image),
                 ),
             ),
@@ -372,7 +376,7 @@ class Syncthing(Component, pulumi_type='kluster:apps:Syncthing'):
             # It speaks to its peers and its interface's clients alone, and
             # never to Kubernetes.
             automount_service_account_token=False,
-            affinity=self.state.placement,
+            **self.state.constraints.pod_fields(),
             security_context=k8s.core.v1.PodSecurityContextArgs(
                 run_as_non_root=True,
                 run_as_user=USER,

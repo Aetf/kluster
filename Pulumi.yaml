@@ -96,10 +96,10 @@ config:
   # builds them from (rfc-008 §4 and §5): one pin per container a component
   # declares, keyed by the component and the container's role in it rather
   # than by the software, so that a component changing what it runs keeps its
-  # key. Each digest is the image index's where the publisher has one, since a
-  # component on the cloud pool runs on arm64 and one on the worker on amd64;
-  # the pins below that a component runs on the worker alone may name one
-  # architecture.
+  # key. Each digest is the image index's where the publisher has one. A pin
+  # may name one architecture only where its component's pods are held to
+  # nodes of that architecture: by `on_architecture`, by the home site, or by
+  # a device only that architecture offers.
   #
   # Renovate reads each the way it reads every image pin here. A tagging scheme
   # its default reading would never move -- a release line that moves by
@@ -117,7 +117,8 @@ config:
   # goes with its component at Wave A1's land.
   versions:image-echo: docker.io/traefik/whoami:v1.12.0@sha256:c4717a8d1f0134a7444e24f881160e033991f23027c6c5a9a3f8fd22e70d1d44
 
-  # Wave A1. exim runs on the worker, and its image may publish amd64 alone.
+  # Wave A1. exim's pods are held to amd64 (`on_architecture`), so its image
+  # may publish amd64 alone.
   versions:image-exim: docker.io/devture/exim-relay:4.94.2-r0-2@sha256:4bafb3a859befd9e4c6c0dfd810588129112e8c97f350030857edd91be3ce38d
   versions:image-authelia: ghcr.io/authelia/authelia:4.39.4@sha256:64b356c30fd817817a4baafb4dbc0f9f8702e46b49e1edb92ff42e19e487b517
   # authelia's sessions, in a Redis of its own.

@@ -9,8 +9,9 @@ refused: from outside, only a signed-in user reaches it.
 
 **The library is read-only.** `Media` is mounted through `nas_claim`, read-only,
 at the path the legacy pod mounted it at, `/media`, because the import folders
-in the server's database name their files by that path. The pod runs on the
-worker, the one node that reaches the export, through `WORKER_POD_AFFINITY`.
+in the server's database name their files by that path. The pod runs at the
+home site, which alone reaches the export (`NasClaim.constraints`), and the
+configuration's claim is handed the same, so its mover binds it there.
 
 **The configuration is a claim, backed up under `STANDARD`**: the server's
 settings, its SQLite database and its logs, which the land copies from the
@@ -42,11 +43,11 @@ from collections.abc import Mapping
 import pulumi
 import pulumi_kubernetes as k8s
 
-from kluster.components.apps import Backend, Exposed, Fronts, expose
+from kluster.components.apps import Backend, Exposed, Fronts, declared_constraints, expose
 from kluster.components.apps.storage import Claim, NasClaim, claim, nas_claim
 from kluster.conventions.backup import STANDARD
 from kluster.conventions.routes import Exposure, Proxied, Route
-from kluster.lib.k8s import WORKER_POD_AFFINITY, ApplicationNamespace, application_namespace
+from kluster.lib.k8s import ApplicationNamespace, application_namespace
 from kluster.lib.versions import ImagePin
 from putils import Component
 
@@ -167,11 +168,15 @@ class Shoko(Component, pulumi_type='kluster:apps:Shoko'):
         super().__init__(name, opts=opts)
 
         self.namespace = application_namespace(f'{name}-namespace', name=NAME, opts=self.child_opts())
+        self.constraints = declared_constraints(exposure, self.namespace)
         # Read off the namespace, so each object in it waits for it; the claims
         # name it plainly, and wait for it through opts.
         namespace = self.namespace.namespace.metadata.name
         in_namespace = self.child_opts(depends_on=[self.namespace.namespace])
 
+        self.library = nas_claim(
+            f'{name}-library', 'library', LIBRARY, namespace=NAME, read_only=True, opts=in_namespace
+        )
         self.configuration = claim(
             f'{name}-configuration',
             'configuration',
@@ -180,11 +185,8 @@ class Shoko(Component, pulumi_type='kluster:apps:Shoko'):
             namespace=NAME,
             uid=USER,
             writer_key=writer_key,
-            placement=WORKER_POD_AFFINITY,
+            constraints=self.constraints & self.library.constraints,
             opts=in_namespace,
-        )
-        self.library = nas_claim(
-            f'{name}-library', 'library', LIBRARY, namespace=NAME, read_only=True, opts=in_namespace
         )
 
         self.deployment = k8s.apps.v1.Deployment(
@@ -196,7 +198,9 @@ class Shoko(Component, pulumi_type='kluster:apps:Shoko'):
                 strategy=k8s.apps.v1.DeploymentStrategyArgs(type='Recreate'),
                 selector=k8s.meta.v1.LabelSelectorArgs(match_labels=dict(LABELS)),
                 template=k8s.core.v1.PodTemplateSpecArgs(
-                    metadata=k8s.meta.v1.ObjectMetaArgs(labels=dict(LABELS)),
+                    metadata=k8s.meta.v1.ObjectMetaArgs(
+                        labels=dict(LABELS), annotations=dict(self.configuration.pod_annotations)
+                    ),
                     spec=self._pod(image),
                 ),
             ),
@@ -230,7 +234,7 @@ class Shoko(Component, pulumi_type='kluster:apps:Shoko'):
             # It speaks HTTP to its clients and to AniDB alone, and never to
             # Kubernetes.
             automount_service_account_token=False,
-            affinity=self.configuration.placement,
+            **self.configuration.constraints.pod_fields(),
             security_context=k8s.core.v1.PodSecurityContextArgs(
                 run_as_non_root=True,
                 run_as_user=USER,

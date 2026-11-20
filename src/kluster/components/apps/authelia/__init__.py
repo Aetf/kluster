@@ -63,9 +63,15 @@ portal (`templates/auth-canary.sh`). The scheduled-job family's rules over
 `AUTH_CANARY` are its alerts, declared beside it: a run that was not refused
 fails, and a canary that stops running goes stale.
 
-Every pod runs on the cloud pool (`kluster.lib.k8s.CLOUD_POD_AFFINITY`),
-with CPU and memory limits; the server's and the receiver's take it from the
-claim, as its `placement`, so the claim's movers bind it where the pod runs.
+**The portal keeps working while the uplink is down**, which it declares
+(`kluster.components.apps.UPLINK_DOWN`): a client at home signs in through an
+outage of the home uplink, so every pod here runs at the home site, the
+canary's included, at the held priority and through its node's
+unreachability. The canary reads the gate on whatever node it runs on, since
+every node's Envoy carries the same `internet-gw` configuration. Each pod
+carries CPU and memory limits. The server's and the receiver's state the
+claim's constraints, which compose its hold in, and run in its blockio
+class; the claim's movers bind it at home, where the pod runs.
 The server's, Redis's and the curl image's users are stated as numbers
 (rfc-008 §10.2). Nothing here calls the Kubernetes API.
 
@@ -86,7 +92,7 @@ import pulumi_crds as crds
 import pulumi_kubernetes as k8s
 
 from kluster import conventions
-from kluster.components.apps import Backend, Exposed, Fronts, expose
+from kluster.components.apps import Backend, Exposed, Fronts, declared_constraints, expose
 from kluster.components.apps.exim import HOST as SMTP_HOST
 from kluster.components.apps.exim import PORT as SMTP_PORT
 from kluster.components.apps.storage import Claim, claim
@@ -99,9 +105,9 @@ from kluster.conventions.schedule import ScheduledJob
 from kluster.conventions.sso import Factor
 from kluster.lib import templates
 from kluster.lib.k8s import (
-    CLOUD_POD_AFFINITY,
     PORTAL,
     ApplicationNamespace,
+    Constraints,
     Portal,
     PortedSecret,
     application_namespace,
@@ -627,7 +633,7 @@ def _server(
         # A Service's link variables would land beside the server's own, and
         # Authelia reads every `AUTHELIA_` variable as configuration.
         enable_service_links=False,
-        affinity=storage.placement,
+        **storage.constraints.pod_fields(),
         security_context=_pod_security(AUTHELIA_USER),
         containers=[container],
         volumes=[
@@ -656,7 +662,7 @@ def _server(
 # the Deployment runs a receiver in the server's place: an idle container of
 # the server's own image, which has `tar`, mounting the claim where the server
 # does. A second merge, without `receiving`, starts the server on what was
-# streamed. The receiver is a running pod with the server's placement, never
+# streamed. The receiver is a running pod with the server's constraints, never
 # zero replicas, because the claim binds to the node its first consumer is
 # scheduled on, and its backup's mover, the first consumer otherwise, selects
 # no node. It runs as the server's user, so what it extracts is the server's
@@ -700,7 +706,7 @@ def _receiver(image: ImagePin, storage: Claim) -> k8s.core.v1.PodSpecArgs:
     return k8s.core.v1.PodSpecArgs(
         automount_service_account_token=False,
         enable_service_links=False,
-        affinity=storage.placement,
+        **storage.constraints.pod_fields(),
         security_context=_pod_security(AUTHELIA_USER),
         containers=[container],
         volumes=[_data_volume(storage)],
@@ -710,7 +716,7 @@ def _receiver(image: ImagePin, storage: Claim) -> k8s.core.v1.PodSpecArgs:
 # -- the sessions ----------------------------------------------------------------
 
 
-def _redis(image: ImagePin, secrets: pulumi.Input[str]) -> k8s.core.v1.PodSpecArgs:
+def _redis(image: ImagePin, secrets: pulumi.Input[str], constraints: Constraints) -> k8s.core.v1.PodSpecArgs:
     """Redis's pod: the sessions in memory alone, behind the password the server's Secret carries."""
     container = k8s.core.v1.ContainerArgs(
         name='redis',
@@ -742,7 +748,7 @@ def _redis(image: ImagePin, secrets: pulumi.Input[str]) -> k8s.core.v1.PodSpecAr
     return k8s.core.v1.PodSpecArgs(
         automount_service_account_token=False,
         enable_service_links=False,
-        affinity=CLOUD_POD_AFFINITY,
+        **constraints.pod_fields(),
         security_context=_pod_security(REDIS_USER),
         containers=[container],
         # Its working directory, which it writes nothing to it keeps.
@@ -771,7 +777,9 @@ def _target(image: ImagePin) -> k8s.core.v1.ContainerArgs:
     )
 
 
-def _canary_job(image: ImagePin, *, portal: str, address: pulumi.Input[str]) -> k8s.batch.v1.JobTemplateSpecArgs:
+def _canary_job(
+    image: ImagePin, *, portal: str, address: pulumi.Input[str], constraints: Constraints
+) -> k8s.batch.v1.JobTemplateSpecArgs:
     container = k8s.core.v1.ContainerArgs(
         name='canary',
         image=str(image),
@@ -800,7 +808,7 @@ def _canary_job(image: ImagePin, *, portal: str, address: pulumi.Input[str]) -> 
                     restart_policy='Never',
                     automount_service_account_token=False,
                     enable_service_links=False,
-                    affinity=CLOUD_POD_AFFINITY,
+                    **constraints.pod_fields(),
                     security_context=_pod_security(CANARY_USER, _CANARY_GROUP),
                     containers=[container],
                     volumes=[
@@ -881,6 +889,7 @@ class Authelia(Component, pulumi_type='kluster:apps:Authelia'):
         super().__init__(name, opts=opts)
 
         self.namespace = application_namespace(f'{name}-namespace', name=NAMESPACE, opts=self.child_opts())
+        self.constraints = declared_constraints(exposure, self.namespace, uplink_down=True)
         self.canary_namespace = application_namespace(
             f'{name}-canary-namespace', name=CANARY_NAMESPACE, opts=self.child_opts()
         )
@@ -912,7 +921,7 @@ class Authelia(Component, pulumi_type='kluster:apps:Authelia'):
             namespace=NAMESPACE,
             uid=AUTHELIA_USER,
             writer_key=writer_key,
-            placement=CLOUD_POD_AFFINITY,
+            constraints=self.constraints,
             protect=True,
             opts=behind,
         )
@@ -933,7 +942,9 @@ class Authelia(Component, pulumi_type='kluster:apps:Authelia'):
                 selector=k8s.meta.v1.LabelSelectorArgs(match_labels=dict(LABELS)),
                 template=k8s.core.v1.PodTemplateSpecArgs(
                     # The relay admits a sender by this label.
-                    metadata=k8s.meta.v1.ObjectMetaArgs(labels={**LABELS, **conventions.MAIL_SENDER_LABEL}),
+                    metadata=k8s.meta.v1.ObjectMetaArgs(
+                        labels={**LABELS, **conventions.MAIL_SENDER_LABEL}, annotations=dict(self.data.pod_annotations)
+                    ),
                     spec=_receiver(image, self.data)
                     if receiving
                     else _server(image, self.secrets.metadata.name, self.config_secrets.metadata.name, self.data),
@@ -975,7 +986,7 @@ class Authelia(Component, pulumi_type='kluster:apps:Authelia'):
                 selector=k8s.meta.v1.LabelSelectorArgs(match_labels=dict(_REDIS_LABELS)),
                 template=k8s.core.v1.PodTemplateSpecArgs(
                     metadata=k8s.meta.v1.ObjectMetaArgs(labels=dict(_REDIS_LABELS)),
-                    spec=_redis(redis_image, self.secrets.metadata.name),
+                    spec=_redis(redis_image, self.secrets.metadata.name, self.constraints),
                 ),
             ),
             opts=self.child_opts(),
@@ -1001,7 +1012,7 @@ class Authelia(Component, pulumi_type='kluster:apps:Authelia'):
                     spec=k8s.core.v1.PodSpecArgs(
                         automount_service_account_token=False,
                         enable_service_links=False,
-                        affinity=CLOUD_POD_AFFINITY,
+                        **self.constraints.pod_fields(),
                         security_context=k8s.core.v1.PodSecurityContextArgs(
                             run_as_non_root=True,
                             seccomp_profile=k8s.core.v1.SeccompProfileArgs(type='RuntimeDefault'),
@@ -1068,7 +1079,9 @@ class Authelia(Component, pulumi_type='kluster:apps:Authelia'):
                 starting_deadline_seconds=int(starting.total_seconds()) if starting is not None else None,
                 successful_jobs_history_limit=1,
                 failed_jobs_history_limit=3,
-                job_template=_canary_job(canary_image, portal=portal, address=fronts.internet.balancer_v4),
+                job_template=_canary_job(
+                    canary_image, portal=portal, address=fronts.internet.balancer_v4, constraints=self.constraints
+                ),
             ),
             opts=self.child_opts(depends_on=[self.canary_run]),
         )

@@ -505,7 +505,8 @@ classes its objects fall into (§1.2):
 11. **The held `PriorityClass`** — `held`
     (`conventions.HELD_PRIORITY_CLASS`, `components.scheduling`), the
     class a pod held by its constraints runs at, by a site or an
-    architecture (declarative/workloads.md §1). Its value is above 0,
+    architecture, or kept to one node by a volume or a device
+    (declarative/workloads.md §1). Its value is above 0,
     the priority of every pod that names no class, since no class is
     the global default, and below the classes the system reserves, which
     some charts' pods name (metrics-server's), so the scheduler preempts

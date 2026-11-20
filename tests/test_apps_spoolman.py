@@ -29,7 +29,6 @@ from kluster.components.apps import Fronts
 from kluster.components.apps import spoolman as spoolman_app
 from kluster.components.apps.spoolman import Spoolman
 from kluster.components.cilium import InternetPoolMembers
-from kluster.conventions import CONTROL_PLANE_LABEL
 from kluster.conventions.backup import BACKED_NAMESPACES, BackupFamily
 from kluster.conventions.routes import REWRITE, Exposure, Gate, Proxied, Route
 from kluster.lib.k8s import POD_SECURITY_ENFORCE_LABEL, PORTAL, PodSecurity
@@ -151,14 +150,6 @@ def test_each_probe_asks_a_port_the_container_listens_on(declared: Recorder) -> 
 
     for probe in ('readinessProbe', 'livenessProbe'):
         assert container[probe]['httpGet']['port'] in named, probe
-
-
-def test_the_pod_runs_on_the_worker(declared: Recorder) -> None:
-    """Its clients are at home, and a cloud node's resources are the control plane's and the internet pool's."""
-    affinity = pod_of(declared)['spec']['affinity']['nodeAffinity']
-    (term,) = affinity['requiredDuringSchedulingIgnoredDuringExecution']['nodeSelectorTerms']
-
-    assert {'key': CONTROL_PLANE_LABEL, 'operator': 'DoesNotExist'} in term['matchExpressions']
 
 
 def test_the_database_never_has_two_writers(declared: Recorder) -> None:

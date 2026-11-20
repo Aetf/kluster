@@ -12,8 +12,9 @@ Home Assistant's own address, which no cloud node has a route to (rfc-008
 §4.1, operations.md §4; `ALERTMANAGER_CONSTRAINTS`). vmagent scrapes etcd's
 metrics listener on every control plane, which the node firewall admits over
 KubeSpan alone, so from a control plane it could not read its own node's
-(`VMAGENT_CONSTRAINTS`). Every other pod is free (`UNCONSTRAINED`); the node
-exporter runs on every node it reports on, at the system's class for a
+(`VMAGENT_CONSTRAINTS`). Every other pod is free (`UNCONSTRAINED`) but the
+stores, which their claims keep to their nodes (`stores`), and the node
+exporter, which runs on every node it reports on, at the system's class for a
 per-node agent (`NODE_AGENT_PRIORITY_CLASS`), so no free pod placed on its
 node first can leave it pending. Grafana is reached by a
 port-forward until its name moves (rfc-007 §7.4).
@@ -26,9 +27,10 @@ every other. vmagent writes the history's class to it through a second
 remote write, and vmalert writes its recording rules through vmagent, so they
 reach both stores the same way. Grafana reads the history as a datasource of
 its own. Each store's volume is `local-path`, which binds on the node the
-store is first placed on, and each store's pod runs in the blockio class
-`conventions.ETCD_DISK_WRITER`, which caps what it writes to the disk etcd
-shares where that node is a control plane (cluster/nodes.md §1.2). **Each store is
+store is first placed on and keeps the store there, at the held priority, and
+each store's pod runs in the blockio class `conventions.ETCD_DISK_WRITER`,
+which caps what it writes to the disk etcd shares where that node is a
+control plane (cluster/nodes.md §1.2). **Each store is
 backed up hourly to the backup bucket and restores itself before it starts**
 (`stores`), under the monitoring namespace's writer key on the bucket
 (`conventions.sealed.writer_key`), which `k8s-base` holds sealed. Each
@@ -186,12 +188,15 @@ from kluster.conventions.backup import BackupFamily
 from kluster.conventions.outputs import BOOT_VOLUME
 from kluster.lib.k8s import (
     UNCONSTRAINED,
+    Keeper,
     LooserLevel,
     PodSecurity,
     at_home,
     helm_chart,
+    kept,
     namespace,
     sealed_value,
+    writer_annotations,
 )
 from kluster.lib.monitoring.jobs import ETCD_JOB, KUBE_STATE_METRICS_JOB, KUBELET_JOB, SCRAPE_INTERVAL
 from kluster.lib.versions import ChartPin, ImagePin
@@ -431,17 +436,25 @@ VMAGENT_CONSTRAINTS = at_home(
 )
 
 
+#: A store's constraints: no site, and its claim's hold, since a `local-path`
+#: claim keeps its store to the node it is bound on, so the store runs at the
+#: held priority.
+_STORE_CONSTRAINTS = kept(Keeper.VOLUME, 'its `local-path` claim is bound on the node it is first placed on')
+
+
 def _store_pod() -> dict[str, object]:
-    """What a store's pod carries: no constraint, and its containers in `conventions.ETCD_DISK_WRITER`, since its claim is `local-path`.
+    """What a store's pod carries: its claim's hold, and its containers in `conventions.ETCD_DISK_WRITER`, since its claim is `local-path`.
 
     A `local-path` claim binds on the node its store is first placed on,
     which may be a control plane, where the class caps what the store writes
-    to the disk etcd shares (cluster/nodes.md §1.2). The operator puts
-    `podMetadata`'s annotations on the store's pod template.
+    to the disk etcd shares (cluster/nodes.md §1.2). The claim keeps the
+    store to that node, which the scheduler reads from the volume, so the
+    store states no affinity and runs at the held priority. The operator
+    puts `podMetadata`'s annotations on the store's pod template.
     """
     return {
-        **UNCONSTRAINED.pod_fields_json(),
-        'podMetadata': {'annotations': dict(conventions.ETCD_DISK_WRITER.pod_annotation)},
+        **_STORE_CONSTRAINTS.pod_fields_json(),
+        'podMetadata': {'annotations': dict(writer_annotations(conventions.SC_LOCAL_PATH))},
     }
 
 

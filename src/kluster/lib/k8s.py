@@ -9,10 +9,9 @@ SealedSecret in the shape
 fixes -- for a row of the sealed census, from the row -- labeling a
 Service into a Cilium load-balancer pool, and stating the constraints on the
 nodes a pod may run on, typed or as JSON (`Constraints`), which every
-component that runs a pod states, the platform's as well as the applications'.
-The applications still place their pods in a node pool, the worker or the
-cloud nodes (`WORKER_POD_AFFINITY`, `WORKER_AFFINITY_JSON` and the cloud
-pool's pair), until they move to `Constraints`. Anything specific to one component
+component that runs a pod states, the platform's as well as the applications',
+with the home site's node selector (`HOME_NODE_SELECTOR`) for a volume that
+only the home site reaches. Anything specific to one component
 belongs with that component, not here. A pinned release manifest is fetched
 by `kluster.lib.release_assets`, which imports no bindings, so `update_crds`
 can run it while it regenerates them.
@@ -65,9 +64,8 @@ from kluster.lib.secret import Secret
 from kluster.lib.versions import ChartPin
 
 __all__ = (
-    'CLOUD_AFFINITY_JSON',
-    'CLOUD_NODE_SELECTOR',
-    'CLOUD_POD_AFFINITY',
+    'HOME_NODE_SELECTOR',
+    'HOME_NODE_SELECTOR_JSON',
     'INGRESS_ENTITY',
     'KUBECONFIG_KEY',
     'NODE_ENTITIES',
@@ -76,18 +74,19 @@ __all__ = (
     'PORTAL',
     'PRIVATE_SPACE',
     'UNCONSTRAINED',
-    'WORKER_AFFINITY_JSON',
-    'WORKER_NODE_SELECTOR',
-    'WORKER_POD_AFFINITY',
     'AbsentSealedValue',
     'ApiClients',
     'ApplicationNamespace',
     'Architecture',
+    'BackedVolumeBesideNodeVolume',
     'Backend',
     'Constraint',
     'Constraints',
     'HomeSite',
+    'Keeper',
+    'Kept',
     'LooserLevel',
+    'NodeRequirement',
     'PassthroughRefused',
     'PodFields',
     'PodSecurity',
@@ -96,6 +95,7 @@ __all__ = (
     'Reach',
     'SealingScope',
     'SecretTemplate',
+    'TwoBackedVolumes',
     'UnusableKubeconfig',
     'application_namespace',
     'at_home',
@@ -107,6 +107,7 @@ __all__ = (
     'helm_chart',
     'identity_stripped',
     'in_denied_space',
+    'kept',
     'kubeconfig_from',
     'lb_pool_labels',
     'namespace',
@@ -120,6 +121,7 @@ __all__ = (
     'sealed_ciphertext',
     'sealed_secret',
     'sealed_value',
+    'writer_annotations',
 )
 
 
@@ -736,6 +738,8 @@ class ApplicationNamespace:
     namespace: k8s.core.v1.Namespace
     default_deny: crds.cilium.v2.CiliumNetworkPolicy
     egress_block: crds.cilium.v2.CiliumNetworkPolicy
+    reaches: tuple[Reach, ...]
+    """The namespace's exceptions to the egress block, as it was declared with them."""
 
 
 def application_namespace(
@@ -833,7 +837,9 @@ def application_namespace(
     egress_block = _egress_block(
         f'{resource_name}-egress-block', namespace=ns.metadata.name, reaches=reaches, api_clients=api_clients, opts=opts
     )
-    return ApplicationNamespace(namespace=ns, default_deny=default_deny, egress_block=egress_block)
+    return ApplicationNamespace(
+        namespace=ns, default_deny=default_deny, egress_block=egress_block, reaches=tuple(reaches)
+    )
 
 
 def _egress_block(
@@ -1234,64 +1240,34 @@ def lb_pool_labels(pool: str) -> dict[str, str]:
     return {conventions.LB_POOL_LABEL: pool}
 
 
-# -- Node pools ----------------------------------------------------------------
+# -- The home site ------------------------------------------------------------
 
 
-def _node_pool(operator: Literal['Exists', 'DoesNotExist']) -> tuple[k8s.core.v1.NodeSelectorArgs, Mapping[str, Any]]:
-    """The required node selector of the node pool `operator` picks by `conventions.CONTROL_PLANE_LABEL`, typed and as JSON.
+def _home_selector() -> tuple[k8s.core.v1.NodeSelectorArgs, Mapping[str, Any]]:
+    """The required node selector of the home site, by `conventions.SITE_LABEL`, typed and as JSON.
 
-    A node pool is the nodes that carry the label, which are the cloud nodes,
-    or the nodes that do not, which is the worker. Both forms are written here,
-    from the one requirement, so a pool's typed and JSON placements cannot
-    part.
+    Both forms are written here, from the one requirement, so the typed and
+    JSON selectors cannot part.
     """
-    key = conventions.CONTROL_PLANE_LABEL
     typed = k8s.core.v1.NodeSelectorArgs(
         node_selector_terms=[
             k8s.core.v1.NodeSelectorTermArgs(
-                match_expressions=[k8s.core.v1.NodeSelectorRequirementArgs(key=key, operator=operator)]
+                match_expressions=[
+                    k8s.core.v1.NodeSelectorRequirementArgs(key=SITE_LABEL, operator='In', values=[Site.HOME])
+                ]
             )
         ]
     )
-    as_json = {'nodeSelectorTerms': [{'matchExpressions': [{'key': key, 'operator': operator}]}]}
+    as_json = {
+        'nodeSelectorTerms': [{'matchExpressions': [{'key': SITE_LABEL, 'operator': 'In', 'values': [Site.HOME]}]}]
+    }
     return typed, as_json
 
 
-#: The worker's nodes, as a node selector: the one node `physical` declares
-#: with a role other than control plane, and so the one Talos gives no
-#: `conventions.CONTROL_PLANE_LABEL`. A volume only the worker reaches states
-#: it as its node affinity.
-WORKER_NODE_SELECTOR, _WORKER_NODE_SELECTOR_JSON = _node_pool('DoesNotExist')
-
-#: The cloud pool's nodes, as a node selector: every control plane node,
-#: which every cloud node is and the worker is not.
-CLOUD_NODE_SELECTOR, _CLOUD_NODE_SELECTOR_JSON = _node_pool('Exists')
-
-#: The affinity that holds a pod on the worker, for a pod a component declares
-#: itself. A pod takes it where its own placement constraint says the worker,
-#: which its component states.
-WORKER_POD_AFFINITY = k8s.core.v1.AffinityArgs(
-    node_affinity=k8s.core.v1.NodeAffinityArgs(required_during_scheduling_ignored_during_execution=WORKER_NODE_SELECTOR)
-)
-
-#: The affinity that holds a pod on the cloud pool, for a pod a component
-#: declares itself. The control plane nodes take workloads, so no toleration
-#: goes with it.
-CLOUD_POD_AFFINITY = k8s.core.v1.AffinityArgs(
-    node_affinity=k8s.core.v1.NodeAffinityArgs(required_during_scheduling_ignored_during_execution=CLOUD_NODE_SELECTOR)
-)
-
-#: `WORKER_POD_AFFINITY` as Kubernetes' `Affinity` in JSON, for a pod whose
-#: spec is handed over as JSON: a chart's values, an operator's resource
-#: (`components.apps.database` takes the `nodeAffinity` inside it).
-WORKER_AFFINITY_JSON: Mapping[str, Any] = {
-    'nodeAffinity': {'requiredDuringSchedulingIgnoredDuringExecution': _WORKER_NODE_SELECTOR_JSON}
-}
-
-#: `CLOUD_POD_AFFINITY` as Kubernetes' `Affinity` in JSON, the same way.
-CLOUD_AFFINITY_JSON: Mapping[str, Any] = {
-    'nodeAffinity': {'requiredDuringSchedulingIgnoredDuringExecution': _CLOUD_NODE_SELECTOR_JSON}
-}
+#: The home site's nodes, as a node selector, typed and as JSON: the nodes
+#: whose `conventions.SITE_LABEL` says home. A volume that only the home site
+#: reaches, such as the NAS's, states it as its node affinity.
+HOME_NODE_SELECTOR, HOME_NODE_SELECTOR_JSON = _home_selector()
 
 
 # -- Node constraints ----------------------------------------------------------
@@ -1332,6 +1308,52 @@ class Constraint[T]:
         return Constraint(self.value, tuple(dict.fromkeys((*self.declarations, *other.declarations))))
 
 
+class Keeper(StrEnum):
+    """What keeps a pod to one node through what it mounts or requests, which the scheduler reads from the pod itself."""
+
+    VOLUME = 'volume'
+    """A volume that binds on the node the pod is first placed on, and keeps it there."""
+    BACKED_VOLUME = 'backed volume'
+    """A volume that binds on the node the pod, or another pod that mounts it, is first placed on.
+
+    Which of the two is placed first decides the node, so a pod that
+    mounts two such volumes could find them bound on two nodes.
+    """
+    NODE_VOLUME = 'node volume'
+    """A volume that is on one node before any pod is placed, which the volume's own class decides."""
+    DEVICE = 'device'
+    """A device that one node offers, which the pod requests."""
+
+
+class TwoBackedVolumes(ValueError):
+    """Two backed volumes on one pod: each may be bound by another pod first, so they could bind on two nodes, and the pod run on neither."""
+
+
+class BackedVolumeBesideNodeVolume(ValueError):
+    """A backed volume beside a node volume on one pod: another pod may bind the first off the node the second is on, and the pod run on neither."""
+
+
+@dataclass(frozen=True)
+class NodeRequirement:
+    """One requirement of a pod's required node affinity: the node's label `key` holds `value`."""
+
+    key: str
+    value: str
+
+
+@dataclass(frozen=True)
+class Kept:
+    """One hold of a pod to one node by what it mounts or requests, and what implies it."""
+
+    keeper: Keeper
+    declaration: str
+    """What keeps the pod there, in a sentence: the volume or the device."""
+
+    def __post_init__(self) -> None:
+        if not self.declaration.strip():
+            raise ValueError(f'a pod kept by a {self.keeper} says what keeps it: it takes a declaration')
+
+
 #: The one site a pod is held to: home. A pod that a fact about nodes or its
 #: component's requirement holds to a site is held at home (declarative/
 #: workloads.md §1); nothing holds a pod to the cloud.
@@ -1353,12 +1375,15 @@ class Constraints:
     A pod states a node constraint only for a fact about nodes the scheduler
     cannot read from its requests or from what it mounts, or for a
     requirement its component declares; where it runs within them is the
-    scheduler's. Two kinds are written here: the home site (`at_home`,
-    against `conventions.SITE_LABEL`), and an architecture, where an image
-    lacks one (`on_architecture`). A device and data on a node constrain a
-    pod through its request and its volume, and state nothing here, so a pod
-    they alone hold is not held by its `Constraints` and is not given the
-    held priority by them.
+    scheduler's. Three kinds are written here: the home site (`at_home`,
+    against `conventions.SITE_LABEL`); an architecture, where an image
+    lacks one (`on_architecture`); and a pod **kept** to one node by what it
+    mounts or requests (`kept`): a volume bound on a node, a device one node
+    offers. The scheduler reads that from the pod itself, the
+    volume's node affinity or the device request, so it renders no affinity,
+    but it holds the pod all the same: without the held priority, free pods
+    that reach the node first can leave it pending, since it can run nowhere
+    else.
 
     **It renders what a pod carries** (`pod_fields`, typed, and
     `pod_fields_json`, for a spec handed over as JSON): its required node
@@ -1367,13 +1392,22 @@ class Constraints:
     so an outage of the uplink, which the control plane cannot tell from the
     worker's, evicts nothing; and where it holds the pod at all, the held
     `PriorityClass` (`conventions.HELD_PRIORITY_CLASS`), so a free pod
-    yields the node to it. A free pod, held by none, carries none of the
-    three and is `UNCONSTRAINED`, stated where the pod is declared, so that a
+    yields the node to it. A free pod, held and kept by none, carries none
+    of the three and is `UNCONSTRAINED`, stated where the pod is declared, so that a
     free pod reads as a decision.
 
     **Constraints compose** with `&`: a pod under two takes both, with every
     declaration behind each. Two of one kind that disagree are refused,
-    since no node would admit the pod. A contradiction across kinds, such as
+    since no node would admit the pod. So is a backed volume
+    (`Keeper.BACKED_VOLUME`) beside a second backed volume
+    (`TwoBackedVolumes`) or beside a node volume
+    (`BackedVolumeBesideNodeVolume`): another pod may bind the backed one
+    first, off the node the other is or will be bound on, and the pod, which
+    needs both, would run on neither. A backed volume beside a device
+    (`Keeper.DEVICE`) is not refused, though the same can befall it: the
+    other pod may bind the volume on a node that does not offer the device.
+    It holds only where the pod's other constraints leave one node, and that
+    node offers the device. A contradiction across kinds, such as
     the home site and an architecture no home node runs, is not refused,
     since which architectures a site's nodes run is a fact about the nodes
     rather than about the constraints.
@@ -1381,26 +1415,48 @@ class Constraints:
 
     site: Constraint[HomeSite] | None = None
     architecture: Constraint[Architecture] | None = None
+    kept: tuple[Kept, ...] = ()
+    """Each hold of the pod to one node by what it mounts or requests (`kept`)."""
+
+    def __post_init__(self) -> None:
+        backed = [it.declaration for it in self.kept if it.keeper is Keeper.BACKED_VOLUME]
+        on_a_node = [it.declaration for it in self.kept if it.keeper is Keeper.NODE_VOLUME]
+        if len(backed) > 1:
+            raise TwoBackedVolumes(
+                f'{"; ".join(backed)}: one pod mounts more than one backed volume, which another pod may bind first, '
+                'so they could bind on different nodes'
+            )
+        if backed and on_a_node:
+            raise BackedVolumeBesideNodeVolume(
+                f'{"; ".join(backed)}; {"; ".join(on_a_node)}: one pod mounts a backed volume beside a node volume, '
+                'and another pod may bind the first off the node the second is on'
+            )
 
     def __and__(self, other: Constraints) -> Constraints:
-        return Constraints(site=_both(self.site, other.site), architecture=_both(self.architecture, other.architecture))
+        return Constraints(
+            site=_both(self.site, other.site),
+            architecture=_both(self.architecture, other.architecture),
+            kept=tuple(dict.fromkeys((*self.kept, *other.kept))),
+        )
 
     @property
     def holds(self) -> bool:
-        """Whether these constraints hold the pod to some nodes, which gives it the held priority."""
-        return self.site is not None or self.architecture is not None
+        """Whether these constraints hold the pod to some nodes or keep it to one, which gives it the held priority."""
+        return self.site is not None or self.architecture is not None or bool(self.kept)
 
-    def _requirements(self) -> list[tuple[str, str]]:
-        return [
-            (key, str(constraint.value))
+    @property
+    def requirements(self) -> tuple[NodeRequirement, ...]:
+        """The node label each constraint requires, with the one value it admits; none for a pod they leave free or only keep."""
+        return tuple(
+            NodeRequirement(key, str(constraint.value))
             for key, constraint in ((SITE_LABEL, self.site), (_ARCHITECTURE_LABEL, self.architecture))
             if constraint is not None
-        ]
+        )
 
     @property
     def affinity(self) -> k8s.core.v1.AffinityArgs | None:
         """The pod's required node affinity: one term, every constraint a requirement in it; none for a free pod."""
-        requirements = self._requirements()
+        requirements = self.requirements
         if not requirements:
             return None
         return k8s.core.v1.AffinityArgs(
@@ -1409,8 +1465,8 @@ class Constraints:
                     node_selector_terms=[
                         k8s.core.v1.NodeSelectorTermArgs(
                             match_expressions=[
-                                k8s.core.v1.NodeSelectorRequirementArgs(key=key, operator='In', values=[value])
-                                for key, value in requirements
+                                k8s.core.v1.NodeSelectorRequirementArgs(key=it.key, operator='In', values=[it.value])
+                                for it in requirements
                             ]
                         )
                     ]
@@ -1421,12 +1477,10 @@ class Constraints:
     @property
     def affinity_json(self) -> Mapping[str, Any] | None:
         """`affinity` as Kubernetes' `Affinity` in JSON, for a pod whose spec is handed over as JSON."""
-        requirements = self._requirements()
+        requirements = self.requirements
         if not requirements:
             return None
-        terms = [
-            {'matchExpressions': [{'key': key, 'operator': 'In', 'values': [value]} for key, value in requirements]}
-        ]
+        terms = [{'matchExpressions': [{'key': it.key, 'operator': 'In', 'values': [it.value]} for it in requirements]}]
         return {'nodeAffinity': {'requiredDuringSchedulingIgnoredDuringExecution': {'nodeSelectorTerms': terms}}}
 
     def _tolerations_json(self) -> list[dict[str, str]] | None:
@@ -1486,6 +1540,22 @@ def at_home(declaration: str) -> Constraints:
     """The pod held at the home site, for `declaration`: the fact about nodes, or the requirement the component declares, that implies it."""
     home: HomeSite = Site.HOME
     return Constraints(site=Constraint(home, (declaration,)))
+
+
+def kept(keeper: Keeper, declaration: str) -> Constraints:
+    """The pod kept to one node by `keeper`, for `declaration`: held, at the held priority, with no affinity of its own."""
+    return Constraints(kept=(Kept(keeper, declaration),))
+
+
+def writer_annotations(storage_class: str) -> Mapping[str, str]:
+    """What a pod that writes to a claim of `storage_class` carries in its metadata: its blockio class, or nothing.
+
+    A `local-path` claim is on the disk the node's other writers share, etcd's
+    among them on a control plane, so its pod writes in
+    `conventions.ETCD_DISK_WRITER` (cluster/nodes.md §1.2). Any other class is
+    a disk of its own, a node volume or the NAS, and takes none.
+    """
+    return conventions.ETCD_DISK_WRITER.pod_annotation if storage_class == conventions.SC_LOCAL_PATH else {}
 
 
 def on_architecture(architecture: Architecture, declaration: str) -> Constraints:

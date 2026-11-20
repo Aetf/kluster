@@ -11,7 +11,7 @@ Two calls, and a class for a node volume that is not a call at all
     `storage_class` is `conventions.node_volume_class(row)`.
 -   **`nas_claim`** is a static PersistentVolume over a path of the host's one
     export and its claim, for data the cluster does not own, scheduled to the
-    worker alone, since no other node can reach the export.
+    home site alone, since no node elsewhere can reach the export.
 
 **A backed claim** carries a VolSync `ReplicationSource` with the restic mover,
 `copyMethod: Direct` since `local-path` has no snapshots, to the repository at
@@ -21,16 +21,35 @@ under the base name that carries the namespace's sealed writer key, with the
 password and the repository in its template: in state, and in clear in the
 SealedSecret object, which is the residual the security audit records.
 
-**A restic mover runs where the workload does.** A `local-path` claim binds
+**A restic mover runs where the workload may.** A `local-path` claim binds
 on the node its first consumer is scheduled to, and VolSync places a `Direct`
 mover beside the claim's running consumer and anywhere at all while it has
 none. So a source that reaches the claim before the workload's pod would bind
 it wherever its mover landed, which may be a node the workload can never run
-on. `claim` takes the workload's `placement`, every node constraint the
-workload is under, and records it on the `Claim`, whose `placement` is what
-the workload's pod states as its affinity; the restic mover carries that
-placement's node affinity. Whichever of the mover and the pod is scheduled
-first, the claim binds on a node the placement admits.
+on. `claim` takes the workload's `constraints`
+(`kluster.lib.k8s.Constraints`), and the restic mover carries their node
+affinity, so whichever of the mover and the pod is scheduled first, the claim
+binds on a node the workload's constraints admit. A workload mounts at most
+one backed claim, and none beside a node volume's claim: a mover, placed
+apart from the pod's other claim, could bind its claim on another node than
+that claim's, and the pod, which needs both, would run on neither.
+`claim_hold` records which kind of claim keeps the pod, so the composition
+is refused (`kluster.lib.k8s.TwoBackedVolumes`,
+`BackedVolumeBesideNodeVolume`). A backed claim beside a GPU request is not
+refused, though its mover could bind it on a node without the GPU; that pair
+is safe only while the pod is held to a site of one node that has the GPU
+(cluster/storage.md §3.1).
+
+**The `Claim` says what the workload's pod carries for it.** Its
+`constraints` are the workload's with the claim's own hold composed in
+(`kluster.lib.k8s.kept`): a bound claim keeps its pod to its node, which the
+scheduler reads from the volume, so the pod states no affinity for it and
+runs at the held priority, ahead of free pods that could otherwise fill the
+node it can run nowhere else than. Its `pod_annotations` put a `local-path`
+claim's pod in the blockio class `conventions.ETCD_DISK_WRITER`, which caps
+what it writes to the disk etcd shares where its node is a control plane
+(cluster/nodes.md §1.2); a node volume is a disk of its own and takes no
+class. A mover carries no class: VolSync gives it labels alone.
 
 **A move is asked for, and it backs nothing up.** A claim's name and its restic
 source's carry a generation, while its repository, its password and its Secret
@@ -55,7 +74,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import Any
 from urllib.parse import urlsplit
 
 import pulumi
@@ -68,7 +87,18 @@ from kluster.components.backup import s3_endpoint
 from kluster.conventions.backup import RetentionClass
 from kluster.conventions.cluster import RETENTION_LABEL, WRITER_KEY_FIELDS
 from kluster.conventions.sealed import SealingScope
-from kluster.lib.k8s import WORKER_NODE_SELECTOR, SecretTemplate, sealed_secret
+from kluster.lib.k8s import (
+    HOME_NODE_SELECTOR,
+    BackedVolumeBesideNodeVolume,
+    Constraints,
+    Keeper,
+    SecretTemplate,
+    TwoBackedVolumes,
+    at_home,
+    kept,
+    sealed_secret,
+    writer_annotations,
+)
 
 __all__ = (
     'COPY_SECONDS_PER_GIB',
@@ -80,6 +110,7 @@ __all__ = (
     'NasClaim',
     'Off',
     'claim',
+    'claim_hold',
     'claim_name',
     'copy_timeout',
     'nas_claim',
@@ -158,8 +189,10 @@ class Claim:
     repository: crds.bitnami.v1alpha1.SealedSecret | None
     move: Move | None
     movers: crds.cilium.v2.CiliumNetworkPolicy | None
-    placement: k8s.core.v1.AffinityArgs
-    """The placement `claim` was handed, which the workload's pod states as its affinity."""
+    constraints: Constraints
+    """What the workload's pod states: the constraints `claim` was handed, with the claim's hold composed in."""
+    pod_annotations: Mapping[str, str]
+    """What the workload's pod carries in its metadata for the claim: a `local-path` claim's blockio class, or nothing."""
 
 
 def claim(
@@ -171,7 +204,7 @@ def claim(
     namespace: str,
     uid: int,
     writer_key: Mapping[str, pulumi.Input[str]],
-    placement: k8s.core.v1.AffinityArgs,
+    constraints: Constraints,
     generation: int = 0,
     moving_to: Mapping[str, str] | None = None,
     stopped: pulumi.Resource | None = None,
@@ -203,21 +236,18 @@ def claim(
     :param writer_key: The ciphertext of the namespace's sealed writer key, as
         the program read it, sealed namespace-wide so that it opens under the
         repository Secret's name (`kluster.lib.k8s.sealed_ciphertext`).
-    :param placement: Every node constraint the workload is under, stated as
-        its pod's affinity: a pod that a volume already holds to one node, as
-        a `nas_claim` does, states that node's pool too, and a pod that
-        mounts more than one backed claim is placed on one node and hands
-        each claim that placement, the second as `<first>.placement`, since
-        each claim's mover binds its own claim apart from the others. The
-        `Claim` records it, and the workload's pod takes its affinity from
-        there, so the two are one value. Every restic mover of the claim
-        carries its node affinity, required and preferred, term for term, so
-        that a mover binds the claim only on a node the placement admits,
-        weighed as the workload's pod is. Under a retention class, a placement with pod
-        affinity or anti-affinity is refused, since the mover does not
-        reproduce the pods it is stated against. During a copy it is the
-        workload's placement on the claim being copied: the workload moves to
-        the target in the finish.
+    :param constraints: Every node constraint the workload is under: a pod
+        that mounts a `nas_claim` beside this claim states its home site
+        (`NasClaim.constraints`), and a pod that mounts a second claim hands
+        it the first's (`<first>.constraints`). Every restic mover of the
+        claim carries their node affinity, so that it binds the claim only on
+        a node they admit. The `Claim` records them with its own hold
+        composed in, and the workload's pod states them from there, so the
+        two are one value. A backed claim handed the constraints of another
+        backed claim, or of a node volume's claim, is refused: its mover
+        could bind it on another node than the other claim's. During a copy
+        they are the workload's on the claim being copied: the workload moves
+        to the target in the finish.
     :param generation: The claim's generation, raised by one for each move.
     :param moving_to: The node labels the new generation's claim is made on,
         which the destination's mover selects; set for the copy alone.
@@ -242,7 +272,12 @@ def claim(
             f'and a repository Secret carries {sorted(WRITER_KEY_FIELDS)}'
         )
 
-    affinity = _mover_affinity(resource_name, placement) if isinstance(retention, RetentionClass) else None
+    backed = isinstance(retention, RetentionClass)
+    try:
+        held = constraints & claim_hold(f'its claim {claim_name(name, generation)!r}', storage_class, backed=backed)
+    except (TwoBackedVolumes, BackedVolumeBesideNodeVolume) as refused:
+        raise type(refused)(f'{resource_name}: {refused}') from None
+    affinity = _mover_affinity(constraints) if backed else None
 
     child = pulumi.ResourceOptions.merge(opts, pulumi.ResourceOptions(protect=protect))
     target = _claim(resource_name, name, generation, size, storage_class, namespace=namespace, opts=child)
@@ -272,8 +307,8 @@ def claim(
         # The claim that holds the data, as it was made: this call's size and
         # class are the new claim's, and a class changed here would otherwise
         # replace this one, which empties it.
-        held = pulumi.ResourceOptions.merge(child, pulumi.ResourceOptions(ignore_changes=['spec']))
-        copied = _claim(resource_name, name, generation - 1, size, storage_class, namespace=namespace, opts=held)
+        as_made = pulumi.ResourceOptions.merge(child, pulumi.ResourceOptions(ignore_changes=['spec']))
+        copied = _claim(resource_name, name, generation - 1, size, storage_class, namespace=namespace, opts=as_made)
         source, destination = _pair(
             resource_name,
             name,
@@ -310,7 +345,6 @@ def claim(
             )
         )
 
-    backed = isinstance(retention, RetentionClass)
     movers = (
         _movers(resource_name, name, namespace=namespace, bucket=backed, opts=opts)
         if backed or move is not None
@@ -324,8 +358,25 @@ def claim(
         repository=repository,
         move=move,
         movers=movers,
-        placement=placement,
+        constraints=held,
+        pod_annotations=writer_annotations(storage_class),
     )
+
+
+def claim_hold(what: str, storage_class: str, *, backed: bool) -> Constraints:
+    """The hold of a pod to the node a claim of `storage_class` is bound on, saying `what` the claim is.
+
+    A node volume's claim is on its node before any pod is placed
+    (`Keeper.NODE_VOLUME`). A `local-path` claim binds on the node its first
+    consumer is placed on: the pod's, or, for a backed claim, a restic
+    mover's (`Keeper.BACKED_VOLUME`), since VolSync places a mover of a claim
+    no running pod uses wherever its own affinity admits.
+    """
+    if storage_class != conventions.SC_LOCAL_PATH:
+        return kept(Keeper.NODE_VOLUME, f'{what} is on the node its node volume is attached to')
+    if backed:
+        return kept(Keeper.BACKED_VOLUME, f'{what} is bound on the node it or its mover is first placed on')
+    return kept(Keeper.VOLUME, f'{what} is bound on the node it is first placed on')
 
 
 def _copy(
@@ -484,136 +535,28 @@ def _restic(
     )
 
 
-def _stated[T](resource_name: str, value: object, cls: type[T], what: str) -> T:
-    """`value` as the `cls` it has to be, refused when it is anything else, such as an output."""
-    if not isinstance(value, cls):
-        raise ValueError(f'{resource_name}: a placement states its {what} as a value, not {value!r}')
-    return value
-
-
-def _listed(resource_name: str, value: object, what: str) -> list[object]:
-    """A list a placement states, none where it states none, refused when it is anything but one."""
-    if value is None:
-        return []
-    if not isinstance(value, list | tuple):
-        raise ValueError(f'{resource_name}: a placement states its {what} as a list, not {value!r}')
-    return list(cast('list[object] | tuple[object, ...]', value))
-
-
-def _requirements(
-    resource_name: str, term: k8s.core.v1.NodeSelectorTermArgs
-) -> tuple[list[k8s.core.v1.NodeSelectorRequirementArgs], list[k8s.core.v1.NodeSelectorRequirementArgs]]:
-    """A node selector term's requirements: on the node's labels, then on its fields."""
-
-    def each(value: object, what: str) -> list[k8s.core.v1.NodeSelectorRequirementArgs]:
-        return [
-            _stated(resource_name, it, k8s.core.v1.NodeSelectorRequirementArgs, what)
-            for it in _listed(resource_name, value, f'{what}s')
-        ]
-
-    return each(term.match_expressions, 'label requirement'), each(term.match_fields, 'field requirement')
-
-
 def _mover_affinity(
-    resource_name: str, placement: k8s.core.v1.AffinityArgs
+    constraints: Constraints,
 ) -> crds.volsync.v1alpha1.ReplicationSourceSpecResticMoverAffinityArgs | None:
-    """The restic mover's affinity: the node affinity of the workload's `placement`, term for term, if it states one.
-
-    Both parts are carried. The required terms decide the nodes the mover may
-    bind the claim on, and the preferred terms weigh the scheduler's choice
-    among them as the workload's pod is weighed, since for a claim that is
-    not yet bound the node chosen is the workload's from then on.
-    """
+    """The restic mover's affinity: the workload's node requirements, as one required term; none where they state none."""
     v = crds.volsync.v1alpha1
-    if placement.pod_affinity is not None or placement.pod_anti_affinity is not None:
-        raise ValueError(
-            f'{resource_name}: a placement with pod affinity or anti-affinity is not one a mover can follow, since '
-            'the mover does not reproduce the pods it is stated against'
-        )
-    if placement.node_affinity is None:
-        return None
-    node = _stated(resource_name, placement.node_affinity, k8s.core.v1.NodeAffinityArgs, 'node affinity')
-
-    required: (
-        v.ReplicationSourceSpecResticMoverAffinityNodeAffinityRequiredDuringSchedulingIgnoredDuringExecutionArgs | None
-    ) = None
-    if node.required_during_scheduling_ignored_during_execution is not None:
-        selector = _stated(
-            resource_name,
-            node.required_during_scheduling_ignored_during_execution,
-            k8s.core.v1.NodeSelectorArgs,
-            'required node affinity',
-        )
-        terms: list[
-            v.ReplicationSourceSpecResticMoverAffinityNodeAffinityRequiredDuringSchedulingIgnoredDuringExecutionNodeSelectorTermsArgs
-        ] = []
-        for stated in _listed(resource_name, selector.node_selector_terms, 'node selector terms'):
-            expressions, fields = _requirements(
-                resource_name, _stated(resource_name, stated, k8s.core.v1.NodeSelectorTermArgs, 'node selector term')
-            )
-            terms.append(
-                v.ReplicationSourceSpecResticMoverAffinityNodeAffinityRequiredDuringSchedulingIgnoredDuringExecutionNodeSelectorTermsArgs(
-                    match_expressions=[
-                        v.ReplicationSourceSpecResticMoverAffinityNodeAffinityRequiredDuringSchedulingIgnoredDuringExecutionNodeSelectorTermsMatchExpressionsArgs(
-                            key=it.key, operator=it.operator, values=it.values
-                        )
-                        for it in expressions
-                    ]
-                    or None,
-                    match_fields=[
-                        v.ReplicationSourceSpecResticMoverAffinityNodeAffinityRequiredDuringSchedulingIgnoredDuringExecutionNodeSelectorTermsMatchFieldsArgs(
-                            key=it.key, operator=it.operator, values=it.values
-                        )
-                        for it in fields
-                    ]
-                    or None,
-                )
-            )
-        required = (
-            v.ReplicationSourceSpecResticMoverAffinityNodeAffinityRequiredDuringSchedulingIgnoredDuringExecutionArgs(
-                node_selector_terms=terms
-            )
-        )
-
-    preferred: list[
-        v.ReplicationSourceSpecResticMoverAffinityNodeAffinityPreferredDuringSchedulingIgnoredDuringExecutionArgs
-    ] = []
-    for stated in _listed(
-        resource_name, node.preferred_during_scheduling_ignored_during_execution, 'preferred node affinity'
-    ):
-        preference = _stated(resource_name, stated, k8s.core.v1.PreferredSchedulingTermArgs, 'preferred term')
-        expressions, fields = _requirements(
-            resource_name,
-            _stated(resource_name, preference.preference, k8s.core.v1.NodeSelectorTermArgs, 'preference'),
-        )
-        preferred.append(
-            v.ReplicationSourceSpecResticMoverAffinityNodeAffinityPreferredDuringSchedulingIgnoredDuringExecutionArgs(
-                weight=preference.weight,
-                preference=v.ReplicationSourceSpecResticMoverAffinityNodeAffinityPreferredDuringSchedulingIgnoredDuringExecutionPreferenceArgs(
-                    match_expressions=[
-                        v.ReplicationSourceSpecResticMoverAffinityNodeAffinityPreferredDuringSchedulingIgnoredDuringExecutionPreferenceMatchExpressionsArgs(
-                            key=it.key, operator=it.operator, values=it.values
-                        )
-                        for it in expressions
-                    ]
-                    or None,
-                    match_fields=[
-                        v.ReplicationSourceSpecResticMoverAffinityNodeAffinityPreferredDuringSchedulingIgnoredDuringExecutionPreferenceMatchFieldsArgs(
-                            key=it.key, operator=it.operator, values=it.values
-                        )
-                        for it in fields
-                    ]
-                    or None,
-                ),
-            )
-        )
-
-    if required is None and not preferred:
+    requirements = constraints.requirements
+    if not requirements:
         return None
     return v.ReplicationSourceSpecResticMoverAffinityArgs(
         node_affinity=v.ReplicationSourceSpecResticMoverAffinityNodeAffinityArgs(
-            required_during_scheduling_ignored_during_execution=required,
-            preferred_during_scheduling_ignored_during_execution=preferred or None,
+            required_during_scheduling_ignored_during_execution=v.ReplicationSourceSpecResticMoverAffinityNodeAffinityRequiredDuringSchedulingIgnoredDuringExecutionArgs(
+                node_selector_terms=[
+                    v.ReplicationSourceSpecResticMoverAffinityNodeAffinityRequiredDuringSchedulingIgnoredDuringExecutionNodeSelectorTermsArgs(
+                        match_expressions=[
+                            v.ReplicationSourceSpecResticMoverAffinityNodeAffinityRequiredDuringSchedulingIgnoredDuringExecutionNodeSelectorTermsMatchExpressionsArgs(
+                                key=it.key, operator='In', values=[it.value]
+                            )
+                            for it in requirements
+                        ]
+                    )
+                ]
+            )
         )
     )
 
@@ -777,12 +720,24 @@ def _movers(
 _NAS_NOMINAL_SIZE = '1Gi'
 
 
+#: What a pod that mounts the NAS states: the home site, which alone reaches
+#: the export. The volume's node affinity already places the pod there; the
+#: pod states it too, so that it is held as a pod at home is, and so that a
+#: backed claim mounted beside it binds where the pod can run.
+_ON_THE_NAS = at_home("mounts the NAS's export, which only the home site reaches (physical/homelab-host.md §5)")
+
+
 @dataclass(frozen=True)
 class NasClaim:
     """What `nas_claim` emitted: the volume, bound to its claim alone, and the claim."""
 
     volume: k8s.core.v1.PersistentVolume
     claim: k8s.core.v1.PersistentVolumeClaim
+
+    @property
+    def constraints(self) -> Constraints:
+        """What a pod that mounts it states, and a claim mounted beside it is handed: the home site."""
+        return _ON_THE_NAS
 
 
 def nas_claim(
@@ -794,13 +749,13 @@ def nas_claim(
     read_only: bool,
     opts: pulumi.ResourceOptions | None = None,
 ) -> NasClaim:
-    """A static PersistentVolume over `path` under the host's one export, and its claim, on the worker alone.
+    """A static PersistentVolume over `path` under the host's one export, and its claim, at the home site alone.
 
     For data the cluster does not own, so it takes no retention: the source's
     own regime is its safety net. The export is reachable from the worker and
     from no other node (physical/homelab-host.md §5), so the volume's node
-    affinity is the worker's, and the scheduler places every pod that mounts it
-    there. The volume is bound to its claim by name and to no other, under a
+    affinity is the home site's (`kluster.lib.k8s.HOME_NODE_SELECTOR`), and
+    the scheduler places every pod that mounts it there. The volume is bound to its claim by name and to no other, under a
     class no StorageClass answers to, so no provisioner touches either, and it
     reclaims `Retain`: removing the claim never touches the data.
 
@@ -835,7 +790,9 @@ def nas_claim(
                 path='/'.join([conventions.NAS_EXPORT, *parts]),
                 read_only=read_only,
             ),
-            node_affinity=k8s.core.v1.VolumeNodeAffinityArgs(required=WORKER_NODE_SELECTOR),
+            # Immutable once the volume is created: the API server refuses a
+            # change to it, so a different affinity is a new volume and claim.
+            node_affinity=k8s.core.v1.VolumeNodeAffinityArgs(required=HOME_NODE_SELECTOR),
         ),
         opts=opts,
     )

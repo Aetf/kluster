@@ -1,4 +1,4 @@
-"""immich, the photo library, on the worker (rfc-008 §5.6).
+"""immich, the photo library (rfc-008 §5.6).
 
 Four workloads in one namespace, `NAMESPACE`, which is the legacy one because
 the ported ciphertexts are sealed to it (declarative/workloads.md §5):
@@ -13,14 +13,17 @@ the ported ciphertexts are sealed to it (declarative/workloads.md §5):
 -   **its database**, the application base's shape
     (`kluster.components.apps.database`), on the `vchord` operand.
 
-**It runs on the worker.** The library is on the NAS, which the worker alone
-reaches, and the GPU both the server and the machine-learning service request
-is the worker's: each asks for one `kluster.components.gpu.GPU_RESOURCE`, the
-server for ffmpeg's QSV transcodes and the service for OpenVINO. Every pod
-takes `kluster.lib.k8s.WORKER_POD_AFFINITY`, the cache's through its claim's
-placement, and the database the node affinity of `WORKER_AFFINITY_JSON`. Each
-rollout is `Recreate`, since the GPU is one device a second pod would wait
-for.
+**The server runs at the home site, and the machine-learning service beside
+the GPU.** The library is on the NAS, which the home site alone reaches, so
+the server states the NAS claim's constraints (`NasClaim.constraints`). Both
+the server and the machine-learning service request the GPU, one
+`kluster.components.gpu.GPU_RESOURCE` each, the server for ffmpeg's QSV
+transcodes and the service for OpenVINO, which keeps each to the node offering
+it (`kluster.components.apps.GPU_HOLD`); the service's cache claim keeps it there
+too. The component declares nothing else that holds it to a site
+(`kluster.lib.k8s.UNCONSTRAINED`), so the scheduler places the database, its
+Redis and the watchdog. Each rollout is `Recreate`, since the GPU is one
+device a second pod would wait for.
 
 **What it keeps, and where** (rfc-008 §4.2):
 
@@ -109,7 +112,7 @@ import pulumi_crds as crds
 import pulumi_kubernetes as k8s
 
 from kluster import conventions
-from kluster.components.apps import Backend, Exposed, Fronts, exim, expose
+from kluster.components.apps import GPU_HOLD, Backend, Exposed, Fronts, declared_constraints, exim, expose
 from kluster.components.apps.database import Database, Drill, Recovery, Resources, database
 from kluster.components.apps.immich import watchdog
 from kluster.components.apps.storage import Claim, NasClaim, claim, nas_claim, off
@@ -118,10 +121,9 @@ from kluster.conventions.backup import PRECIOUS
 from kluster.conventions.routes import Exposure, Held, Proxied, Route
 from kluster.conventions.sso import Client, redirect_uris
 from kluster.lib.k8s import (
-    WORKER_AFFINITY_JSON,
-    WORKER_POD_AFFINITY,
     ApiClients,
     ApplicationNamespace,
+    Constraints,
     PortedSecret,
     SecretTemplate,
     application_namespace,
@@ -551,7 +553,9 @@ def _secret_env(name: str, selector: k8s.core.v1.SecretKeySelectorArgs) -> k8s.c
     return k8s.core.v1.EnvVarArgs(name=name, value_from=k8s.core.v1.EnvVarSourceArgs(secret_key_ref=selector))
 
 
-def _server(image: ImagePin, *, library: pulumi.Input[str], config: pulumi.Input[str]) -> k8s.core.v1.PodSpecArgs:
+def _server(
+    image: ImagePin, *, library: NasClaim, config: pulumi.Input[str], constraints: Constraints
+) -> k8s.core.v1.PodSpecArgs:
     """The server's pod: the library at `MEDIA`, the configuration at `CONFIG_FILE`, the database, Redis and the service by name."""
     # The operator's Secret of the owner's credential (CloudNativePG's
     # `<cluster>-app`).
@@ -591,11 +595,11 @@ def _server(image: ImagePin, *, library: pulumi.Input[str], config: pulumi.Input
     return k8s.core.v1.PodSpecArgs(
         automount_service_account_token=False,
         enable_service_links=False,
-        affinity=WORKER_POD_AFFINITY,
+        **(constraints & library.constraints & GPU_HOLD).pod_fields(),
         security_context=_pod_security(USER),
         containers=[container],
         volumes=[
-            _claim_volume('library', library),
+            _claim_volume('library', library.claim.metadata.name),
             k8s.core.v1.VolumeArgs(
                 name='config',
                 secret=k8s.core.v1.SecretVolumeSourceArgs(
@@ -636,14 +640,14 @@ def _machine_learning(image: ImagePin, cache: Claim) -> k8s.core.v1.PodSpecArgs:
     return k8s.core.v1.PodSpecArgs(
         automount_service_account_token=False,
         enable_service_links=False,
-        affinity=cache.placement,
+        **(cache.constraints & GPU_HOLD).pod_fields(),
         security_context=_pod_security(USER),
         containers=[container],
         volumes=[_claim_volume('cache', cache.claim.metadata.name)],
     )
 
 
-def _redis(image: ImagePin, exporter_image: ImagePin) -> k8s.core.v1.PodSpecArgs:
+def _redis(image: ImagePin, exporter_image: ImagePin, constraints: Constraints) -> k8s.core.v1.PodSpecArgs:
     """Redis's pod: the queues in memory alone, behind the ported password, with its metrics exporter beside it."""
     container = k8s.core.v1.ContainerArgs(
         name='redis',
@@ -678,7 +682,7 @@ def _redis(image: ImagePin, exporter_image: ImagePin) -> k8s.core.v1.PodSpecArgs
     return k8s.core.v1.PodSpecArgs(
         automount_service_account_token=False,
         enable_service_links=False,
-        affinity=WORKER_POD_AFFINITY,
+        **constraints.pod_fields(),
         security_context=_pod_security(REDIS_USER),
         containers=[container, exporter],
         # Its working directory, which it keeps nothing in.
@@ -799,6 +803,7 @@ class Immich(Component, pulumi_type='kluster:apps:Immich'):
         self.namespace = application_namespace(
             f'{name}-namespace', name=NAMESPACE, api_clients=_API_CLIENTS, opts=self.child_opts()
         )
+        self.constraints = declared_constraints(exposure, self.namespace)
         # Read off the namespace, so each object in it waits for it; a value,
         # a claim or the database names its namespace as a string, so its
         # objects wait for it here.
@@ -828,7 +833,7 @@ class Immich(Component, pulumi_type='kluster:apps:Immich'):
             # Read by no mover under `off`; the namespace's one writer key is
             # the barman family's.
             writer_key=writer_key,
-            placement=WORKER_POD_AFFINITY,
+            constraints=self.constraints,
             opts=behind,
         )
         self.database = database(
@@ -840,7 +845,7 @@ class Immich(Component, pulumi_type='kluster:apps:Immich'):
             image=database_image,
             dbname=DBNAME,
             resources=_DATABASE_RESOURCES,
-            node_affinity=WORKER_AFFINITY_JSON['nodeAffinity'],
+            constraints=self.constraints,
             writer_key=writer_key,
             drill=_DRILL,
             drill_image=drill_image,
@@ -854,7 +859,7 @@ class Immich(Component, pulumi_type='kluster:apps:Immich'):
             f'{name}-redis',
             REDIS_SERVICE,
             REDIS_LABELS,
-            _redis(redis_image, exporter_image),
+            _redis(redis_image, exporter_image, self.constraints),
             namespace=namespace,
             reload=True,
         )
@@ -865,6 +870,7 @@ class Immich(Component, pulumi_type='kluster:apps:Immich'):
             ML_LABELS,
             _machine_learning(ml_image, self.cache),
             namespace=namespace,
+            annotations=self.cache.pod_annotations,
         )
         self.ml_service = self._service(f'{name}-machine-learning', ML_SERVICE, ML_LABELS, ML_PORT, 'http', namespace)
         self.server = self._deployment(
@@ -872,7 +878,7 @@ class Immich(Component, pulumi_type='kluster:apps:Immich'):
             SERVER_SERVICE,
             # The relay admits a sender by this label.
             {**SERVER_LABELS, **conventions.MAIL_SENDER_LABEL},
-            _server(server_image, library=self.library.claim.metadata.name, config=self.config.metadata.name),
+            _server(server_image, library=self.library, config=self.config.metadata.name, constraints=self.constraints),
             namespace=namespace,
             selector=SERVER_LABELS,
             reload=True,
@@ -887,7 +893,7 @@ class Immich(Component, pulumi_type='kluster:apps:Immich'):
             redis_port=REDIS_PORT,
             redis_password=REDIS_SECRET,
             user=USER,
-            affinity=WORKER_POD_AFFINITY,
+            constraints=self.constraints,
             opts=behind,
         )
         self.exposed = expose(
@@ -913,8 +919,12 @@ class Immich(Component, pulumi_type='kluster:apps:Immich'):
         namespace: pulumi.Input[str],
         selector: Mapping[str, str] | None = None,
         reload: bool = False,
+        annotations: Mapping[str, str] | None = None,
     ) -> k8s.apps.v1.Deployment:
-        """One replica of `pod`, stopped before its successor starts, rolled by Reloader where it reads a Secret at its start."""
+        """One replica of `pod`, stopped before its successor starts, rolled by Reloader where it reads a Secret at its start.
+
+        `annotations` are its pod's, the blockio class of a claim it mounts.
+        """
         return k8s.apps.v1.Deployment(
             resource_name,
             metadata=k8s.meta.v1.ObjectMetaArgs(
@@ -927,7 +937,10 @@ class Immich(Component, pulumi_type='kluster:apps:Immich'):
                 strategy=k8s.apps.v1.DeploymentStrategyArgs(type='Recreate'),
                 selector=k8s.meta.v1.LabelSelectorArgs(match_labels=dict(selector or labels)),
                 template=k8s.core.v1.PodTemplateSpecArgs(
-                    metadata=k8s.meta.v1.ObjectMetaArgs(labels=dict(labels)), spec=pod
+                    metadata=k8s.meta.v1.ObjectMetaArgs(
+                        labels=dict(labels), annotations=dict(annotations) if annotations else None
+                    ),
+                    spec=pod,
                 ),
             ),
             opts=self.child_opts(),

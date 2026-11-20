@@ -224,39 +224,47 @@ binds on the node its first consumer is scheduled to, and VolSync
 gives it no node selection at all while no pod does. So a source that
 reaches a claim before the workload's pod would bind the claim wherever
 its mover landed, which may be a node the workload can never run on.
-`claim` therefore takes the workload's `placement`, which the `Claim`
-it returns records and the workload's pod takes as its affinity, so the
-two are one value. Every restic mover of the claim carries the
-placement's node affinity as `moverAffinity`, term for term: the
-required terms, which decide the nodes the claim may bind on, and the
-preferred ones, which weigh the scheduler's choice among them as they
-weigh the workload's own pod, and the node chosen is the workload's for
-the claim's whole life. Whichever of the mover and the workload's pod
-is scheduled first, whether on the claim's first sync or after the
-claim is made again, the claim binds on a node the placement admits,
-weighed by its preferences.
+`claim` therefore takes the workload's `constraints`
+(`kluster.lib.k8s.Constraints`, declarative/workloads.md §1), which the
+`Claim` it returns records, with the claim's own hold composed in, and
+the workload's pod states from there, so the two are one value. Every
+restic mover of the claim carries their required node affinity as
+`moverAffinity`, which decides the nodes the claim may bind on, and the
+node chosen is the workload's for the claim's whole life. Whichever of
+the mover and the workload's pod is scheduled first, whether on the
+claim's first sync or after the claim is made again, the claim binds on
+a node the workload's constraints admit.
 
-**New rule:** the placement is every node constraint the workload is
-under, stated as its pod's affinity. A pod that a volume already holds
-to one node, as a `nas_claim` does, states that node's pool too, since
-otherwise its claim's mover may bind the claim on a node the volume
-never reaches. A placement stated against other pods, pod affinity or
-anti-affinity, is refused for a backed claim, since the mover does not
-reproduce those pods. During a copy, the placement is the workload's on
-the claim being copied; it names the target in the finish.
+**New rule:** the constraints are every node constraint the workload is
+under. A pod that a volume already holds to its site, as a `nas_claim`
+does, hands its claims the home site too (`NasClaim.constraints`), since
+otherwise a claim's mover may bind the claim on a node the volume never
+reaches. During a copy, the constraints are the workload's on the claim
+being copied; the copy names the target in the finish.
 
-**New rule:** a pod that mounts more than one backed claim is placed on
-one node, and hands each claim that placement, the second as
-`placement=<first>.placement`. Each claim's mover binds its own claim
-and is scheduled apart from the others, so under a placement that
-admits several nodes, two movers can bind one pod's claims on two of
-them, and the pod, which needs both, then runs on neither.
+**New rule:** a workload mounts at most one backed claim, and no backed
+claim beside a node volume's claim. `claim` refuses a backed claim handed
+the constraints of either, the form a workload's second claim takes
+(`<first>.constraints`): its movers could bind on different nodes. Each
+claim's mover binds its own claim and is scheduled apart from the
+others, and the constraints state no node, so a mover can bind its claim
+on one node while the pod's other claim is on another, and the pod,
+which needs both, then runs on neither. A claim nothing backs up has no
+mover, and binds where its pod is placed. The render holds the rule too,
+whatever a component handed its claims (`tests/test_apps_placement.py`).
+
+A backed claim beside a GPU request is not refused, though the same can
+befall it: the mover carries the workload's constraints, not the GPU's
+node, so it could bind the claim on a node without the GPU, and the pod
+would then run nowhere. The pair is safe today only because the one pod
+that makes it, jellyfin's, is held at the home site, which is one node,
+and that node has the GPU.
 
 Every claim with a mover carries the allow for its movers' traffic,
 which reaches the claim's namespace, the cluster's DNS and, for a restic
 mover, the bucket's endpoint, and nothing else. **Unproven live**: the
 destination's mover placing a claim that is not yet bound, a restic
-mover's affinity holding such a claim to its workload's placement, the
+mover's affinity holding such a claim to its workload's constraints, the
 destination's Service resolving by its DNS name in the source's
 `address`, the copy's timeout per GiB, the movers' resource figures,
 restic's calls on the bucket itself under a key scoped to one prefix,

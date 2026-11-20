@@ -1,10 +1,12 @@
 """SplitPro, the expense splitter, signing its users in through the portal (rfc-008 §5.3).
 
-One server on the cloud pool, and beside it its database, one CNPG instance on
-the cloud pool too (`kluster.components.apps.database`), which archives to the
-backup bucket.
-Receipts are kept on a claim of their own, backed up as `PRECIOUS`, on the
-cloud pool beside the server (Aetf/kluster-ops#883).
+One server, and beside it its database, one CNPG instance
+(`kluster.components.apps.database`), which archives to the backup bucket.
+Receipts are kept on a claim of their own, backed up as `PRECIOUS`
+(Aetf/kluster-ops#883). It declares nothing that holds it to a site, so the
+scheduler places the server and the instance (`kluster.lib.k8s.UNCONSTRAINED`);
+each is kept to its claim's node once bound, and writes in the claim's blockio
+class.
 
 **The portal is the only way in.** The server signs in through the client the
 program hands it, its row of `conventions.sso.CLIENTS`, and registers no other
@@ -46,14 +48,12 @@ import pulumi_crds as crds
 import pulumi_kubernetes as k8s
 
 from kluster import conventions
-from kluster.components.apps import Backend, Exposed, Fronts, expose
+from kluster.components.apps import Backend, Exposed, Fronts, declared_constraints, expose
 from kluster.components.apps.database import API_CLIENTS, Database, Drill, Recovery, Resources, database
 from kluster.components.apps.storage import Claim, claim
 from kluster.conventions.backup import PRECIOUS
 from kluster.conventions.routes import Exposure, Held, Proxied, Route
 from kluster.lib.k8s import (
-    CLOUD_AFFINITY_JSON,
-    CLOUD_POD_AFFINITY,
     ApplicationNamespace,
     PortedSecret,
     application_namespace,
@@ -398,9 +398,9 @@ def _server(
         # SplitPro validates its environment at its start; a variable per
         # Service in the namespace is nothing it reads.
         enable_service_links=False,
-        # The claim binds where its first consumer is placed, so the pod takes
-        # the placement the claim and its movers were given.
-        affinity=receipts.placement,
+        # The claim binds where its first consumer is placed, so the pod
+        # states the constraints the claim and its movers were given.
+        **receipts.constraints.pod_fields(),
         security_context=k8s.core.v1.PodSecurityContextArgs(
             run_as_non_root=True,
             run_as_user=SPLITPRO_USER,
@@ -521,6 +521,7 @@ class SplitPro(Component, pulumi_type='kluster:apps:SplitPro'):
         self.namespace = application_namespace(
             f'{name}-namespace', name=NAMESPACE, api_clients=API_CLIENTS, opts=self.child_opts()
         )
+        self.constraints = declared_constraints(exposure, self.namespace)
         # Read off the namespace, so each object in it waits for it.
         namespace = self.namespace.namespace.metadata.name
         # A value or a database names its namespace as a string, so its
@@ -537,7 +538,7 @@ class SplitPro(Component, pulumi_type='kluster:apps:SplitPro'):
             image=database_image,
             dbname=DBNAME,
             resources=_DATABASE_RESOURCES,
-            node_affinity=CLOUD_AFFINITY_JSON['nodeAffinity'],
+            constraints=self.constraints,
             writer_key=database_writer_key,
             drill=Drill(table=_DRILL_TABLE, extensions=(_PG_CRON,)),
             drill_image=drill_image,
@@ -559,7 +560,7 @@ class SplitPro(Component, pulumi_type='kluster:apps:SplitPro'):
             namespace=NAMESPACE,
             uid=SPLITPRO_USER,
             writer_key=receipts_writer_key,
-            placement=CLOUD_POD_AFFINITY,
+            constraints=self.constraints,
             protect=True,
             opts=behind,
         )
@@ -579,7 +580,9 @@ class SplitPro(Component, pulumi_type='kluster:apps:SplitPro'):
                 strategy=k8s.apps.v1.DeploymentStrategyArgs(type='Recreate'),
                 selector=k8s.meta.v1.LabelSelectorArgs(match_labels=dict(LABELS)),
                 template=k8s.core.v1.PodTemplateSpecArgs(
-                    metadata=k8s.meta.v1.ObjectMetaArgs(labels=dict(LABELS)),
+                    metadata=k8s.meta.v1.ObjectMetaArgs(
+                        labels=dict(LABELS), annotations=dict(self.receipts.pod_annotations)
+                    ),
                     spec=_server(
                         image,
                         client,

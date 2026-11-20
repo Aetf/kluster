@@ -2,15 +2,22 @@
 
 One call, `database` (declarative/workloads.md §4, rfc-008 §4.3), which emits:
 
--   **The `Cluster`**, `instances: 1` and no standby: every database is pinned
-    to one site, and a second instance there would share the first's node,
-    disk and failure domain. Its data is a claim the operator makes under the
-    class it is handed, `local-path` unless a node volume's, placed by the
-    node affinity it is handed, which is how a database follows its
-    application's site. It is protected, as every data-bearing resource is
-    (storage.md §3.3), and it has no disruption budget: over one instance,
-    CNPG's budget would refuse every eviction of it and hang each drain of
-    its node, and it protects nothing the archive does not.
+-   **The `Cluster`**, `instances: 1` and no standby: a second instance would
+    cost the database's whole memory request again and add a writer to the
+    boot volume's cap wherever it lands, and the restore drill covers the loss
+    of the node (rfc-008 §4.3). Its data is a claim the operator makes under
+    the class it is handed, `local-path` unless a node volume's, and its
+    instance states the constraints it is handed, which is how a database
+    follows its application's (`kluster.lib.k8s.Constraints`), with its
+    claim's hold composed in: the claim keeps the instance to its node, so it
+    runs at the held priority. On `local-path` the instance writes in the
+    blockio class `conventions.ETCD_DISK_WRITER`, through the `Cluster`'s
+    `inheritedMetadata`, which caps what it writes to the disk etcd shares
+    where its node is a control plane (cluster/nodes.md §1.2). It is
+    protected, as every data-bearing resource is (storage.md §3.3), and it
+    has no disruption budget: over one instance, CNPG's budget would refuse
+    every eviction of it and hang each drain of its node, and it protects
+    nothing the archive does not.
 -   **Its archive**: the Barman Cloud plugin as its WAL archiver, to the
     backup bucket at `conventions.barman_repo_path` of its namespace and its
     server name, through an `ObjectStore` whose credential is the namespace's
@@ -71,13 +78,14 @@ import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any
+from typing import Any, cast
 
 import pulumi
 import pulumi_crds as crds
 import pulumi_kubernetes as k8s
 
 from kluster import conventions
+from kluster.components.apps.storage import claim_hold
 from kluster.components.backup import s3_endpoint
 from kluster.components.monitoring.operator_objects import operator_object
 from kluster.components.monitoring.rules import RuleGroup, rule_group_spec, scheduled_job_rules
@@ -87,7 +95,7 @@ from kluster.conventions.cluster import RETENTION_LABEL, WRITER_KEY_FIELDS
 from kluster.conventions.schedule import ScheduledJob
 from kluster.conventions.sealed import SealingScope
 from kluster.lib import templates
-from kluster.lib.k8s import ApiClients, SecretTemplate, sealed_secret
+from kluster.lib.k8s import ApiClients, Constraints, SecretTemplate, sealed_secret, writer_annotations
 from kluster.lib.versions import ImagePin
 
 __all__ = (
@@ -335,7 +343,7 @@ class Recovery:
 
 @dataclass(frozen=True, kw_only=True)
 class Resources:
-    """What an instance asks for and is held to: on the cloud pool, its CPU limit is required (declarative/workloads.md §1)."""
+    """What an instance asks for and is held to: its CPU limit is required, since it may be placed on a cloud node (declarative/workloads.md §1)."""
 
     requests: Mapping[str, str]
     limits: Mapping[str, str]
@@ -387,7 +395,7 @@ def database(
     image: ImagePin,
     dbname: str,
     resources: Resources,
-    node_affinity: Mapping[str, Any],
+    constraints: Constraints,
     writer_key: Mapping[str, pulumi.Input[str]],
     drill: Drill,
     drill_image: ImagePin,
@@ -418,8 +426,9 @@ def database(
     :param dbname: The application's database, and its owner.
     :param resources: The instance's requests and limits, which the drill's
         recovered instance takes too.
-    :param node_affinity: Kubernetes' `NodeAffinity` as JSON, the site's pool
-        the instance and the drill's recovered instance are placed in.
+    :param constraints: The application's constraints on the nodes the
+        instance, the drill's recovered instance and the drill's pod run on;
+        the instances compose their claim's hold into them.
     :param writer_key: The ciphertext of the namespace's sealed writer key of
         the barman family, as the program read it
         (`kluster.lib.k8s.sealed_ciphertext` over
@@ -468,7 +477,7 @@ def database(
         image=str(image),
         size=size,
         resources=resources,
-        node_affinity=node_affinity,
+        constraints=constraints,
         labels=labels,
         shared_preload_libraries=tuple(shared_preload_libraries),
         parameters=dict(parameters or {}),
@@ -482,6 +491,9 @@ def database(
     recovered = (
         _recovery_store(resource_name, name, recovery, namespace=namespace, opts=opts) if recovery is not None else None
     )
+    # The instance's claim keeps it to the node it is bound on; the drill's
+    # recovered instance has a fresh claim each run, which keeps it nowhere.
+    held = constraints & claim_hold(f"the instance's claim of {name!r}", storage_class, backed=False)
     cluster = crds.postgresql.v1.Cluster(
         resource_name,
         metadata=k8s.meta.v1.ObjectMetaArgs(name=name, namespace=namespace),
@@ -496,8 +508,11 @@ def database(
             resources=crds.postgresql.v1.ClusterSpecResourcesArgs(
                 requests=dict(resources.requests), limits=dict(resources.limits)
             ),
-            affinity=crds.postgresql.v1.ClusterSpecAffinityArgs(node_affinity=_as_given(node_affinity)),
-            inherited_metadata=crds.postgresql.v1.ClusterSpecInheritedMetadataArgs(labels=labels),
+            affinity=_as_given(_affinity(held)),
+            priority_class_name=held.priority_class_name,
+            inherited_metadata=crds.postgresql.v1.ClusterSpecInheritedMetadataArgs(
+                labels=labels, annotations=dict(writer_annotations(storage_class)) or None
+            ),
             postgresql=_postgresql(instance),
             bootstrap=_bootstrap(
                 dbname,
@@ -551,6 +566,7 @@ def database(
         image=drill_image,
         dbname=dbname,
         server=server,
+        constraints=constraints,
         opts=opts,
     )
     rules = operator_object(
@@ -582,15 +598,26 @@ class _Instance:
     image: str
     size: int
     resources: Resources
-    node_affinity: Mapping[str, Any]
+    constraints: Constraints
+    """The application's constraints, which both instances state; the database's composes its claim's hold in."""
     labels: Mapping[str, str]
     shared_preload_libraries: tuple[str, ...]
     parameters: Mapping[str, str]
 
 
-def _as_given(value: Mapping[str, Any]) -> Any:
+def _as_given(value: Mapping[str, Any] | None) -> Any:
     """Kubernetes' own JSON, which the provider sends as it is, in place of the SDK's type for it."""
-    return dict(value)
+    return None if value is None else dict(value)
+
+
+def _affinity(constraints: Constraints) -> dict[str, Any] | None:
+    """A `Cluster`'s `affinity`, as JSON: the node affinity and the tolerations `constraints` render, none where they render neither."""
+    fields = constraints.pod_fields_json()
+    affinity = {
+        **cast('dict[str, Any]', fields.get('affinity', {})),
+        **({'tolerations': fields['tolerations']} if 'tolerations' in fields else {}),
+    }
+    return affinity or None
 
 
 def _postgresql(instance: _Instance) -> crds.postgresql.v1.ClusterSpecPostgresqlArgs | None:
@@ -817,7 +844,10 @@ def _drill_manifest(name: str, instance: _Instance, *, dbname: str, server: str,
     an archive of its own, and a recovered cluster archiving under the
     database's server name would write over the database's. It takes
     `local-path` whatever the database's class, since its claim is removed
-    with it and that class reclaims `Delete`.
+    with it and that class reclaims `Delete`, and so it writes in
+    `conventions.ETCD_DISK_WRITER`. It states the application's constraints
+    and no hold: its claim is made fresh for each run, so nothing keeps it to
+    a node, and at the held priority a drill would preempt a serving pod.
     """
     postgresql = {
         **(
@@ -839,8 +869,16 @@ def _drill_manifest(name: str, instance: _Instance, *, dbname: str, server: str,
             'imageName': instance.image,
             'storage': {'storageClass': conventions.SC_LOCAL_PATH, 'size': f'{instance.size}Gi'},
             'resources': {'requests': dict(instance.resources.requests), 'limits': dict(instance.resources.limits)},
-            'affinity': {'nodeAffinity': dict(instance.node_affinity)},
-            'inheritedMetadata': {'labels': dict(instance.labels)},
+            **({'affinity': affinity} if (affinity := _affinity(instance.constraints)) is not None else {}),
+            **(
+                {'priorityClassName': instance.constraints.priority_class_name}
+                if instance.constraints.priority_class_name is not None
+                else {}
+            ),
+            'inheritedMetadata': {
+                'labels': dict(instance.labels),
+                'annotations': dict(writer_annotations(conventions.SC_LOCAL_PATH)),
+            },
             **({'postgresql': postgresql} if postgresql else {}),
             'bootstrap': {'recovery': {'source': _DRILL_SOURCE, 'database': dbname, 'owner': dbname}},
             'externalClusters': [
@@ -1073,6 +1111,7 @@ def _drill(
     image: ImagePin,
     dbname: str,
     server: str,
+    constraints: Constraints,
     opts: pulumi.ResourceOptions | None,
 ) -> tuple[k8s.rbac.v1.Role, k8s.batch.v1.CronJob, k8s.core.v1.ConfigMap]:
     """The drill's CronJob, the ConfigMap holding its script and its cluster, the role it runs as, and its admission's parameters."""
@@ -1121,6 +1160,7 @@ def _drill(
     pod = k8s.core.v1.PodSpecArgs(
         service_account_name=job.cronjob,
         restart_policy='Never',
+        **constraints.pod_fields(),
         security_context=k8s.core.v1.PodSecurityContextArgs(
             run_as_user=DRILL_USER,
             run_as_group=DRILL_USER,

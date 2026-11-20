@@ -22,6 +22,41 @@ that says how it is reached, and its component makes one call for it,
     one CNAME to the cluster anchor in its zone, proxied exactly where its
     row is (`public_records`).
 
+**Where an application's pods may run is the scheduler's**, within the
+constraints a fact about nodes or the component's own declaration forces
+(declarative/workloads.md §1, `kluster.lib.k8s.Constraints`). A component
+derives them here, from what it declares and never by naming a site
+(`declared_constraints`), and every pod it renders states them, its
+database's and its claims' movers' included. The home site is derived from:
+
+-   **the requirement that it keeps working while the uplink is down**
+    (`UPLINK_DOWN`), which a component declares of itself (cluster/
+    architecture.md §1.1): with the uplink down the worker reaches no cloud
+    node, so its pods run at home;
+-   **the device its exposure's relay forwards to**
+    (`conventions.routes.Device`), and **a reach of its namespace to a home
+    address** (`kluster.lib.k8s.Reach` to an address on one of
+    `conventions.SITE_NETWORKS`): KubeSpan carries the members' addresses
+    alone, so no cloud node has a route to either;
+-   **a raw port that answers on the worker's own address** (a `Port` whose
+    `internet` side is `SiteForward`): the site's forward and pinhole end at
+    that address, so a pod elsewhere receives none of the port's traffic;
+-   **bulk egress** (`BulkEgress`): every path out of a cloud node leaves
+    through that node's metered egress, the tunnel to the worker included
+    (architecture.md §3.5).
+
+The function takes the exposure the component hands `expose` and the
+namespace it installs into, whose reaches the namespace records, so the
+derivation reads the declarations themselves rather than a second copy of
+them.
+
+An exposure's home side derives nothing: while the uplink is up, a `lan`
+VIP's connection reaches a backend on any node. Beside these, a pod that
+requests the GPU is kept to the node offering it (`GPU_HOLD`), and a claim
+keeps its pod to the claim's node (`components.apps.storage`); neither states
+an affinity, since the scheduler reads both from the pod, and both hold the
+pod at the held priority.
+
 A `Passthrough` row is refused, naming its host: Cilium drops a TLS
 passthrough listener together with the zone's wildcard listener on the same
 port, so a pod that terminates its own TLS is reached at a raw port instead,
@@ -56,6 +91,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
+from ipaddress import IPv4Address, IPv6Address
 from typing import Literal
 
 import pulumi
@@ -67,6 +103,7 @@ from kluster import conventions
 from kluster.components.cilium import InternetPoolMembers
 from kluster.components.cilium.gateways import apex_listener, sharing_annotations
 from kluster.components.dns.record import cname
+from kluster.components.gpu import GPU_RESOURCE
 from kluster.conventions.cluster import POOL_WORKER
 from kluster.conventions.routes import (
     Apex,
@@ -85,8 +122,14 @@ from kluster.conventions.routes import (
     unwrapped,
 )
 from kluster.lib.k8s import (
+    UNCONSTRAINED,
+    ApplicationNamespace,
     Backend,
+    Constraints,
+    Keeper,
+    at_home,
     identity_stripped,
+    kept,
     lb_pool_labels,
     redirect_routes,
     refuse_passthrough,
@@ -97,12 +140,16 @@ from putils import async_output, resolve
 
 __all__ = (
     'CLUSTER_ANCHOR',
+    'GPU_HOLD',
     'LB_IPAM_IPS',
+    'UPLINK_DOWN',
     'WORLD_ENTITY',
     'Backend',
+    'BulkEgress',
     'Exposed',
     'Fronts',
     'PortResources',
+    'declared_constraints',
     'dialed_names',
     'expose',
     'port',
@@ -118,6 +165,78 @@ LB_IPAM_IPS = 'lbipam.cilium.io/ips'
 #: allow admits: on the balancer's front the tunnel carries it to the pod's
 #: node (rfc-008 §4.1), and a home client at a VIP is one.
 WORLD_ENTITY = 'world'
+
+#: The requirement a component declares of itself when it answers a client at
+#: home at its home Gateway or VIP without the home uplink, while the worker
+#: stays up (cluster/architecture.md §1.1). The declaration covers every pod
+#: the component renders, and every component it calls while it answers
+#: declares it in turn.
+UPLINK_DOWN = 'keeps working while the uplink is down, which its component declares (cluster/architecture.md §1.1)'
+
+#: What a pod that requests the GPU states: kept to the one node that offers
+#: it, which the scheduler reads from the request, so no affinity, and the
+#: held priority.
+GPU_HOLD = kept(Keeper.DEVICE, f'requests the GPU ({GPU_RESOURCE}), which one node offers')
+
+
+@dataclass(frozen=True)
+class BulkEgress:
+    """That a component's pods send bulk traffic out of the cluster, and what: they run at home, whose uplink is not metered."""
+
+    reason: str
+
+    def __post_init__(self) -> None:
+        if not self.reason.strip():
+            raise ValueError('bulk egress says what leaves: it takes a reason')
+
+
+def _at_home_address(address: IPv4Address | IPv6Address) -> bool:
+    """Whether `address` is on one of the networks the home gateway serves, which no cloud node has a route to."""
+    return any(address in (network.v4 if address.version == 4 else network.v6) for network in conventions.SITE_NETWORKS)
+
+
+def declared_constraints(
+    exposure: Exposure | None,
+    namespace: ApplicationNamespace,
+    *,
+    uplink_down: bool = False,
+    bulk_egress: BulkEgress | None = None,
+) -> Constraints:
+    """The constraints a component's declarations derive, which every pod it renders states: the home site, or none.
+
+    :param exposure: The exposure the component hands `expose`, whose device
+        its relay forwards to, at a home address, and whose raw ports answer
+        on the worker's own address where their `internet` side is
+        `SiteForward`; `None` for a component that exposes nothing. Its rows'
+        home sides derive nothing.
+    :param namespace: The namespace the component installs into
+        (`kluster.lib.k8s.application_namespace`), whose reaches it
+        declared: one to an address on a network the home gateway serves
+        holds it at home, and one elsewhere states nothing.
+    :param uplink_down: That the component keeps working while the uplink is
+        down (`UPLINK_DOWN`).
+    :param bulk_egress: That its pods send bulk traffic out.
+    """
+    constraints = UNCONSTRAINED
+    if uplink_down:
+        constraints &= at_home(UPLINK_DOWN)
+    device = exposure.device if exposure is not None else None
+    if device is not None:
+        constraints &= at_home(f'relays to the device at {device.address}, a home address no cloud node reaches')
+    for port in exposure.ports if exposure is not None else ():
+        if isinstance(port.internet, SiteForward):
+            constraints &= at_home(
+                f"answers {port.name!r} on the worker's own address, where the site's forward and pinhole end"
+            )
+    for reach in namespace.reaches:
+        if _at_home_address(reach.address):
+            constraints &= at_home(f'reaches {reach.address}, a home address no cloud node reaches: {reach.reason}')
+    if bulk_egress is not None:
+        constraints &= at_home(
+            f'sends bulk traffic out, which leaves a cloud node through its metered egress: {bulk_egress.reason}'
+        )
+    return constraints
+
 
 type _Families = tuple[Literal['IPv4'], Literal['IPv6']] | tuple[Literal['IPv4']]
 _DUAL: _Families = ('IPv4', 'IPv6')

@@ -19,17 +19,27 @@ its own against its census row, with an image pin of the test's.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from ipaddress import IPv4Address, IPv6Address
 from typing import Any
 
 import grimp
-import pulumi_kubernetes as k8s
 import pytest
 import pytest_asyncio
 from mock_monitor import Recorder, declaring, run_with
+from node_selection import CLOUD, NODES, schedulable
 
 from kluster import conventions
-from kluster.components.apps import Backend, Fronts, dialed_names, expose, published_once
+from kluster.components.apps import (
+    GPU_HOLD,
+    UPLINK_DOWN,
+    Backend,
+    BulkEgress,
+    Fronts,
+    declared_constraints,
+    dialed_names,
+    expose,
+    published_once,
+)
 from kluster.components.apps.echo import Echo
 from kluster.components.cilium import InternetPoolMembers
 from kluster.components.cilium.gateways import (
@@ -47,6 +57,7 @@ from kluster.conventions.routes import (
     Apex,
     Balancer,
     Dedicated,
+    Device,
     Direct,
     Exposure,
     Gate,
@@ -62,12 +73,12 @@ from kluster.conventions.routes import (
     Vip,
 )
 from kluster.lib.k8s import (
-    CLOUD_AFFINITY_JSON,
-    CLOUD_POD_AFFINITY,
     PORTAL,
-    WORKER_AFFINITY_JSON,
-    WORKER_POD_AFFINITY,
+    UNCONSTRAINED,
+    Constraints,
     PassthroughRefused,
+    Reach,
+    application_namespace,
     bare_listener,
 )
 from kluster.lib.versions import ImagePin
@@ -574,110 +585,92 @@ def test_a_port_at_no_name_is_dialed_at_none() -> None:
     assert dialed_names(Port('x', 60011, Transports.TCP, internet=Dedicated())) == ()
 
 
-# -- the node pools' placements ---------------------------------------------------
-#
-# The placements are `kluster.lib.k8s`'s, which every component that runs a pod
-# takes, the applications' first among them.
+# -- what a component declares -------------------------------------------------
 
-#: The label Talos puts on every control plane node, with an empty value, and
-#: on no other node: Talos' contract, transcribed
-#: ([`node_label_spec.go` L83–85](https://github.com/siderolabs/talos/blob/v1.13.9/internal/app/machined/pkg/controllers/k8s/node_label_spec.go#L83-L85)).
-TALOS_CONTROL_PLANE_LABEL = 'node-role.kubernetes.io/control-plane'
+#: An address on the IoT VLAN, which the home gateway serves, in each family.
+HOME_ADDRESS = next(conventions.IOT_VLAN.v4.hosts())
+HOME_ADDRESS_V6 = next(conventions.IOT_VLAN.v6.hosts())
 
-#: The nodes, by name, as Talos labels them: each control plane node, which
-#: every cloud node is (nodes.md §4.2), carries `TALOS_CONTROL_PLANE_LABEL`,
-#: and the worker carries no role label at all. Every node carries the
-#: kubelet's own labels.
-NODES: dict[str, dict[str, str]] = {
-    name: {'kubernetes.io/hostname': name, 'kubernetes.io/os': 'linux', **role}
-    for name, role in (
-        *((name, {TALOS_CONTROL_PLANE_LABEL: ''}) for name in conventions.CLOUD_NODES),
-        (conventions.HOMELAB_NODE, {}),
-    )
-}
+#: An address in private space outside the cluster that no home network holds.
+ELSEWHERE = IPv4Address('172.31.200.40')
 
-#: Each pool's nodes, which its placements admit and no other.
-POOL_NODES = {'worker': {conventions.HOMELAB_NODE}, 'cloud': set(conventions.CLOUD_NODES)}
+#: An exposure at home alone: one name on `lan`, one on `media`.
+AT_HOME = Exposure(routes=(Route('gl-links', lan=BARE), Route('sp-spools', media=REWRITE)))
 
-#: Each pool's typed placement, as a pod a component declares takes it.
-POD_AFFINITIES = {'worker': WORKER_POD_AFFINITY, 'cloud': CLOUD_POD_AFFINITY}
-
-#: Each pool's placement as JSON, as a chart's values or an operator's resource take it.
-JSON_AFFINITIES = {'worker': WORKER_AFFINITY_JSON, 'cloud': CLOUD_AFFINITY_JSON}
+#: The same rows, its relay forwarding to a device at home.
+RELAYED = Exposure(routes=(Route('ha-home', lan=REWRITE),), device=Device(HOME_ADDRESS, 443))
 
 
-@pytest_asyncio.fixture(scope='module', loop_scope='module')
-async def placed() -> Recorder:
-    """A pod taking each pool's typed affinity, named for its pool."""
-    monitor = await run_with(Recorder(), stack='apps')
+#: The same, its raw port forwarded by the site to the worker's own address.
+FORWARDED = Exposure(ports=(Port('bt-peer', 51413, Transports.TCP_AND_UDP, internet=SiteForward()),))
+
+
+def reach(address: IPv4Address | IPv6Address) -> Reach:
+    return Reach(address=address, port=443, transports=Transports.TCP, reason='a service there')
+
+
+async def declared(
+    exposure: Exposure | None,
+    *reaches: Reach,
+    uplink_down: bool = False,
+    bulk_egress: BulkEgress | None = None,
+) -> Constraints:
+    """What a component exposed by `exposure`, in a namespace declaring `reaches`, derives."""
+    _ = await run_with(Recorder(), stack='apps')
     async with declaring():
-        for pool, affinity in POD_AFFINITIES.items():
-            _ = k8s.core.v1.Pod(
-                pool,
-                metadata=k8s.meta.v1.ObjectMetaArgs(name=pool),
-                spec=k8s.core.v1.PodSpecArgs(
-                    affinity=affinity,
-                    containers=[k8s.core.v1.ContainerArgs(name='x', image='registry.example.invalid/x')],
-                ),
-            )
-    return monitor
+        namespace = application_namespace('placed-namespace', name='placed', reaches=reaches)
+        return declared_constraints(exposure, namespace, uplink_down=uplink_down, bulk_egress=bulk_egress)
 
 
-def selects(affinity: Mapping[str, Any], labels: Mapping[str, str]) -> bool:
-    """Whether a node carrying `labels` meets the required node affinity, as the scheduler reads it.
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ('exposure', 'reaches', 'uplink_down', 'bulk_egress'),
+    [
+        (AT_HOME, (), True, None),
+        (RELAYED, (), False, None),
+        (AT_HOME, (reach(HOME_ADDRESS),), False, None),
+        (AT_HOME, (reach(HOME_ADDRESS_V6),), False, None),
+        (FORWARDED, (), False, None),
+        (None, (), False, BulkEgress('a torrent client')),
+    ],
+    ids=['uplink down', 'device', 'reach home v4', 'reach home v6', 'site forward', 'bulk egress'],
+)
+async def test_each_declaration_that_needs_the_home_site_admits_no_cloud_node_and_stays_through_an_outage(
+    exposure: Exposure | None, reaches: tuple[Reach, ...], uplink_down: bool, bulk_egress: BulkEgress | None
+) -> None:
+    """A requirement, an address only home routes, the worker's own address, or metered egress: each holds every pod at home, through an outage too."""
+    spec = (await declared(exposure, *reaches, uplink_down=uplink_down, bulk_egress=bulk_egress)).pod_fields_json()
 
-    The terms are ORed and the expressions of a term ANDed; a term with no
-    expression matches no node. The operators are the ones that compare a
-    label's presence and value; a field selector is not read here.
-    """
-    terms = affinity['nodeAffinity']['requiredDuringSchedulingIgnoredDuringExecution']['nodeSelectorTerms']
-
-    def holds(expression: Mapping[str, Any]) -> bool:
-        key, operator = expression['key'], expression['operator']
-        match operator:
-            case 'Exists':
-                return key in labels
-            case 'DoesNotExist':
-                return key not in labels
-            case 'In':
-                return labels.get(key) in expression['values']
-            case 'NotIn':
-                return labels.get(key) not in expression['values']
-            case _:
-                raise AssertionError(f'an operator this reader does not evaluate: {operator}')
-
-    def term_holds(term: Mapping[str, Any]) -> bool:
-        if term.get('matchFields'):
-            raise AssertionError(f'a field selector this reader does not evaluate: {term}')
-        expressions: list[Mapping[str, Any]] = term.get('matchExpressions') or []
-        return bool(expressions) and all(holds(it) for it in expressions)
-
-    return any(term_holds(term) for term in terms)
+    assert schedulable(spec) == set(NODES) - CLOUD
+    assert spec['priorityClassName'] == conventions.HELD_PRIORITY_CLASS
+    assert {it['key'] for it in spec['tolerations']} == {'node.kubernetes.io/unreachable'}
 
 
-def admitted(affinity: Mapping[str, Any]) -> set[str]:
-    """The names of the nodes `affinity` admits."""
-    return {name for name, labels in NODES.items() if selects(affinity, labels)}
+@pytest.mark.asyncio
+async def test_a_component_that_declares_it_keeps_working_while_the_uplink_is_down_says_so() -> None:
+    constraints = await declared(AT_HOME, uplink_down=True)
+
+    assert constraints.site is not None
+    assert UPLINK_DOWN in constraints.site.declarations
 
 
-@pytest.mark.parametrize('pool', sorted(POOL_NODES))
-def test_a_pools_pod_affinity_admits_its_nodes_and_no_other(placed: Recorder, pool: str) -> None:
-    (pod,) = [it.inputs for it in placed.of_type('kubernetes:core/v1:Pod') if it.inputs['metadata']['name'] == pool]
-
-    assert admitted(pod['spec']['affinity']) == POOL_NODES[pool]
-
-
-@pytest.mark.parametrize('pool', sorted(POOL_NODES))
-def test_a_pools_json_affinity_admits_its_nodes_and_no_other(pool: str) -> None:
-    assert admitted(JSON_AFFINITIES[pool]) == POOL_NODES[pool]
+@pytest.mark.asyncio
+async def test_an_exposure_at_home_and_a_reach_off_the_home_networks_derive_nothing() -> None:
+    """An audience on `lan` and `media` holds no pod, and a reach elsewhere in private space is no home address."""
+    assert await declared(AT_HOME) == UNCONSTRAINED
+    assert await declared(AT_HOME, reach(ELSEWHERE)) == UNCONSTRAINED
 
 
-@pytest.mark.parametrize('term', [{}, {'matchExpressions': []}])
-def test_an_empty_node_selector_term_admits_no_node(term: Mapping[str, Any]) -> None:
-    """Kubernetes reads a term with no requirement as matching nothing, and the reader above does too."""
-    affinity = {'nodeAffinity': {'requiredDuringSchedulingIgnoredDuringExecution': {'nodeSelectorTerms': [term]}}}
+def test_bulk_egress_says_what_leaves() -> None:
+    with pytest.raises(ValueError, match='reason'):
+        _ = BulkEgress(' ')
 
-    assert admitted(affinity) == set()
+
+def test_a_pod_that_requests_the_gpu_is_held_with_no_affinity_of_its_own() -> None:
+    """The request already keeps it to the node offering the device, which the scheduler reads from the pod."""
+    spec = GPU_HOLD.pod_fields_json()
+
+    assert spec == {'priorityClassName': conventions.HELD_PRIORITY_CLASS}
 
 
 def test_the_k8s_base_program_reaches_neither_the_application_base_nor_cloudflare() -> None:

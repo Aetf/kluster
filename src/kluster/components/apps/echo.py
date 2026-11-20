@@ -12,7 +12,8 @@ The image is `traefik/whoami`, pinned as `versions:image-echo`. Its image
 config names no user, so the pod states a numeric one that is not root, as
 the namespace's `restricted` level requires, and the server listens on a port
 above 1024, which needs no capability. It writes nothing, so its root
-filesystem is read-only.
+filesystem is read-only. It declares nothing that holds it to a site, so it
+is a free pod (`kluster.lib.k8s.UNCONSTRAINED`).
 
 The component, its row, its pin and its tests go at Wave A1's land, when the
 first public application takes over as the front door's proof (rfc-008 slice
@@ -26,7 +27,7 @@ from collections.abc import Mapping
 import pulumi
 import pulumi_kubernetes as k8s
 
-from kluster.components.apps import Backend, Exposed, Fronts, expose
+from kluster.components.apps import Backend, Exposed, Fronts, declared_constraints, expose
 from kluster.conventions.routes import Exposure
 from kluster.lib.k8s import ApplicationNamespace, application_namespace
 from kluster.lib.versions import ImagePin
@@ -98,6 +99,7 @@ class Echo(Component, pulumi_type='kluster:apps:Echo'):
         super().__init__(name, opts=opts)
 
         self.namespace = application_namespace(f'{name}-namespace', name=NAME, opts=self.child_opts())
+        self.constraints = declared_constraints(exposure, self.namespace)
         # Read off the namespace, so each object in it waits for it.
         namespace = self.namespace.namespace.metadata.name
 
@@ -112,6 +114,7 @@ class Echo(Component, pulumi_type='kluster:apps:Echo'):
                     spec=k8s.core.v1.PodSpecArgs(
                         # It speaks HTTP to its clients alone, and never Kubernetes.
                         automount_service_account_token=False,
+                        **self.constraints.pod_fields(),
                         security_context=k8s.core.v1.PodSecurityContextArgs(
                             run_as_non_root=True,
                             run_as_user=ECHO_USER,
