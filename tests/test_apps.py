@@ -21,14 +21,16 @@ from __future__ import annotations
 
 from typing import Any
 
+import pulumi_kubernetes as k8s
 import pytest
 import pytest_asyncio
 from mock_monitor import Recorder, declaring, run_with
 
 from kluster import conventions
-from kluster.components.apps import Backend, Fronts, dialed_names, expose, published_once
+from kluster.components.apps import WORKER_POD_AFFINITY, Backend, Fronts, dialed_names, expose, published_once
 from kluster.components.apps.echo import Echo
 from kluster.components.cilium import InternetPoolMembers
+from kluster.components.cilium.bgp import CONTROL_PLANE_LABEL
 from kluster.components.cilium.gateways import (
     SHARING_KEY,
     Gateways,
@@ -513,6 +515,58 @@ def test_a_balancer_front_with_no_host_is_dialed_at_its_home_sides_name() -> Non
 
 def test_a_port_at_no_name_is_dialed_at_none() -> None:
     assert dialed_names(Port('x', 60011, Transports.TCP, internet=Dedicated())) == ()
+
+
+# -- the worker's affinity -------------------------------------------------------
+
+
+@pytest_asyncio.fixture(scope='module', loop_scope='module')
+async def on_the_worker() -> Recorder:
+    """A pod taking the worker's affinity."""
+    monitor = await run_with(Recorder(), stack='apps')
+    async with declaring():
+        _ = k8s.core.v1.Pod(
+            'on-the-worker',
+            spec=k8s.core.v1.PodSpecArgs(
+                affinity=WORKER_POD_AFFINITY,
+                containers=[k8s.core.v1.ContainerArgs(name='x', image='registry.example.invalid/x')],
+            ),
+        )
+    return monitor
+
+
+def selects(affinity: dict[str, Any], labels: dict[str, str]) -> bool:
+    """Whether a node carrying `labels` meets the required node affinity, as the scheduler reads it.
+
+    The terms are ORed and the expressions of a term ANDed; the operators are
+    the ones that compare a label's presence and value.
+    """
+    terms = affinity['nodeAffinity']['requiredDuringSchedulingIgnoredDuringExecution']['nodeSelectorTerms']
+
+    def holds(expression: dict[str, Any]) -> bool:
+        key, operator = expression['key'], expression['operator']
+        match operator:
+            case 'Exists':
+                return key in labels
+            case 'DoesNotExist':
+                return key not in labels
+            case 'In':
+                return labels.get(key) in expression['values']
+            case 'NotIn':
+                return labels.get(key) not in expression['values']
+            case _:
+                raise AssertionError(f'an operator this reader does not evaluate: {operator}')
+
+    return any(all(holds(it) for it in term['matchExpressions']) for term in terms)
+
+
+def test_the_workers_affinity_admits_the_worker_and_no_control_plane_node(on_the_worker: Recorder) -> None:
+    """Talos labels each control-plane node with `CONTROL_PLANE_LABEL` and the worker with no role of that kind."""
+    (pod,) = [it.inputs for it in on_the_worker.of_type('kubernetes:core/v1:Pod')]
+    affinity = pod['spec']['affinity']
+
+    assert selects(affinity, {'kubernetes.io/hostname': 'worker'})
+    assert not selects(affinity, {'kubernetes.io/hostname': 'cp-1', CONTROL_PLANE_LABEL: ''})
 
 
 # -- the public records ----------------------------------------------------------
