@@ -244,10 +244,28 @@ snapshots, the kubelet's and Talos' logs, every cloud-pool claim
     `VolumeThrottledIOs`, which OCI emits for every boot volume
     ([Block Volume metrics](https://docs.oracle.com/en-us/iaas/Content/Block/References/volumemetrics-reference.htm)),
     stays 0, and a peak is shaped to the write rate the reproduction
-    below finds safe beside etcd, 12 MB/s. Two things set a peak's
-    size: how many images the kubelet pulls at once, and how many
-    objects an apply creates at once; the shaping below bounds both.
+    below finds safe beside etcd, 12 MB/s. Three things set a peak's
+    size: how many images the kubelet pulls at once, how many objects
+    an apply creates at once, and the writes of the containers in the
+    `blockio` class. The shaping below bounds the first two, and rule 5
+    the third.
 4.  **hath's cache I/O is on its own volume**, outside this budget.
+5.  **Rule: an application's writes to the boot volume run in
+    containerd's `blockio` class `etcd-disk-writer`**, which caps each
+    container's write bandwidth and write operations on every whole disk
+    of a control plane, the system disk among them (`components.talos`). The class is on every node, and a pod runs
+    in it when its component declares the class. On 2026-11-20 no pod
+    does: Aetf/kluster-ops#78's slices P2a and P2b put the pods with a
+    `local-path` claim in it. The capped containers that could all be
+    placed on one control plane, those held at home left out, times the
+    class's rates stay within 12 MB/s and 300 write operations a second;
+    planning alone holds that sum. The class fails open on a device that
+    matches nothing and on a rate that does not parse, which a live read
+    of a pod's `io.max` catches on the class's first apply and nothing
+    catches after. VolSync's movers carry no class and are uncapped. The
+    300 is rule 2's steady figure until a reading of
+    Aetf/kluster-ops#785's rig beside random writes in the class
+    replaces it.
 
 **What the readings show** (2026-11-17, on the cluster a from-scratch
 rebuild brought up):
@@ -353,6 +371,64 @@ each followed by `fdatasync`.
     (Aetf/kluster-ops#785); if it does not, buying disk performance is
     the operator's decision on that issue.
 -   **A worker's pulls are not bounded**: its disk holds no etcd.
+
+**The `blockio` class** holds the writes of each container in it to the
+rate rule 5 sets. Kubernetes schedules no disk I/O, so the cap is the runtime's:
+
+-   **What enforces it.** `physical` writes the class file
+    `/var/lib/blockio/classes.yaml` on every node and a part of
+    containerd's configuration that has containerd load it
+    (`blockio_patch`, `components.talos`; declarative/physical.md §2).
+    containerd puts a container in the class by its pod's
+    `blockio.resources.beta.kubernetes.io/pod` annotation, and `runc`
+    writes the class's caps to that container's own `io.max`. On a
+    control plane the class caps every whole disk, `/dev/sd[a-z]`: the
+    system disk is `sda` only while the kernel finds it first, and the
+    control plane holding hath's cache volume has a second disk. Capping
+    that one too stays within rule 5, since only a container in the
+    class is capped and the cache volume's pod is in none. The pattern
+    names no partition, such as `sda4`, which `io.max` refuses. On the
+    worker it is empty, so a pod in it starts there uncapped: the
+    worker's disk holds no etcd. The kernel throttles a buffered write
+    when it is written back, so a pod's page cache does not take it past
+    the cap.
+-   **Rule: the plan bounds how many containers are capped.** Each
+    container gets its own `io.max`, and nothing sets one on a pod's
+    group or on `/kubepods`, so a node's figure cannot be divided at
+    run time among the writers the scheduler happens to place there.
+    The figure holds as the rate per container times every capped
+    container that could be placed on one control plane: counted across
+    the cluster, since the scheduler may stack them on one node; each
+    container of a pod counted, since the pod's annotation caps each;
+    containers held at home left out, since they never run on a control
+    plane. A writer that would carry the product past the figures lowers
+    every container's rate or keeps its data elsewhere.
+-   **The rates are 0.8 MB/s and 20 write operations a second per
+    container** (`conventions.ETCD_DISK_WRITER`), which 15 containers
+    fit. Write operations are capped as well as bandwidth because the
+    reproduction's random 4 KiB writes, 2,924 a second at only 11.4
+    MB/s, under the bandwidth figure, took the probe's p99 to 34.9 ms,
+    past rule 1's 10 ms.
+-   **What it costs.** A capped writer is slow on a control plane: at 20
+    write operations a second a database commits on the order of ten
+    transactions a second, and 1 GiB written at 0.8 MB/s takes about 22
+    minutes. Talos writes the class file at boot alone, so a change to a
+    rate reboots every control plane, one at a time, and a change to the
+    class's name or to its part of containerd's configuration reboots
+    every node. And `io.max` bounds the container's own I/O alone: XFS's
+    log, the container logs containerd writes, and the `emptyDir` and
+    writable layer of a pod outside the class are not capped. A writer
+    among them that breaks rule 1 fires etcd's fsync alerts,
+    `EtcdWalFsyncSlow` and `EtcdDiskStall`
+    (`components.monitoring.rules`).
+
+**Unguarded:**
+
+-   Nothing but the plan holds the capped containers' rates within the
+    figures.
+-   A class that fails open is caught by a live read of a pod's
+    `io.max` on its first apply, and by nothing after.
+-   VolSync's movers are uncapped.
 
 ## 2. The deciding factor is egress, not compute
 

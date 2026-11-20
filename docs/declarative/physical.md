@@ -263,7 +263,8 @@ machine_secrets
     control planes, **one image pull at a time**, because the images
     unpack onto the disk etcd syncs to and a burst of unpacks stretches
     its syncs into seconds (cluster/nodes.md §1.2, which sizes the
-    bound); on the control
+    bound); on every node, **containerd's `blockio` class**, which caps
+    a pod in it on the disk etcd shares (an item below); on the control
     planes, **Talos API access from Kubernetes** for the etcd snapshot's
     role alone (an item below); the **Talos ingress firewall** (the next
     item); kube-apiserver `anonymous-auth=false` pinned and audit
@@ -340,6 +341,38 @@ machine_secrets
     once `physical` has applied the field. v1.14 moves the field into a
     document of its own, `KubeTalosAPIAccessConfig`, with the rest of
     the configuration contract (Aetf/kluster-ops#475).
+-   **Every node carries containerd's `blockio` class
+    `etcd-disk-writer`** (`conventions.ETCD_DISK_WRITER`;
+    cluster/nodes.md §1.2, which sizes it), as two `machine.files`
+    entries (`blockio_patch`). One is the class file,
+    `/var/lib/blockio/classes.yaml`, in the format of `goresctrl`, the
+    library containerd loads it with: on a control plane the class caps
+    writes to every whole disk, `/dev/sd[a-z]`, at the class's write
+    bandwidth and write operations, and on the worker it is empty,
+    because the worker's disk holds no etcd. The pattern reaches the
+    system disk whichever order the kernel finds a control plane's disks
+    in, and names no partition, which `io.max` refuses. The other is a
+    part of containerd's configuration,
+    `/etc/cri/conf.d/20-customization.part`, which names that file as
+    containerd's `blockio_config_file`. Talos merges it into the
+    configuration containerd imports through its own `/etc` file
+    resource rather than as a user file under `/var`, and reads a part
+    at that one path alone, so the part holds every setting the cluster
+    gives containerd. A file Talos creates anywhere else must be under
+    `/var`. containerd loads the class when it starts, and a pod is in
+    it by its `blockio.resources.beta.kubernetes.io/pod` annotation. A
+    pod naming a class its node lacks is refused at creation, which is
+    why every node carries it. Talos writes `machine.files` at boot
+    alone, and the field is not among those it applies immediately, so
+    an apply that changes either file is staged ("Reboot-requiring
+    config changes" below), and each node takes the change when it
+    reboots. A change to a rate reboots every control plane, one at a
+    time, since the worker's class is empty whatever the rates; a change
+    to the class's name or to that part of containerd's configuration
+    reboots every node. The class fails open on a device that matches
+    nothing and on a rate that does not parse, which a live read of a
+    pod's `io.max` shows, and otherwise only a warning in containerd's
+    log.
 -   **The Talos ingress firewall is the only filter on ports.** It is a
     `NetworkDefaultActionConfig` of `block` plus a `NetworkRuleConfig`
     per opening, and the subnet in front of it narrows no port (§1;
@@ -514,10 +547,12 @@ machine_secrets
     for it: the node labels as `machine.nodeLabels`, the kubelet's
     `systemReserved`, eviction threshold and pull bound as
     `machine.kubelet.extraConfig`, and the API server's requests as
-    `cluster.apiServer.resources` among it.
+    `cluster.apiServer.resources` among it, and the `blockio` class's
+    files as `machine.files`.
     A change to `machine.kubelet`, `machine.nodeLabels` or `cluster`
     applies to a running node without a reboot, since Talos applies those
-    fields immediately (`CanApplyImmediate`). The kubelet restarts under
+    fields immediately (`CanApplyImmediate`); a change to `machine.files`
+    waits for one. The kubelet restarts under
     a changed `machine.kubelet`, and a changed `cluster.apiServer`
     replaces the API server's static pod on each control plane. The
     applies wait for one another's acceptance and not for the API server,

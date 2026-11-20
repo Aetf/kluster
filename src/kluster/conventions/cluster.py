@@ -1,9 +1,10 @@
-"""Inside the cluster: its address ranges, its ports, its mesh's MTU, its routing session, its pools, its nodes' sites, its namespaces, its metrics history, its storage classes, the renewal of its admin credential."""
+"""Inside the cluster: its address ranges, its ports, its mesh's MTU, its routing session, its pools, its nodes' sites, its namespaces, its metrics history, its storage classes, its blockio class, the renewal of its admin credential."""
 
 from __future__ import annotations
 
 import datetime as dt
 from collections.abc import Mapping
+from dataclasses import dataclass
 from enum import Enum, StrEnum
 from ipaddress import IPv4Network, IPv6Network
 from types import MappingProxyType
@@ -363,3 +364,57 @@ LOCAL_PATH_VOLUME = 'storage'
 #: pointed at: Talos mounts a user volume at its root under the volume's
 #: name. The StorageClass above is k8s-base's.
 LOCAL_PATH_ROOT = f'{USER_VOLUME_ROOT}/{LOCAL_PATH_VOLUME}'
+
+
+@dataclass(frozen=True, kw_only=True)
+class BlockioClass:
+    """A containerd blockio class: the name a pod selects it by, and the write caps it puts on each of the pod's containers.
+
+    The machine configuration declares the class on every node
+    (`components.talos.blockio_patch`), with its caps on the disks the class
+    names there. A pod is in it by its
+    `blockio.resources.beta.kubernetes.io/pod` annotation, which containerd
+    reads when it creates each container, and each container gets the caps
+    in its own control group's `io.max`. Nothing caps a pod's group as a
+    whole, or `/kubepods`.
+    """
+
+    name: str
+    """The class's name, which the class file and a pod's annotation both carry."""
+    write_bps: int
+    """How many bytes a second each container in the class writes to a capped disk."""
+    write_iops: int
+    """How many write operations a second each container in the class issues to a capped disk."""
+
+    def __post_init__(self) -> None:
+        """Refuse a rate that is not positive.
+
+        goresctrl drops a cap whose rate is negative with a warning, leaving
+        the class registered without it, and a cap of zero stops every write.
+        """
+        for field, rate in (('write_bps', self.write_bps), ('write_iops', self.write_iops)):
+            if rate <= 0:
+                raise ValueError(f'{self.name}: {field} is {rate}, and a cap is a positive rate')
+
+
+#: The class for an application's writes to the disk etcd shares
+#: (nodes.md §1.2). A pod is in it when its component declares the class.
+#: On a control plane it caps every whole disk, the system disk among them;
+#: the worker holds no etcd and carries it empty, so a pod in it starts
+#: there uncapped.
+#:
+#: The rates are the figures nodes.md §1.2 holds a control plane's other
+#: writers to, divided among the containers that could all be placed on one
+#: control plane. 12 MB/s is the peak rate the volume takes beside etcd
+#: (rule 3): a writer held there kept an etcd-shaped `fdatasync` at a p99 of
+#: 1.6 ms (Aetf/kluster-ops#785). 300 write operations a second is rule 2's
+#: steady figure, the operations figure until a reading beside random writes
+#: in this class replaces it. The cap is on operations as well as bandwidth
+#: because the same reproduction's random 4 KiB writes, 2,924 a second at
+#: only 11.4 MB/s, took the probe's p99 to 34.9 ms, past rule 1's 10 ms. At
+#: 800,000 bytes and 20 operations a second, 15 containers fit both
+#: figures. Planning alone holds the count (nodes.md §1.2): a writer that
+#: would carry it past the figures lowers both rates, which reboots every
+#: control plane (`components.talos.blockio_patch`), or keeps its data
+#: elsewhere.
+ETCD_DISK_WRITER = BlockioClass(name='etcd-disk-writer', write_bps=800_000, write_iops=20)
