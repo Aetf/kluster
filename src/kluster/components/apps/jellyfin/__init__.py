@@ -328,6 +328,7 @@ class Jellyfin(Component, pulumi_type='kluster:apps:Jellyfin'):
             namespace=NAME,
             uid=USER,
             writer_key=writer_key,
+            placement=WORKER_POD_AFFINITY,
             opts=in_namespace,
         )
         self.derived = nas_claim(
@@ -390,7 +391,7 @@ class Jellyfin(Component, pulumi_type='kluster:apps:Jellyfin'):
             # `JELLYFIN_*` variables, the prefix the server reads its
             # configuration from.
             enable_service_links=False,
-            affinity=WORKER_POD_AFFINITY,
+            affinity=self.data.placement,
             security_context=k8s.core.v1.PodSecurityContextArgs(
                 run_as_non_root=True,
                 run_as_user=USER,

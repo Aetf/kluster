@@ -311,8 +311,8 @@ def _data_volume(claim_name: pulumi.Input[str]) -> k8s.core.v1.VolumeArgs:
     )
 
 
-def _server(image: ImagePin, oidc_secret: pulumi.Input[str], claim_name: pulumi.Input[str]) -> k8s.core.v1.PodSpecArgs:
-    """The server's pod: continuwuity, reading its configuration, the client's secret and its claim."""
+def _server(image: ImagePin, oidc_secret: pulumi.Input[str], data: Claim) -> k8s.core.v1.PodSpecArgs:
+    """The server's pod: continuwuity, reading its configuration, the client's secret and its claim, placed as the claim records."""
     probe = k8s.core.v1.HTTPGetActionArgs(path='/_matrix/federation/v1/version', port='http')
     container = k8s.core.v1.ContainerArgs(
         name=NAME,
@@ -352,7 +352,7 @@ def _server(image: ImagePin, oidc_secret: pulumi.Input[str], claim_name: pulumi.
         # It speaks Matrix and OpenID Connect, and never Kubernetes.
         automount_service_account_token=False,
         enable_service_links=False,
-        affinity=_CLOUD_AFFINITY,
+        affinity=data.placement,
         security_context=_POD_SECURITY,
         containers=[container],
         volumes=[
@@ -366,7 +366,7 @@ def _server(image: ImagePin, oidc_secret: pulumi.Input[str], claim_name: pulumi.
                     default_mode=0o440,
                 ),
             ),
-            _data_volume(claim_name),
+            _data_volume(data.claim.metadata.name),
         ],
     )
 
@@ -389,10 +389,8 @@ def _server(image: ImagePin, oidc_secret: pulumi.Input[str], claim_name: pulumi.
 # image that has `tar`, mounting the claim where the server does. A second
 # merge, without `receiver`, starts the server on what was streamed. The
 # receiver is a running pod with the server's placement, never zero replicas,
-# because the claim binds to the node its first consumer is scheduled on, and
-# its backup's mover, the first consumer otherwise, selects no node. It runs as
-# the server's user, so what it extracts is the server's to write, whoever
-# owned it before.
+# since the land execs the stream into it. It runs as the server's user, so
+# what it extracts is the server's to write, whoever owned it before.
 #
 # The layer is everything in this module and in `tests/test_apps_matrix.py`
 # that names the receiver. Today that is the `receiver` parameter of `Matrix`,
@@ -410,7 +408,7 @@ _RECEIVER_COMMAND = ('sleep', 'infinity')
 RECEIVE = ('tar', '-x', '--strip-components=1', '-C', DATA)
 
 
-def _receiver(image: ImagePin, claim_name: pulumi.Input[str]) -> k8s.core.v1.PodSpecArgs:
+def _receiver(image: ImagePin, data: Claim) -> k8s.core.v1.PodSpecArgs:
     """The receiver's pod: an idle container of `image`, mounting the claim at `DATA`, placed and run as the server is."""
     container = k8s.core.v1.ContainerArgs(
         name='receiver',
@@ -426,10 +424,10 @@ def _receiver(image: ImagePin, claim_name: pulumi.Input[str]) -> k8s.core.v1.Pod
     return k8s.core.v1.PodSpecArgs(
         automount_service_account_token=False,
         enable_service_links=False,
-        affinity=_CLOUD_AFFINITY,
+        affinity=data.placement,
         security_context=_POD_SECURITY,
         containers=[container],
-        volumes=[_data_volume(claim_name)],
+        volumes=[_data_volume(data.claim.metadata.name)],
     )
 
 
@@ -501,10 +499,10 @@ class Matrix(Component, pulumi_type='kluster:apps:Matrix'):
             namespace=NAMESPACE,
             uid=MATRIX_USER,
             writer_key=writer_key,
+            placement=_CLOUD_AFFINITY,
             protect=True,
             opts=behind,
         )
-        claim_name = self.data.claim.metadata.name
         self.deployment = k8s.apps.v1.Deployment(
             name,
             metadata=k8s.meta.v1.ObjectMetaArgs(
@@ -522,9 +520,9 @@ class Matrix(Component, pulumi_type='kluster:apps:Matrix'):
                 selector=k8s.meta.v1.LabelSelectorArgs(match_labels=dict(LABELS)),
                 template=k8s.core.v1.PodTemplateSpecArgs(
                     metadata=k8s.meta.v1.ObjectMetaArgs(labels=dict(LABELS)),
-                    spec=_server(image, self.oidc.metadata.name, claim_name)
+                    spec=_server(image, self.oidc.metadata.name, self.data)
                     if receiver is None
-                    else _receiver(receiver, claim_name),
+                    else _receiver(receiver, self.data),
                 ),
             ),
             opts=self.child_opts(),

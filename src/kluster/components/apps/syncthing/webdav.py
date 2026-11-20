@@ -5,7 +5,8 @@ syncthing folder and live in a claim backed up under `STANDARD`, and, at
 `STUFF_MOUNT` under them, the `Stuff` folder syncthing keeps on the NAS, which
 the server writes to as a peer of the instance would. The folder is the
 export's `Sync/Stuff`, so the server runs on the worker beside the instance
-(`nas_claim`), and what it writes there the instance finds at its next scan.
+(`nas_claim`), which its pod's affinity states and its claim's mover follows
+(`claim`), and what it writes there the instance finds at its next scan.
 
 **The gate is all that guards it.** The server allows every operation to every
 client and checks no credential: its route's `internet` side asks the portal
@@ -27,7 +28,7 @@ from collections.abc import Mapping
 import pulumi
 import pulumi_kubernetes as k8s
 
-from kluster.components.apps import Backend, Exposed, Fronts, expose
+from kluster.components.apps import WORKER_POD_AFFINITY, Backend, Exposed, Fronts, expose
 from kluster.components.apps.storage import Claim, NasClaim, claim, nas_claim
 from kluster.components.apps.syncthing import SYNC
 from kluster.conventions.backup import STANDARD
@@ -109,6 +110,7 @@ class WebDav(Component, pulumi_type='kluster:apps:WebDav'):
             namespace=NAME,
             uid=USER,
             writer_key=writer_key,
+            placement=WORKER_POD_AFFINITY,
             opts=in_namespace,
         )
         self.stuff = nas_claim(
@@ -128,6 +130,7 @@ class WebDav(Component, pulumi_type='kluster:apps:WebDav'):
                     spec=k8s.core.v1.PodSpecArgs(
                         # It speaks HTTP to its clients alone, and never Kubernetes.
                         automount_service_account_token=False,
+                        affinity=self.files.placement,
                         security_context=k8s.core.v1.PodSecurityContextArgs(
                             run_as_non_root=True,
                             run_as_user=USER,

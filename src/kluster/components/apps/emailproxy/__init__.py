@@ -257,6 +257,7 @@ class EmailProxy(Component, pulumi_type='kluster:apps:EmailProxy'):
             namespace=NAMESPACE,
             uid=USER,
             writer_key=writer_key,
+            placement=WORKER_POD_AFFINITY,
             opts=in_namespace,
         )
 
@@ -300,7 +301,7 @@ class EmailProxy(Component, pulumi_type='kluster:apps:EmailProxy'):
         return k8s.core.v1.PodSpecArgs(
             # It speaks IMAP to its clients and to Gmail alone, and never Kubernetes.
             automount_service_account_token=False,
-            affinity=WORKER_POD_AFFINITY,
+            affinity=self.cache.placement,
             security_context=k8s.core.v1.PodSecurityContextArgs(
                 run_as_non_root=True,
                 run_as_user=USER,
