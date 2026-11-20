@@ -42,7 +42,8 @@ its pod mounts no Kubernetes token.
 other workload can mount the bundle. The job runs on the control planes, as
 the etcd snapshot does: it goes on through an outage of the home site, its
 traffic stays in the cloud, and only the control planes' kubelets are served
-the bundle.
+the bundle. Its pod carries CPU and memory limits, as anything the cloud pool
+may hold does (declarative/workloads.md §1).
 """
 
 from __future__ import annotations
@@ -62,6 +63,10 @@ from putils import Component
 
 __all__ = (
     'BUNDLE_DIR',
+    'CPU',
+    'CPU_REQUEST',
+    'MEMORY',
+    'MEMORY_REQUEST',
     'PROGRAM',
     'PROGRAM_CONFIGMAP',
     'PROGRAM_DIR',
@@ -105,6 +110,24 @@ SETTINGS = state.table_settings().dumps()
 UPKEEP_USER = 65534
 _BUNDLE_MODE = 0o440
 _PROGRAM_MODE = 0o444
+
+#: The pod's memory. The container's working set peaked at 17.9 MiB over the
+#: seven days to 2026-11-19: the interpreter, and one `psql` at a time. What
+#: the program reads back is a key and a size per row of the state table, so
+#: it grows with the table's rows alone. The request is the peak with room
+#: above it, and the limit more than three times the peak.
+MEMORY_REQUEST = '32Mi'
+MEMORY = '64Mi'
+
+#: The pod's CPU. A run is shorter than the metrics' scrape interval, so no
+#: rate of it has been read; the most CPU time a scrape saw a run hold is
+#: 0.45 s, a lower bound on a run's. What it does is start the interpreter and
+#: run a handful of `psql` statements, each over a TLS connection of its own.
+#: At the limit, a quarter of a core, ten times that CPU time takes under 20
+#: seconds against the run's deadline of 15 minutes
+#: (`conventions.schedule.STATE_UPKEEP`).
+CPU_REQUEST = '50m'
+CPU = '250m'
 
 
 def cronjob_spec(*, image: ImagePin) -> k8s.batch.v1.CronJobSpecArgs:
@@ -160,6 +183,10 @@ def _pod(image: ImagePin) -> k8s.core.v1.PodSpecArgs:
                     f'{PROGRAM_DIR}/{SETTINGS_FILE}',
                     BUNDLE_DIR,
                 ],
+                resources=k8s.core.v1.ResourceRequirementsArgs(
+                    requests={'cpu': CPU_REQUEST, 'memory': MEMORY_REQUEST},
+                    limits={'cpu': CPU, 'memory': MEMORY},
+                ),
                 security_context=k8s.core.v1.SecurityContextArgs(
                     allow_privilege_escalation=False,
                     read_only_root_filesystem=True,

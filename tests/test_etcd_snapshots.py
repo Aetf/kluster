@@ -18,11 +18,13 @@ import pulumi
 import pytest
 import pytest_asyncio
 from k8s_base_installation import Run, applied
+from k8s_quantity import MIB, quantity
 
 from kluster import conventions
 from kluster.components import talos
 from kluster.components.backup import etcd_scope
 from kluster.components.backup.etcd import (
+    PROCESS_MEMORY_MIB,
     SERVICE_ACCOUNT,
     TALOS_SECRET_DIR,
     TALOS_SERVICE_ACCOUNT,
@@ -180,6 +182,37 @@ def test_every_directory_the_run_holds_in_memory_is_bounded(applied: Run) -> Non
     assert in_memory
     for volume in in_memory:
         assert volume['emptyDir'].get('sizeLimit'), volume['name']
+
+
+def test_every_container_requests_and_is_limited_in_cpu_and_memory(applied: Run) -> None:
+    """The pod may be scheduled to the cloud pool, where etcd shares the cores (workloads.md §1)."""
+    pod = _pod(applied)
+    containers = [*pod.get('initContainers', []), *pod['containers']]
+
+    assert containers
+    for container in containers:
+        resources = container['resources']
+        for resource in ('cpu', 'memory'):
+            request, limit = resources['requests'][resource], resources['limits'][resource]
+            assert quantity(request) <= quantity(limit), (container['name'], resource)
+
+
+def test_the_memory_limit_holds_every_in_memory_directory_and_the_processes_share_above_it(applied: Run) -> None:
+    """A memory-backed directory is charged to the pod, so a database that outgrows it fails naming the directory.
+
+    A limit under the directories' bounds and the processes' share would end
+    such a run as an out-of-memory kill, which names nothing, rather than as
+    `no space left on device`.
+    """
+    pod = _pod(applied)
+    (container,) = pod['containers']
+    in_memory = sum(
+        quantity(it['emptyDir']['sizeLimit'])
+        for it in pod['volumes']
+        if it.get('emptyDir', {}).get('medium') == 'Memory'
+    )
+
+    assert quantity(container['resources']['limits']['memory']) >= in_memory + PROCESS_MEMORY_MIB * MIB
 
 
 def test_each_snapshot_is_encrypted_to_every_escrowed_generation_on_file_and_then_to_the_restore_verify(

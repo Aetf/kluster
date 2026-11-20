@@ -18,6 +18,7 @@ from typing import Any
 
 import pytest_asyncio
 from k8s_base_installation import SEALED, Run, applied
+from k8s_quantity import quantity
 
 from kluster import conventions
 from kluster.conventions.schedule import STATE_UPKEEP
@@ -145,3 +146,16 @@ def test_the_bundle_is_the_rows_sealed_secret_in_the_jobs_namespace(applied: Run
     assert BUNDLE.namespace == STATE_UPKEEP.namespace
     assert mounted == [BUNDLE.name]
     assert secret['spec']['encryptedData'] == SEALED[BUNDLE.name]
+
+
+def test_every_container_requests_and_is_limited_in_cpu_and_memory(applied: Run) -> None:
+    """The pod may be scheduled to the cloud pool, where etcd shares the cores (workloads.md §1)."""
+    pod, _ = _container(applied)
+    containers = [*pod.get('initContainers', []), *pod['containers']]
+
+    assert containers
+    for container in containers:
+        resources = container['resources']
+        for resource in ('cpu', 'memory'):
+            request, limit = resources['requests'][resource], resources['limits'][resource]
+            assert quantity(request) <= quantity(limit), (container['name'], resource)

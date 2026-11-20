@@ -2010,7 +2010,14 @@ nothing from the ones that failed.
    lists the runs from the oldest, each named `etcd-snapshot-<n>`, and
    `mise x -- kubectl -n etcd-backup logs job/<run>` ends in the one
    line a failed run writes, which names the step that failed. The steps
-   below go by that line's opening words.
+   below go by that line's opening words. A run the kernel stopped writes
+   no such line, and
+   `mise x -- kubectl -n etcd-backup get pods -l job-name=<run> -o jsonpath='{.items[*].status.containerStatuses[*].state.terminated.reason}'`
+   reads `OOMKilled`: the processes outgrew their term above the working
+   directory (`components.backup.etcd.PROCESS_MEMORY_MIB`), which `MEMORY`
+   adds to the directory's bound. Raise the term, and the limit follows
+   it. A directory that filled reads `no space left on device` instead
+   (step 9).
 3. **A pod that never started.** It waits on what it mounts or reads:
    the Secret `etcd-snapshot`, which Talos writes for the
    `ServiceAccount` of that name; or the writer key's Secret,
@@ -2119,6 +2126,14 @@ restore.
    line a failed run writes, `FAILED <step>: …`, which names the object.
    The steps below go by that step. A run that passed ends in
    `ok: <object>, taken <n> minutes ago, at revision <r> with <k> keys, …`.
+   A run the kernel stopped writes no `FAILED` line, and
+   `mise x -- kubectl -n etcd-backup get pods -l job-name=<run> -o jsonpath='{.items[*].status.containerStatuses[*].state.terminated.reason}'`
+   reads `OOMKilled`: the processes, the scratch etcd's above all,
+   outgrew their term above the working directory
+   (`components.backup.etcd.VERIFY_PROCESS_MEMORY_MIB`), which
+   `VERIFY_MEMORY` adds to the directory's bound. Raise the term, and the
+   limit follows it. A directory that filled reads `no space left on
+   device` instead (step 12).
 3. **A pod that never started.** It waits on what it mounts or reads:
    the reader key's Secret, `reader-etcd`, or the identity's,
    `etcd-drill`, each of which a SealedSecret the controller cannot open

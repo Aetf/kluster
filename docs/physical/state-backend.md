@@ -1778,7 +1778,11 @@ cause.
     oldest, and `mise x -- kubectl -n state-upkeep logs job/<run>` is
     the census, the listing and the delete, the ceiling's reading, and
     an `ERROR:` line for each step that failed. The branches below go
-    by that line.
+    by that line. A run the kernel stopped writes no `ERROR:` line, and
+    `mise x -- kubectl -n state-upkeep get pods -l job-name=<run> -o jsonpath='{.items[*].status.containerStatuses[*].state.terminated.reason}'`
+    reads `OOMKilled`: the interpreter and `psql` outgrew the pod's
+    memory limit, `MEMORY` in `components.state_upkeep`, which what the
+    run reads back approaches as the state table's rows grow. Raise it.
 2.  **A row over the ceiling, named** (`exceed the ceiling of`). The
     pooler's cap was not derived for a row that large. Read the census,
     and set R again by §2's rule (`LARGEST_ROW_BYTES`); a cap that moves
