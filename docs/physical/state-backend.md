@@ -1070,8 +1070,8 @@ shell on it:
     5432 + TLS + auth probe — backend-down is discovered by the first
     thing that needs it, which is the only thing that cares.
 -   **The cluster checks the box every hour, twice.** Each check is a
-    CronJob of its own in `monitoring`, on the worker:
-    `state-backend-certificate` and `state-backend-dumps`. Both run one
+    CronJob of its own in `monitoring`, a free pod the scheduler places
+    on any node: `state-backend-certificate` and `state-backend-dumps`. Both run one
     program (`components.monitoring.state_backend_check`) in the
     `oci-sdk` image. They are the cluster's under ci.md §3's rule,
     since neither gives an unmerged ref's runs anything they do not
@@ -1162,7 +1162,7 @@ shell on it:
     `StateUpkeepStale`, no success within the family's age over its
     daily period. Each names §7.6. A run that cannot reach the box fails
     too, so the job is also a daily connection, TLS and authentication
-    probe from the control planes, and its `upkeep` leaf reports its
+    probe from whichever node runs it, and its `upkeep` leaf reports its
     expiry at the first run after it (above).
 -   **Deliberately unmonitored, with rationale**: Zincati/update
     failures and disk fill. The DB is ~4 orders of magnitude under

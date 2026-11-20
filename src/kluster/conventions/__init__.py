@@ -209,6 +209,22 @@ private space
     in it; the node firewall's cluster ranges, which admit the node
     networks, are the other set (`components.talos.CLUSTER_RANGES`).
 
+held pod
+    A pod its constraints hold to some nodes, a site or an architecture
+    (`kluster.lib.k8s.Constraints`; declarative/workloads.md §1): it runs at
+    `cluster.HELD_PRIORITY_CLASS`, and one held at home tolerates its node's
+    unreachable taint. "Held" as a pod's state is this sense alone; a held
+    row is the other, a row whose name the legacy VPS still holds
+    (`routes.Held`), and the prose's "held in memory" or "a test holds it"
+    is no term. Its opposite is a free pod.
+
+free pod
+    A pod its constraints hold to no nodes, which the scheduler places on
+    any node it fits (`kluster.lib.k8s.UNCONSTRAINED`; declarative/workloads.md
+    §1). A pod that only a node volume or a device keeps to some nodes is
+    no held pod: its constraints state nothing, and it names no priority
+    class.
+
 CI
     This repository's own GitHub Actions, the deployment pipeline
     (cluster/architecture.md §4.3; `overlay.Role.CI`, `overlay.CI_MEMBERS`).
@@ -254,6 +270,7 @@ from kluster.conventions.cloud import (
 from kluster.conventions.cluster import (
     API_CLIENT_LABEL,
     BGP_SECRETS_NAMESPACE,
+    BLOCKIO_POD_ANNOTATION,
     CERT_MANAGER_NAMESPACE,
     CILIUM_NAMESPACE,
     CLUSTER_ASN,
@@ -268,6 +285,7 @@ from kluster.conventions.cluster import (
     GATEWAY_MEDIA,
     GATEWAY_NAMESPACE,
     GATEWAY_PORTS,
+    HELD_PRIORITY_CLASS,
     HISTORY_STORE,
     INTEL_DEVICE_PLUGINS_NAMESPACE,
     KUBEPRISM_PORT,
@@ -387,6 +405,7 @@ __all__ = (
     'B2_ACCOUNT',
     'BACKUP_VERSION_RETENTION_DAYS',
     'BGP_SECRETS_NAMESPACE',
+    'BLOCKIO_POD_ANNOTATION',
     'BUCKET_BACKUP',
     'BULKY',
     'CERT_MANAGER_NAMESPACE',
@@ -414,6 +433,7 @@ __all__ = (
     'GATEWAY_MEDIA',
     'GATEWAY_NAMESPACE',
     'GATEWAY_PORTS',
+    'HELD_PRIORITY_CLASS',
     'HISTORY_STORE',
     'HOMELAB_BRIDGE',
     'HOMELAB_DISK_GIB',

@@ -25,7 +25,7 @@ object and no process argument carries it. The certificate pod's spec is built
 by a function that takes no key: the handshake needs none, since the box
 sends its certificate before anything authenticates.
 
-**Both retry a run twice.** Each crosses the internet, from the worker to the
+**Both retry a run twice.** Each crosses the internet, from its node to the
 appliance or to B2, and one dropped connection is no finding; a finding
 repeats on the retry, and the Job fails after its third pod, inside the row's
 deadline. Neither speaks to the Kubernetes API, so neither pod mounts a token.
@@ -41,6 +41,7 @@ from kluster import conventions
 from kluster.components.monitoring import memory
 from kluster.conventions.schedule import STATE_BACKEND_CERTIFICATE, STATE_BACKEND_DUMPS, ScheduledJob
 from kluster.lib import templates
+from kluster.lib.k8s import Constraints
 from kluster.lib.state_backend import settings as backend
 from kluster.lib.versions import ImagePin
 
@@ -104,14 +105,16 @@ def settings() -> str:
     )
 
 
-def dumps_cronjob_spec(*, image: ImagePin, affinity: k8s.core.v1.AffinityArgs) -> k8s.batch.v1.CronJobSpecArgs:
-    """The dump-age check every hour, at its minute, under the freshness key."""
-    return _cronjob_spec(STATE_BACKEND_DUMPS, minute=_DUMPS_MINUTE, pod=_dumps_pod(image, affinity))
+def dumps_cronjob_spec(*, image: ImagePin, constraints: Constraints) -> k8s.batch.v1.CronJobSpecArgs:
+    """The dump-age check every hour, at its minute, under the freshness key, placed under `constraints`."""
+    return _cronjob_spec(STATE_BACKEND_DUMPS, minute=_DUMPS_MINUTE, pod=_dumps_pod(image, constraints))
 
 
-def certificate_cronjob_spec(*, image: ImagePin, affinity: k8s.core.v1.AffinityArgs) -> k8s.batch.v1.CronJobSpecArgs:
-    """The certificate check every hour, at its minute, with no credential."""
-    return _cronjob_spec(STATE_BACKEND_CERTIFICATE, minute=_CERTIFICATE_MINUTE, pod=_certificate_pod(image, affinity))
+def certificate_cronjob_spec(*, image: ImagePin, constraints: Constraints) -> k8s.batch.v1.CronJobSpecArgs:
+    """The certificate check every hour, at its minute, with no credential, placed under `constraints`."""
+    return _cronjob_spec(
+        STATE_BACKEND_CERTIFICATE, minute=_CERTIFICATE_MINUTE, pod=_certificate_pod(image, constraints)
+    )
 
 
 def _cronjob_spec(row: ScheduledJob, *, minute: int, pod: k8s.core.v1.PodSpecArgs) -> k8s.batch.v1.CronJobSpecArgs:
@@ -129,13 +132,13 @@ def _cronjob_spec(row: ScheduledJob, *, minute: int, pod: k8s.core.v1.PodSpecArg
     )
 
 
-def _dumps_pod(image: ImagePin, affinity: k8s.core.v1.AffinityArgs) -> k8s.core.v1.PodSpecArgs:
+def _dumps_pod(image: ImagePin, constraints: Constraints) -> k8s.core.v1.PodSpecArgs:
     return _pod(
         image,
-        affinity,
+        constraints,
         name='dumps',
         args=['dumps', f'{PROGRAM_DIR}/{SETTINGS_FILE}', KEY_DIR],
-        resources=memory.STATE_BACKEND_DUMPS.resources(),
+        resources=memory.STATE_BACKEND_DUMPS.rendered(),
         mounts=[k8s.core.v1.VolumeMountArgs(name='key', mount_path=KEY_DIR, read_only=True)],
         volumes=[
             k8s.core.v1.VolumeArgs(
@@ -148,13 +151,13 @@ def _dumps_pod(image: ImagePin, affinity: k8s.core.v1.AffinityArgs) -> k8s.core.
     )
 
 
-def _certificate_pod(image: ImagePin, affinity: k8s.core.v1.AffinityArgs) -> k8s.core.v1.PodSpecArgs:
+def _certificate_pod(image: ImagePin, constraints: Constraints) -> k8s.core.v1.PodSpecArgs:
     return _pod(
         image,
-        affinity,
+        constraints,
         name='certificate',
         args=['certificate', f'{PROGRAM_DIR}/{SETTINGS_FILE}'],
-        resources=memory.STATE_BACKEND_CERTIFICATE.resources(),
+        resources=memory.STATE_BACKEND_CERTIFICATE.rendered(),
         mounts=[],
         volumes=[],
     )
@@ -162,7 +165,7 @@ def _certificate_pod(image: ImagePin, affinity: k8s.core.v1.AffinityArgs) -> k8s
 
 def _pod(
     image: ImagePin,
-    affinity: k8s.core.v1.AffinityArgs,
+    constraints: Constraints,
     *,
     name: str,
     args: list[str],
@@ -175,7 +178,7 @@ def _pod(
         restart_policy='Never',
         # It speaks to the box and to B2, and never to Kubernetes.
         automount_service_account_token=False,
-        affinity=affinity,
+        **constraints.pod_fields(),
         security_context=k8s.core.v1.PodSecurityContextArgs(
             run_as_non_root=True,
             run_as_user=CHECK_USER,

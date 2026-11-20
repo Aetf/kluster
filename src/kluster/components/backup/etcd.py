@@ -1,4 +1,4 @@
-"""The etcd snapshots: Sidero's `talos-backup` hourly on the control planes, and their daily restore-verify on the worker.
+"""The etcd snapshots: Sidero's `talos-backup` hourly, and their daily restore-verify.
 
 **What a run does.** `talos-backup` opens the talosconfig Talos wrote into its
 pod, streams an etcd snapshot from apid into its working directory, refuses a
@@ -32,19 +32,20 @@ seals into `k8s-base` (`conventions.sealed.ETCD_WRITER_KEY`). The key writes
 under the prefix and does nothing else: it cannot list, read or delete, and an
 upload asks for nothing more.
 
-**It runs on the control planes.** The snapshots then go on through an outage
-of the home site, the bucket traffic leaves from the cloud, and the stream does
-not cross the mesh to the worker. `talos-backup` writes the snapshot and its
+**The scheduler places it** (`kluster.lib.k8s.UNCONSTRAINED`): nothing about
+a node holds it (declarative/workloads.md §1). The snapshots go on through an
+outage of the home site without a constraint, since the scheduler places no
+new pod on a node that is not ready. `talos-backup` writes the snapshot and its
 ciphertext relative to its working directory, and the image's is `/`, which
 the run's user cannot write, so the working directory is an empty directory of
 the pod's own. It is held in memory, since a control plane's disk is etcd's own
 (cluster/nodes.md §1.2), and bounded (`WORK_SIZE`), since a run holds two copies
 of the database at once. The root filesystem is read-only: the run writes only
 there and to the Talos client's own directory. The pod carries CPU and memory
-limits, as anything the cloud pool may hold does (declarative/workloads.md §1):
+limits, as any pod the scheduler may place on a cloud node does (declarative/workloads.md §1):
 its memory is the directory's bound and the processes' share above it
 (`MEMORY`), since the directory is charged to the pod, and its CPU a quarter of
-a core, which leaves the control plane's cores to etcd.
+a core, which on a control plane leaves the rest of its cores to etcd.
 
 **The restore-verify reads the newest snapshot back daily**
 (`EtcdRestoreVerify`, its row `conventions.schedule.ETCD_RESTORE_VERIFY`). A
@@ -65,10 +66,10 @@ backup bucket's shell client, `shell/b2.sh`, which the metrics stores' scripts
 source too, since its image carries no interpreter but busybox; the image is
 `etcd-age`, built by this repository (`docker/etcd-age.conf`).
 
-**It runs off the control planes**, which today is the worker. It reads
-nothing of Talos, so none of the snapshot's reasons for the control planes
-holds, and a scratch etcd with its data in memory would draw on the memory
-nodes.md §1.1 keeps there for the control plane's own. Its working directory
+**The scheduler places it too** (`kluster.lib.k8s.UNCONSTRAINED`): nothing
+about a node holds it, and on a control plane its scratch etcd draws on the
+allocatable the control plane's reservation leaves, as any pod's memory does
+(nodes.md §1.1). Its working directory
 is in memory, so the plaintext keyspace never reaches a disk, and is bounded
 (`VERIFY_WORK_SIZE`); the pod's memory is bounded above that by the processes'
 own share (`VERIFY_MEMORY`), and its CPU at half a core, which holds the
@@ -88,7 +89,7 @@ from kluster.components.backup import s3_endpoint
 from kluster.conventions.backup import max_age
 from kluster.conventions.schedule import ETCD_RESTORE_VERIFY, ETCD_SNAPSHOT
 from kluster.lib import templates
-from kluster.lib.k8s import CLOUD_POD_AFFINITY, WORKER_POD_AFFINITY, namespace, sealed_value
+from kluster.lib.k8s import UNCONSTRAINED, namespace, sealed_value
 from kluster.lib.versions import ImagePin
 from putils import Component
 
@@ -185,9 +186,8 @@ MEMORY = f'{_WORK_SIZE_MIB + PROCESS_MEMORY_MIB}Mi'
 #: 0.59 s, a lower bound on a run's. What it does is copy a database of tens
 #: of MB three times, through TLS, `age` and TLS again. At the limit, a quarter
 #: of a core, ten times that CPU time takes under half a minute against the
-#: run's deadline of 15 minutes (`conventions.schedule.ETCD_SNAPSHOT`), and the
-#: run leaves the rest of the control plane's cores to etcd, which serves the
-#: stream.
+#: run's deadline of 15 minutes (`conventions.schedule.ETCD_SNAPSHOT`), and on
+#: a control plane the run leaves the rest of its cores to etcd.
 CPU_REQUEST = '50m'
 CPU = '250m'
 
@@ -331,7 +331,7 @@ def _pod(image: ImagePin, recipients: Sequence[str]) -> k8s.core.v1.PodSpecArgs:
         restart_policy='Never',
         # It speaks Talos' API and B2's, and never Kubernetes'.
         automount_service_account_token=False,
-        affinity=CLOUD_POD_AFFINITY,
+        **UNCONSTRAINED.pod_fields(),
         security_context=k8s.core.v1.PodSecurityContextArgs(
             run_as_non_root=True,
             run_as_user=_USER,
@@ -497,7 +497,7 @@ def _verify_pod(image: ImagePin) -> k8s.core.v1.PodSpecArgs:
         restart_policy='Never',
         # It speaks B2's API and its own loopback, and never Kubernetes'.
         automount_service_account_token=False,
-        affinity=WORKER_POD_AFFINITY,
+        **UNCONSTRAINED.pod_fields(),
         security_context=k8s.core.v1.PodSecurityContextArgs(
             run_as_non_root=True,
             run_as_user=_VERIFY_USER,

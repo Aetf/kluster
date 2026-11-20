@@ -1,17 +1,22 @@
-"""Monitoring: the VictoriaMetrics stack and metrics-server, on the homelab worker, and the in-cluster alert leg.
+"""Monitoring: the VictoriaMetrics stack and metrics-server, and the in-cluster alert leg.
 
 Item 6 of declarative/cluster-infra.md §1, with metrics-server from item 8
 (rfc-007 §7, §8). The VictoriaMetrics stack chart brings the operator, the
 database (vmsingle), the scraper (vmagent), the rule evaluator (vmalert),
 alertmanager, Grafana, kube-state-metrics and the node exporter.
 
-**It runs on the worker** (`kluster.lib.k8s.WORKER_AFFINITY_JSON`), the node
-exporter apart, which runs on every node it reports on. Alertmanager has to: it
-posts to Home Assistant at Home Assistant's own address, which only the worker
-has a route to (rfc-008 §4.1, operations.md §4). The rest goes with it because
-the worker has the memory and the local disk, and the cloud nodes share their
-cores with etcd. Grafana is reached by a port-forward until its name moves
-(rfc-007 §7.4).
+**The scheduler places it** (declarative/workloads.md §1), within two
+constraints, each the home site for a fact about nodes the scheduler cannot
+see (`kluster.lib.k8s.Constraints`). Alertmanager posts to Home Assistant at
+Home Assistant's own address, which no cloud node has a route to (rfc-008
+§4.1, operations.md §4; `ALERTMANAGER_CONSTRAINTS`). vmagent scrapes etcd's
+metrics listener on every control plane, which the node firewall admits over
+KubeSpan alone, so from a control plane it could not read its own node's
+(`VMAGENT_CONSTRAINTS`). Every other pod is free (`UNCONSTRAINED`); the node
+exporter runs on every node it reports on, at the system's class for a
+per-node agent (`NODE_AGENT_PRIORITY_CLASS`), so no free pod placed on its
+node first can leave it pending. Grafana is reached by a
+port-forward until its name moves (rfc-007 §7.4).
 
 **Two stores keep what is scraped** (`stores`): the chart's vmsingle, the
 recent store, every series for a month; and the history store, a vmsingle the
@@ -20,7 +25,10 @@ long its control plane takes, for good, so that every period compares with
 every other. vmagent writes the history's class to it through a second
 remote write, and vmalert writes its recording rules through vmagent, so they
 reach both stores the same way. Grafana reads the history as a datasource of
-its own. Each store's volume is `local-path`, on the worker. **Each store is
+its own. Each store's volume is `local-path`, which binds on the node the
+store is first placed on, and each store's pod runs in the blockio class
+`conventions.ETCD_DISK_WRITER`, which caps what it writes to the disk etcd
+shares where that node is a control plane (cluster/nodes.md §1.2). **Each store is
 backed up hourly to the backup bucket and restores itself before it starts**
 (`stores`), under the monitoring namespace's writer key on the bucket
 (`conventions.sealed.writer_key`), which `k8s-base` holds sealed. Each
@@ -111,10 +119,10 @@ Grafana's depends on a draw or on what the cluster holds. The password guards
 nothing that outlives the pod, since Grafana keeps no volume here, so it is
 escrowed nowhere.
 
-**Its memory on the worker is held to nodes.md §4.4's budget** by the requests
-of `memory.WORKER_CONTAINERS` charged to monitoring's line of that table, the
+**Its memory is held to nodes.md §4.4's budget**, planned at the home site, by the requests
+of `memory.CONTAINERS` charged to monitoring's line of that table, the
 stack's containers; every container the component runs for as long as the
-stack does takes its memory from there, metrics-server too, which is charged
+stack does takes its memory and CPU from there, metrics-server too, which is charged
 to the line for the rest of kube-system, and a job's container is no row of
 it (`memory`). Grafana is trimmed to fit it. Its datasources are
 the chart's own ConfigMap, mounted where Grafana provisions them from at start
@@ -177,10 +185,10 @@ from kluster.conventions.alert import Tier
 from kluster.conventions.backup import BackupFamily
 from kluster.conventions.outputs import BOOT_VOLUME
 from kluster.lib.k8s import (
-    WORKER_AFFINITY_JSON,
-    WORKER_POD_AFFINITY,
+    UNCONSTRAINED,
     LooserLevel,
     PodSecurity,
+    at_home,
     helm_chart,
     namespace,
     sealed_value,
@@ -205,6 +213,7 @@ __all__ = (
     'HISTORY_SIZE',
     'KUBELET_RELABELING',
     'KUBE_STATE_METRICS_ENDPOINT',
+    'NODE_AGENT_PRIORITY_CLASS',
     'NODE_EXPORTER_ENDPOINT',
     'RECEIVER',
     'SNAPSHOTS_MAX_AGE',
@@ -384,7 +393,7 @@ GRAFANA_DATASOURCES_DIR = '/etc/grafana/provisioning/datasources'
 #: nothing else.
 DATASOURCES_DIGEST_ENV = 'KLUSTER_DATASOURCES_DIGEST'
 
-#: The history store's claim, a budget line on the worker's disk rather than
+#: The history store's claim, a budget line on its node's disk rather than
 #: a limit, which `local-path` does not enforce: the class grows by 3 to 6 GB a
 #: year (Aetf/kluster-ops#790), and this is about two years of it.
 HISTORY_SIZE = '10Gi'
@@ -396,6 +405,44 @@ SNAPSHOTS_MAX_AGE = dt.timedelta(days=1)
 #: The history store as Grafana's datasource, beside the chart's own for the
 #: recent store.
 HISTORY_DATASOURCE = 'VictoriaMetrics history'
+
+
+#: The system's class for a pod that must run on its node, which the node
+#: exporter takes: it reports on the node it runs on, and nowhere else.
+NODE_AGENT_PRIORITY_CLASS = 'system-node-critical'
+
+#: Alertmanager's constraints: the home site, since it posts to Home
+#: Assistant at Home Assistant's own address, which no cloud node has a
+#: route to: KubeSpan carries the members' addresses alone (rfc-008 §4.1).
+ALERTMANAGER_CONSTRAINTS = at_home(
+    'posts to Home Assistant at its home address (`conventions.HOME_ASSISTANT`), which no cloud node reaches',
+)
+
+#: vmagent's constraints: the home site, since it scrapes etcd's metrics
+#: listener on every control plane (`etcd_scrape_spec`), which the node
+#: firewall admits over KubeSpan and on loopback alone, so a scraper on a
+#: control plane could not read its own node's
+#: (`components.talos.HOST_OPENINGS`). The fact is about a node's role, not
+#: being a control plane, and it coincides with the home site only while
+#: every control plane is in the cloud and every node at home is a worker.
+VMAGENT_CONSTRAINTS = at_home(
+    "scrapes each control plane's etcd metrics listener, which a pod on a control plane cannot reach on its own "
+    'node (`components.talos.HOST_OPENINGS`)',
+)
+
+
+def _store_pod() -> dict[str, object]:
+    """What a store's pod carries: no constraint, and its containers in `conventions.ETCD_DISK_WRITER`, since its claim is `local-path`.
+
+    A `local-path` claim binds on the node its store is first placed on,
+    which may be a control plane, where the class caps what the store writes
+    to the disk etcd shares (cluster/nodes.md §1.2). The operator puts
+    `podMetadata`'s annotations on the store's pod template.
+    """
+    return {
+        **UNCONSTRAINED.pod_fields_json(),
+        'podMetadata': {'annotations': dict(conventions.ETCD_DISK_WRITER.pod_annotation)},
+    }
 
 
 def grafana_datasources_mount(release: str, chart: str) -> dict[str, object]:
@@ -437,8 +484,8 @@ def _restore(restore: Sequence[Mapping[str, Any]]) -> dict[str, object]:
 def stack_values(release: str, chart: ChartPin, *, restore: Sequence[Mapping[str, Any]]) -> dict[str, object]:
     """The VictoriaMetrics stack chart's values, installed as `release` from `chart`.
 
-    Placed on the worker, the chart's extras off, Grafana's admin given, every
-    container's memory from `memory.WORKER_CONTAINERS`, Grafana trimmed to fit
+    Each pod under its constraints, the chart's extras off, Grafana's admin given, every
+    container's resources from `memory.CONTAINERS`, Grafana trimmed to fit
     it, the recent store's retention and keys, and the history store written
     to and read. `restore` holds the recent store's restore containers. The
     last value is the digest of
@@ -470,7 +517,13 @@ def _stack_values(release: str, chart: ChartPin, restore: Sequence[Mapping[str, 
         'kubeEtcd': {'enabled': False},
         # Read by every scrape the chart builds from this spec, cAdvisor's among them.
         'kubelet': {'vmScrape': {'spec': {'relabelConfigs': [dict(entry) for entry in KUBELET_RELABELING]}}},
-        'prometheus-node-exporter': {'vmScrape': {'spec': {'endpoints': [dict(NODE_EXPORTER_ENDPOINT)]}}},
+        'prometheus-node-exporter': {
+            'vmScrape': {'spec': {'endpoints': [dict(NODE_EXPORTER_ENDPOINT)]}},
+            # A per-node agent its DaemonSet keeps on its node, where a free pod
+            # placed first could otherwise leave it no room it can preempt
+            # for; the class per-node agents run at, as Cilium's agent does.
+            'priorityClassName': NODE_AGENT_PRIORITY_CLASS,
+        },
         'kubeApiServer': {
             'vmScrape': {
                 'spec': {
@@ -496,11 +549,11 @@ def _stack_values(release: str, chart: ChartPin, restore: Sequence[Mapping[str, 
             # The chart's default, stated: it is what keeps the webhook's
             # certificate from being generated afresh on every run.
             'admissionWebhooks': {'keepTLSSecret': True},
-            'affinity': WORKER_AFFINITY_JSON,
+            **UNCONSTRAINED.pod_fields_json(),
         },
         'vmsingle': {
             'spec': {
-                'affinity': WORKER_AFFINITY_JSON,
+                **_store_pod(),
                 # Stated rather than left to the cluster's default class: a
                 # claim made before any class is the default would be made with
                 # none, and never bind.
@@ -513,14 +566,14 @@ def _stack_values(release: str, chart: ChartPin, restore: Sequence[Mapping[str, 
             },
         },
         'vmagent': {
-            'spec': {'affinity': WORKER_AFFINITY_JSON, 'scrapeInterval': backup.duration(SCRAPE_INTERVAL)},
+            'spec': {**VMAGENT_CONSTRAINTS.pod_fields_json(), 'scrapeInterval': backup.duration(SCRAPE_INTERVAL)},
             'additionalRemoteWrites': [stores.history_remote_write(history)],
         },
         # The recording rules reach the stores through vmagent, so the history
         # keeps those of its class as it keeps scraped series.
         'vmalert': {
             'spec': {
-                'affinity': WORKER_AFFINITY_JSON,
+                **UNCONSTRAINED.pod_fields_json(),
                 'evaluationInterval': backup.duration(EVALUATION_INTERVAL),
                 # Every `VMRule` in every namespace: a component that declares a
                 # CronJob and its rules beside it, as a database's drill does,
@@ -544,7 +597,7 @@ def _stack_values(release: str, chart: ChartPin, restore: Sequence[Mapping[str, 
         },
         'alertmanager': {
             'spec': {
-                'affinity': WORKER_AFFINITY_JSON,
+                **ALERTMANAGER_CONSTRAINTS.pod_fields_json(),
                 # The receiver's configuration is a VMAlertmanagerConfig, whose
                 # route the operator otherwise confines to alerts carrying its
                 # own namespace's label; alertmanager here has one receiver for
@@ -553,7 +606,7 @@ def _stack_values(release: str, chart: ChartPin, restore: Sequence[Mapping[str, 
             },
         },
         'grafana': {
-            'affinity': WORKER_AFFINITY_JSON,
+            **UNCONSTRAINED.pod_fields_json(),
             # The credentials are the component's Secret, so that the chart
             # draws no password and renders no checksum of one.
             'admin': {
@@ -572,14 +625,14 @@ def _stack_values(release: str, chart: ChartPin, restore: Sequence[Mapping[str, 
             },
         },
         'kube-state-metrics': {
-            'affinity': WORKER_AFFINITY_JSON,
+            **UNCONSTRAINED.pod_fields_json(),
             'vmScrape': {'spec': {'endpoints': [dict(KUBE_STATE_METRICS_ENDPOINT)]}},
         },
     }
 
 
 def metrics_server_values() -> dict[str, object]:
-    """metrics-server's values: on the worker, with its memory, and reading each kubelet over the TLS it serves.
+    """metrics-server's values: a free pod, with its memory, and reading each kubelet over the TLS it serves.
 
     Talos' kubelet serves a self-signed certificate, which no cluster authority
     signs, so metrics-server is told not to verify it; the stack's own kubelet
@@ -588,7 +641,7 @@ def metrics_server_values() -> dict[str, object]:
     item 6 of declarative/cluster-infra.md §1.
     """
     return memory.merged(
-        {'args': ['--kubelet-insecure-tls'], 'affinity': WORKER_AFFINITY_JSON},
+        {'args': ['--kubelet-insecure-tls'], **UNCONSTRAINED.pod_fields_json()},
         memory.chart_values(memory.METRICS_SERVER_CHART),
     )
 
@@ -887,7 +940,7 @@ class Monitoring(Component, pulumi_type='kluster:monitoring:Monitoring'):
             metadata=k8s.meta.v1.ObjectMetaArgs(
                 name=schedule.OCI_METRICS_PULL.cronjob, namespace=self.namespace.metadata.name
             ),
-            spec=oci_metrics.cronjob_spec(image=oci_sdk_image, affinity=WORKER_POD_AFFINITY),
+            spec=oci_metrics.cronjob_spec(image=oci_sdk_image, constraints=UNCONSTRAINED),
             opts=self.child_opts(depends_on=[self.chart, self.history, self.oci_pull_program, self.metrics_reader_key]),
         )
 
@@ -908,7 +961,7 @@ class Monitoring(Component, pulumi_type='kluster:monitoring:Monitoring'):
             metadata=k8s.meta.v1.ObjectMetaArgs(
                 name=schedule.STATE_BACKEND_CERTIFICATE.cronjob, namespace=self.namespace.metadata.name
             ),
-            spec=state_backend.certificate_cronjob_spec(image=oci_sdk_image, affinity=WORKER_POD_AFFINITY),
+            spec=state_backend.certificate_cronjob_spec(image=oci_sdk_image, constraints=UNCONSTRAINED),
             opts=self.child_opts(depends_on=[self.state_backend_checks]),
         )
         # Behind the sealing controller, whose chart defines the kind, and the
@@ -925,7 +978,7 @@ class Monitoring(Component, pulumi_type='kluster:monitoring:Monitoring'):
             metadata=k8s.meta.v1.ObjectMetaArgs(
                 name=schedule.STATE_BACKEND_DUMPS.cronjob, namespace=self.namespace.metadata.name
             ),
-            spec=state_backend.dumps_cronjob_spec(image=oci_sdk_image, affinity=WORKER_POD_AFFINITY),
+            spec=state_backend.dumps_cronjob_spec(image=oci_sdk_image, constraints=UNCONSTRAINED),
             opts=self.child_opts(depends_on=[self.state_backend_checks, self.freshness_key]),
         )
 
@@ -970,7 +1023,7 @@ class _Backups:
 
 
 def history_store_spec(*, image: ImagePin, restore: Sequence[Mapping[str, Any]]) -> dict[str, object]:
-    """The history store's vmsingle: its pinned release, for good, on the worker, its own memory and claim, the keys.
+    """The history store's vmsingle: its pinned release, for good, in the blockio class, its own memory and claim, the keys.
 
     The release is pinned by the component, since the operator otherwise runs
     a vmsingle at its own default rather than at the chart's; a tag carrying
@@ -981,8 +1034,8 @@ def history_store_spec(*, image: ImagePin, restore: Sequence[Mapping[str, Any]])
     return {
         'image': {'repository': image.repository, 'tag': f'{image.tag}@{image.digest}'},
         'retentionPeriod': stores.HISTORY_RETENTION,
-        'affinity': WORKER_AFFINITY_JSON,
-        'resources': memory.HISTORY_STORE.memory.resources(),
+        **_store_pod(),
+        'resources': memory.HISTORY_STORE.resources.rendered(),
         'storage': {
             'storageClassName': conventions.SC_LOCAL_PATH,
             'accessModes': ['ReadWriteOnce'],
@@ -1000,7 +1053,7 @@ def etcd_scrape_spec() -> dict[str, object]:
     by its presence: Talos gives it an empty value, and the operator turns a
     `matchLabels` entry into a relabeling that keeps a target whose label
     matches the value, which an absent label, read as empty, does too.
-    vmagent runs on the worker (`WORKER_AFFINITY_JSON`), so its request
+    vmagent is held at home (`VMAGENT_CONSTRAINTS`), so its request
     reaches a control plane over KubeSpan, which the node firewall accepts
     ahead of every rule: the port takes no opening (`components.talos.HOST_OPENINGS`).
     """
@@ -1029,8 +1082,9 @@ def webhook_url(webhook_id: str) -> str:
     A direct post, at the IPv4 address `conventions.HOME_ASSISTANT` holds --
     the one the gateway's rules for Home Assistant follow too -- rather than at
     its name, which answers with the cluster's media gateway, and over neither
-    the cluster's relay nor the overlay (operations.md §4). Only the homelab
-    worker reaches it, which is where monitoring runs.
+    the cluster's relay nor the overlay (operations.md §4). No cloud node
+    reaches it, which is why Alertmanager is held at home
+    (`ALERTMANAGER_CONSTRAINTS`).
     """
     return (
         f'http://{conventions.HOME_ASSISTANT.v4}:{conventions.HOME_ASSISTANT_PORT}'

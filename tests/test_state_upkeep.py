@@ -19,6 +19,7 @@ from typing import Any
 import pytest_asyncio
 from k8s_base_installation import SEALED, Run, applied
 from k8s_quantity import quantity
+from node_selection import CLOUD, schedulable
 
 from kluster import conventions
 from kluster.conventions.schedule import STATE_UPKEEP
@@ -148,8 +149,19 @@ def test_the_bundle_is_the_rows_sealed_secret_in_the_jobs_namespace(applied: Run
     assert secret['spec']['encryptedData'] == SEALED[BUNDLE.name]
 
 
+def test_the_upkeep_runs_through_an_outage_of_the_home_site(applied: Run) -> None:
+    """Every cloud node may take a run, so the upkeep goes on while the home site is down.
+
+    The box it reaches admits its port from anywhere, so a cloud node reaches
+    it as the worker does.
+    """
+    pod, _ = _container(applied)
+
+    assert schedulable(pod) >= CLOUD
+
+
 def test_every_container_requests_and_is_limited_in_cpu_and_memory(applied: Run) -> None:
-    """The pod may be scheduled to the cloud pool, where etcd shares the cores (workloads.md §1)."""
+    """The pod may be scheduled to a cloud node, where etcd shares the cores (workloads.md §1)."""
     pod, _ = _container(applied)
     containers = [*pod.get('initContainers', []), *pod['containers']]
 

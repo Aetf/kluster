@@ -4,11 +4,12 @@ Cilium's BGPv2 control plane, in its three objects
 (`bgp-control-plane-configuration.rst` at Cilium v1.20.1):
 
 -   **the cluster configuration** selects the nodes that run a BGP instance and
-    names the instance's peer. It selects every node that is not a control
-    plane node, which is the homelab worker alone: the control plane is the
-    cloud nodes (nodes.md §4.2), Talos labels each node of that type
-    `conventions.CONTROL_PLANE_LABEL`, and the worker is the one node
-    `physical` declares with any other role.
+    names the instance's peer. It selects the nodes at the home site, whose
+    `conventions.SITE_LABEL` the machine configuration sets to
+    `conventions.Site.HOME`, which is the homelab worker alone: the peer is
+    the gateway at home, reached on the worker's own VLAN, and no cloud node
+    has a path to it. A selector that matches no node runs no instance, and
+    the gateway then withdraws every `lan` address.
     The peer is the gateway's leg on the cluster VLAN, the worker's default
     route, at the ASN the gateway's routing daemon is configured with, and the
     instance is the ASN that daemon expects of the worker
@@ -134,11 +135,7 @@ class BgpSession(Component, pulumi_type='kluster:cilium:BgpSession'):
             metadata=k8s.meta.v1.ObjectMetaArgs(name=PEER),
             spec=crds.cilium.v2.CiliumBGPClusterConfigSpecArgs(
                 node_selector=crds.cilium.v2.CiliumBGPClusterConfigSpecNodeSelectorArgs(
-                    match_expressions=[
-                        crds.cilium.v2.CiliumBGPClusterConfigSpecNodeSelectorMatchExpressionsArgs(
-                            key=conventions.CONTROL_PLANE_LABEL, operator='DoesNotExist'
-                        )
-                    ]
+                    match_labels={conventions.SITE_LABEL: conventions.Site.HOME.value}
                 ),
                 bgp_instances=[
                     crds.cilium.v2.CiliumBGPClusterConfigSpecBgpInstancesArgs(

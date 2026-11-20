@@ -50,6 +50,7 @@ from kluster.conventions.cloud import NodeVolumeEntry
 from kluster.conventions.providers import OCI_BLOCKSTORE_METRICS
 from kluster.conventions.schedule import OCI_METRICS_PULL
 from kluster.lib import templates
+from kluster.lib.k8s import Constraints
 from kluster.lib.versions import ImagePin
 
 __all__ = (
@@ -152,13 +153,14 @@ def settings(found: Mapping[str, Target], *, compartment: str, history: str, imp
     )
 
 
-def cronjob_spec(*, image: ImagePin, affinity: k8s.core.v1.AffinityArgs) -> k8s.batch.v1.CronJobSpecArgs:
+def cronjob_spec(*, image: ImagePin, constraints: Constraints) -> k8s.batch.v1.CronJobSpecArgs:
     """The pull every hour, its row's period, at its minute, one run at a time, cut off at its row's deadline.
 
     A failed run is left to the next hour's, which reads from the newest
     sample the stores hold and so fills what the failed one missed. The pod
     runs as `PULL_USER` on a read-only root, with no capability, and reads the
-    program, its settings and the key from what it mounts.
+    program, its settings and the key from what it mounts. It is placed under
+    `constraints`.
     """
     return k8s.batch.v1.CronJobSpecArgs(
         schedule=f'{_PULL_MINUTE} * * * *',
@@ -167,17 +169,17 @@ def cronjob_spec(*, image: ImagePin, affinity: k8s.core.v1.AffinityArgs) -> k8s.
             spec=k8s.batch.v1.JobSpecArgs(
                 backoff_limit=0,
                 active_deadline_seconds=int(OCI_METRICS_PULL.deadline.total_seconds()),
-                template=k8s.core.v1.PodTemplateSpecArgs(spec=_pod(image, affinity)),
+                template=k8s.core.v1.PodTemplateSpecArgs(spec=_pod(image, constraints)),
             ),
         ),
     )
 
 
-def _pod(image: ImagePin, affinity: k8s.core.v1.AffinityArgs) -> k8s.core.v1.PodSpecArgs:
-    resources = memory.OCI_PULL.resources()
+def _pod(image: ImagePin, constraints: Constraints) -> k8s.core.v1.PodSpecArgs:
+    resources = memory.OCI_PULL.rendered()
     return k8s.core.v1.PodSpecArgs(
         restart_policy='Never',
-        affinity=affinity,
+        **constraints.pod_fields(),
         security_context=k8s.core.v1.PodSecurityContextArgs(
             run_as_non_root=True,
             run_as_user=PULL_USER,

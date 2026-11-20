@@ -8,7 +8,6 @@ identity the module draws.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +18,7 @@ import pytest
 import pytest_asyncio
 from k8s_base_installation import Run, applied
 from k8s_quantity import MIB, quantity
+from node_selection import CLOUD, schedulable
 
 from kluster import conventions
 from kluster.components import talos
@@ -31,7 +31,6 @@ from kluster.components.backup.etcd import (
     TALOS_SERVICE_ACCOUNT_API_VERSION,
     EtcdSnapshots,
 )
-from kluster.conventions import CONTROL_PLANE_LABEL
 from kluster.conventions.schedule import ETCD_SNAPSHOT
 from kluster.lib import etcd_backup
 from kluster.lib.k8s import POD_SECURITY_ENFORCE_LABEL, PodSecurity
@@ -176,7 +175,7 @@ def test_the_run_writes_into_a_writable_directory_of_its_own_pod(applied: Run) -
 
 
 def test_every_directory_the_run_holds_in_memory_is_bounded(applied: Run) -> None:
-    """A memory-backed directory is memory of the node it runs on, a control plane, until the pod is gone."""
+    """A memory-backed directory is memory of the node it runs on, until the pod is gone."""
     in_memory = [it for it in _pod(applied)['volumes'] if it.get('emptyDir', {}).get('medium') == 'Memory']
 
     assert in_memory
@@ -185,7 +184,7 @@ def test_every_directory_the_run_holds_in_memory_is_bounded(applied: Run) -> Non
 
 
 def test_every_container_requests_and_is_limited_in_cpu_and_memory(applied: Run) -> None:
-    """The pod may be scheduled to the cloud pool, where etcd shares the cores (workloads.md §1)."""
+    """The pod may be scheduled to a cloud node, where etcd shares the cores (workloads.md §1)."""
     pod = _pod(applied)
     containers = [*pod.get('initContainers', []), *pod['containers']]
 
@@ -292,23 +291,9 @@ def test_the_reader_names_the_row_the_command_tree_spells() -> None:
     assert etcd_backup.DRILL_RECIPIENT_ROW == derived.ETCD_DRILL_AGE_IDENTITY_ROW
 
 
-def test_the_snapshot_runs_on_the_control_planes_and_not_on_the_worker(applied: Run) -> None:
-    """The snapshots go on through an outage of the home site, and the stream stays off the mesh to the worker."""
-    required = _pod(applied)['affinity']['nodeAffinity']['requiredDuringSchedulingIgnoredDuringExecution']
-    # As Talos labels the nodes: every cloud node is a control plane, the
-    # worker is not.
-    nodes: dict[str, dict[str, str]] = {
-        **{node: {CONTROL_PLANE_LABEL: ''} for node in conventions.CLOUD_NODES},
-        conventions.HOMELAB_NODE: {},
-    }
-
-    def holds(expression: Mapping[str, Any], labels: Mapping[str, str]) -> bool:
-        return {'Exists': True, 'DoesNotExist': False}[expression['operator']] == (expression['key'] in labels)
-
-    def admits(labels: Mapping[str, str]) -> bool:
-        return any(all(holds(it, labels) for it in term['matchExpressions']) for term in required['nodeSelectorTerms'])
-
-    assert {node for node, labels in nodes.items() if admits(labels)} == set(conventions.CLOUD_NODES)
+def test_the_snapshot_runs_through_an_outage_of_the_home_site(applied: Run) -> None:
+    """Every cloud node may take a run, so the snapshots go on while the home site is down."""
+    assert schedulable(_pod(applied)) >= CLOUD
 
 
 def test_an_empty_recipient_list_is_refused() -> None:

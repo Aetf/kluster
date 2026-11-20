@@ -7,10 +7,12 @@ rendered, creating a namespace at its Pod Security level, declaring a
 SealedSecret in the shape
 [declarative/cluster-infra.md](../../docs/declarative/cluster-infra.md) §1.1
 fixes -- for a row of the sealed census, from the row -- labeling a
-Service into a Cilium load-balancer pool, and placing a pod in a node pool,
-the worker or the cloud nodes, typed or as JSON (`WORKER_POD_AFFINITY`,
-`WORKER_AFFINITY_JSON` and the cloud pool's pair), which every component that
-runs a pod takes, the platform's as well as the applications'. Anything specific to one component
+Service into a Cilium load-balancer pool, and stating the constraints on the
+nodes a pod may run on, typed or as JSON (`Constraints`), which every
+component that runs a pod states, the platform's as well as the applications'.
+The applications still place their pods in a node pool, the worker or the
+cloud nodes (`WORKER_POD_AFFINITY`, `WORKER_AFFINITY_JSON` and the cloud
+pool's pair), until they move to `Constraints`. Anything specific to one component
 belongs with that component, not here. A pinned release manifest is fetched
 by `kluster.lib.release_assets`, which imports no bindings, so `update_crds`
 can run it while it regenerates them.
@@ -43,7 +45,7 @@ from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 from ipaddress import IPv4Address, IPv4Network, IPv6Address, IPv6Network, ip_network
-from typing import Annotated, Any, Literal, NoReturn, cast
+from typing import Annotated, Any, Literal, NoReturn, TypedDict, cast
 
 import pulumi
 import pulumi_crds as crds
@@ -54,7 +56,7 @@ from ruamel.yaml import YAML
 from ruamel.yaml.error import YAMLError
 
 from kluster import conventions
-from kluster.conventions.cluster import POOL_WORKER, Transports
+from kluster.conventions.cluster import HELD_PRIORITY_CLASS, POOL_WORKER, SITE_LABEL, Site, Transports
 from kluster.conventions.routes import Bare, Gate, Passthrough, Port, PortRedirect, Proxied, Route
 from kluster.conventions.sealed import SealedValue, SealingScope
 from kluster.lib import install_order
@@ -73,15 +75,21 @@ __all__ = (
     'POD_SECURITY_ENFORCE_LABEL',
     'PORTAL',
     'PRIVATE_SPACE',
+    'UNCONSTRAINED',
     'WORKER_AFFINITY_JSON',
     'WORKER_NODE_SELECTOR',
     'WORKER_POD_AFFINITY',
     'AbsentSealedValue',
     'ApiClients',
     'ApplicationNamespace',
+    'Architecture',
     'Backend',
+    'Constraint',
+    'Constraints',
+    'HomeSite',
     'LooserLevel',
     'PassthroughRefused',
+    'PodFields',
     'PodSecurity',
     'Portal',
     'PortedSecret',
@@ -90,6 +98,7 @@ __all__ = (
     'SecretTemplate',
     'UnusableKubeconfig',
     'application_namespace',
+    'at_home',
     'await_admission_path',
     'bare_listener',
     'client_certificate_expiry',
@@ -101,6 +110,7 @@ __all__ = (
     'kubeconfig_from',
     'lb_pool_labels',
     'namespace',
+    'on_architecture',
     'pick_resource',
     'redirect_routes',
     'refuse_passthrough',
@@ -1249,8 +1259,7 @@ def _node_pool(operator: Literal['Exists', 'DoesNotExist']) -> tuple[k8s.core.v1
 
 #: The worker's nodes, as a node selector: the one node `physical` declares
 #: with a role other than control plane, and so the one Talos gives no
-#: `conventions.CONTROL_PLANE_LABEL`; the BGP session selects its node the
-#: same way (`components.cilium.bgp`). A volume only the worker reaches states
+#: `conventions.CONTROL_PLANE_LABEL`. A volume only the worker reaches states
 #: it as its node affinity.
 WORKER_NODE_SELECTOR, _WORKER_NODE_SELECTOR_JSON = _node_pool('DoesNotExist')
 
@@ -1283,6 +1292,212 @@ WORKER_AFFINITY_JSON: Mapping[str, Any] = {
 CLOUD_AFFINITY_JSON: Mapping[str, Any] = {
     'nodeAffinity': {'requiredDuringSchedulingIgnoredDuringExecution': _CLOUD_NODE_SELECTOR_JSON}
 }
+
+
+# -- Node constraints ----------------------------------------------------------
+
+#: The label Kubernetes' kubelet puts on every node with the node's
+#: architecture, as Go names it.
+_ARCHITECTURE_LABEL = 'kubernetes.io/arch'
+
+#: The taint the node lifecycle controller puts on a node it has lost touch
+#: with, with the `NoExecute` effect, which evicts every pod that does not
+#: tolerate it.
+_UNREACHABLE_TAINT = 'node.kubernetes.io/unreachable'
+
+#: An architecture a node runs, as `_ARCHITECTURE_LABEL` carries it: the
+#: worker's, and the cloud nodes'.
+type Architecture = Literal['amd64', 'arm64']
+
+
+@dataclass(frozen=True)
+class Constraint[T]:
+    """One constraint on the nodes a pod may run on, of one kind, and every declaration it was derived from."""
+
+    value: T
+    declarations: tuple[str, ...]
+    """What implies the constraint, each in a sentence: the fact about nodes, or the requirement the component declares."""
+
+    def __post_init__(self) -> None:
+        if not self.declarations or not all(it.strip() for it in self.declarations):
+            raise ValueError(f'a constraint to {self.value} says what implies it: it takes a declaration')
+
+    def __and__(self, other: Constraint[T]) -> Constraint[T]:
+        """Both constraints at once: the one value, implied by the declarations of both."""
+        if self.value != other.value:
+            raise ValueError(
+                f'{"; ".join(self.declarations)} holds the pod to {self.value}, and '
+                f'{"; ".join(other.declarations)} to {other.value}: no node is both'
+            )
+        return Constraint(self.value, tuple(dict.fromkeys((*self.declarations, *other.declarations))))
+
+
+#: The one site a pod is held to: home. A pod that a fact about nodes or its
+#: component's requirement holds to a site is held at home (declarative/
+#: workloads.md §1); nothing holds a pod to the cloud.
+type HomeSite = Literal[Site.HOME]
+
+
+class PodFields(TypedDict):
+    """What `Constraints` sets on a pod, typed, as the keyword arguments of `k8s.core.v1.PodSpecArgs`."""
+
+    affinity: k8s.core.v1.AffinityArgs | None
+    tolerations: Sequence[k8s.core.v1.TolerationArgs] | None
+    priority_class_name: str | None
+
+
+@dataclass(frozen=True, kw_only=True)
+class Constraints:
+    """The constraints on the nodes a pod may run on, each built from the declaration that implies it (declarative/workloads.md §1).
+
+    A pod states a node constraint only for a fact about nodes the scheduler
+    cannot read from its requests or from what it mounts, or for a
+    requirement its component declares; where it runs within them is the
+    scheduler's. Two kinds are written here: the home site (`at_home`,
+    against `conventions.SITE_LABEL`), and an architecture, where an image
+    lacks one (`on_architecture`). A device and data on a node constrain a
+    pod through its request and its volume, and state nothing here, so a pod
+    they alone hold is not held by its `Constraints` and is not given the
+    held priority by them.
+
+    **It renders what a pod carries** (`pod_fields`, typed, and
+    `pod_fields_json`, for a spec handed over as JSON): its required node
+    affinity, in both forms (`affinity`, `affinity_json`); where it holds the
+    pod at home, the toleration of `_UNREACHABLE_TAINT` with no time limit,
+    so an outage of the uplink, which the control plane cannot tell from the
+    worker's, evicts nothing; and where it holds the pod at all, the held
+    `PriorityClass` (`conventions.HELD_PRIORITY_CLASS`), so a free pod
+    yields the node to it. A free pod, held by none, carries none of the
+    three and is `UNCONSTRAINED`, stated where the pod is declared, so that a
+    free pod reads as a decision.
+
+    **Constraints compose** with `&`: a pod under two takes both, with every
+    declaration behind each. Two of one kind that disagree are refused,
+    since no node would admit the pod. A contradiction across kinds, such as
+    the home site and an architecture no home node runs, is not refused,
+    since which architectures a site's nodes run is a fact about the nodes
+    rather than about the constraints.
+    """
+
+    site: Constraint[HomeSite] | None = None
+    architecture: Constraint[Architecture] | None = None
+
+    def __and__(self, other: Constraints) -> Constraints:
+        return Constraints(site=_both(self.site, other.site), architecture=_both(self.architecture, other.architecture))
+
+    @property
+    def holds(self) -> bool:
+        """Whether these constraints hold the pod to some nodes, which gives it the held priority."""
+        return self.site is not None or self.architecture is not None
+
+    def _requirements(self) -> list[tuple[str, str]]:
+        return [
+            (key, str(constraint.value))
+            for key, constraint in ((SITE_LABEL, self.site), (_ARCHITECTURE_LABEL, self.architecture))
+            if constraint is not None
+        ]
+
+    @property
+    def affinity(self) -> k8s.core.v1.AffinityArgs | None:
+        """The pod's required node affinity: one term, every constraint a requirement in it; none for a free pod."""
+        requirements = self._requirements()
+        if not requirements:
+            return None
+        return k8s.core.v1.AffinityArgs(
+            node_affinity=k8s.core.v1.NodeAffinityArgs(
+                required_during_scheduling_ignored_during_execution=k8s.core.v1.NodeSelectorArgs(
+                    node_selector_terms=[
+                        k8s.core.v1.NodeSelectorTermArgs(
+                            match_expressions=[
+                                k8s.core.v1.NodeSelectorRequirementArgs(key=key, operator='In', values=[value])
+                                for key, value in requirements
+                            ]
+                        )
+                    ]
+                )
+            )
+        )
+
+    @property
+    def affinity_json(self) -> Mapping[str, Any] | None:
+        """`affinity` as Kubernetes' `Affinity` in JSON, for a pod whose spec is handed over as JSON."""
+        requirements = self._requirements()
+        if not requirements:
+            return None
+        terms = [
+            {'matchExpressions': [{'key': key, 'operator': 'In', 'values': [value]} for key, value in requirements]}
+        ]
+        return {'nodeAffinity': {'requiredDuringSchedulingIgnoredDuringExecution': {'nodeSelectorTerms': terms}}}
+
+    def _tolerations_json(self) -> list[dict[str, str]] | None:
+        if self.site is None:
+            return None
+        return [{'key': _UNREACHABLE_TAINT, 'operator': 'Exists', 'effect': 'NoExecute'}]
+
+    @property
+    def tolerations(self) -> list[k8s.core.v1.TolerationArgs] | None:
+        """For a pod held at home, the unreachable taint tolerated with no time limit; none otherwise.
+
+        From the control plane, an unreachable home node and a down uplink
+        look the same, and the taint's default toleration deletes the pod
+        after 300 s while it runs. Its replacement can only be placed at
+        home, so it would wait, and the kubelet would kill the running
+        original for it once the uplink returned. This holds while the home
+        site has one node.
+        """
+        tolerations = self._tolerations_json()
+        if tolerations is None:
+            return None
+        return [
+            k8s.core.v1.TolerationArgs(key=it['key'], operator=it['operator'], effect=it['effect'])
+            for it in tolerations
+        ]
+
+    @property
+    def priority_class_name(self) -> str | None:
+        """The held `PriorityClass` for a pod these constraints hold; none for a free pod, which names no class."""
+        return HELD_PRIORITY_CLASS if self.holds else None
+
+    def pod_fields(self) -> PodFields:
+        """What the pod carries, as the keyword arguments of `k8s.core.v1.PodSpecArgs`: each one `None` where it carries none."""
+        return PodFields(
+            affinity=self.affinity, tolerations=self.tolerations, priority_class_name=self.priority_class_name
+        )
+
+    def pod_fields_json(self) -> dict[str, Any]:
+        """What the pod carries, as the fields of a pod spec in JSON: only those it carries, so a free pod's is empty."""
+        fields = {
+            'affinity': self.affinity_json,
+            'tolerations': self._tolerations_json(),
+            'priorityClassName': self.priority_class_name,
+        }
+        return {key: value for key, value in fields.items() if value is not None}
+
+
+def _both[T](one: Constraint[T] | None, other: Constraint[T] | None) -> Constraint[T] | None:
+    if one is None:
+        return other
+    if other is None:
+        return one
+    return one & other
+
+
+def at_home(declaration: str) -> Constraints:
+    """The pod held at the home site, for `declaration`: the fact about nodes, or the requirement the component declares, that implies it."""
+    home: HomeSite = Site.HOME
+    return Constraints(site=Constraint(home, (declaration,)))
+
+
+def on_architecture(architecture: Architecture, declaration: str) -> Constraints:
+    """The pod held to nodes of `architecture`, for `declaration`, such as an image pinned for that architecture alone."""
+    return Constraints(architecture=Constraint(architecture, (declaration,)))
+
+
+#: A free pod: its constraints hold it to no nodes, so it carries no
+#: affinity, no toleration and no priority class, and the scheduler places
+#: it on any node it fits. It is stated where the pod is declared, so that a
+#: free pod reads as a decision.
+UNCONSTRAINED = Constraints()
 
 
 # -- Routes ------------------------------------------------------------------

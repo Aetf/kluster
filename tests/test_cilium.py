@@ -26,7 +26,6 @@ from __future__ import annotations
 import ipaddress
 import json
 import re
-from collections.abc import Mapping
 from typing import Any, cast
 
 import pytest
@@ -43,6 +42,7 @@ from k8s_base_installation import (
     declare,
 )
 from mock_monitor import Declaration
+from node_selection import labelled, matches, selected
 from pulumi.output import UNKNOWN
 from referenced_stack import reading_back
 
@@ -468,10 +468,8 @@ PASSWORD = conventions.sealed.BGP_PASSWORD
 #: one key.
 (SEALED_PASSWORD,) = cast('dict[str, str]', SEALED[PASSWORD.name]).values()
 
-#: The label Talos puts on every control plane node (`node_label_spec.go` at
-#: v1.13.9, L83–85), and the key Cilium reads a BGP password under
+#: The key Cilium reads a BGP password under
 #: (`bgp-control-plane-configuration.rst` at v1.20.1, "MD5 Password").
-TALOS_CONTROL_PLANE_LABEL = 'node-role.kubernetes.io/control-plane'
 CILIUM_PASSWORD_KEY = 'password'
 
 #: The lowest port the kernel lets a process bind without
@@ -485,46 +483,25 @@ def _one(run: Run, kind: str) -> dict[str, Any]:
     return declared
 
 
-def _matches(selector: Mapping[str, Any], labels: Mapping[str, str]) -> bool:
-    """Whether a present label selector matches `labels`, as Kubernetes reads one: every requirement holds."""
-    match_labels = cast('dict[str, str]', selector.get('matchLabels', {}))
-    expressions = cast('list[dict[str, Any]]', selector.get('matchExpressions', []))
-    return all(labels.get(key) == value for key, value in match_labels.items()) and all(
-        _holds(expression, labels) for expression in expressions
-    )
+def test_the_cluster_configuration_selects_the_nodes_at_home_alone(applied: Run) -> None:
+    """The nodes that run a BGP instance are those at the home site, where the gateway is, whatever their role.
 
-
-def _holds(expression: Mapping[str, Any], labels: Mapping[str, str]) -> bool:
-    key = cast('str', expression['key'])
-    values = cast('list[str]', expression.get('values', []))
-    match expression['operator']:
-        case 'In':
-            return key in labels and labels[key] in values
-        case 'NotIn':
-            return key not in labels or labels[key] not in values
-        case 'Exists':
-            return key in labels
-        case 'DoesNotExist':
-            return key not in labels
-        case operator:
-            raise AssertionError(f'no such selector operator: {operator}')
-
-
-def test_the_cluster_configuration_selects_the_worker_alone(applied: Run) -> None:
-    """The one node that runs a BGP instance is the worker; no control plane node does.
-
-    Each node carries the label Talos puts on a control plane node, or does
-    not. An absent selector applies the configuration to every node.
+    A node of each site in each role carries the labels its machine
+    configuration gives it at its site, and a control plane the label Talos
+    puts on one; today the worker is the one node at home, and every control
+    plane is in the cloud. An absent selector applies the configuration to
+    every node, and one that matches none runs no instance, which withdraws
+    every `lan` address.
     """
-    nodes: dict[str, dict[str, str]] = {
-        **{node: {TALOS_CONTROL_PLANE_LABEL: ''} for node in conventions.CLOUD_NODES},
-        conventions.HOMELAB_NODE: {},
+    nodes = {
+        (site, control_plane): labelled('a-node', site, control_plane=control_plane, architecture='amd64')
+        for site in conventions.Site
+        for control_plane in (True, False)
     }
-    selector = _one(applied, BGP_CLUSTER)['spec'].get('nodeSelector')
 
-    selected = {node for node, labels in nodes.items() if selector is None or _matches(selector, labels)}
+    chosen = selected(_one(applied, BGP_CLUSTER)['spec'].get('nodeSelector'), nodes)
 
-    assert selected == {conventions.HOMELAB_NODE}
+    assert chosen == {(conventions.Site.HOME, control_plane) for control_plane in (True, False)}
 
 
 def test_the_session_is_the_one_the_gateways_routing_daemon_names(applied: Run) -> None:
@@ -630,7 +607,7 @@ def test_the_peer_carries_the_password_reference_and_both_families(applied: Run)
         ('ipv6', 'unicast'),
     ]
     for family in spec['families']:
-        assert _matches(family['advertisements'], advertisement), family
+        assert matches(family['advertisements'], advertisement), family
 
 
 def test_the_advertisement_selects_the_lan_pools_services(applied: Run) -> None:
@@ -648,13 +625,13 @@ def test_the_advertisement_selects_the_lan_pools_services(applied: Run) -> None:
     }
     selector = advertisement.get('selector')
 
-    announced = {name for name, labels in services.items() if selector is not None and _matches(selector, labels)}
+    announced = {name for name, labels in services.items() if selector is not None and matches(selector, labels)}
 
     assert (advertisement['advertisementType'], advertisement['service']['addresses']) == (
         'Service',
         ['LoadBalancerIP'],
     )
-    assert announced == {name for name, labels in services.items() if _matches(lan_pool, labels)}
+    assert announced == {name for name, labels in services.items() if matches(lan_pool, labels)}
     assert announced
     assert announced != set(services)
 

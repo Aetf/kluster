@@ -15,6 +15,7 @@ census is held to that.
 from __future__ import annotations
 
 import base64
+import dataclasses
 import datetime as dt
 import importlib
 import json
@@ -46,7 +47,9 @@ from k8s_base_installation import (
     Run,
     release_assets,
 )
+from k8s_quantity import quantity
 from mock_monitor import Recorder, declaring, run_under_backstop
+from node_selection import schedulable
 from renovate_text import effective, package_rules, scalar
 from section_numbers import sections
 
@@ -250,30 +253,6 @@ def test_the_namespace_is_privileged_for_the_node_exporter(applied: Run) -> None
     assert applied.inputs(CHART, STACK)['namespace'] == conventions.MONITORING_NAMESPACE
 
 
-def _admits(node: Mapping[str, str], selector: Mapping[str, str], affinity: Mapping[str, Any]) -> bool:
-    """Whether a pod with this `nodeSelector` and `affinity` may be scheduled on a node with these labels.
-
-    Kubernetes' rule for the required part: every `nodeSelector` pair matches,
-    and at least one `nodeSelectorTerm` has every expression hold.
-    """
-    if any(node.get(key) != value for key, value in selector.items()):
-        return False
-    required = affinity.get('nodeAffinity', {}).get('requiredDuringSchedulingIgnoredDuringExecution')
-    if required is None:
-        return True
-
-    def holds(expression: Mapping[str, Any]) -> bool:
-        key, operator, values = expression['key'], expression['operator'], expression.get('values', [])
-        return {
-            'In': lambda: node.get(key) in values,
-            'NotIn': lambda: node.get(key) not in values,
-            'Exists': lambda: key in node,
-            'DoesNotExist': lambda: key not in node,
-        }[operator]()
-
-    return any(all(holds(e) for e in term.get('matchExpressions', [])) for term in required['nodeSelectorTerms'])
-
-
 def _talos_nodes() -> dict[str, dict[str, str]]:
     """The cluster's nodes, labeled as Talos labels them: every cloud node is a control plane node, the worker is not."""
     return {
@@ -283,24 +262,42 @@ def _talos_nodes() -> dict[str, dict[str, str]]:
 
 
 @pytest.mark.parametrize('workload', ['alertmanager', 'vmagent'])
-def test_the_workload_can_schedule_on_the_worker_alone(applied: Run, workload: str) -> None:
-    """Each holds a condition that only the worker meets.
+def test_the_workload_admits_no_cloud_node_and_stays_through_an_outage_of_the_uplink(
+    applied: Run, workload: str
+) -> None:
+    """Each holds a condition that no cloud node meets, so the home site holds it, at the held priority.
 
-    Alertmanager posts to Home Assistant at an address only the worker
-    reaches (rfc-008 §4.1). vmagent reads etcd's metrics listener on every
-    control plane, which the node firewall admits from KubeSpan alone; from a
-    control plane, its call to its own node's listener would arrive from a
-    pod address, which no opening admits (`components.talos.HOST_OPENINGS`).
+    Alertmanager posts to Home Assistant at its home address, which no cloud
+    node has a route to (rfc-008 §4.1). vmagent reads etcd's metrics listener
+    on every control plane, which the node firewall admits from KubeSpan
+    alone; from a control plane, its call to its own node's listener would
+    arrive from a pod address, which no opening admits
+    (`components.talos.HOST_OPENINGS`). Held at home, each tolerates its
+    node's unreachable taint with no time limit, so an outage of the uplink
+    evicts neither.
     """
     spec = _values(applied)[workload]['spec']
 
-    schedulable = {
-        name
-        for name, labels in _talos_nodes().items()
-        if _admits(labels, spec.get('nodeSelector', {}), spec.get('affinity', {}))
-    }
+    assert schedulable(spec) == {conventions.HOMELAB_NODE}
+    assert spec['priorityClassName'] == conventions.HELD_PRIORITY_CLASS
+    (toleration,) = [it for it in spec['tolerations'] if it['key'] == 'node.kubernetes.io/unreachable']
+    assert (toleration['operator'], toleration['effect']) == ('Exists', 'NoExecute')
+    assert 'tolerationSeconds' not in toleration
 
-    assert schedulable == {conventions.HOMELAB_NODE}
+
+def test_each_store_writes_in_the_class_that_caps_what_it_writes_to_the_disk_etcd_shares(applied: Run) -> None:
+    """Its claim is `local-path`, which binds wherever it is first placed; on a control plane the class caps its writes.
+
+    The operator carries `podMetadata`'s annotations to the store's pod
+    template, and containerd reads the class off the pod's annotation.
+    """
+    recent = _values(applied)['vmsingle']['spec']
+    history = _history(applied)['spec']
+
+    for spec in (recent, history):
+        assert spec['storage']['storageClassName'] == conventions.SC_LOCAL_PATH
+        annotations = spec['podMetadata']['annotations']
+        assert annotations[conventions.BLOCKIO_POD_ANNOTATION] == conventions.ETCD_DISK_WRITER.name
 
 
 # -- Grafana's admin -----------------------------------------------------------------
@@ -719,7 +716,7 @@ def test_each_mutating_endpoint_of_the_store_takes_a_generated_key_no_rendered_o
     assert len(set(keys)) == len(keys), 'two endpoints share a key'
 
 
-# -- Memory on the worker -----------------------------------------------------------
+# -- Resources ----------------------------------------------------------------------
 
 #: The logical name of the chart each pin installs, as the program declares it.
 INSTALLED_AS = {memory.STACK_CHART: STACK, memory.METRICS_SERVER_CHART: METRICS_SERVER}
@@ -743,7 +740,7 @@ def _mib(quantity: str) -> int:
 
 
 def _installed_memory(
-    run: Run, containers: tuple[memory.Container, ...] = memory.WORKER_CONTAINERS
+    run: Run, containers: tuple[memory.Container, ...] = memory.CONTAINERS
 ) -> dict[str, Mapping[str, Any]]:
     """Each container's `resources`, read where its chart reads them in the values the program installs.
 
@@ -759,8 +756,8 @@ def _installed_memory(
     return found
 
 
-def test_the_memory_requests_on_the_worker_fit_monitorings_budget(applied: Run) -> None:
-    """What the scheduler reserves for monitoring on the worker is within nodes.md §4.4's budget, rfc-008 §6.1's request.
+def test_the_memory_requests_fit_monitorings_budget(applied: Run) -> None:
+    """What the scheduler reserves for monitoring is within nodes.md §4.4's budget, planned at the home site, rfc-008 §6.1's request.
 
     The requests are those of the containers charged to monitoring's line of
     nodes.md §4.4, read from the values each chart is installed with, at the
@@ -777,7 +774,7 @@ def test_the_history_stores_request_is_its_own_line_beside_monitorings(applied: 
     """The history store is charged to a line of its own, as the operator ruled (Aetf/kluster-ops#790, option A).
 
     Its request is read where the declared store reads it, so monitoring's
-    worker memory is the two lines together: the stack's containers within
+    memory is the two lines together: the stack's containers within
     `BUDGET_MIB`, the history store within `HISTORY_BUDGET_MIB`.
     """
     charged = memory.charged_to(memory.Line.HISTORY)
@@ -792,23 +789,67 @@ def test_the_history_stores_request_is_its_own_line_beside_monitorings(applied: 
     assert sum(requested.values()) + sum(monitoring.values()) <= memory.BUDGET_MIB + memory.HISTORY_BUDGET_MIB
 
 
+def _limited(resources: Mapping[str, Any], *where: str) -> None:
+    """Both a request and a limit for CPU and for memory, each request at most its limit."""
+    for resource in ('cpu', 'memory'):
+        request, limit = resources['requests'][resource], resources['limits'][resource]
+        assert quantity(request) <= quantity(limit), (*where, resource)
+
+
+def test_every_container_the_stack_runs_requests_and_is_limited_in_cpu_and_memory(applied: Run) -> None:
+    """The scheduler may place any of the stack's pods on a cloud node, where etcd shares the cores (workloads.md §1).
+
+    Read where each chart reads a container's resources in the values the
+    program installs, and on each store's init containers, which run before
+    the store on the node it is given; a pod with one unlimited container has
+    no pod-level limit at all.
+    """
+    for container in memory.CONTAINERS:
+        _limited(_installed_memory(applied, (container,))[container.name], container.name)
+    stores = {'vmsingle': _values(applied)['vmsingle']['spec'], 'vmsingle-history': _history(applied)['spec']}
+    for store, spec in stores.items():
+        assert spec['initContainers'], store
+        for container in spec['initContainers']:
+            _limited(container['resources'], store, container['name'])
+
+
+def test_every_container_of_every_job_requests_and_is_limited_in_cpu_and_memory(applied: Run) -> None:
+    """A job's pod is a free pod too, which the scheduler may place on a cloud node (workloads.md §1)."""
+    jobs = [it for it in applied.monitor.of_type(CRONJOB) if it.name.startswith(f'{STACK}-')]
+
+    assert jobs
+    for job in jobs:
+        pod = job.inputs['spec']['jobTemplate']['spec']['template']['spec']
+        for container in [*pod.get('initContainers', []), *pod['containers']]:
+            _limited(container['resources'], job.name, container['name'])
+
+
+def test_the_node_exporter_outranks_every_pod_the_scheduler_may_place_on_its_node(applied: Run) -> None:
+    """Its DaemonSet keeps it on its node, so a free pod placed first must not leave it nothing to preempt.
+
+    A free pod names no class and runs at 0, and a held pod at a class below
+    the system's, so a class the system reserves outranks both.
+    """
+    assert _values(applied)['prometheus-node-exporter']['priorityClassName'].startswith('system-')
+
+
 def test_every_memory_limit_is_at_least_its_request(applied: Run) -> None:
     """A limit under its request is refused by the API server, for the pod, at apply."""
     for name, resources in _installed_memory(applied).items():
-        if 'limits' in resources:
-            assert _mib(resources['limits']['memory']) >= _mib(resources['requests']['memory']), name
+        assert _mib(resources['limits']['memory']) >= _mib(resources['requests']['memory']), name
 
 
-def test_every_memory_value_leaves_cpu_to_the_charts_defaults(applied: Run) -> None:
-    """Only memory is set, so each chart and the operator keep the CPU they would give a container.
-
-    The operator fills each resource it finds unset from its defaults, CPU
-    apart from memory (`build.Resources`, `factory/build/container.go`
-    L97-142 at operator v0.74.0); a chart merges the values handed to it
-    over its own.
-    """
-    for name, resources in _installed_memory(applied).items():
-        assert {key for side in resources.values() for key in side} == {'memory'}, name
+@pytest.mark.parametrize(
+    ('requested', 'limit', 'peak'),
+    [(10, 50, 50), (10, 50, 60), (60, 50, None)],
+    ids=['a limit at the peak', 'a limit below the peak', 'a request above the limit'],
+)
+def test_a_cpu_figure_that_would_throttle_its_peak_or_exceed_its_limit_is_refused(
+    requested: int, limit: int, peak: int | None
+) -> None:
+    """A limit is set above the peak it was read against, so the peak is never throttled."""
+    with pytest.raises(ValueError, match='CPU'):
+        _ = memory.Cpu(request=requested, limit=limit, peak=peak)
 
 
 def test_grafana_reads_the_stacks_datasources_from_a_mount_rather_than_a_sidecar(
@@ -872,11 +913,14 @@ def test_grafanas_pod_changes_when_what_renders_its_datasources_changes(monkeypa
 
     assert _digest(pin) == first
     assert _digest(bumped) != first
-    head, *rest = memory.WORKER_CONTAINERS
-    grown = memory.Container(
-        head.name, head.chart, head.path, memory.Memory(head.memory.request + 1, head.memory.limit)
+    head, *rest = memory.CONTAINERS
+    grown = dataclasses.replace(
+        head,
+        resources=dataclasses.replace(
+            head.resources, memory=memory.Memory(head.resources.memory.request + 1, head.resources.memory.limit)
+        ),
     )
-    monkeypatch.setattr(memory, 'WORKER_CONTAINERS', (grown, *rest))
+    monkeypatch.setattr(memory, 'CONTAINERS', (grown, *rest))
     assert _digest(pin) != first
 
 
@@ -1673,20 +1717,6 @@ def _history_service(run: Run) -> str:
     """
     metadata = _history(run)['metadata']
     return f'http://vmsingle-{metadata["name"]}.{metadata["namespace"]}.svc:8428'
-
-
-def test_the_history_store_runs_on_the_worker_alone(applied: Run) -> None:
-    """It is a second vmsingle beside the chart's, on the worker's local disk, as every store of the stack is."""
-    spec = _history(applied)['spec']
-
-    schedulable = {
-        name
-        for name, labels in _talos_nodes().items()
-        if _admits(labels, spec.get('nodeSelector', {}), spec.get('affinity', {}))
-    }
-
-    assert schedulable == {conventions.HOMELAB_NODE}
-    assert spec['storage']['storageClassName'] == conventions.SC_LOCAL_PATH
 
 
 def test_the_history_stores_mutating_endpoints_take_the_stacks_keys(applied: Run) -> None:
@@ -2967,19 +2997,6 @@ def test_every_series_the_pull_writes_is_kept_by_the_history_store(applied: Run)
         assert _relabel(series, relabeling) is not None, metric
 
 
-def test_the_pull_can_schedule_on_the_worker_alone(applied: Run) -> None:
-    """With the rest of the stack, off the cores the cloud nodes share with etcd."""
-    pod = _pull_pod(applied)
-
-    schedulable = {
-        name
-        for name, labels in _talos_nodes().items()
-        if _admits(labels, pod.get('nodeSelector', {}), pod.get('affinity', {}))
-    }
-
-    assert schedulable == {conventions.HOMELAB_NODE}
-
-
 def test_a_declared_volume_physical_published_no_ocid_for_is_refused_by_name() -> None:
     """A targeted `physical` apply that left a volume uncreated would otherwise leave it pulled by nothing, silently."""
     from kluster.components.monitoring import oci_metrics
@@ -3080,17 +3097,3 @@ def test_the_certificate_check_mounts_no_secret(applied: Run) -> None:
 
     assert [it for it in pod['volumes'] if 'secret' in it or 'projected' in it] == []
     assert pod['automountServiceAccountToken'] is False
-
-
-@pytest.mark.parametrize('row', CHECKS, ids=lambda row: row.cronjob)
-def test_each_check_can_schedule_on_the_worker_alone(applied: Run, row: schedule.ScheduledJob) -> None:
-    """With the rest of the stack, off the cores the cloud nodes share with etcd."""
-    pod = _check_pod(applied, row)
-
-    schedulable = {
-        name
-        for name, labels in _talos_nodes().items()
-        if _admits(labels, pod.get('nodeSelector', {}), pod.get('affinity', {}))
-    }
-
-    assert schedulable == {conventions.HOMELAB_NODE}

@@ -21,12 +21,14 @@ lock-in, and declarative management using Pulumi.
 
 -   **Cloud site (OCI, Phoenix)**: **three A1.Flex nodes (2 OCPU / 8 GB
     each) forming the HA control plane** — etcd quorum stays within one
-    region, so Raft never crosses the WAN — and simultaneously serving as
-    the ingress/worker pool for internet-facing and stable-IP workloads
-    (hath). About $44 a month past the OCI free allowance
+    region, so Raft never crosses the WAN — and simultaneously the
+    ingress for every internet-facing workload, wherever its pods run;
+    the scheduler places pods on them as on any node, and hath stays on
+    its cache's node. About $44 a month past the OCI free allowance
     (nodes.md §3.2).
 -   **Homelab site**: one large Talos **worker** VM on the physical server
-    (libvirt) for internal, NAS-coupled, GPU, and bulk-egress workloads.
+    (libvirt) for every pod a fact or a declaration holds at home
+    (declarative/workloads.md §1), and the pods the scheduler places there.
     The home site holds the data gravity; the cloud site holds the
     control plane and the public face. **No management inbound ports are
     required at the home network** (§5.1; the sole app-level survivor is
@@ -49,6 +51,13 @@ lock-in, and declarative management using Pulumi.
 -   **Egress**: default per-node local egress; bulk egress stays on the home
     uplink; the one stable-IP workload, hath, leaves on its own address
     by a mechanism its migration wave chooses (§3.5).
+
+**A component may declare that it keeps working while the uplink is
+down.** It then answers a client at home at its home Gateway or VIP
+without the uplink, while the worker stays up: its pods run at home, the
+components it calls declare the same, and the cluster's DNS answers on
+each site. An audience on `lan` declares nothing: while the uplink is
+up, a `lan` VIP's connection reaches a backend on any node.
 
 ### 1.2 Network Topology
 
@@ -340,9 +349,9 @@ endpoint at its IPv4 (cert SANs include the NLB's IPv4, and no
 certificate names its IPv6). No home-side path is involved in managing
 the cluster.
 
-**Escape hatch — client-IP-sensitive non-HTTP on the homelab pool**: if a
+**Escape hatch — client-IP-sensitive non-HTTP at the home site**: if a
 raw TCP/UDP service ever both needs real client IPs *and* must run
-homelab-side (too big for the cloud pool), the cloud path can't serve it
+homelab-side, the cloud path can't serve it
 (`Cluster` SNATs, `Local` needs local backends, DSR can't cross WG/NAT).
 Expose it via the **home uplink** instead: UDM port-forward to its `lan`
 VIP — DNAT preserves the source address end-to-end. Costs: home-IP DNS
@@ -483,9 +492,11 @@ one home view.
     workload; anything ever needing one fixed cloud egress IP takes
     the stable-IP pattern below. The OCI
     10 TB/mo egress allowance is tenancy-wide, shared by all three.
--   **Bulk egress (qbittorrent, seeding)**: pinned to the homelab
-    pool; leaves via the home uplink. Never routed through a
-    metered-egress cloud path.
+-   **Bulk egress (qbittorrent, seeding)**: held at the home site by
+    the egress it declares (declarative/workloads.md §1); leaves via the
+    home uplink. Never routed through a metered-egress cloud path: every
+    path out of a cloud node, the KubeSpan tunnel to the worker included,
+    leaves through that node's metered egress.
 -   **A roaming device's sync crosses the cloud's metered egress, by
     the operator's ruling.** No syncthing replica runs in the cloud: the
     balancer's peer port reaches the NAS instance on the worker, so a
@@ -547,9 +558,9 @@ its own, and its ports tell it apart from the Gateway's; a raw row of
 any kind brings its own allow, since the namespace's default-deny admits
 only what a Gateway forwards (§4.1).
 
-Placement (which node runs the pods) is orthogonal for every row — set
-by scheduling constraints, with §3.5's egress rules deciding it for
-bulk-egress workloads and storage locality deciding it for hath.
+Placement (which node runs the pods) is the scheduler's, within the
+constraints a node fact or the component's declaration forces
+(declarative/workloads.md §1), and no row forces one.
 
 ## 4. Security & Observability
 
@@ -710,9 +721,10 @@ producer paths exist by necessity, not preference:
     (cluster-infra.md §1's alerting spine). Direct by design: an alert
     about the home network must not detour through a third party, and
     must not wait on anything slower than a webhook POST. The post goes
-    to Home Assistant's own address, which only the homelab worker
-    reaches, so monitoring runs there
-    ([rfc-008](../rfc/rfc-008-workload-migration.md) §4.1).
+    to Home Assistant's own address, which no cloud node reaches, so
+    Alertmanager is held at the home site
+    (declarative/workloads.md §1;
+    [rfc-008](../rfc/rfc-008-workload-migration.md) §4.1).
 -   **Out-of-cluster**: CI alerts (deploy failures, the drift check)
     and the ops repo's own workflows must not route through the
     cluster — they report on what deploys the cluster and on the jobs

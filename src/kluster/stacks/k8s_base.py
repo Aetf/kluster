@@ -3,8 +3,10 @@
 Gateway API CRDs, Cilium, sealed-secrets, cert-manager, CNPG and VolSync with
 the volume snapshot definitions it watches, VictoriaMetrics, NFD and the GPU
 plugin, the small standing set the legacy cluster proved, the hourly etcd
-snapshot with its daily restore-verify and the state table's daily upkeep —
-in that dependency order, per docs/declarative/cluster-infra.md. The component list is closed: additions
+snapshot with its daily restore-verify, the state table's daily upkeep and
+the `PriorityClass` a held pod runs at — in that dependency order, per
+docs/declarative/cluster-infra.md, monitoring apart, which is behind the
+`PriorityClass` since it renders pods that name it. The component list is closed: additions
 argue for themselves in writing first.
 
 Its components live in areas of `kluster/components/`, the way `physical`
@@ -87,6 +89,7 @@ from kluster.components.local_path import LocalPathProvisioner
 from kluster.components.monitoring import Monitoring, OciPull
 from kluster.components.postgres import PostgresOperator
 from kluster.components.reloader import Reloader
+from kluster.components.scheduling import HeldPriority
 from kluster.components.sealing import SealedSecretsController
 from kluster.components.state_upkeep import StateUpkeep
 from kluster.conventions.backup import BackupFamily
@@ -154,6 +157,9 @@ async def main() -> None:
     sealing = SealedSecretsController(
         'sealed-secrets', chart=versions.chart['sealed-secrets'], after=[cilium], opts=opts
     )
+    # The class a held pod names, which the API server refuses a pod for
+    # until it exists: a component that declares a held pod is behind it.
+    held = HeldPriority('held-priority', after=[cilium], opts=opts)
     _ = BgpSession(
         'bgp',
         after=[cilium, sealing],
@@ -184,7 +190,7 @@ async def main() -> None:
         'monitoring',
         stack_chart=versions.chart['victoria-metrics-k8s-stack'],
         metrics_server_chart=versions.chart['metrics-server'],
-        after=[cilium, sealing],
+        after=[cilium, sealing, held],
         alert_webhook=sealed_ciphertext(conventions.sealed.ALERT_WEBHOOK, sealed),
         kubeconfig_expiry=kubeconfig_expiry,
         writer_key=sealed_ciphertext(

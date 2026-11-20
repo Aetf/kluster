@@ -1,4 +1,4 @@
-"""The state table's daily upkeep: the census, the prune of the expired rows and the ceiling, as a CronJob on the control planes.
+"""The state table's daily upkeep: the census, the prune of the expired rows and the ceiling, as a CronJob.
 
 **What a run does** is what `state-backend census --prune-expired --yes
 --ceiling` does on a workstation, through the same function
@@ -33,17 +33,18 @@ the pod mounts it as one, readable by the pod's group alone, which libpq
 accepts for a key root owns. The connection string goes through the pooler's
 transaction entry with `verify-full` against the bundle's CA, and the census's
 session is read-only (physical/state-backend.md §2). Nothing in the cluster
-stands between a control plane and the box: the namespace is a platform
+stands between a node and the box: the namespace is a platform
 namespace, which no egress policy covers, and the box admits its port from
 anywhere (physical/state-backend.md §4). The job speaks to Postgres alone, so
 its pod mounts no Kubernetes token.
 
 **The namespace holds the job and what it mounts, and nothing else**, so no
-other workload can mount the bundle. The job runs on the control planes, as
-the etcd snapshot does: it goes on through an outage of the home site, its
-traffic stays in the cloud, and only the control planes' kubelets are served
-the bundle. Its pod carries CPU and memory limits, as anything the cloud pool
-may hold does (declarative/workloads.md §1).
+other workload can mount the bundle. The scheduler places the job, as it
+does the etcd snapshot (`kluster.lib.k8s.UNCONSTRAINED`): nothing about a
+node holds it, and it goes on through an outage of the home site without a
+constraint, since the scheduler places no new pod on a node that is not
+ready. Its pod carries CPU and memory limits, as any pod the scheduler may
+place on a cloud node does (declarative/workloads.md §1).
 """
 
 from __future__ import annotations
@@ -56,7 +57,7 @@ import pulumi_kubernetes as k8s
 from kluster import conventions
 from kluster.conventions.schedule import STATE_UPKEEP
 from kluster.lib import templates
-from kluster.lib.k8s import CLOUD_POD_AFFINITY, namespace, sealed_value
+from kluster.lib.k8s import UNCONSTRAINED, namespace, sealed_value
 from kluster.lib.state_backend import state
 from kluster.lib.versions import ImagePin
 from putils import Component
@@ -161,7 +162,7 @@ def _pod(image: ImagePin) -> k8s.core.v1.PodSpecArgs:
         restart_policy='Never',
         # It speaks Postgres alone, and never Kubernetes.
         automount_service_account_token=False,
-        affinity=CLOUD_POD_AFFINITY,
+        **UNCONSTRAINED.pod_fields(),
         security_context=k8s.core.v1.PodSecurityContextArgs(
             run_as_non_root=True,
             run_as_user=UPKEEP_USER,
