@@ -1203,6 +1203,47 @@
       enabled: false,
     },
     {
+      // seedwatch's interpreter, the `python` base of its image. Its line is
+      // the one the `uv.lock` of the pinned `SEEDWATCH_COMMIT` carries wheels
+      // for; on a line the lock has none for, `uv sync` falls to source
+      // builds the slim base has no compiler for. So another minor or major
+      // waits on the dashboard, and is approved with the `SEEDWATCH_COMMIT`
+      // bump whose lock carries that line. Not an `allowedVersions` bound:
+      // `tests/test_images.py` reads each such bound on this base as one on
+      // `.python-version`'s line, and seedwatch is not this repository's
+      // Python. Digest refreshes stay in the monthly group above.
+      matchFileNames: [
+        'docker/seedwatch.Containerfile',
+      ],
+      matchDepNames: [
+        'docker.io/library/python',
+      ],
+      matchUpdateTypes: [
+        'major',
+        'minor',
+      ],
+      dependencyDashboardApproval: true,
+    },
+    {
+      // The uv that installs seedwatch's lock in the build stage, which
+      // releases about weekly and is no part of the published image: each
+      // release would be a pull request against the Containerfile and a new
+      // tag of the same environment. So it is offered once a month, in the
+      // window where the base refreshes above already move seedwatch's tag,
+      // which keeps it at most a month behind for reading a newer upstream
+      // lock. Not in their group, where a uv that cannot read the lock would
+      // hold every image's refresh red.
+      matchFileNames: [
+        'docker/seedwatch.Containerfile',
+      ],
+      matchDepNames: [
+        'ghcr.io/astral-sh/uv',
+      ],
+      schedule: [
+        '* 0-3 1 * *',
+      ],
+    },
+    {
       // The any-Terraform-provider bridge every SDK under `sdks/` is generated
       // with. One dependency written once per SDK, so one bump moves every
       // entry and regenerates every SDK; alone, because a bridge release
