@@ -1,0 +1,155 @@
+# Authelia's configuration, rendered by `kluster.components.apps.authelia`.
+# Authelia renders it once more as it reads it, through its `template` filter:
+# each `secret` below reads a file of a Secret the pod mounts, so nothing
+# secret is here. The other secrets reach it as `AUTHELIA_*_FILE` variables.
+
+server:
+  address: {{ address | tojson }}
+  # A forward-auth request carries the request's own headers, the session
+  # cookie among them; the default buffer answers a large one with a 431.
+  buffers:
+    read: 8192
+  # The kubelet's probes read `/api/health`; the image's own check is not run.
+  disable_healthcheck: true
+  # Declaring an endpoint replaces Authelia's default ones: these are every
+  # endpoint the portal serves.
+  endpoints:
+    authz:
+{%- for endpoint in endpoints %}
+      {{ endpoint.name }}:
+        implementation: {{ endpoint.implementation }}
+        authn_strategies:
+{%- for strategy in endpoint.strategies %}
+          - name: {{ strategy.name }}
+{%- if strategy.schemes %}
+            schemes: {{ strategy.schemes | tojson }}
+{%- endif %}
+{%- endfor %}
+{%- endfor %}
+
+theme: light
+
+log:
+  # Debug writes several lines per forward-auth request.
+  level: info
+
+totp:
+  issuer: {{ zone | tojson }}
+
+authentication_backend:
+  password_reset:
+    disable: false
+  file:
+    path: {{ users | tojson }}
+    watch: true
+    search:
+      email: true
+    # What a new or changed password is hashed with; a stored hash carries
+    # its own parameters.
+    password:
+      algorithm: argon2
+      argon2:
+        variant: argon2id
+        iterations: 1
+        memory: 131072
+        parallelism: 8
+        key_length: 32
+        salt_length: 16
+
+session:
+  name: authelia_session
+  expiration: 1d
+  inactivity: 1d
+  remember_me: 1y
+  redis:
+    host: {{ redis_host | tojson }}
+    port: {{ redis_port }}
+  cookies:
+    - domain: {{ zone | tojson }}
+      authelia_url: {{ portal | tojson }}
+      default_redirection_url: {{ landing | tojson }}
+
+storage:
+  local:
+    path: {{ database | tojson }}
+
+notifier:
+  # Authelia sends a test message before it binds its listener, and a relay
+  # that is down would keep the portal down with it.
+  disable_startup_check: true
+  smtp:
+    address: {{ smtp | tojson }}
+    # The relay offers no STARTTLS and speaks to the cluster's pods in the
+    # clear.
+    disable_require_tls: true
+    identifier: {{ identifier | tojson }}
+    sender: {{ sender | tojson }}
+    subject: '[Authelia] {title}'
+
+# Failed sign-ins are counted by user alone: the first element of
+# `X-Forwarded-For` the gate hands the portal is the client's own word.
+regulation:
+  modes:
+    - user
+
+access_control:
+  default_policy: deny
+  rules:
+{%- for rule in rules %}
+    - domain: {{ rule.domains | tojson }}
+{%- if rule.resources %}
+      resources: {{ rule.resources | tojson }}
+{%- endif %}
+      subject: {{ rule.subject | tojson }}
+      policy: {{ rule.policy | tojson }}
+{%- endfor %}
+
+identity_providers:
+  oidc:
+    jwks:
+      - key: {{ jwks_key }}
+    cors:
+      endpoints:
+        - authorization
+        - token
+        - revocation
+        - introspection
+        - userinfo
+    authorization_policies:
+{%- for client in clients %}
+      {{ client.name }}:
+        default_policy: deny
+        rules:
+{%- for grant in client.grants %}
+          - policy: {{ grant.policy | tojson }}
+            subject: {{ grant.subject | tojson }}
+{%- endfor %}
+{%- endfor %}
+{%- if claims %}
+    claims_policies:
+{%- for client in claims %}
+      {{ client.name }}:
+        id_token: {{ client.id_token | tojson }}
+{%- endfor %}
+{%- endif %}
+    clients:
+{%- for client in clients %}
+      - client_id: {{ client.id }}
+        client_name: {{ client.name | tojson }}
+        client_secret: {{ client.secret }}
+        public: false
+        authorization_policy: {{ client.name | tojson }}
+{%- if client.id_token %}
+        claims_policy: {{ client.name | tojson }}
+{%- endif %}
+{%- if client.pkce %}
+        require_pkce: true
+        pkce_challenge_method: S256
+{%- endif %}
+        token_endpoint_auth_method: {{ client.token_endpoint_auth | tojson }}
+        userinfo_signed_response_alg: none
+        response_types: ["code"]
+        scopes: {{ client.scopes | tojson }}
+        grant_types: {{ client.grant_types | tojson }}
+        redirect_uris: {{ client.redirect_uris | tojson }}
+{%- endfor %}

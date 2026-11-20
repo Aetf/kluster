@@ -41,8 +41,8 @@ owns sequencing, data movement, and teardown.
         row of `LEGACY_VHOSTS` — and takes the row out of the held
         state, so `apps` publishes the record and `dns` the rewrite.
         Verification needs something deployed, and a merge is what
-        deploys, so the land and the cut are two merges; hath and matrix
-        take a third, below.
+        deploys, so the land and the cut are two merges; hath, authelia
+        and matrix take a third, below.
     -   **A window's applications land together and cut together.** One
         that does not verify is left out of the cut, and its land is
         reverted on its own. A home-only application publishes no record
@@ -284,8 +284,12 @@ spends its way back (rfc-008 §5.9).
     relay keeps relaying for its legacy senders until Wave C's head
     (§0 rule 1). **authelia** (SSO gates everything else) moves with it,
     its users and second factors on a backed claim, and the legacy
-    authentication service stops at this wave's head (§0 rule 1). The
-    authentication canary ships with it.
+    authentication service stops at this wave's head (§0 rule 1). It
+    moves in three merges: a land that wires it with a receiver in the
+    server's place, which the legacy claim is streamed into, a second
+    merge that starts the server on what was streamed, and the cut,
+    which deletes the receiver (rfc-008 §5.2). The authentication canary
+    ships with it, in a namespace of its own.
 -   **Wave A2 — blog, splitpro, matrix, syncthing, stdiscosrv.** This
     wave reaches the worker as well as the cloud pool. **blog/static
     sites** (prerequisite: blog CI publishes the built branch; cluster
