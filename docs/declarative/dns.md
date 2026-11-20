@@ -634,6 +634,7 @@ mean something. *How* is the row's type:
 | --- | --- | --- | --- | --- |
 | a `Route` | HTTPS by name, in each zone it names | `Proxied`, with an optional gate, or `Direct`, with its reason | `Rewrite`, or `Bare` | `Rewrite` |
 | a `Passthrough` | TLS the pod terminates, on 443, by name, in the primary | `Direct` | `Rewrite` | `Rewrite` |
+| a `PortRedirect` | HTTPS on 443, by name, in the primary, answered with a redirect to the same name at a raw port of its exposure | `Direct` | `Rewrite` | `Rewrite` |
 | an `Apex` | a website's apex, in each zone it names | set by the type, its address the web origin's (§2) | none | none |
 | a `Port` | a raw port, at a Gateway's address | `Balancer`, with the names it is dialed at, `Dedicated` or `SiteForward` | `Vip`, with its name, or `Heard` | `Vip`, or `Heard` |
 
@@ -654,7 +655,11 @@ on `internet` alone and one on a home Gateway alone, held or not, which
 is one service under two names; a `device` beside anything but
 `Route`s, held or not, since its relay forwards to one port; a heard
 side on a port not served on UDP alone, since a packet is what is
-heard; an empty reason, an empty zone set, and a host that is empty or
+heard; a `PortRedirect` whose port is no TCP `Port` of its `Exposure` that
+serves every Gateway the redirect sets at the redirect's host — at the
+balancer for `internet`, at a `Vip` of that host for a home side —
+since its client would be sent to an address that does not serve the
+port; an empty reason, an empty zone set, and a host that is empty or
 `@`.
 
 **What is a relation between rows is an invariant of the census**, held
@@ -669,8 +674,12 @@ so they agree on both. A raw port's `Host` shares a name only with a
 row published `Direct`, since a proxied record would hide the raw port,
 every home side on the name answers at one VIP, and any other shared
 name is refused. The discovery server's `syncapi` is the case it
-exists for: one `Passthrough` and one `Port`, one direct record, and
-one rewrite to the LAN VIP.
+exists for: the peer port, the discovery server's `Port` and its
+`PortRedirect`, one direct record, the redirect's, and one rewrite to the
+LAN VIP. **The census with every `Held` taken off holds too**: a held
+name publishes nothing, so two exposures that will both publish it pass
+every other check until the cut, and the census tests take each wrapper
+off and hold that census to one exposure per name and one answer.
 
 **A service reachable from home and from outside has one name.** Outside
 it resolves to the public address; at home the rewrite resolves the same
@@ -681,6 +690,21 @@ one `host`, and its Gateways are fields of that row, so one name is what
 a row says by default; a second name takes a second row, and the
 constructor refuses the pair. No row keeps a `lan.ucw.phd` name (§4).
 
+**A client that names a raw HTTPS port's server with no port is
+answered on 443, by name, with a redirect to that port.** That is a
+`PortRedirect` row beside the `Port`: on each Gateway it sets, the
+Gateway ends TLS on the zone's wildcard certificate and answers every
+request with a `308` to the same name at the port, path and query kept,
+forwarding to nothing and asking no gate. A client certificate is
+presented on the raw port's leg alone, where the pod asks for it. It is
+how the discovery server keeps the address every device holds,
+`https://syncapi.<primary>` with no port
+([rfc-008](../rfc/rfc-008-workload-migration.md) §4.1,
+[Aetf/kluster-ops#723](https://github.com/Aetf/kluster-ops/issues/723)).
+The row stands in for a `Passthrough`, which Cilium cannot serve beside
+the zone's wildcard listener, and becomes one when the pinned Cilium can
+(the comment on its pin in `Pulumi.yaml`).
+
 **A gate belongs to `internet`, since the home has none.** It is the
 `gate` of `Proxied` — the portal's session, or HTTP Basic for a client
 that cannot follow a redirect — declared on the row, so the census says
@@ -688,10 +712,11 @@ which names are gated, and a gated name's home side is answered ungated
 (cluster-infra.md §2).
 
 **A held row is the legacy VPS's until its cut.** `Held` wraps a
-`Route`, a `Passthrough`, or a raw port's `Host` while a record of this
-stack still points its name at the legacy VPS: by the VPS's address or
-its anchor (`legacy.IP_ARCHVPS`, `legacy.ANCHOR_ARCHVPS`), in an
-application's block of `legacy.py` or in the web origin's pair. A held
+`Route`, a `Passthrough`, a `PortRedirect`, or a raw port's `Host` while a
+record of this stack still points its name at the legacy VPS: by the
+VPS's address or its anchor (`legacy.IP_ARCHVPS`,
+`legacy.ANCHOR_ARCHVPS`), in an application's block of `legacy.py` or
+in the web origin's pair. A held
 row's route attaches to its Gateways and publishes no record and no
 rewrite, and neither does a VIP host that a held row shares, so the
 name keeps resolving where the legacy VPS publishes it while the new
@@ -706,7 +731,7 @@ each derivation that reads it, and its invariant go with it, with no
 row changing shape.
 
 **Every rewrite derives from the rows** (`rewrites.rewrites`, §3). A
-`Route` or a `Passthrough` with a home side is rewritten to that
+row by name with a home side is rewritten to that
 Gateway's VIP in each zone it is published in, and `Bare` adds the bare
 label, which `lan-gw` redirects to the name. A raw port's `Vip`
 rewrites its host in the primary to its Gateway's VIP, and a heard side
@@ -725,7 +750,8 @@ aliases, holds the chain relation of §2, and the website co-host
 carries no application name of the primary's, from a row as from a
 block (`tests/test_dns_records.py`). The certificates follow
 `served_zones` (§4): the zones of every `Route` and `Apex`, held or
-not, and the primary; a `Passthrough` and a `Host` take none.
+not, and the primary; a `Passthrough` and a `Host` take none, and a
+`PortRedirect` is answered on the primary's.
 
 **`expose(exposure)` on the app component base is the one helper**
 (`kluster.components.apps`), and it takes the application's `Exposure`
@@ -734,15 +760,17 @@ the census by eye — so an application publishing a name `dns` never
 rewrites cannot be written. From that it emits the coherent set: an
 `HTTPRoute` per Gateway each `Route` sets (`kluster.lib.k8s.route`),
 `internet`'s gate on that one alone, and a redirect for a bare name at
-`lan-gw`'s listener for the label; an `HTTPRoute` at `internet-gw`'s
-apex listeners for an `Apex`;
+`lan-gw`'s listener for the label; an `HTTPRoute` per Gateway each
+`PortRedirect` sets (`kluster.lib.k8s.redirect_routes`), whose one rule
+redirects to its port, with no backend;
+an `HTTPRoute` at `internet-gw`'s apex listeners for an `Apex`;
 and for each `Port`, a Service for each Gateway it sets, at that
 front's addresses, with one allow for the world on its port and
 transports. A held row's routes attach all the same. It refuses a
 `Passthrough` by name, as the Gateways do: Cilium drops a passthrough
 listener together with the zone's wildcard listener on the same port
-(cluster-infra.md §2), and how such a row is reached is
-[Aetf/kluster-ops#723](https://github.com/Aetf/kluster-ops/issues/723).
+(cluster-infra.md §2), so such a pod is reached at a raw port, and by
+name through a `PortRedirect` to it (above).
 For each name the exposure publishes (`public_names` over that
 exposure alone) it declares one CNAME to the cluster anchor in the
 name's zone, proxied exactly where its row is, through the `apps`

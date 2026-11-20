@@ -973,12 +973,12 @@ All decided behavior from architecture.md §3, expressed as config:
     refused by name, by the Gateways and by `expose` alike**: Cilium
     holds a TLS passthrough listener and an HTTPS listener on one port to
     conflict whenever their hostnames can match one name, and drops both
-    (`listenerPairConflict`, `operator/pkg/gateway-api/gateway_reconcile.go`
-    at v1.20.1, unchanged through `main`), so a passthrough for a name
-    under a served zone would take that zone's wildcard listener, and
-    every name of the zone, off the Gateway. How the discovery server,
-    the one such row, is reached instead is
-    [Aetf/kluster-ops#723](https://github.com/Aetf/kluster-ops/issues/723).
+    (`listenerPairConflict`, `operator/pkg/gateway-api/status_listener.go`
+    at the pinned v1.20.4), so a passthrough for a name under a served
+    zone would take that zone's wildcard listener, and every name of the
+    zone, off the Gateway. The discovery server, the one such row, is a
+    raw port instead, with a `PortRedirect` to it on 443
+    ([Aetf/kluster-ops#723](https://github.com/Aetf/kluster-ops/issues/723)).
     **One certificate per served zone, for the apex and the wildcard
     together** (dns.md §4), in the Gateways' namespace so no listener
     refers across one, issued by **one `ClusterIssuer`, Let's Encrypt
@@ -1028,13 +1028,14 @@ All decided behavior from architecture.md §3, expressed as config:
     holds to: the identity headers (`Remote-User` and the rest) are
     copied from its answer only where the answer carries them, and
     Authelia sets them only for a signed-in subject, so an application
-    that trusts them sits under no `bypass` rule, and every route without
-    a gate removes them from the request; and the first element of the
-    `X-Forwarded-For` the gate hands the portal is the client's own word,
-    since Envoy appends the peer it saw to what the client sent, so the
-    portal's access rules and its regulation key on no client network
-    while the header is forwarded this way. Bootstrap verification:
-    confirm the filter **fails closed** when Authelia is unreachable
+    that trusts them sits under no `bypass` rule, and every route that
+    forwards a request without a gate removes them from it; and the first
+    element of the `X-Forwarded-For` the gate hands the portal is the
+    client's own word, since Envoy appends the peer it saw to what the
+    client sent, so the portal's access rules and its regulation key on
+    no client network while the header is forwarded this way.
+    Bootstrap verification: confirm the filter **fails closed** when
+    Authelia is unreachable
     (fail-open was reported against early builds, cilium#47178), and
     when its target is not declared — no Service, and no grant — which
     takes a different path through the operator. Because every

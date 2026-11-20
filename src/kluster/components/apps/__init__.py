@@ -8,6 +8,9 @@ that says how it is reached, and its component makes one call for it,
 -   for each `Route`, its `HTTPRoute`s (`kluster.lib.k8s.route`): one per
     Gateway the row sets, the gate on `internet`'s alone, and the redirect of
     a bare name;
+-   for each `PortRedirect`, one `HTTPRoute` per Gateway the row sets, which
+    answers every request on its name with a redirect to its raw port and
+    forwards to nothing (`kluster.lib.k8s.redirect_routes`);
 -   for each `Apex`, one `HTTPRoute` at `internet-gw`'s apex listeners, and
     one `Apex` row to an exposure;
 -   for each `Port`, one LoadBalancer Service per Gateway it sets, at that
@@ -22,10 +25,11 @@ that says how it is reached, and its component makes one call for it,
 A `Passthrough` row is refused, naming its host: Cilium drops a TLS
 passthrough listener together with the zone's wildcard listener on the same
 port, so a pod that terminates its own TLS is reached at a raw port instead,
-as the discovery server is (Aetf/kluster-ops#723,
-`kluster.lib.k8s.refuse_passthrough`). Every route without a gate removes the
-portal's identity headers from the request, since nothing but the client
-writes them there (`kluster.lib.k8s.Portal`).
+and a client that names it with no port at a `PortRedirect` to that port, as
+the discovery server is (Aetf/kluster-ops#723,
+`kluster.lib.k8s.refuse_passthrough`). Every route that forwards a request
+without a gate removes the portal's identity headers from it, since nothing
+but the client writes them there (`kluster.lib.k8s.Portal`).
 
 It writes no rewrite, which is the `dns` stack's from the same rows. A row
 the legacy VPS holds (`Held`) attaches all the same, which is how an
@@ -72,13 +76,23 @@ from kluster.conventions.routes import (
     Held,
     Passthrough,
     Port,
+    PortRedirect,
     PublicName,
     Route,
     SiteForward,
     Vip,
     public_names,
+    unwrapped,
 )
-from kluster.lib.k8s import Backend, identity_stripped, lb_pool_labels, refuse_passthrough, route, row_gateways
+from kluster.lib.k8s import (
+    Backend,
+    identity_stripped,
+    lb_pool_labels,
+    redirect_routes,
+    refuse_passthrough,
+    route,
+    row_gateways,
+)
 from putils import async_output, resolve
 
 __all__ = (
@@ -385,8 +399,8 @@ def public_records(
     """One CNAME to the cluster anchor for each name the exposure publishes, in that name's zone.
 
     The names are `conventions.routes.public_names` over this exposure alone:
-    a `Route` or a `Passthrough` on `internet` publishes its host in each of
-    its zones, a raw port's `Host` its label in the primary, a held row and an
+    a row by name on `internet` publishes its host in each of its zones, a
+    raw port's `Host` its label in the primary, a held row and an
     `Apex` nothing. Each record is proxied exactly where its row is, `Direct`
     and a raw port's host going past the proxy (declarative/dns.md §2), and
     its TTL is Cloudflare's automatic one: the anchor carries the short TTL a
@@ -486,9 +500,9 @@ def expose(
     :param exposure: The application's row of `conventions.routes.EXPOSURES`.
     :param namespace: The application's namespace, which carries the route
         label (`kluster.lib.k8s.application_namespace`).
-    :param backend: The Service every route row forwards to: the
-        application's, or a device's relay where the exposure names one.
-        Required where the exposure has a route row.
+    :param backend: The Service every route row but a `PortRedirect`
+        forwards to: the application's, or a device's relay where the
+        exposure names one. Required where the exposure has such a row.
     :param selector: The labels of the pods that serve the raw ports, at
         least one where the exposure has a port (`port`).
     :param fronts: The addresses of the `internet` fronts, as the program
@@ -498,15 +512,22 @@ def expose(
     :param opts: Carries the Kubernetes provider the cluster's objects are
         declared through and the Cloudflare provider the records are.
     """
-    http_routes: list[crds.gateway.v1.HTTPRoute] = []
-    if exposure.routes:
+    rows = [unwrapped(row) for row in exposure.routes]
+    # A port redirect forwards to nothing, so it is the one row that needs no
+    # backend (the `PortRedirect` layer).
+    http_routes = [
+        it
+        for row in rows
+        if isinstance(row, PortRedirect)
+        for it in redirect_routes(f'{resource_name}-{row.host}', row, namespace=namespace, opts=opts)
+    ]
+    forwarded = [row for row in rows if not isinstance(row, PortRedirect)]
+    if forwarded:
         if backend is None:
             raise ValueError(f'{resource_name}: an exposure with route rows needs the Service they forward to')
-        apexes = [row for row in exposure.routes if isinstance(row, Apex)]
-        if len(apexes) > 1:
+        if len([row for row in forwarded if isinstance(row, Apex)]) > 1:
             raise ValueError(f'{resource_name}: an exposure has one apex row, which names each of its zones')
-        for held in exposure.routes:
-            row = held.row if isinstance(held, Held) else held
+        for row in forwarded:
             match row:
                 case Route():
                     http_routes += route(

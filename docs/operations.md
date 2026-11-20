@@ -243,7 +243,14 @@ preview with `denydefaultprovider not registered`.
     the bootstrap verifications on the preview environment of one
     node (LB-IPAM node-IP pools, reserved-IP NAT, MTU over KubeSpan,
     ExternalAuth fail-closed); merge deploys; watch the
-    Envoy/agent rollout complete before calling it done.
+    Envoy/agent rollout complete before calling it done. The preview
+    run also reads whether the new version serves a TLS passthrough
+    listener on an exact hostname beside an HTTPS listener on a wildcard
+    that matches it, on one port: where it does, the `PortRedirect`
+    layer is removable and the discovery server's row becomes the
+    `Passthrough` it stands in for (the comment on the pin in
+    `Pulumi.yaml`,
+    [Aetf/kluster-ops#723](https://github.com/Aetf/kluster-ops/issues/723)).
 -   **§2.3 State-backend lifecycle** — owned by
     physical/state-backend.md §7 (pointer, not a copy).
 -   **§2.4 CNPG major upgrade** — owned by workloads.md §4

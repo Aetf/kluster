@@ -50,7 +50,7 @@ from kluster import conventions
 from kluster.components.apps import Backend, Exposed, Fronts, expose
 from kluster.components.apps.storage import NasClaim, nas_claim
 from kluster.components.cilium.gateways import apex_listener
-from kluster.conventions.routes import Apex, Exposure, Held, Passthrough, Route
+from kluster.conventions.routes import Apex, Exposure, Held, Passthrough, PortRedirect, Route
 from kluster.lib import templates
 from kluster.lib.k8s import (
     CLOUD_POD_AFFINITY,
@@ -176,7 +176,7 @@ def served_names(exposure: Exposure) -> tuple[str, ...]:
                 names += row.zones
             case Route():
                 names += [f'{row.host}.{zone}' for zone in row.zones]
-            case Passthrough():
+            case Passthrough() | PortRedirect():
                 pass
     return tuple(dict.fromkeys(names))
 

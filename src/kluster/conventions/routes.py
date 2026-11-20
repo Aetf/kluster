@@ -3,13 +3,13 @@
 An application's exposure answers the two questions cluster/architecture.md
 §3.6 asks of every deployment: *which Gateway* and *how*. Which Gateway is
 three peers, `internet`, `lan` and `media`, the same fields on every row where
-they mean something. How is the row's type: a `Route` or a `Passthrough` goes
-through a Gateway's proxy, by name, and a `Port` is raw, at a Gateway's
-address. Setting a field chooses that Gateway, and the field's type carries
-what only that Gateway and that way of reaching it mean, so a combination that
-means nothing cannot be written (declarative/dns.md §5). What a type cannot
-say is refused where the row is constructed, so a census that holds one does
-not load.
+they mean something. How is the row's type: a `Route`, a `Passthrough` or a
+`PortRedirect` goes through a Gateway's proxy, by name, and a `Port` is raw, at
+a Gateway's address. Setting a field chooses that Gateway, and the field's type
+carries what only that Gateway and that way of reaching it mean, so a
+combination that means nothing cannot be written (declarative/dns.md §5). What
+a type cannot say is refused where the row is constructed, so a census that
+holds one does not load.
 
 `EXPOSURES` maps each application to its exposure, and it is the census: the
 rows `dns`, `physical` and `k8s-base` read derive from it, and an application's
@@ -71,6 +71,7 @@ __all__ = (
     'Host',
     'Passthrough',
     'Port',
+    'PortRedirect',
     'Proxied',
     'PublicName',
     'Rewrite',
@@ -81,6 +82,7 @@ __all__ = (
     'ports',
     'public_names',
     'served_zones',
+    'unwrapped',
 )
 
 
@@ -211,6 +213,82 @@ class Passthrough:
 
 
 @dataclass(frozen=True)
+class PortRedirect:
+    """HTTPS by name in the primary, answered by the Gateway with a redirect to the same name at a raw port of its exposure.
+
+    It is for a client that names a raw HTTPS port's server with no port, and
+    so dials 443 (Aetf/kluster-ops#723). The Gateway ends that leg's TLS on the
+    zone's wildcard certificate and answers every request with a `308` to
+    `https://<host>:<port>`, path and query kept, which forwards nothing and
+    asks the portal nothing. What the client presents only to the pod, a
+    client certificate, it presents on the second leg, where the pod asks for
+    it. The port is a `Port` of the same exposure that serves every Gateway
+    the redirect sets at the redirect's host, which `Exposure` holds.
+
+    **It is a removable layer.** A pod that terminates its own TLS on 443 is a
+    `Passthrough`, which no Gateway carries at the pinned Cilium, since
+    Cilium drops a TLS passthrough listener together with the zone's wildcard
+    HTTPS listener on the same port (`kluster.lib.k8s.refuse_passthrough`).
+    When the pin serves an exact passthrough beside a wildcard
+    (cilium/cilium#48092, after kubernetes-sigs/gateway-api#4271), the row
+    becomes a `Passthrough` of the same host and sides, and the port it names
+    goes with its listener, which leaves its clients as they are. The layer
+    is, today:
+
+    -   this class, and its member of the type parameters of `Held` and
+        `RouteRow`, of `unwrapped`'s return, of `row_gateways`
+        (`kluster.lib.k8s`) and of the Gateways' row walk
+        (`kluster.components.cilium.gateways`);
+    -   its relation in `Exposure` (`_lands`);
+    -   its cell, `kluster.lib.k8s.redirect_routes`, and the split in
+        `kluster.components.apps.expose` that hands it the port redirects
+        and needs no backend for them;
+    -   the acceptance in `kluster.components.apps.stdiscosrv._discovery`,
+        and the arm in `kluster.components.apps.static_site.served_names`;
+    -   the discovery server's row in `EXPOSURES`, which becomes the
+        `Passthrough`, and its 8443 `Port` with the balancer's listener for
+        it, which goes in one `physical` apply;
+    -   what reads that `Port`: `kluster.components.apps.stdiscosrv`, whose
+        listen port, Services and certificate come from it, and
+        `kluster.components.apps.syncthing._announce_server`, which renders
+        the NAS instance's discovery address with that port;
+    -   the comment on the Cilium pin in `Pulumi.yaml` and the reading of
+        operations.md §2.2 that a Cilium bump makes for it;
+    -   the cases of the tests that build one, in `test_conventions`,
+        `test_apps`, `test_apps_stdiscosrv`, `test_dns_rewrites` and
+        `test_front_door`;
+    -   the prose that states it: every document and docstring that names
+        `PortRedirect`, and migration.md §2's stdiscosrv entry ("a redirect
+        on 443").
+
+    The `Passthrough` it becomes is served once the refusals that stand in
+    for its listener today (`kluster.lib.k8s.refuse_passthrough`) give way
+    to that listener.
+    """
+
+    host: str
+    """The label, in the primary zone."""
+    port: int
+    """The raw port the client is sent to, at the same name."""
+    internet: Direct | None = None
+    lan: Rewrite | None = None
+    media: Rewrite | None = None
+
+    def __post_init__(self) -> None:
+        what = f'the redirect {self.host!r}'
+        _refuse_name(self.host, what='a redirect')
+        _refuse_port(self.port, what=what)
+        if self.internet is None and self.lan is None and self.media is None:
+            raise ValueError(f'{what} sets no Gateway')
+        _refuse_sides(self.lan, self.media, what=what)
+
+    @property
+    def zones(self) -> tuple[str, ...]:
+        """The primary alone: the port it sends a client to is dialed at a name in the primary."""
+        return PRIMARY_ONLY
+
+
+@dataclass(frozen=True)
 class Apex:
     """A website's apex, on `internet`; the `dns` stack holds its address, as the web origin."""
 
@@ -232,7 +310,7 @@ class Host:
 
 
 @dataclass(frozen=True)
-class Held[T: (Route, Passthrough, Host)]:
+class Held[T: (Route, Passthrough, PortRedirect, Host)]:
     """A row whose name the legacy VPS still holds (rfc-008 §3.3).
 
     A held row's route attaches to its Gateways, and the row publishes no
@@ -254,7 +332,9 @@ class Balancer:
     """`internet` at the balancer, with the names it publishes for the port.
 
     A front that publishes none is dialed at a name another row publishes:
-    the one its home side shares, as the discovery server's does.
+    the one its home side shares, as the peer port's and the discovery
+    server's are at `syncapi`, which the discovery server's redirect
+    publishes.
     """
 
     hosts: tuple[Host | Held[Host], ...] = ()
@@ -338,7 +418,7 @@ class Device:
         _refuse_port(self.port, what=f'the device at {self.address}')
 
 
-type RouteRow = Route | Passthrough | Apex | Held[Route] | Held[Passthrough]
+type RouteRow = Route | Passthrough | PortRedirect | Apex | Held[Route] | Held[Passthrough] | Held[PortRedirect]
 
 
 @dataclass(frozen=True)
@@ -353,10 +433,10 @@ class Exposure:
         if not self.routes and not self.ports:
             raise ValueError('an exposure states no route and no port')
         if self.device is not None and (
-            self.ports or not self.routes or not all(isinstance(_unwrapped(row), Route) for row in self.routes)
+            self.ports or not self.routes or not all(isinstance(unwrapped(row), Route) for row in self.routes)
         ):
             raise ValueError("a device's relay forwards to one port, so it backs `Route`s alone")
-        named = [row for row in map(_unwrapped, self.routes) if isinstance(row, Route)]
+        named = [row for row in map(unwrapped, self.routes) if isinstance(row, Route)]
         # A route sets some Gateway, so one with no home side is on `internet` alone.
         internet_alone = [row.host for row in named if row.lan is None and row.media is None]
         home_alone = [row.host for row in named if row.internet is None]
@@ -365,9 +445,34 @@ class Exposure:
                 f'the routes {internet_alone[0]!r} and {home_alone[0]!r} are one service under two names: '
                 'a service reached from home and from outside has one name, its home side a field of that row'
             )
+        for row in map(unwrapped, self.routes):
+            if isinstance(row, PortRedirect) and not any(_lands(port, row) for port in self.ports):
+                raise ValueError(
+                    f'the redirect {row.host!r} sends a client to port {row.port}, which no TCP port of its exposure '
+                    f'serves at {row.host!r} on every Gateway the redirect sets'
+                )
 
 
-def _unwrapped(row: RouteRow) -> Route | Passthrough | Apex:
+def _lands(port: Port, row: PortRedirect) -> bool:
+    """Whether a client the redirect sends on lands on `port`, whichever Gateway the redirect answered it at.
+
+    The client dials the redirect's own host again, at the redirect's port
+    and over TCP. From outside, the host's record is the cluster anchor,
+    which the balancer answers. At home, it is the rewrite of the redirect's
+    side, which is that Gateway's VIP; the port answers there only where its
+    own side on that Gateway is `Vip(host)`.
+    """
+    home = Vip(row.host)
+    return (
+        port.port == row.port
+        and 'tcp' in port.transports.protocols
+        and (row.internet is None or isinstance(port.internet, Balancer))
+        and (row.lan is None or port.lan == home)
+        and (row.media is None or port.media == home)
+    )
+
+
+def unwrapped(row: RouteRow) -> Route | Passthrough | PortRedirect | Apex:
     """The row itself, whether the legacy VPS holds it or not."""
     return row.row if isinstance(row, Held) else row
 
@@ -379,25 +484,34 @@ def _unwrapped(row: RouteRow) -> Route | Passthrough | Apex:
 EXPOSURES: Mapping[str, Exposure] = MappingProxyType(
     {
         # The peer port, at the balancer for a roaming device and at the LAN
-        # VIP for one at home. `syncapi` is the name a device dials it at,
-        # held while the legacy VPS serves it.
+        # VIP for one at home, dialed at `syncapi`, its home side's name. The
+        # record is the discovery server's redirect's, since the name is
+        # cut with that server (rfc-008 §5.3).
         'syncthing': Exposure(
-            ports=(
-                Port(
-                    'syncthing',
-                    22000,
-                    Transports.TCP_AND_UDP,
-                    internet=Balancer((Held(Host('syncapi')),)),
-                    lan=Vip('syncapi'),
-                ),
-            )
+            ports=(Port('syncthing', 22000, Transports.TCP_AND_UDP, internet=Balancer(), lan=Vip('syncapi')),)
         ),
         # The discovery server, on a port of its own at the balancer and at
-        # the LAN VIP (Aetf/kluster-ops#723). It is dialed at `syncapi`, which
-        # the peer port publishes and its home side shares, so it publishes
-        # no name of its own.
+        # the LAN VIP, dialed at `syncapi`; and on 443 at the same name, by a
+        # redirect to that port for a device that names the server with no
+        # port (Aetf/kluster-ops#723). The redirect is the one row by name
+        # on `syncapi`, so it publishes the name's record, which both raw
+        # ports are dialed at; it is held while the legacy VPS serves the
+        # name.
         'stdiscosrv': Exposure(
-            ports=(Port('stdiscosrv', 8443, Transports.TCP, internet=Balancer(), lan=Vip('syncapi')),)
+            routes=(
+                Held(
+                    PortRedirect(
+                        'syncapi',
+                        8443,
+                        internet=Direct(
+                            "the name's raw ports, the discovery server's and the peer port, which the proxy does "
+                            'not carry'
+                        ),
+                        lan=REWRITE,
+                    )
+                ),
+            ),
+            ports=(Port('stdiscosrv', 8443, Transports.TCP, internet=Balancer(), lan=Vip('syncapi')),),
         ),
         # The bulk-transfer peer port, through the site's forward and
         # pinhole: inbound peer traffic lands where its outbound traffic
@@ -445,7 +559,8 @@ def served_zones(exposures: Iterable[Exposure] | None = None) -> tuple[str, ...]
     zone is served because a `Route` or an `Apex` publishes in it, held or
     not, since verifying a held row needs the zone's certificate. A
     `Passthrough` and a raw port's `Host` take none: the pod holds the one,
-    and the other is no TLS of the cluster's.
+    and the other is no TLS of the cluster's. A `PortRedirect` is answered on the
+    primary's, which is served by definition.
 
     In that order, each zone once, so a reader that declares one resource per
     zone declares them in the same order on every run. `exposures` is the
@@ -453,7 +568,7 @@ def served_zones(exposures: Iterable[Exposure] | None = None) -> tuple[str, ...]
     """
     zones = [ZONE_PRIMARY]
     for exposure in _census(exposures):
-        for row in map(_unwrapped, exposure.routes):
+        for row in map(unwrapped, exposure.routes):
             if not isinstance(row, Route | Apex):
                 continue
             for zone in row.zones:
@@ -494,8 +609,8 @@ def _published(exposure: Exposure) -> Iterator[PublicName]:
 def public_names(exposures: Iterable[Exposure] | None = None) -> tuple[PublicName, ...]:
     """Every name the census publishes, once each, in census order.
 
-    A row on `internet` publishes its host in each of its zones, and a raw
-    port's `Host` in the primary; a held row publishes nothing, and an `Apex`
+    A row by name on `internet` publishes its host in each of its zones, and
+    a raw port's `Host` in the primary; a held row publishes nothing, and an `Apex`
     nothing either, since its address is the `dns` stack's web origin. Rows
     that share a host publish one record: the first row's, which the census
     invariants hold to be direct wherever a `Host` shares it (rfc-008 §4.1,

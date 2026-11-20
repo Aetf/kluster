@@ -7,11 +7,12 @@ value the stack declares sealed in, the DNS-01 token among them -- twice
 
 -   **as the installation stands**;
 -   **with a census whose Gateway rows sit on other ports, a route in a
-    second zone, and a row of each shape that asks a Gateway for a listener
-    of its own** -- an apex and a bare name -- so that a listener built from
-    a fixed port, a certificate built from a fixed zone list, two zones'
-    certificates crossed, or a listener derived from anything but the rows
-    that ask for it, reads differently from what the census asks.
+    second zone, a row of each shape that asks a Gateway for a listener of
+    its own** -- an apex and a bare name -- **and a redirect, which asks for
+    none**, so that a listener built from a fixed port, a certificate built
+    from a fixed zone list, two zones' certificates crossed, or a listener
+    derived from anything but the rows that ask for it, reads differently
+    from what the census asks.
 
 Literals written here are the upstream projects' contracts: the Gateway API's
 address type and listener protocols, cert-manager's issuer kind.
@@ -60,6 +61,10 @@ MOVED_PORTS = conventions.GatewayPorts(http=10080, https=10443)
 #: The label of the moved run's bare name.
 BARE_LABEL = 'short'
 
+#: The label of the moved run's redirect, and the raw port it sends a client to.
+REDIRECT_LABEL = 'hop'
+REDIRECT_PORT = 9443
+
 #: The moved run's census: the installation's, one route in a second zone,
 #: on `internet` and rewritten on `lan`, with an apex there, and a bare name.
 PROBE = {
@@ -74,6 +79,25 @@ PROBE = {
     ),
     'probe-bare': conventions.routes.Exposure(
         routes=(conventions.routes.Route(BARE_LABEL, lan=conventions.routes.BARE),)
+    ),
+    'probe-redirect': conventions.routes.Exposure(
+        routes=(
+            conventions.routes.PortRedirect(
+                REDIRECT_LABEL,
+                REDIRECT_PORT,
+                internet=conventions.routes.Direct('a raw port'),
+                lan=conventions.routes.REWRITE,
+            ),
+        ),
+        ports=(
+            conventions.routes.Port(
+                REDIRECT_LABEL,
+                REDIRECT_PORT,
+                conventions.Transports.TCP,
+                internet=conventions.routes.Balancer(),
+                lan=conventions.routes.Vip(REDIRECT_LABEL),
+            ),
+        ),
     ),
 }
 
@@ -383,6 +407,22 @@ def test_a_bare_listener_exists_on_lan_gw_exactly_for_each_bare_row(moved: Run) 
     assert [listener['hostname'] for listener in _bare(gateways[conventions.GATEWAY_LAN])] == [BARE_LABEL]
     for name in (conventions.GATEWAY_INTERNET, conventions.GATEWAY_MEDIA):
         assert _bare(gateways[name]) == [], name
+
+
+def test_a_redirect_asks_no_gateway_for_a_listener(moved: Run) -> None:
+    """Its route attaches to the primary zone's wildcard listener, as a route in the primary does.
+
+    A listener for its name -- a TLS passthrough above all, which Cilium
+    drops together with the wildcard it intersects -- would take every name
+    of the zone off the Gateway with it, so none names it, and it takes no
+    certificate of its own.
+    """
+    name = f'{REDIRECT_LABEL}.{conventions.ZONE_PRIMARY}'
+
+    for gateway, spec in _gateways(moved).items():
+        assert [it for it in spec['spec']['listeners'] if it.get('hostname') == name] == [], gateway
+        assert _protocol(spec, 'TLS') == [], gateway
+    assert [it for it in _certificates(moved) if name in it['spec']['dnsNames']] == []
 
 
 # -- What waits for what ---------------------------------------------------------

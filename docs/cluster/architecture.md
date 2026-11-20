@@ -531,11 +531,14 @@ questions: *which Gateway* is three peer fields, `internet`, `lan` and
 | A website's apex (`Apex`: the blog) | HTTPRoute → `internet-gw`'s apex listener | — | — |
 | Raw TCP/UDP (`Port`: syncthing 22000, hath, qbittorrent's peer port) | LoadBalancer Service at its front: the NLB (+ its listener, `physical`'s), the dedicated VIP (+ its wave's egress mechanism, §3.2), or the worker's own address behind the site's forward | LoadBalancer Service at `lan-gw`'s VIP, sharing it | LoadBalancer Service at `media-gw`'s VIP, sharing it |
 
-A `Passthrough` row, TLS the pod terminates on 443 by name (the
-discovery server), is refused: Cilium drops a passthrough listener
-together with the zone's wildcard listener on the same port (§6.7), and
-how that server is reached is
-[Aetf/kluster-ops#723](https://github.com/Aetf/kluster-ops/issues/723).
+A `Passthrough` row, TLS the pod terminates on 443 by name, is refused:
+Cilium drops a passthrough listener together with the zone's wildcard
+listener on the same port (§6.7). Such a pod is a raw `Port` instead,
+and a client that names it with no port is answered by a `PortRedirect`
+row: on each Gateway it sets, an HTTPRoute on the zone's wildcard
+listener whose one rule is a `308` to the same name at that port, with
+no backend and no gate. The discovery server is the case
+([Aetf/kluster-ops#723](https://github.com/Aetf/kluster-ops/issues/723)).
 
 A row sets one field per Gateway it is reached on, so a split-horizon
 application (immich) is one row on `internet` and `lan`, under one
@@ -1378,9 +1381,15 @@ are not re-litigated from scratch. §6.5 documents the largest reversal
     and every name of the zone, off the Gateway. A `ListenerSet` loses to
     the Gateway's own listener by the same rule, and two Gateways cannot
     both hold 443 on one address. So the Gateways and `expose` refuse
-    the row by name, and how the discovery server is reached instead,
-    a raw port with each device reconfigured among the candidates, is
-    [Aetf/kluster-ops#723](https://github.com/Aetf/kluster-ops/issues/723).
+    the row by name, and the discovery server is a raw port on 8443
+    with a `PortRedirect` to it on 443, which keeps each device's address
+    as it is
+    ([Aetf/kluster-ops#723](https://github.com/Aetf/kluster-ops/issues/723)).
+    The redirect is removable: when the pinned Cilium serves an exact
+    passthrough beside a wildcard (cilium/cilium#48092, after
+    the Gateway API's
+    [multiplexing proposal](https://github.com/kubernetes-sigs/gateway-api/issues/4271)),
+    the row becomes a `Passthrough` and the raw port goes.
 
 ### 6.8 HAOS under KubeVirt
 
