@@ -763,6 +763,14 @@ def test_the_server_answers_the_probe_and_every_route_through_the_filter_the_fil
     starts the server answers from a placeholder, which listens whatever the
     base path, so the callers ask once the server has logged its start
     complete, in the log directory its image names.
+
+    The network settings the server logs are read from that same file. The
+    server logs them while it builds its services, ahead of its start
+    complete, and writes the file in the order it logs, so they are there
+    by the time the callers ask. The container's own output is no such
+    record: podman hands it to its log driver, and a journald driver keeps
+    what the journal's per-unit rate limit lets through, which every
+    container of the user shares.
     """
     require_podman(WHY)
     reference = pulled(pinned('jellyfin'), timeout=LARGE_PULL_TIMEOUT)
@@ -847,13 +855,17 @@ def test_the_server_answers_the_probe_and_every_route_through_the_filter_the_fil
             check=True,
         )
         answers = {caller: asked(prober, url, *how) for caller, how in callers.items()}
-        logged = process_sessions.run(['podman', 'logs', name], timeout=COMMAND_TIMEOUT, check=True)
+        log = process_sessions.run(
+            ['podman', 'exec', name, 'sh', '-c', 'cat "$JELLYFIN_LOG_DIR"/*.log'],
+            timeout=COMMAND_TIMEOUT,
+            check=True,
+        ).stdout.decode()
 
-    log = logged.stdout.decode() + logged.stderr.decode()
-    (subnets,) = re.findall(r'Defined LAN subnets: (\[.*\])', log)
+    subnets = re.findall(r'Defined LAN subnets: (\[.*\])', log)
     assert answers == {caller: ['Healthy', '200'] for caller in callers}
-    assert 'Bind Addresses ["0.0.0.0"]' in log
-    assert set(KEPT_SUBNETS) <= set(json.loads(subnets))
+    assert len(subnets) == 1, log
+    assert 'Bind Addresses ["0.0.0.0"]' in log, log
+    assert set(KEPT_SUBNETS) <= set(json.loads(subnets[0]))
 
 
 # -- the storage -----------------------------------------------------------------
