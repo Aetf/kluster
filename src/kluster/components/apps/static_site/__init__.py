@@ -47,13 +47,18 @@ import pulumi_crds as crds
 import pulumi_kubernetes as k8s
 
 from kluster import conventions
-from kluster.components.apps import WORKER_POD_AFFINITY, Backend, Exposed, Fronts, expose
+from kluster.components.apps import Backend, Exposed, Fronts, expose
 from kluster.components.apps.storage import NasClaim, nas_claim
-from kluster.components.cilium.bgp import CONTROL_PLANE_LABEL
 from kluster.components.cilium.gateways import apex_listener
 from kluster.conventions.routes import Apex, Exposure, Held, Passthrough, Route
 from kluster.lib import templates
-from kluster.lib.k8s import ApplicationNamespace, application_namespace, identity_stripped
+from kluster.lib.k8s import (
+    CLOUD_POD_AFFINITY,
+    WORKER_POD_AFFINITY,
+    ApplicationNamespace,
+    application_namespace,
+    identity_stripped,
+)
 from kluster.lib.versions import ImagePin
 from putils import Component
 
@@ -331,22 +336,6 @@ def documents_route(
     )
 
 
-#: What places a pod on the cloud pool: every control plane node, which are
-#: the cloud nodes (nodes.md §4.2), each carrying `CONTROL_PLANE_LABEL`.
-_CLOUD_AFFINITY = k8s.core.v1.AffinityArgs(
-    node_affinity=k8s.core.v1.NodeAffinityArgs(
-        required_during_scheduling_ignored_during_execution=k8s.core.v1.NodeSelectorArgs(
-            node_selector_terms=[
-                k8s.core.v1.NodeSelectorTermArgs(
-                    match_expressions=[
-                        k8s.core.v1.NodeSelectorRequirementArgs(key=CONTROL_PLANE_LABEL, operator='Exists')
-                    ]
-                )
-            ]
-        )
-    )
-)
-
 #: The node label the git source's pods are spread over, one per node.
 _NODE_TOPOLOGY = 'kubernetes.io/hostname'
 
@@ -446,7 +435,7 @@ def _pod(
             return k8s.core.v1.PodSpecArgs(
                 automount_service_account_token=False,
                 enable_service_links=False,
-                affinity=_CLOUD_AFFINITY,
+                affinity=CLOUD_POD_AFFINITY,
                 topology_spread_constraints=[
                     k8s.core.v1.TopologySpreadConstraintArgs(
                         max_skew=1,

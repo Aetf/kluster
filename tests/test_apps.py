@@ -19,18 +19,19 @@ its own against its census row, with an image pin of the test's.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
+import grimp
 import pulumi_kubernetes as k8s
 import pytest
 import pytest_asyncio
 from mock_monitor import Recorder, declaring, run_with
 
 from kluster import conventions
-from kluster.components.apps import WORKER_POD_AFFINITY, Backend, Fronts, dialed_names, expose, published_once
+from kluster.components.apps import Backend, Fronts, dialed_names, expose, published_once
 from kluster.components.apps.echo import Echo
 from kluster.components.cilium import InternetPoolMembers
-from kluster.components.cilium.bgp import CONTROL_PLANE_LABEL
 from kluster.components.cilium.gateways import (
     SHARING_KEY,
     Gateways,
@@ -59,7 +60,15 @@ from kluster.conventions.routes import (
     SiteForward,
     Vip,
 )
-from kluster.lib.k8s import PORTAL, PassthroughRefused, bare_listener
+from kluster.lib.k8s import (
+    CLOUD_AFFINITY_JSON,
+    CLOUD_POD_AFFINITY,
+    PORTAL,
+    WORKER_AFFINITY_JSON,
+    WORKER_POD_AFFINITY,
+    PassthroughRefused,
+    bare_listener,
+)
 from kluster.lib.versions import ImagePin
 
 HTTP_ROUTE = 'crds:gateway.networking.k8s.io/v1:HTTPRoute'
@@ -517,33 +526,65 @@ def test_a_port_at_no_name_is_dialed_at_none() -> None:
     assert dialed_names(Port('x', 60011, Transports.TCP, internet=Dedicated())) == ()
 
 
-# -- the worker's affinity -------------------------------------------------------
+# -- the node pools' placements ---------------------------------------------------
+#
+# The placements are `kluster.lib.k8s`'s, which every component that runs a pod
+# takes, the applications' first among them.
+
+#: The label Talos puts on every control plane node, with an empty value, and
+#: on no other node: Talos' contract, transcribed
+#: ([`node_label_spec.go` L83–85](https://github.com/siderolabs/talos/blob/v1.13.9/internal/app/machined/pkg/controllers/k8s/node_label_spec.go#L83-L85)).
+TALOS_CONTROL_PLANE_LABEL = 'node-role.kubernetes.io/control-plane'
+
+#: The nodes, by name, as Talos labels them: each control plane node, which
+#: every cloud node is (nodes.md §4.2), carries `TALOS_CONTROL_PLANE_LABEL`,
+#: and the worker carries no role label at all. Every node carries the
+#: kubelet's own labels.
+NODES: dict[str, dict[str, str]] = {
+    name: {'kubernetes.io/hostname': name, 'kubernetes.io/os': 'linux', **role}
+    for name, role in (
+        *((name, {TALOS_CONTROL_PLANE_LABEL: ''}) for name in conventions.CLOUD_NODES),
+        (conventions.HOMELAB_NODE, {}),
+    )
+}
+
+#: Each pool's nodes, which its placements admit and no other.
+POOL_NODES = {'worker': {conventions.HOMELAB_NODE}, 'cloud': set(conventions.CLOUD_NODES)}
+
+#: Each pool's typed placement, as a pod a component declares takes it.
+POD_AFFINITIES = {'worker': WORKER_POD_AFFINITY, 'cloud': CLOUD_POD_AFFINITY}
+
+#: Each pool's placement as JSON, as a chart's values or an operator's resource take it.
+JSON_AFFINITIES = {'worker': WORKER_AFFINITY_JSON, 'cloud': CLOUD_AFFINITY_JSON}
 
 
 @pytest_asyncio.fixture(scope='module', loop_scope='module')
-async def on_the_worker() -> Recorder:
-    """A pod taking the worker's affinity."""
+async def placed() -> Recorder:
+    """A pod taking each pool's typed affinity, named for its pool."""
     monitor = await run_with(Recorder(), stack='apps')
     async with declaring():
-        _ = k8s.core.v1.Pod(
-            'on-the-worker',
-            spec=k8s.core.v1.PodSpecArgs(
-                affinity=WORKER_POD_AFFINITY,
-                containers=[k8s.core.v1.ContainerArgs(name='x', image='registry.example.invalid/x')],
-            ),
-        )
+        for pool, affinity in POD_AFFINITIES.items():
+            _ = k8s.core.v1.Pod(
+                pool,
+                metadata=k8s.meta.v1.ObjectMetaArgs(name=pool),
+                spec=k8s.core.v1.PodSpecArgs(
+                    affinity=affinity,
+                    containers=[k8s.core.v1.ContainerArgs(name='x', image='registry.example.invalid/x')],
+                ),
+            )
     return monitor
 
 
-def selects(affinity: dict[str, Any], labels: dict[str, str]) -> bool:
+def selects(affinity: Mapping[str, Any], labels: Mapping[str, str]) -> bool:
     """Whether a node carrying `labels` meets the required node affinity, as the scheduler reads it.
 
-    The terms are ORed and the expressions of a term ANDed; the operators are
-    the ones that compare a label's presence and value.
+    The terms are ORed and the expressions of a term ANDed; a term with no
+    expression matches no node. The operators are the ones that compare a
+    label's presence and value; a field selector is not read here.
     """
     terms = affinity['nodeAffinity']['requiredDuringSchedulingIgnoredDuringExecution']['nodeSelectorTerms']
 
-    def holds(expression: dict[str, Any]) -> bool:
+    def holds(expression: Mapping[str, Any]) -> bool:
         key, operator = expression['key'], expression['operator']
         match operator:
             case 'Exists':
@@ -557,16 +598,52 @@ def selects(affinity: dict[str, Any], labels: dict[str, str]) -> bool:
             case _:
                 raise AssertionError(f'an operator this reader does not evaluate: {operator}')
 
-    return any(all(holds(it) for it in term['matchExpressions']) for term in terms)
+    def term_holds(term: Mapping[str, Any]) -> bool:
+        if term.get('matchFields'):
+            raise AssertionError(f'a field selector this reader does not evaluate: {term}')
+        expressions: list[Mapping[str, Any]] = term.get('matchExpressions') or []
+        return bool(expressions) and all(holds(it) for it in expressions)
+
+    return any(term_holds(term) for term in terms)
 
 
-def test_the_workers_affinity_admits_the_worker_and_no_control_plane_node(on_the_worker: Recorder) -> None:
-    """Talos labels each control-plane node with `CONTROL_PLANE_LABEL` and the worker with no role of that kind."""
-    (pod,) = [it.inputs for it in on_the_worker.of_type('kubernetes:core/v1:Pod')]
-    affinity = pod['spec']['affinity']
+def admitted(affinity: Mapping[str, Any]) -> set[str]:
+    """The names of the nodes `affinity` admits."""
+    return {name for name, labels in NODES.items() if selects(affinity, labels)}
 
-    assert selects(affinity, {'kubernetes.io/hostname': 'worker'})
-    assert not selects(affinity, {'kubernetes.io/hostname': 'cp-1', CONTROL_PLANE_LABEL: ''})
+
+@pytest.mark.parametrize('pool', sorted(POOL_NODES))
+def test_a_pools_pod_affinity_admits_its_nodes_and_no_other(placed: Recorder, pool: str) -> None:
+    (pod,) = [it.inputs for it in placed.of_type('kubernetes:core/v1:Pod') if it.inputs['metadata']['name'] == pool]
+
+    assert admitted(pod['spec']['affinity']) == POOL_NODES[pool]
+
+
+@pytest.mark.parametrize('pool', sorted(POOL_NODES))
+def test_a_pools_json_affinity_admits_its_nodes_and_no_other(pool: str) -> None:
+    assert admitted(JSON_AFFINITIES[pool]) == POOL_NODES[pool]
+
+
+@pytest.mark.parametrize('term', [{}, {'matchExpressions': []}])
+def test_an_empty_node_selector_term_admits_no_node(term: Mapping[str, Any]) -> None:
+    """Kubernetes reads a term with no requirement as matching nothing, and the reader above does too."""
+    affinity = {'nodeAffinity': {'requiredDuringSchedulingIgnoredDuringExecution': {'nodeSelectorTerms': [term]}}}
+
+    assert admitted(affinity) == set()
+
+
+def test_the_k8s_base_program_reaches_neither_the_application_base_nor_cloudflare() -> None:
+    """The placements live below the components, so a platform component that takes one imports no application.
+
+    `k8s-base` declares no application and opens no Cloudflare provider; the
+    application base imports Cloudflare's SDK for the records it publishes.
+    The graph is import-linter's own (`grimp`), every import a module makes at
+    any depth.
+    """
+    graph = grimp.build_graph('kluster', 'putils', include_external_packages=True)
+    reached = graph.find_upstream_modules('kluster.stacks.k8s_base')
+
+    assert {'kluster.components.apps', 'pulumi_cloudflare'} & reached == set()
 
 
 # -- the public records ----------------------------------------------------------

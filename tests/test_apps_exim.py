@@ -43,9 +43,9 @@ from pinned_image import COMMAND_TIMEOUT, CONTAINER_TIMEOUT, pinned, pulled, req
 
 from kluster import conventions
 from kluster.components.apps.exim import CONFIGURATION, HOST, NAMESPACE, SMTP, Exim
-from kluster.components.cilium.bgp import CONTROL_PLANE_LABEL
 from kluster.components.dns import base as dns_base
 from kluster.components.dns.record import zone_records
+from kluster.conventions import CONTROL_PLANE_LABEL
 from kluster.lib.k8s import sealed_ciphertext
 from kluster.lib.versions import ImagePin
 
@@ -260,7 +260,7 @@ def selects(expressions: list[dict[str, Any]], labels: Mapping[str, str]) -> boo
 
 
 def test_the_relay_runs_on_the_worker_and_on_no_control_plane_node(relay: Recorder) -> None:
-    """The worker is the one node of the cluster that is no control plane node (`components.monitoring`)."""
+    """The worker is the one node of the cluster that is no control plane node (`kluster.lib.k8s.WORKER_POD_AFFINITY`)."""
     affinity = pod_of(relay)['spec']['affinity']['nodeAffinity']
     terms = affinity['requiredDuringSchedulingIgnoredDuringExecution']['nodeSelectorTerms']
 

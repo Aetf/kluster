@@ -88,7 +88,7 @@ import pulumi
 import pulumi_kubernetes as k8s
 
 from kluster import conventions
-from kluster.components.apps import WORKER_POD_AFFINITY, Backend, Exposed, Fronts, expose
+from kluster.components.apps import Backend, Exposed, Fronts, expose
 from kluster.components.apps.storage import Claim, NasClaim, claim, nas_claim
 from kluster.components.gpu import GPU_RESOURCE
 from kluster.conventions.backup import STANDARD
@@ -96,7 +96,7 @@ from kluster.conventions.cluster import Transports
 from kluster.conventions.routes import Exposure, Held, Port, Route
 from kluster.conventions.sso import Client
 from kluster.lib import templates
-from kluster.lib.k8s import ApplicationNamespace, application_namespace
+from kluster.lib.k8s import WORKER_POD_AFFINITY, ApplicationNamespace, application_namespace
 from kluster.lib.versions import ImagePin
 from putils import Component
 

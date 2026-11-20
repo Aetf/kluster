@@ -61,7 +61,6 @@ import pulumi_kubernetes as k8s
 
 from kluster import conventions
 from kluster.components.cilium import InternetPoolMembers
-from kluster.components.cilium.bgp import CONTROL_PLANE_LABEL
 from kluster.components.cilium.gateways import apex_listener, sharing_annotations
 from kluster.components.dns.record import cname
 from kluster.conventions.cluster import POOL_WORKER
@@ -85,7 +84,6 @@ from putils import async_output, resolve
 __all__ = (
     'CLUSTER_ANCHOR',
     'LB_IPAM_IPS',
-    'WORKER_POD_AFFINITY',
     'WORLD_ENTITY',
     'Backend',
     'Exposed',
@@ -194,25 +192,6 @@ async def _balancer_addresses(members: InternetPoolMembers) -> list[str]:
         balancer_v4,
         balancer_v6,
     ]
-
-
-#: The affinity that holds a pod on the worker: the one node `physical`
-#: declares with a role other than control plane, and so the one Talos gives no
-#: `CONTROL_PLANE_LABEL`. A pod takes it where its own placement constraint
-#: says the worker, which its component states.
-WORKER_POD_AFFINITY = k8s.core.v1.AffinityArgs(
-    node_affinity=k8s.core.v1.NodeAffinityArgs(
-        required_during_scheduling_ignored_during_execution=k8s.core.v1.NodeSelectorArgs(
-            node_selector_terms=[
-                k8s.core.v1.NodeSelectorTermArgs(
-                    match_expressions=[
-                        k8s.core.v1.NodeSelectorRequirementArgs(key=CONTROL_PLANE_LABEL, operator='DoesNotExist')
-                    ]
-                )
-            ]
-        )
-    )
-)
 
 
 def dialed_names(row: Port) -> tuple[str, ...]:

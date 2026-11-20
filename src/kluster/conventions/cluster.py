@@ -88,6 +88,14 @@ POOL_INTERNET = 'internet'
 #: worker's own, routed to it as the node it is.
 POOL_WORKER = 'worker'
 
+#: The label Talos puts on every control plane node, with an empty value,
+#: and on no other node
+#: ([`node_label_spec.go` L83–85](https://github.com/siderolabs/talos/blob/v1.13.9/internal/app/machined/pkg/controllers/k8s/node_label_spec.go#L83-L85)).
+#: The control plane is the cloud nodes (nodes.md §4.2), so its presence is
+#: what tells the cloud pool from the worker, which the placements in
+#: `kluster.lib.k8s` select by.
+CONTROL_PLANE_LABEL = 'node-role.kubernetes.io/control-plane'
+
 #: A Service opts into a pool by carrying this label; the pools'
 #: `serviceSelector` matches on it.
 LB_POOL_LABEL = f'{LABEL_DOMAIN}/lb-pool'

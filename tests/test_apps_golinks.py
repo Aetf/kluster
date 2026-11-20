@@ -22,7 +22,7 @@ from kluster.components.apps import Fronts
 from kluster.components.apps import golinks as golinks_app
 from kluster.components.apps.golinks import Golinks
 from kluster.components.cilium import InternetPoolMembers
-from kluster.components.cilium.bgp import CONTROL_PLANE_LABEL
+from kluster.conventions import CONTROL_PLANE_LABEL
 from kluster.conventions.backup import BACKED_NAMESPACES, BackupFamily
 from kluster.conventions.cluster import Transports
 from kluster.conventions.routes import (

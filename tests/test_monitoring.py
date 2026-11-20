@@ -55,7 +55,6 @@ from kluster.components.apps.database import Drill, Resources, database
 from kluster.components.monitoring import (
     DATASOURCES_DIGEST_ENV,
     RECEIVER,
-    WORKER_AFFINITY,
     dashboard,
     memory,
     rules,
@@ -80,7 +79,7 @@ from kluster.conventions.backup import BackupFamily
 from kluster.conventions.cluster import KUBECONFIG_ALERT_MARGIN, KUBECONFIG_RENEWAL
 from kluster.conventions.outputs import BOOT_VOLUME
 from kluster.conventions.providers import OCI_BLOCKSTORE_METRICS
-from kluster.lib.k8s import KUBECONFIG_KEY
+from kluster.lib.k8s import KUBECONFIG_KEY, WORKER_AFFINITY_JSON
 from kluster.lib.monitoring import readings
 from kluster.lib.monitoring.selectors import JOB_LABEL, Selector, selectors
 from kluster.lib.state_backend import settings as backend_settings
@@ -2597,7 +2596,7 @@ class _WiredDatabase(Component, pulumi_type='kluster:test:WiredDatabase'):
             image=image,
             dbname='app',
             resources=Resources(requests={'cpu': '100m', 'memory': '256Mi'}, limits={'cpu': '1', 'memory': '512Mi'}),
-            node_affinity=WORKER_AFFINITY['nodeAffinity'],
+            node_affinity=WORKER_AFFINITY_JSON['nodeAffinity'],
             writer_key=dict.fromkeys(conventions.WRITER_KEY_FIELDS, 'AgB-sealed'),
             drill=Drill(table='a_table'),
             drill_image=image,

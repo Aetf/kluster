@@ -29,7 +29,7 @@ from kluster.components.backup.etcd import (
     TALOS_SERVICE_ACCOUNT_API_VERSION,
     EtcdSnapshots,
 )
-from kluster.components.cilium.bgp import CONTROL_PLANE_LABEL
+from kluster.conventions import CONTROL_PLANE_LABEL
 from kluster.conventions.schedule import ETCD_SNAPSHOT
 from kluster.lib import etcd_backup
 from kluster.lib.k8s import POD_SECURITY_ENFORCE_LABEL, PodSecurity

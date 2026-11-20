@@ -34,7 +34,7 @@ from pinned_image import COMMAND_TIMEOUT, CONTAINER_TIMEOUT, pinned, pulled, req
 from kluster.components.apps import Fronts
 from kluster.components.apps.static_site import GitSource, NasSource, StaticSite
 from kluster.components.cilium import InternetPoolMembers
-from kluster.components.cilium.bgp import CONTROL_PLANE_LABEL
+from kluster.conventions import CONTROL_PLANE_LABEL
 from kluster.conventions.cluster import Transports
 from kluster.conventions.routes import PROXIED, Apex, Balancer, Device, Direct, Exposure, Held, Passthrough, Port, Route
 from kluster.lib.versions import ImagePin

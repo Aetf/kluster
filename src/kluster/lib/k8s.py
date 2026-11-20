@@ -6,8 +6,11 @@ the order they need (`kluster.lib.install_order`), reaching into what one
 rendered, creating a namespace at its Pod Security level, declaring a
 SealedSecret in the shape
 [declarative/cluster-infra.md](../../docs/declarative/cluster-infra.md) §1.1
-fixes -- for a row of the sealed census, from the row -- and labeling a
-Service into a Cilium load-balancer pool. Anything specific to one component
+fixes -- for a row of the sealed census, from the row -- labeling a
+Service into a Cilium load-balancer pool, and placing a pod in a node pool,
+the worker or the cloud nodes, typed or as JSON (`WORKER_POD_AFFINITY`,
+`WORKER_AFFINITY_JSON` and the cloud pool's pair), which every component that
+runs a pod takes, the platform's as well as the applications'. Anything specific to one component
 belongs with that component, not here. A pinned release manifest is fetched
 by `kluster.lib.release_assets`, which imports no bindings, so `update_crds`
 can run it while it regenerates them.
@@ -60,6 +63,9 @@ from kluster.lib.secret import Secret
 from kluster.lib.versions import ChartPin
 
 __all__ = (
+    'CLOUD_AFFINITY_JSON',
+    'CLOUD_NODE_SELECTOR',
+    'CLOUD_POD_AFFINITY',
     'INGRESS_ENTITY',
     'KUBECONFIG_KEY',
     'NODE_ENTITIES',
@@ -67,6 +73,9 @@ __all__ = (
     'POD_SECURITY_ENFORCE_LABEL',
     'PORTAL',
     'PRIVATE_SPACE',
+    'WORKER_AFFINITY_JSON',
+    'WORKER_NODE_SELECTOR',
+    'WORKER_POD_AFFINITY',
     'AbsentSealedValue',
     'ApiClients',
     'ApplicationNamespace',
@@ -1211,6 +1220,67 @@ def lb_pool_labels(pool: str) -> dict[str, str]:
     if pool not in (conventions.POOL_INTERNET, conventions.LAN_POOL.name, POOL_WORKER):
         raise ValueError(f'no such load-balancer pool: {pool}')
     return {conventions.LB_POOL_LABEL: pool}
+
+
+# -- Node pools ----------------------------------------------------------------
+
+
+def _node_pool(operator: Literal['Exists', 'DoesNotExist']) -> tuple[k8s.core.v1.NodeSelectorArgs, Mapping[str, Any]]:
+    """The required node selector of the node pool `operator` picks by `conventions.CONTROL_PLANE_LABEL`, typed and as JSON.
+
+    A node pool is the nodes that carry the label, which are the cloud nodes,
+    or the nodes that do not, which is the worker. Both forms are written here,
+    from the one requirement, so a pool's typed and JSON placements cannot
+    part.
+    """
+    key = conventions.CONTROL_PLANE_LABEL
+    typed = k8s.core.v1.NodeSelectorArgs(
+        node_selector_terms=[
+            k8s.core.v1.NodeSelectorTermArgs(
+                match_expressions=[k8s.core.v1.NodeSelectorRequirementArgs(key=key, operator=operator)]
+            )
+        ]
+    )
+    as_json = {'nodeSelectorTerms': [{'matchExpressions': [{'key': key, 'operator': operator}]}]}
+    return typed, as_json
+
+
+#: The worker's nodes, as a node selector: the one node `physical` declares
+#: with a role other than control plane, and so the one Talos gives no
+#: `conventions.CONTROL_PLANE_LABEL`; the BGP session selects its node the
+#: same way (`components.cilium.bgp`). A volume only the worker reaches states
+#: it as its node affinity.
+WORKER_NODE_SELECTOR, _WORKER_NODE_SELECTOR_JSON = _node_pool('DoesNotExist')
+
+#: The cloud pool's nodes, as a node selector: every control plane node,
+#: which every cloud node is and the worker is not.
+CLOUD_NODE_SELECTOR, _CLOUD_NODE_SELECTOR_JSON = _node_pool('Exists')
+
+#: The affinity that holds a pod on the worker, for a pod a component declares
+#: itself. A pod takes it where its own placement constraint says the worker,
+#: which its component states.
+WORKER_POD_AFFINITY = k8s.core.v1.AffinityArgs(
+    node_affinity=k8s.core.v1.NodeAffinityArgs(required_during_scheduling_ignored_during_execution=WORKER_NODE_SELECTOR)
+)
+
+#: The affinity that holds a pod on the cloud pool, for a pod a component
+#: declares itself. The control plane nodes take workloads, so no toleration
+#: goes with it.
+CLOUD_POD_AFFINITY = k8s.core.v1.AffinityArgs(
+    node_affinity=k8s.core.v1.NodeAffinityArgs(required_during_scheduling_ignored_during_execution=CLOUD_NODE_SELECTOR)
+)
+
+#: `WORKER_POD_AFFINITY` as Kubernetes' `Affinity` in JSON, for a pod whose
+#: spec is handed over as JSON: a chart's values, an operator's resource
+#: (`components.apps.database` takes the `nodeAffinity` inside it).
+WORKER_AFFINITY_JSON: Mapping[str, Any] = {
+    'nodeAffinity': {'requiredDuringSchedulingIgnoredDuringExecution': _WORKER_NODE_SELECTOR_JSON}
+}
+
+#: `CLOUD_POD_AFFINITY` as Kubernetes' `Affinity` in JSON, the same way.
+CLOUD_AFFINITY_JSON: Mapping[str, Any] = {
+    'nodeAffinity': {'requiredDuringSchedulingIgnoredDuringExecution': _CLOUD_NODE_SELECTOR_JSON}
+}
 
 
 # -- Routes ------------------------------------------------------------------

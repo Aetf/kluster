@@ -48,7 +48,7 @@ from kluster.components.backup.etcd import (
     VERIFY_SHELL_DIR,
     VERIFY_WORK_DIR,
 )
-from kluster.components.cilium.bgp import CONTROL_PLANE_LABEL
+from kluster.conventions import CONTROL_PLANE_LABEL
 from kluster.conventions.schedule import ETCD_RESTORE_VERIFY, ETCD_SNAPSHOT
 from kluster.scripts.credentials import age
 

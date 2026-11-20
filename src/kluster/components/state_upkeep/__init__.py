@@ -53,10 +53,9 @@ import pulumi
 import pulumi_kubernetes as k8s
 
 from kluster import conventions
-from kluster.components.cilium.bgp import CONTROL_PLANE_LABEL
 from kluster.conventions.schedule import STATE_UPKEEP
 from kluster.lib import templates
-from kluster.lib.k8s import namespace, sealed_value
+from kluster.lib.k8s import CLOUD_POD_AFFINITY, namespace, sealed_value
 from kluster.lib.state_backend import state
 from kluster.lib.versions import ImagePin
 from putils import Component
@@ -139,19 +138,7 @@ def _pod(image: ImagePin) -> k8s.core.v1.PodSpecArgs:
         restart_policy='Never',
         # It speaks Postgres alone, and never Kubernetes.
         automount_service_account_token=False,
-        affinity=k8s.core.v1.AffinityArgs(
-            node_affinity=k8s.core.v1.NodeAffinityArgs(
-                required_during_scheduling_ignored_during_execution=k8s.core.v1.NodeSelectorArgs(
-                    node_selector_terms=[
-                        k8s.core.v1.NodeSelectorTermArgs(
-                            match_expressions=[
-                                k8s.core.v1.NodeSelectorRequirementArgs(key=CONTROL_PLANE_LABEL, operator='Exists')
-                            ]
-                        )
-                    ]
-                )
-            )
-        ),
+        affinity=CLOUD_POD_AFFINITY,
         security_context=k8s.core.v1.PodSecurityContextArgs(
             run_as_non_root=True,
             run_as_user=UPKEEP_USER,
