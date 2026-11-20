@@ -159,6 +159,15 @@
     `placement`, which its restic mover carries, since a `local-path`
     claim binds where its first consumer is scheduled
     ([Aetf/kluster-ops#874](https://github.com/Aetf/kluster-ops/issues/874)).
+*   **Updated:** 2026-11-19. splitpro's uploads are a claim, backed up
+    as `precious`, as the legacy deployment kept them, rather than an
+    `emptyDir`
+    ([Aetf/kluster-ops#883](https://github.com/Aetf/kluster-ops/issues/883)):
+    §4.2's row, §4.7's row of claims that hold nothing a restart should
+    keep, and §5.3's data for splitpro follow it. splitpro's recovery
+    from the legacy store is a migration layer of its component's own, and
+    slice 32 deletes it, with the component and its tests among its owned
+    paths (§10.3).
 *   **Authority:** AGENTS.md,
     [framework/dispatch.md](../framework/dispatch.md),
     [framework/rfc.md](../framework/rfc.md) and the style rules
@@ -1499,7 +1508,7 @@ today:
 | Application | Today, on disk | From scratch |
 | --- | --- | --- |
 | authelia | 1.1 MB | `claim`, `PRECIOUS`; its sessions in a Redis with no claim, since losing them costs a sign-in |
-| splitpro | an empty uploads directory; a 16 MB database | no uploads claim, an `emptyDir`; the database (§4.3) |
+| splitpro | an empty uploads directory; a 16 MB database | `claim`, `PRECIOUS`, for the uploads, which are receipts no one takes again; the database (§4.3) |
 | matrix | 18 MB, on a 20 GiB claim | `claim`, `PRECIOUS` |
 | the WebDAV server | 1.1 GiB of its own files, on JuiceFS | `claim`, `STANDARD`, for them, which are in no syncthing folder, and `nas_claim('Sync/Stuff')` for the folder it serves |
 | syncthing | 115 GiB on the NAS; 145 MB index and device key | `nas_claim('Sync')`; `claim`, `STANDARD`, for what holds the device key |
@@ -1716,7 +1725,7 @@ reads from the code.
 | spoolman's port 8000 | Its comment's intention, a printer connecting with no gate, is what `media` on the row does, and the printer already dials a name over HTTPS through a proxy | Its `server` is re-entered once, with the name |
 | immich's port 2283 | Its comment's intention, a home client off the cloud path with no setup, is what `lan` on the row does | The photo scripts' first choice of address moves to the name |
 | The ports of golinks and shoko | golinks's comment names the gateway's proxy as its one client, which `lan-gw` replaces; shoko is a `Route` by dns.md §4 | A saved address at the host's name is re-entered once |
-| The claims of authelia's and immich's Redis, stdiscosrv and splitpro's uploads, and jellyfin's 512 GiB cache | Each holds nothing a restart should keep | A Redis restart signs everyone in again, or re-runs immich's queue |
+| The claims of authelia's and immich's Redis, stdiscosrv, and jellyfin's 512 GiB cache | Each holds nothing a restart should keep | A Redis restart signs everyone in again, or re-runs immich's queue |
 | The second immich database instance | §4.3 | A failover takes a restart rather than a promotion |
 | thread-dashboard's move | §11.4 | Nothing: it stays on the host |
 | The UPS card's and thread-dashboard's names with the cluster down | Each is a device row that `lan-gw` answers (§4.1), where the gateway's proxy answered whatever the cluster's state | With the cluster down, the card and the dashboard are reached at their own addresses, the card behind the warning its own certificate draws |
@@ -1895,7 +1904,8 @@ branch.
 *   **splitpro**: its server on the cloud pool, its database by recovery
     from the legacy store (§4.3), its client from the census. It sends
     no mail. **Data**: the database by recovery, once the legacy server
-    is stopped and a final backup has run. **Verified** by a sign-in
+    is stopped and a final backup has run, and the uploads claim copied
+    from the legacy one. **Verified** by a sign-in
     through the single sign-on flow and a recent expense read back.
     **Cut**: `split`. **Rollback** loses the expenses entered since the
     cut.
@@ -3192,7 +3202,7 @@ ended, and slice 45 carries the rest.
 | 29 | A1 | **Cut**: `auth` | `src/kluster/conventions/routes.py`, `src/kluster/components/dns/legacy.py`, `docs/sources-of-truth.md` |
 | 30 | A2 | The head: A1's legacy authelia removed; Home Assistant's configured addresses read; both instances' devices and folders read, and each gap fixed on the device; the DNS-01 token minted for the co-host zone into the land's branch; kluster-code stops A2's applications | kluster-code |
 | 31 | A2 | **Land**: blog, splitpro, matrix, syncthing, stdiscosrv; stdiscosrv's row already stands in `EXPOSURES` (§3.1), so the land changes no `physical` plan for it; matrix lands in two pull requests, its receiver's and then its server's (§5.3) | as slice 28, and `Pulumi.k8s-base.yaml` |
-| 32 | A2 | **Cut**: `split`, `matrix` with its SRV, `dav`, `sync`, `syncapi`, the web origin's served apex and both `www`; the `sync-nas` and `btsync` records deleted; matrix's receiver deleted | as slice 29, and `src/kluster/components/dns/base.py`, `src/kluster/components/apps/matrix/`, `tests/test_apps_matrix.py` |
+| 32 | A2 | **Cut**: `split`, `matrix` with its SRV, `dav`, `sync`, `syncapi`, the web origin's served apex and both `www`; the `sync-nas` and `btsync` records deleted; matrix's receiver deleted; splitpro's recovery from the legacy store deleted, once its database has archived a base backup of its own | as slice 29, and `src/kluster/components/dns/base.py`, `src/kluster/components/apps/matrix/`, `tests/test_apps_matrix.py`, `src/kluster/components/apps/splitpro/`, `tests/test_apps_splitpro.py` |
 | 33 | after A2 | The head and the **stage**: A2's legacy applications removed; slice 25 applied; the tree on the NAS read as world-readable, or re-owned, since the source reads it as the export's anonymous user; hath wired with its client not started, and the copy pair; the warm copy | as slice 28; kluster-code |
 | 34 | after A2 | **Land**: kluster-code stops legacy hath; the final delta; the client started | as slice 28; kluster-code |
 | 35 | after A2 | **Cut**: the re-registration; the copy pair and the not-started parameter deleted | as slice 28, and `src/kluster/components/apps/hath/`, `tests/test_apps_hath.py` |

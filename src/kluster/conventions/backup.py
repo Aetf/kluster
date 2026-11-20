@@ -203,7 +203,7 @@ def writer_scope(namespace: str, family: BackupFamily) -> str:
 BACKED_NAMESPACES: Mapping[str, frozenset[BackupFamily]] = MappingProxyType(
     {
         'serving-system': frozenset({BackupFamily.VOLSYNC}),
-        'splitpro': frozenset({BackupFamily.BARMAN}),
+        'splitpro': frozenset({BackupFamily.BARMAN, BackupFamily.VOLSYNC}),
         'matrix': frozenset({BackupFamily.VOLSYNC}),
         'syncthing': frozenset({BackupFamily.VOLSYNC}),
         'webdav': frozenset({BackupFamily.VOLSYNC}),
