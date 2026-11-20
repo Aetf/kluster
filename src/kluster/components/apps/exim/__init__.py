@@ -1,12 +1,14 @@
 """The mail relay: exim, taking the cluster's mail and handing it to Gmail signed (rfc-008 §5.2).
 
 The cluster's applications send their notifications through it: Authelia's
-password resets and enrollments, and later immich's and Grafana's. The pods
-of the namespaces it is handed as its senders are the only ones that reach
-it; exim itself relays for the cluster's pod ranges, in both families, and
-for no other address. It relays every message to Gmail's submission port
-under the relay's account. It serves no certificate, so it offers no
-STARTTLS, and its senders speak to it in the clear (`HOST`, `PORT`).
+password resets and enrollments, and later immich's and Grafana's. A
+sending component puts `conventions.MAIL_SENDER_LABEL` on its own pods, and
+the pods carrying it are the only pods of another namespace that reach the
+relay; exim itself relays for the cluster's pod ranges, in both
+families, and for no other address. It relays every message to Gmail's
+submission port under the relay's account. It serves no certificate, so it
+offers no STARTTLS, and its senders speak to it in the clear (`HOST`,
+`PORT`).
 
 **The DKIM key is carried, not minted** (declarative/workloads.md §5). Every
 mail zone publishes the public half under the selector `k8s`
@@ -200,11 +202,10 @@ class Exim(Component, pulumi_type='kluster:apps:Exim'):
 
     `image` is the pin it runs; `smtp` and `dkim` are the ciphertexts
     `kluster.lib.k8s.sealed_ciphertext` reads for the ported credential,
-    `SMTP`, and for the DKIM key, `conventions.sealed.DKIM_EXIM`. `senders`
-    are the namespaces whose pods send through the relay, the applications
-    the program wires that send mail; the pods of no other namespace reach
-    it, and with none handed no policy admits any. The Kubernetes provider
-    arrives in `opts`. It has no exposure: its senders are in the cluster.
+    `SMTP`, and for the DKIM key, `conventions.sealed.DKIM_EXIM`. Who may
+    send is the pods carrying `conventions.MAIL_SENDER_LABEL`, which each
+    sending component puts on its own. The Kubernetes provider arrives in `opts`. It has no exposure:
+    its senders are in the cluster.
     """
 
     namespace: ApplicationNamespace
@@ -213,7 +214,7 @@ class Exim(Component, pulumi_type='kluster:apps:Exim'):
     config: k8s.core.v1.ConfigMap
     deployment: k8s.apps.v1.Deployment
     service: k8s.core.v1.Service
-    senders: crds.cilium.v2.CiliumNetworkPolicy | None
+    senders: crds.cilium.v2.CiliumNetworkPolicy
 
     def __init__(
         self,
@@ -222,7 +223,6 @@ class Exim(Component, pulumi_type='kluster:apps:Exim'):
         image: ImagePin,
         smtp: Mapping[str, pulumi.Input[str]],
         dkim: Mapping[str, pulumi.Input[str]],
-        senders: tuple[str, ...],
         opts: pulumi.ResourceOptions | None = None,
     ) -> None:
         super().__init__(name, opts=opts)
@@ -300,19 +300,20 @@ class Exim(Component, pulumi_type='kluster:apps:Exim'):
             ),
             opts=self.child_opts(),
         )
-        self.senders = _senders(name, namespace=namespace, senders=senders, opts=self.child_opts()) if senders else None
+        self.senders = _senders(name, namespace=namespace, opts=self.child_opts())
 
         self.register_outputs({})
 
 
 def _senders(
-    name: str, *, namespace: pulumi.Input[str], senders: tuple[str, ...], opts: pulumi.ResourceOptions
+    name: str, *, namespace: pulumi.Input[str], opts: pulumi.ResourceOptions
 ) -> crds.cilium.v2.CiliumNetworkPolicy:
-    """The policy admitting the pods of `senders`, and of no other namespace, to the relay's SMTP port alone.
+    """The policy admitting the pods carrying `conventions.MAIL_SENDER_LABEL`, from any namespace, to SMTP alone.
 
     The namespace's default-deny admits no other namespace's pods. A peer
     selector that names no namespace selects in the policy's own, so the
-    senders' namespaces are named by the namespace label
+    peer asks for the namespace label to exist, which selects in every
+    namespace
     ([`kubernetes.rst` L216-219](https://github.com/cilium/cilium/blob/v1.20.1/Documentation/security/policy/kubernetes.rst#L216-L219)).
     exim relays for any address of the pod ranges; this is what keeps a pod
     that is not a sender from sending as the relay's account.
@@ -321,17 +322,18 @@ def _senders(
         f'{name}-senders',
         metadata=k8s.meta.v1.ObjectMetaArgs(name='senders', namespace=namespace),
         spec=crds.cilium.v2.CiliumNetworkPolicySpecArgs(
-            description="Admit the senders' pods, and no other namespace's, to the relay's SMTP port alone.",
+            description="Admit the pods labelled as mail senders, from any namespace, to the relay's SMTP port alone.",
             endpoint_selector=crds.cilium.v2.CiliumNetworkPolicySpecEndpointSelectorArgs(match_labels=dict(LABELS)),
             ingress=[
                 crds.cilium.v2.CiliumNetworkPolicySpecIngressArgs(
                     from_endpoints=[
                         crds.cilium.v2.CiliumNetworkPolicySpecIngressFromEndpointsArgs(
+                            match_labels=dict(conventions.MAIL_SENDER_LABEL),
                             match_expressions=[
                                 crds.cilium.v2.CiliumNetworkPolicySpecIngressFromEndpointsMatchExpressionsArgs(
-                                    key='k8s:io.kubernetes.pod.namespace', operator='In', values=list(senders)
+                                    key='k8s:io.kubernetes.pod.namespace', operator='Exists'
                                 )
-                            ]
+                            ],
                         )
                     ],
                     to_ports=[

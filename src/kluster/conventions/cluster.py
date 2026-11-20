@@ -99,6 +99,22 @@ LB_POOL_LABEL = f'{LABEL_DOMAIN}/lb-pool'
 #: (`kluster.lib.k8s.ApiClients`), so on its own it opens nothing.
 API_CLIENT_LABEL: Mapping[str, str] = MappingProxyType({f'{LABEL_DOMAIN}/api-client': 'true'})
 
+#: The label a pod carries to send mail through the cluster's relay
+#: (`kluster.components.apps.exim`), as the one-entry mapping a pod's template
+#: carries. The relay admits a pod carrying it, from any namespace, to its
+#: SMTP port, and refuses a pod of another namespace without it.
+#:
+#: A pod's labels are set by whatever creates or patches it: a role that
+#: writes pods, or one that writes an object a controller starts pods from
+#: with labels the object carries, such as a workload's template or a CNPG
+#: `Cluster`'s `inheritedMetadata`. So a compromised application pod
+#: (threat-model.md §2.6, §2.9) sends as the relay's account only where its
+#: own declaration labels its pods, as long as no application pod holds such
+#: a role. A restore drill's role creates `Cluster`s under any name, which is
+#: such a role, and whether that stands is
+#: [Aetf/kluster-ops#876](https://github.com/Aetf/kluster-ops/issues/876).
+MAIL_SENDER_LABEL: Mapping[str, str] = MappingProxyType({f'{LABEL_DOMAIN}/mail-sender': 'true'})
+
 #: The label a restic source carries its retention class's name under.
 #: VolSync's own metrics carry no class, so a series that needs one takes it
 #: from here (declarative/workloads.md §3).
