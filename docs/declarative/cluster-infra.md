@@ -10,8 +10,8 @@ that speaks the k8s API, consumed by `apps`.
 > **Status**: designed 2026-08-22. Declared: Cilium (§2: the datapath,
 > the Gateway API definitions and class, the Gateways, the pools, the
 > baseline and the BGP session), the sealed-secrets controller,
-> cert-manager with its issuer and certificates, CNPG and its Barman
-> Cloud plugin, VolSync, NFD and the Intel GPU plugin,
+> cert-manager with its issuer and certificates, CNPG with its Barman
+> Cloud plugin and the restore drills' admission policy, VolSync, NFD and the Intel GPU plugin,
 > local-path-provisioner, reloader, and monitoring with metrics-server.
 
 ## 0. Scope and rules
@@ -107,7 +107,12 @@ classes its objects fall into (§1.2):
 5.  **CNPG operator** (≥1.26 — the floor for declarative offline
     in-place major upgrades, workloads.md §4), **VolSync** —
     independent of each other; both before any app declares a
-    database or a backup schedule. VolSync is behind the **volume
+    database or a backup schedule. Beside the operator, the component
+    declares the restore drills' admission policy,
+    `database-restore-drill`, and its binding, cluster-scoped and
+    running nothing, which hold the name, labels, annotations and
+    `inheritedMetadata` of every database drill's cluster to the drill's
+    manifest (workloads.md §4). VolSync is behind the **volume
     snapshot definitions** (`snapshot.storage.k8s.io`, from
     `external-snapshotter`), which its controller watches whatever a
     mover's copy method; they are served and nothing more, with no

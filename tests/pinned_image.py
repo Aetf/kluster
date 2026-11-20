@@ -1,7 +1,10 @@
 """A pinned image, pulled by its digest for a case that runs it or reads a file out of it.
 
-The pin is the one `Pulumi.yaml` holds (`pinned`), so a move of the pin moves
-what the suite runs with it. The image is pulled from Google's mirror where its
+A pin is the one `Pulumi.yaml` holds (`pinned`) where the deployment pulls
+the image, so a move of the pin moves what the suite runs with it. An image
+nothing deploys is pinned in the module whose cases run it, beside what keeps
+the pin on the fleet's: today the control plane's, in
+`tests/test_apps_database.py`, held to the Talos release's listing. The image is pulled from Google's mirror where its
 repository is Docker Hub's, by digest (`source`, `pulled`), and only where it
 is not already local.
 

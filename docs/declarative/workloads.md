@@ -309,7 +309,23 @@ per-app number:
         namespace. The shape spells the drill's `ScheduledJob`,
         `drill_job`, once, and declares from it the CronJob and, beside
         it, the scheduled-job family's two rules over it
-        (operations.md §4, §9.1).
+        (operations.md §4, §9.1). The role's `create` names no
+        cluster, and a cluster's labels, annotations and
+        `inheritedMetadata` reach the pods the operator starts for it,
+        so **the drill's cluster is held at admission on its name,
+        labels, annotations and `inheritedMetadata`**: one `ValidatingAdmissionPolicy` for every database,
+        `drill_admission`, admits a create or update of a `Cluster` by a
+        drill's account only under the name its manifest gives and with
+        exactly that manifest's labels, annotations and
+        `inheritedMetadata`, beside the annotation `kubectl apply`
+        writes, read from parameters the shape derives from the
+        manifest, a `ConfigMap` labelled `DRILL_ADMISSION_LABEL`. The
+        rest of the cluster's `spec` is not held
+        ([Aetf/kluster-ops#889](https://github.com/Aetf/kluster-ops/issues/889)).
+        It judges no other account, and an expression it cannot
+        evaluate refuses the drill, which then fails as any run does.
+        The policy and its binding are cluster-scoped, so `k8s-base`
+        declares them (§1), with the database operator.
     -   **The pods the shape runs call the API**: the instances carry
         `conventions.API_CLIENT_LABEL` through the `Cluster`'s
         `inheritedMetadata`, and the drill's pod through its template,
