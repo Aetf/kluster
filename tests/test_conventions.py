@@ -58,6 +58,7 @@ from workflow_files import (
 )
 
 from kluster import conventions
+from kluster.components.apps import published_once
 from kluster.components.dns import base as dns_base
 from kluster.components.dns import legacy as dns_legacy
 from kluster.components.dns import record as dns_record
@@ -610,7 +611,7 @@ def _of(*rows: routes.RouteRow | routes.Port) -> dict[str, routes.Exposure]:
 
 def _route_rows(
     exposures: Iterable[routes.Exposure],
-) -> list[tuple[routes.Route | routes.Passthrough | routes.Apex, bool]]:
+) -> list[tuple[routes.Route | routes.Passthrough | routes.PortRedirect | routes.Apex, bool]]:
     """Every row by name or apex, and whether the legacy VPS holds it."""
     return [
         (row.row, True) if isinstance(row, routes.Held) else (row, False)
@@ -697,6 +698,29 @@ def test_a_row_is_published_in_the_primary_zone_alone_unless_it_says_otherwise()
     assert routes.Route('photos', internet=routes.PROXIED).zones == (conventions.ZONE_PRIMARY,)
 
 
+#: A redirect on `internet` and `lan`, and the port it sends a client to:
+#: TCP on 8443, at the balancer and at the LAN VIP under the redirect's host.
+_REDIRECT = routes.PortRedirect('find', 8443, internet=REASON, lan=routes.REWRITE)
+_BALANCER = routes.Balancer()
+_HOME = routes.Vip('find')
+_TARGET = routes.Port('find', 8443, Transports.TCP, internet=_BALANCER, lan=_HOME)
+
+
+def _redirected(
+    *,
+    port: int = _TARGET.port,
+    transports: Transports = _TARGET.transports,
+    internet: routes.Balancer | routes.Dedicated | None = _BALANCER,
+    lan: routes.Vip | None = _HOME,
+    media: routes.Vip | None = None,
+) -> routes.Exposure:
+    """`_REDIRECT` beside a port that differs from `_TARGET` in what is given."""
+    return routes.Exposure(
+        routes=(_REDIRECT,),
+        ports=(routes.Port('find', port, transports, internet=internet, lan=lan, media=media),),
+    )
+
+
 #: What a type cannot say, each built the way a census would write it, and a
 #: row beside it that differs in the one respect and is accepted.
 REFUSED: dict[str, tuple[Callable[[], object], Callable[[], object]]] = {
@@ -704,6 +728,22 @@ REFUSED: dict[str, tuple[Callable[[], object], Callable[[], object]]] = {
     'a passthrough on no Gateway': (
         lambda: routes.Passthrough('syncapi'),
         lambda: routes.Passthrough('syncapi', lan=routes.REWRITE),
+    ),
+    'a redirect on no Gateway': (
+        lambda: routes.PortRedirect('syncapi', 8443),
+        lambda: routes.PortRedirect('syncapi', 8443, lan=routes.REWRITE),
+    ),
+    'a redirect to port 0': (
+        lambda: routes.PortRedirect('syncapi', 0, lan=routes.REWRITE),
+        lambda: routes.PortRedirect('syncapi', 8443, lan=routes.REWRITE),
+    ),
+    'a redirect on lan and media': (
+        lambda: routes.PortRedirect('syncapi', 8443, lan=routes.REWRITE, media=routes.REWRITE),
+        lambda: routes.PortRedirect('syncapi', 8443, media=routes.REWRITE),
+    ),
+    'an empty redirect host': (
+        lambda: routes.PortRedirect('', 8443, internet=REASON),
+        lambda: routes.PortRedirect('syncapi', 8443, internet=REASON),
     ),
     'a raw port on no Gateway': (
         lambda: routes.Port('imap', 1993, Transports.TCP),
@@ -822,6 +862,37 @@ REFUSED: dict[str, tuple[Callable[[], object], Callable[[], object]]] = {
         lambda: routes.Port('discovery', 7359, Transports.TCP_AND_UDP, media=routes.Heard()),
         lambda: routes.Port('discovery', 7359, Transports.UDP, media=routes.Heard()),
     ),
+    'a redirect to a port its exposure lacks': (
+        lambda: _redirected(port=8444),
+        lambda: _redirected(),
+    ),
+    'a redirect to a port of another exposure': (
+        lambda: routes.Exposure(routes=(routes.Held(_REDIRECT),)),
+        lambda: routes.Exposure(routes=(routes.Held(_REDIRECT),), ports=(_TARGET,)),
+    ),
+    'a redirect on internet to a port off the balancer': (
+        lambda: _redirected(internet=routes.Dedicated()),
+        lambda: _redirected(internet=routes.Balancer((routes.Host('find'),))),
+    ),
+    'a redirect on internet to a port only at home': (
+        lambda: _redirected(internet=None),
+        lambda: routes.Exposure(
+            routes=(routes.PortRedirect('find', 8443, lan=routes.REWRITE),),
+            ports=(routes.Port('find', 8443, Transports.TCP, lan=routes.Vip('find')),),
+        ),
+    ),
+    'a redirect home to a port at the other VIP': (
+        lambda: _redirected(lan=None, media=routes.Vip('find')),
+        lambda: _redirected(),
+    ),
+    'a redirect home to a port at its VIP under another name': (
+        lambda: _redirected(lan=routes.Vip('other')),
+        lambda: _redirected(lan=routes.Vip('find')),
+    ),
+    'a redirect to a port on UDP alone': (
+        lambda: _redirected(transports=Transports.UDP),
+        lambda: _redirected(transports=Transports.TCP_AND_UDP),
+    ),
 }
 
 
@@ -877,6 +948,15 @@ def test_each_shape_publishes_the_records_its_internet_side_states() -> None:
         routes.PublicName('photos', 'unlimited-code.works', 'uploads'),
         routes.PublicName('syncapi', 'unlimited-code.works', 'client certificates'),
     )
+
+
+def test_a_redirect_publishes_its_host_direct_in_the_primary_and_a_held_one_nothing() -> None:
+    """The name it answers is the name its port is dialed at, which a raw port cannot reach through the proxy."""
+    published = routes.Exposure(routes=(_REDIRECT,), ports=(_TARGET,))
+    held = routes.Exposure(routes=(routes.Held(_REDIRECT),), ports=(_TARGET,))
+
+    assert routes.public_names((published,)) == (routes.PublicName('find', conventions.ZONE_PRIMARY, 'a reason'),)
+    assert routes.public_names((held,)) == ()
 
 
 def test_the_served_zones_are_the_primary_and_every_zone_a_row_takes_a_certificate_in() -> None:
@@ -1068,7 +1148,7 @@ def _two_answers(exposures: Iterable[routes.Exposure]) -> list[tuple[str, str]]:
 
 
 def test_rows_that_share_a_host_give_it_one_record_and_one_rewrite() -> None:
-    """The discovery server's passthrough and the peer port share `syncapi`, and agree on it.
+    """The discovery server's redirect and its port, and the peer port, share `syncapi`, and agree on it.
 
     A raw port's host on a proxied name would publish the proxy's address for
     a port the proxy does not carry, and a raw port at the LAN VIP for a name
@@ -1076,7 +1156,10 @@ def test_rows_that_share_a_host_give_it_one_record_and_one_rewrite() -> None:
     else sharing a name, two routes on it included, is a second service on
     it.
     """
-    syncapi = routes.Passthrough('syncapi', internet=REASON, lan=routes.REWRITE)
+    discovery = routes.Exposure(
+        routes=(routes.PortRedirect('syncapi', 8443, internet=REASON, lan=routes.REWRITE),),
+        ports=(routes.Port('stdiscosrv', 8443, Transports.TCP, internet=routes.Balancer(), lan=routes.Vip('syncapi')),),
+    )
     peer = routes.Port(
         'syncthing',
         22000,
@@ -1087,7 +1170,10 @@ def test_rows_that_share_a_host_give_it_one_record_and_one_rewrite() -> None:
     primary = conventions.ZONE_PRIMARY
 
     assert _two_answers(_census()) == []
-    assert _two_answers(_census(_of(syncapi, peer))) == []
+    assert _two_answers(_census({'stdiscosrv': discovery, **_of(peer)})) == []
+    assert _two_answers(_census({'stdiscosrv': discovery, **_of(routes.Route('syncapi', internet=REASON))})) == [
+        ('syncapi', primary)
+    ]
     assert _two_answers(
         _census(
             _of(
@@ -1107,6 +1193,47 @@ def test_rows_that_share_a_host_give_it_one_record_and_one_rewrite() -> None:
     assert _two_answers(
         _census(_of(routes.Route('auth', internet=routes.PROXIED), routes.Route('auth', internet=routes.PROXIED)))
     ) == [('auth', primary)]
+
+
+def _cut(exposure: routes.Exposure) -> routes.Exposure:
+    """The exposure once every cut has run: each row and each raw port's host with its `Held` taken off."""
+    ports = tuple(
+        dataclasses.replace(
+            port,
+            internet=routes.Balancer(
+                tuple(host.row if isinstance(host, routes.Held) else host for host in port.internet.hosts)
+            ),
+        )
+        if isinstance(port.internet, routes.Balancer)
+        else port
+        for port in exposure.ports
+    )
+    rows = tuple(row.row if isinstance(row, routes.Held) else row for row in exposure.routes)
+    return routes.Exposure(routes=rows, ports=ports, device=exposure.device)
+
+
+def test_the_census_with_every_held_row_cut_publishes_each_name_once_with_one_answer() -> None:
+    """Each cut only takes a wrapper off, so the census it leaves has to hold too.
+
+    A held name publishes nothing, so two exposures that will both publish
+    it, or two rows that will disagree on it, pass every check until the cut
+    that unwraps them. The census with every wrapper taken off is the one a
+    later cut lands in, and it is held to both checks now: each name
+    published by one exposure, since the `apps` program declares each
+    exposure's records (`published_once`), and one answer per name.
+    """
+    peer = routes.Port(
+        'peer', 22000, Transports.TCP, internet=routes.Balancer((routes.Held(routes.Host('find')),)), lan=_HOME
+    )
+    both = {'discovery': routes.Exposure(routes=(routes.Held(_REDIRECT),), ports=(_TARGET,)), **_of(peer)}
+
+    cut = tuple(map(_cut, _census()))
+    published_once(cut)
+    assert _two_answers(cut) == []
+    # Held, the two publish nothing; cut, both publish `find`.
+    published_once(_census(both))
+    with pytest.raises(ValueError, match=rf'find\.{conventions.ZONE_PRIMARY}'):
+        published_once(tuple(map(_cut, _census(both))))
 
 
 # A row on `internet` is held exactly while the `dns` stack points its name at

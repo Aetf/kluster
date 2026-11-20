@@ -194,6 +194,15 @@ config:
   # refuses one the version's tag no longer resolves to, so the pin holds the
   # bytes it was proposed at. Cilium's bump travels alone in renovate, the
   # way Talos's does (operations.md §2.2).
+  #
+  # A bump of Cilium reads whether the new version serves a TLS passthrough
+  # listener on an exact hostname beside an HTTPS listener on a wildcard that
+  # matches it, on one port (cilium/cilium#48092, after
+  # kubernetes-sigs/gateway-api#4271). The pinned one drops both. Where the
+  # new one serves them, the `PortRedirect` row of `conventions.routes` is
+  # removable, and the discovery server's row becomes the `Passthrough` it
+  # stands in for (Aetf/kluster-ops#723). No offline test reads what Cilium
+  # accepts, so the bump's preview run reads it (operations.md §2.2).
   versions:chart-cilium:
     value:
       repository: oci://quay.io/cilium/charts

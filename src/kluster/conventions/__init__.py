@@ -180,6 +180,17 @@ raw port
     `routes.SiteForward`). The Gateways' own ports are no application's and
     are not raw ports (`cluster.GATEWAY_PORTS`).
 
+port redirect
+    The redirect by name to a raw port of the same exposure, answered on 443
+    by the Gateway with a `308` to the same name at that port
+    (`routes.PortRedirect`; rfc-008 §4.1): how a client that names a raw
+    HTTPS port's server with no port reaches it. Distinct from the redirect
+    off plain HTTP, which every Gateway answers on its HTTP listener with
+    the same request over HTTPS
+    (`kluster.components.cilium.gateways.HTTP_LISTENER`), and from the
+    redirect of a bare name, which `lan-gw` answers with the full name
+    (`routes.BARE`).
+
 private space
     Every private-use IPv4 address (RFC 1918) and every unique-local IPv6
     address (`fc00::/7`), as the address plan of the internet sets them

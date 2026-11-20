@@ -26,9 +26,11 @@ passthrough listener and an HTTPS listener on one port to conflict whenever
 their hostnames can match one name, and drops both, so a passthrough for a
 name under a served zone would take the zone's wildcard listener, and every
 name of the zone, off the Gateway (`listenerPairConflict` in
-`operator/pkg/gateway-api/gateway_reconcile.go`, v1.20.1). A pod that
+`operator/pkg/gateway-api/status_listener.go`, v1.20.4). A pod that
 terminates its own TLS is reached at a raw port instead, as the discovery
-server is (Aetf/kluster-ops#723).
+server is (Aetf/kluster-ops#723). **A `PortRedirect` row asks for no listener**:
+its route attaches to the primary zone's wildcard listener as a `Route` in
+the primary does, and redirects to its raw port.
 
 Where a Gateway answers is decided by where its address is routed, since
 Cilium hands its traffic to the Envoy on the node it arrives at (rfc-007
@@ -66,7 +68,7 @@ import pulumi_crds as crds
 import pulumi_kubernetes as k8s
 
 from kluster import conventions
-from kluster.conventions.routes import Apex, Bare, Exposure, Held, Passthrough, Route, served_zones
+from kluster.conventions.routes import Apex, Bare, Exposure, Held, Passthrough, PortRedirect, Route, served_zones
 from kluster.lib.k8s import bare_listener, lb_pool_labels, namespace, refuse_passthrough
 from putils import Component, async_output, resolve
 
@@ -114,7 +116,7 @@ def sharing_annotations(gateway: str) -> dict[str, str]:
     return {SHARING_KEY: sharing_key(gateway), SHARING_CROSS_NAMESPACE: '*'}
 
 
-def _rows(exposures: Iterable[Exposure]) -> Iterator[Route | Passthrough | Apex]:
+def _rows(exposures: Iterable[Exposure]) -> Iterator[Route | Passthrough | PortRedirect | Apex]:
     """Every route row of the census, held or not: a held row's route attaches all the same."""
     for exposure in exposures:
         for row in exposure.routes:
@@ -145,7 +147,7 @@ def apex_listener(zone: str) -> str:
     return f'apex-{zone}'
 
 
-#: The listener every Gateway's redirect attaches to.
+#: The plain HTTP listener, which the redirect off plain HTTP attaches to.
 HTTP_LISTENER = 'http'
 
 

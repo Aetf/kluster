@@ -28,6 +28,7 @@ from kluster.conventions.routes import (
     Host,
     Passthrough,
     Port,
+    PortRedirect,
     Route,
     Vip,
 )
@@ -172,6 +173,10 @@ def test_each_shape_is_rewritten_at_the_vip_of_the_gateway_it_sets() -> None:
         Exposure(routes=(Route('go', lan=BARE),)),
         Exposure(routes=(Passthrough('syncapi', internet=REASON, lan=REWRITE),)),
         Exposure(routes=(Passthrough('relay', media=REWRITE),)),
+        Exposure(
+            routes=(PortRedirect('find', 8443, media=REWRITE),),
+            ports=(Port('find', 8443, Transports.TCP, media=Vip('find')),),
+        ),
         Exposure(routes=(Apex(('unlimited-code.works',)),)),
         Exposure(routes=(Held(Route('mon', internet=PROXIED, lan=REWRITE)),)),
         Exposure(ports=(Port('imap', 1993, Transports.TCP, lan=Vip('imap')),)),
@@ -198,19 +203,23 @@ def test_each_shape_is_rewritten_at_the_vip_of_the_gateway_it_sets() -> None:
         'go': LAN_VIP,
         'syncapi.unlimited-code.works': LAN_VIP,
         'relay.unlimited-code.works': MEDIA_VIP,
+        'find.unlimited-code.works': MEDIA_VIP,
         'imap.unlimited-code.works': LAN_VIP,
         'cast.unlimited-code.works': MEDIA_VIP,
     }
 
 
 def test_rows_that_share_a_host_publish_one_rewrite() -> None:
-    """The discovery server's passthrough and the peer port's VIP are one name with one answer.
+    """The discovery server's redirect, its port's VIP and the peer port's VIP are one name with one answer.
 
     Two rewrites for one name and family would be two rows on the
     resolvers, written under one resource name.
     """
     census = [
-        Exposure(routes=(Passthrough('syncapi', internet=REASON, lan=REWRITE),)),
+        Exposure(
+            routes=(PortRedirect('syncapi', 8443, internet=REASON, lan=REWRITE),),
+            ports=(Port('stdiscosrv', 8443, Transports.TCP, internet=Balancer(), lan=Vip('syncapi')),),
+        ),
         Exposure(
             ports=(
                 Port(

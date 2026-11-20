@@ -55,7 +55,7 @@ from ruamel.yaml.error import YAMLError
 
 from kluster import conventions
 from kluster.conventions.cluster import POOL_WORKER, Transports
-from kluster.conventions.routes import Bare, Gate, Passthrough, Port, Proxied, Route
+from kluster.conventions.routes import Bare, Gate, Passthrough, Port, PortRedirect, Proxied, Route
 from kluster.conventions.sealed import SealedValue, SealingScope
 from kluster.lib import install_order
 from kluster.lib.config import Shape, ShapeRefused, text
@@ -101,6 +101,7 @@ __all__ = (
     'lb_pool_labels',
     'namespace',
     'pick_resource',
+    'redirect_routes',
     'refuse_passthrough',
     'rendered_template',
     'route',
@@ -1330,7 +1331,8 @@ class Portal:
         sets them only for a signed-in subject: an answer under a `bypass`
         rule carries none, and the client's own pass through. So an
         application that trusts them sits under no `bypass` rule. On every
-        route without a gate `route` removes them from the request.
+        route that forwards a request without a gate, `route` removes them
+        from it.
     -   **`X-Forwarded-For`'s first element is the client's own word.**
         Envoy appends the peer it saw to what the client sent, and Authelia
         reads the first element, so a client outside names any address it
@@ -1388,7 +1390,8 @@ def refuse_passthrough(host: str) -> NoReturn:
     raise PassthroughRefused(
         f'the passthrough {host!r} cannot be served: Cilium drops a TLS passthrough listener together with the '
         "zone's wildcard HTTPS listener on the same port, and every name of the zone with it. A pod that "
-        'terminates its own TLS is reached at a raw port instead, as the discovery server is (Aetf/kluster-ops#723)'
+        'terminates its own TLS is reached at a raw port instead, and a client that names it with no port at a '
+        '`PortRedirect` to that port, as the discovery server is (Aetf/kluster-ops#723)'
     )
 
 
@@ -1397,7 +1400,7 @@ def bare_listener(label: str) -> str:
     return f'http-{label}'
 
 
-def row_gateways(row: Route | Passthrough | Port) -> tuple[str, ...]:
+def row_gateways(row: Route | Passthrough | PortRedirect | Port) -> tuple[str, ...]:
     """The Gateways a row sets, `internet` first: each of the three fields is one Gateway."""
     fields = (
         (row.internet, conventions.GATEWAY_INTERNET),
@@ -1439,6 +1442,73 @@ def identity_stripped() -> crds.gateway.v1.HTTPRouteSpecRulesFiltersArgs:
     )
 
 
+def redirect_routes(
+    resource_name: str,
+    row: PortRedirect,
+    *,
+    namespace: pulumi.Input[str],
+    opts: pulumi.ResourceOptions | None = None,
+) -> list[crds.gateway.v1.HTTPRoute]:
+    """The `HTTPRoute`s of one `PortRedirect` row: one per Gateway it sets, each a `308` to the row's port.
+
+    Each attaches to its Gateway by hostname, on the primary zone's wildcard
+    listener, as a `Route` in the primary does, and answers every request on
+    the row's name. The redirect names no hostname, no path and no scheme,
+    so the client is sent to the name it asked for, at the row's port, with
+    its path, its query and its scheme, which on the HTTPS listener is
+    `https`; a `308` keeps the method and the body, which a client's `POST`
+    needs. The scheme is left unset because Cilium guards a redirect that
+    names one with a match on `X-Forwarded-Proto` other than that scheme,
+    which a request on an HTTPS listener never satisfies, so the route would
+    never fire (cilium/cilium#48373). It forwards to no backend, so nothing
+    reaches a pod on this leg and there is no gate to ask.
+
+    It is the cell of the `PortRedirect` layer
+    (`kluster.conventions.routes.PortRedirect`), and goes with it.
+
+    :param resource_name: The logical name, which carries the declaring
+        component's name; each route's is this with its Gateway's name.
+    :param namespace: The namespace the routes are declared in, which
+        carries the route label.
+    """
+    return [
+        _redirect_route(resource_name, row, gateway, namespace=namespace, opts=opts) for gateway in row_gateways(row)
+    ]
+
+
+def _redirect_route(
+    resource_name: str,
+    row: PortRedirect,
+    gateway: str,
+    *,
+    namespace: pulumi.Input[str],
+    opts: pulumi.ResourceOptions | None,
+) -> crds.gateway.v1.HTTPRoute:
+    return crds.gateway.v1.HTTPRoute(
+        f'{resource_name}-{gateway}',
+        metadata=k8s.meta.v1.ObjectMetaArgs(name=f'{row.host}-{gateway}', namespace=namespace),
+        spec=crds.gateway.v1.HTTPRouteSpecArgs(
+            parent_refs=[
+                crds.gateway.v1.HTTPRouteSpecParentRefsArgs(name=gateway, namespace=conventions.GATEWAY_NAMESPACE)
+            ],
+            hostnames=[f'{row.host}.{zone}' for zone in row.zones],
+            rules=[
+                crds.gateway.v1.HTTPRouteSpecRulesArgs(
+                    filters=[
+                        crds.gateway.v1.HTTPRouteSpecRulesFiltersArgs(
+                            type='RequestRedirect',
+                            request_redirect=crds.gateway.v1.HTTPRouteSpecRulesFiltersRequestRedirectArgs(
+                                port=row.port, status_code=308
+                            ),
+                        )
+                    ]
+                )
+            ],
+        ),
+        opts=opts,
+    )
+
+
 def route(
     resource_name: str,
     row: Route,
@@ -1454,8 +1524,9 @@ def route(
     (rfc-007 §5.2). **The gate is `internet`'s alone**: a `Proxied` side with
     a gate puts the authentication filter ahead of the backend on that route
     and on no other, since the home has no gate (dns.md §5), so a gated
-    name's home side is answered ungated. Every route without a gate removes the portal's
-    identity headers from the request (`identity_stripped`). A `Bare` home
+    name's home side is answered ungated. Every route that forwards a
+    request without a gate removes the portal's identity headers from it
+    (`identity_stripped`). A `Bare` home
     side adds one more
     route on `lan-gw`: the bare label, at that Gateway's plain HTTP listener
     for the label (`bare_listener`), answered with a redirect to the name in

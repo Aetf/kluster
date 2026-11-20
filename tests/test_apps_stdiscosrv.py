@@ -2,9 +2,9 @@
 
 Every row here is the test's own: a raw port on TCP, on a port no census row
 carries, dialed at two names through the balancer, one of them held, and at a
-third at home. So the cases show that the row the component is handed decides
-what it declares, never what the census happens to say. The image pin is the
-test's own too.
+third at home, with a held redirect to it at that third name. So the cases show
+that the row the component is handed decides what it declares, never what the
+census happens to say. The image pin is the test's own too.
 
 Literals written here are the upstream projects' contracts: stdiscosrv's flags
 and its `/ping`, cert-manager's issuer reference, Reloader's annotation,
@@ -37,6 +37,7 @@ from kluster.conventions.routes import (
     Host,
     Passthrough,
     Port,
+    PortRedirect,
     Route,
     Vip,
 )
@@ -48,6 +49,7 @@ DEPLOYMENT = 'kubernetes:apps/v1:Deployment'
 NAMESPACE = 'kubernetes:core/v1:Namespace'
 CERTIFICATE = 'crds:cert-manager.io/v1:Certificate'
 POLICY = 'crds:cilium.io/v2:CiliumNetworkPolicy'
+HTTP_ROUTE = 'crds:gateway.networking.k8s.io/v1:HTTPRoute'
 
 FRONTS = Fronts(
     internet=InternetPoolMembers(
@@ -70,7 +72,10 @@ FIND = Port(
     internet=Balancer((Held(Host('st-find')), Host('st-also'))),
     lan=Vip('st-home'),
 )
-EXPOSURE = Exposure(ports=(FIND,))
+#: The redirect a device that names the server with no port is answered with,
+#: held as the name it shares is.
+REDIRECT = PortRedirect('st-home', FIND.port, internet=Direct('a raw port'), lan=REWRITE)
+EXPOSURE = Exposure(routes=(Held(REDIRECT),), ports=(FIND,))
 
 IMAGE = ImagePin('registry.example.invalid/discosrv', 'v9.9.9', f'sha256:{"3" * 64}')
 
@@ -202,6 +207,27 @@ def test_the_server_is_probed_at_its_ping_over_https_on_the_port_it_listens_on(d
         assert named[probe['httpGet']['port']] == FIND.port
 
 
+def test_a_device_on_443_is_redirected_to_the_servers_port_at_each_gateway_the_redirect_sets(
+    declared: Recorder,
+) -> None:
+    """A device configured with the name alone reaches the port its certificate is asked for on.
+
+    The route forwards nothing, so the leg on 443, where the Gateway ends the
+    TLS, carries no device's ID to anything.
+    """
+    routes = in_namespace(declared, HTTP_ROUTE)
+
+    assert sorted(ref['name'] for route in routes for ref in route['spec']['parentRefs']) == sorted(
+        [conventions.GATEWAY_INTERNET, conventions.GATEWAY_LAN]
+    )
+    for route in routes:
+        assert route['spec']['hostnames'] == [f'st-home.{conventions.ZONE_PRIMARY}']
+        (rule,) = route['spec']['rules']
+        assert 'backendRefs' not in rule
+        (redirect,) = rule['filters']
+        assert redirect['requestRedirect'] == {'port': FIND.port, 'statusCode': 308}
+
+
 # -- its pod -------------------------------------------------------------------
 
 
@@ -261,9 +287,9 @@ def declare(exposure: Exposure) -> None:
     ],
     ids=['passthrough', 'route'],
 )
-def test_a_route_row_is_refused(row: Passthrough | Route) -> None:
+def test_a_route_row_but_a_redirect_is_refused(row: Passthrough | Route) -> None:
     """A Gateway would end the TLS that carries a device's ID."""
-    with pytest.raises(ValueError, match='raw port and at no route'):
+    with pytest.raises(ValueError, match='by name only through a redirect'):
         declare(Exposure(routes=(row,), ports=(FIND,)))
 
 

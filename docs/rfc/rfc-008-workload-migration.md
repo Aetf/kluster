@@ -168,6 +168,20 @@
     from the legacy store is a migration layer of its component's own, and
     slice 32 deletes it, with the component and its tests among its owned
     paths (§10.3).
+*   **Updated:** 2026-11-19. A device that names the discovery server
+    with no port is answered on 443, by name, with a redirect to 8443, so
+    no device is re-entered at the cut
+    ([Aetf/kluster-ops#723](https://github.com/Aetf/kluster-ops/issues/723),
+    ruled by the operator). §4.1 gains the `PortRedirect` row, its cell,
+    its relation to the port it names, and the discovery server's row and
+    paragraph. The redirect publishes the record of `syncapi`, and the
+    peer port's balancer front names no host, so the census with every
+    `Held` taken off publishes each name once; §4.1's worked table and its
+    paragraph on the data port's name follow it. §4.7's row goes, and
+    §5.3's stdiscosrv is verified on 443 as well and cut with no device
+    edited. The row is a removable layer: when the pinned Cilium serves an
+    exact passthrough beside a wildcard (cilium/cilium#48092), it becomes
+    the `Passthrough` it stands in for and the port goes.
 *   **Authority:** AGENTS.md,
     [framework/dispatch.md](../framework/dispatch.md),
     [framework/rfc.md](../framework/rfc.md) and the style rules
@@ -609,8 +623,8 @@ architecture.md §3.6 says that deploying an application answers two
 questions, which pool and HTTP or not, and the declaration is those two
 questions. *Which Gateway* is three peers, `internet`, `lan` and
 `media`, the same fields on every row where they mean something. *How*
-is the row's type: `Route` and `Passthrough` go through a Gateway's
-proxy, by name, and `Port` is raw, at a Gateway's address. Setting a
+is the row's type: `Route`, `Passthrough` and `PortRedirect` go through a
+Gateway's proxy, by name, and `Port` is raw, at a Gateway's address. Setting a
 field chooses that Gateway, and the field's type carries what only that
 Gateway and that way of reaching it mean, so a combination that means
 nothing cannot be written. This replaces the enumeration of the same
@@ -660,6 +674,15 @@ class Passthrough:  # TLS the pod terminates, on 443, by name
 
 
 @dataclass(frozen=True)
+class PortRedirect:  # HTTPS by name in the primary, a 308 to a raw port at the name
+    host: str
+    port: int
+    internet: Direct | None = None
+    lan: Rewrite | None = None
+    media: Rewrite | None = None
+
+
+@dataclass(frozen=True)
 class Apex:  # a website's apex, on `internet`; `dns` holds its address
     zones: tuple[str, ...]
 
@@ -670,7 +693,7 @@ class Host:  # a name a raw port is dialed at, published direct
 
 
 @dataclass(frozen=True)
-class Held[T: (Route, Passthrough, Host)]:  # the legacy estate holds it
+class Held[T: (Route, Passthrough, PortRedirect, Host)]:  # the legacy estate holds it
     row: T
 
 
@@ -716,7 +739,9 @@ class Device:  # a machine at home answers, in place of pods
 
 @dataclass(frozen=True)
 class Exposure:  # how one application is reached
-    routes: tuple[Route | Passthrough | Apex | Held[Route] | Held[Passthrough], ...] = ()
+    routes: tuple[
+        Route | Passthrough | PortRedirect | Apex | Held[Route] | Held[Passthrough] | Held[PortRedirect], ...
+    ] = ()
     ports: tuple[Port, ...] = ()
     device: Device | None = None
 ```
@@ -725,7 +750,8 @@ class Exposure:  # how one application is reached
 `conventions.routes` maps each application to its `Exposure` and is the
 census; the rows `dns`, `physical` and `k8s-base` read derive from it. A
 component makes one call, `expose(exposure)`. `Held` wraps a `Route`, a
-`Passthrough` or a `Host` while the legacy estate holds the name (§3.3),
+`Passthrough`, a `PortRedirect` or a `Host` while the legacy estate holds the
+name (§3.3),
 so the migration's state is a wrapper the census sheds rather than a
 field every row carries; a VIP's host that a held row shares publishes
 no rewrite until the row does. `Device` and `Heard` name the two ends a
@@ -769,14 +795,18 @@ does; two `Route`s in one `Exposure`, one on `internet` alone and one on
 a home Gateway alone, held or not, which is one service under two
 names; a device beside anything but `Route`s, held or not, since its
 relay forwards to one port; a heard side on a row that is not UDP alone, since a
-packet is what is heard; an empty
+packet is what is heard; a `PortRedirect` whose port is no TCP `Port` of its
+`Exposure` that serves every Gateway the redirect sets at the redirect's
+host, at the balancer for `internet` and at a `Vip` of that host for a
+home side, since the redirect would send its client to an address that
+does not serve the port; an empty
 reason, an empty zone set, and a host that is empty or `@`.
 
 What is a relation between rows stays a census invariant: known zones; a
 port claimed once on a front, `GATEWAY_PORTS` counted on every front
 they answer; an `Apex` zone holding its address record; §3.3's relation;
 and **one host, one answer**: rows that share a host, as `syncapi` does
-across the peer port and the discovery server's port, publish one
+across the peer port, the discovery server's port and its redirect, publish one
 record and one rewrite, and agree on both: a `Host` shares its record
 only with a row whose `internet` is `Direct`, since a proxied record
 would hide the raw port; every home side on the name answers at one
@@ -855,6 +885,7 @@ cell for each way of being reached on each Gateway:
 | --- | --- | --- | --- |
 | A `Route` | `internet-gw`, on the zone's wildcard listener; the zone's certificate; a CNAME to the cluster anchor per zone, proxied or direct; its gate | `lan-gw`, on the zone's wildcard listener; the zone's certificate; a rewrite at the LAN VIP per zone, and the bare label if asked | the same on `media-gw`, at the media VIP |
 | A `Passthrough` | a TLS passthrough listener on 443 on `internet-gw`, for the host, with a `TLSRoute`; a direct CNAME to the anchor; no certificate | the same on `lan-gw`, with a rewrite at the LAN VIP | the same on `media-gw`, with a rewrite at the media VIP |
+| A `PortRedirect` | `internet-gw`, on the primary's wildcard listener, one `HTTPRoute` whose one rule is a `308` to the same name at the row's port, with no backend and no gate; a direct CNAME to the anchor | the same on `lan-gw`, with a rewrite at the LAN VIP | the same on `media-gw`, with a rewrite at the media VIP |
 | An `Apex` | an HTTPS listener per zone; its certificate zones; `dns`'s web origin, written in its block and held to the row by an invariant | none | none |
 | A `Port` | a LoadBalancer Service: for `Balancer`, on the cloud nodes and the balancer's two addresses, requiring both families, with one listener per family and a direct CNAME per `Host`; for `Dedicated`, on the dedicated node's address; for `SiteForward`, on the worker's, with the forward and the pinhole | a Service at the LAN VIP, under `lan-gw`'s sharing key, and a rewrite for its host; a heard side has the Service, no host and no rewrite, and its heard relay | the same at the media VIP, under `media-gw`'s |
 
@@ -887,8 +918,8 @@ it.
 | immich | `Route('photos', internet=Direct('uploads over the 100 MB proxy limit'), lan=REWRITE)` | |
 | jellyfin | `Route('tube', internet=PROXIED, media=REWRITE)` | `Port('jellyfin-discovery', 7359, UDP, media=Heard())` |
 | qbittorrent | `Route('bt', internet=Proxied(SESSION), lan=REWRITE)` | `Port('qbittorrent-peer', 53363, TCP_AND_UDP, internet=SiteForward())` |
-| syncthing | `Route('sync', internet=Proxied(SESSION))` | `Port('syncthing', 22000, TCP_AND_UDP, internet=Balancer((Host('syncapi'),)), lan=Vip('syncapi'))` |
-| the discovery server | | `Port('stdiscosrv', 8443, TCP, internet=Balancer(), lan=Vip('syncapi'))` |
+| syncthing | `Route('sync', internet=Proxied(SESSION))` | `Port('syncthing', 22000, TCP_AND_UDP, internet=Balancer(), lan=Vip('syncapi'))` |
+| the discovery server | `PortRedirect('syncapi', 8443, internet=Direct('raw ports'), lan=REWRITE)` | `Port('stdiscosrv', 8443, TCP, internet=Balancer(), lan=Vip('syncapi'))` |
 | spoolman | `Route('spool', internet=Proxied(SESSION), media=REWRITE)` | |
 | seedwatch | `Route('seedwatch', lan=REWRITE)` | |
 | golinks | `Route('go', lan=BARE)` | |
@@ -937,15 +968,41 @@ Gateway carries it
 A raw port on 443 is unavailable, since the Gateways hold it. So the
 server's row is a `Port` of its own on 8443, at the balancer and at the
 LAN VIP. Its balancer front publishes no host: it is dialed at
-`syncapi`, which the peer port's `Host` publishes and the discovery
-row's home side shares, so the row adds a port to the name and no
-record. A device names the server as `https://syncapi.<primary>:8443/`;
-syncthing's configuration names it with no port, so each device's
-discovery address is re-entered once at the cut, the NAS instance's
-apart, which its component renders. Behind `Cluster`, the server sees
-the client's address only when the balancer hands the connection to the
-node it runs on, the forwarding node's address otherwise, and at the LAN
-VIP the worker's.
+`syncapi`, which the discovery server's `PortRedirect` (below)
+publishes and both its own home side and the peer port share. The NAS
+instance names the server as `https://syncapi.<primary>:8443/`, which
+its component renders.
+
+**A client that names a raw HTTPS port's server with no port is
+answered on 443, by name, with a redirect to that port.** **New rule**,
+landing in dns.md §5. syncthing's configuration on every other device
+names the discovery server as `https://syncapi.<primary>` with no port,
+so the server's exposure carries a `PortRedirect` beside its `Port`, held
+while `syncapi` is: on each Gateway it sets, a `308` to the same name at
+8443, path and query kept. TLS on 443 ends at the Gateway on the zone's
+wildcard certificate, and the device presents its certificate on the
+8443 leg alone, where the server asks for it. The discovery client is a
+plain Go `http.Client`, which follows a `308` with its method and its
+body, so an announcement's `POST` arrives intact; that reading of
+syncthing's source is **unproven live**, and §5.3 verifies it. No
+device is re-entered at the cut. The Gateway reads, on that leg, the
+announcements' addresses and the lookups' device IDs, which is the
+Envoy that already terminates every other name.
+
+The row is a removable layer: it stands in for the `Passthrough` that
+Cilium cannot serve beside the wildcard. When the pinned Cilium serves
+an exact passthrough beside a wildcard on one port (cilium/cilium#48092,
+after the Gateway API's
+[multiplexing proposal](https://github.com/kubernetes-sigs/gateway-api/issues/4271)),
+the row becomes
+`Passthrough('syncapi', internet=Direct(…), lan=REWRITE)`, the 8443
+port goes with its listener, and no device changes. No test reads what
+Cilium accepts, so the condition is a comment on the Cilium pin in
+`Pulumi.yaml`, read at each bump of Cilium, which travels alone.
+
+Behind `Cluster`, the discovery server sees the client's address only
+when the balancer hands the connection to the node it runs on, the
+forwarding node's address otherwise, and at the LAN VIP the worker's.
 
 **The balancer's peer port reaches syncthing on the worker.** There is
 no cloud replica: its only role was an always-reachable port for roaming
@@ -1028,9 +1085,12 @@ LAN and not through the balancer. The overlay takes the public path, as
 dns.md §4 says of every name.
 
 **The data port's name is `syncapi`, on the raw row.** `Balancer` carries
-the hosts a raw port publishes. The discovery server's front publishes
-none: it is dialed at `syncapi`, which the peer row publishes and its
-own home side shares. It is the name the XPS dials the
+the hosts a raw port publishes, and neither front on `syncapi` publishes
+one: both are dialed at the name their home sides share, whose record
+is the discovery server's `PortRedirect`. The name is cut with that server
+(§5.3), so the record is the row of the exposure the cut moves, and
+once every `Held` is taken off one exposure still publishes it. It is
+the name the XPS dials the
 VPS's device at, as `tcp://syncapi.unlimited-code.works:22000` and its
 `quic://` twin. `btsync.unlimitedcodeworks.xyz`, the older name for the
 same ports, goes as ruled (§4.7).
@@ -1718,7 +1778,6 @@ reads from the code.
 | The name `btsync.unlimitedcodeworks.xyz` | `syncapi` is the newer name for the same ports, as ruled (§11.4) | A device still holding the old name falls back on discovery |
 | A home-only service from off-site | `homelan` also answered on the overlay; a home-only name has no public record, and the overlay is a path into the home audience rather than an audience of its own (architecture.md §3.3) | Each home-only name (§4.1) is reached at its one name by a device that has opened the overlay's tunnel, exactly as from home (physical/gateway.md §2.2, §2.7) |
 | The `lan.ucw.phd` names | One service has one name (§4.1), and dns.md §4 retires the zone, the `thread`, `ups`, `gw` and resolver names its proxy serves with it | Each is re-entered where a client holds it, at its wave: bookmarks, the printer's `server`, and Home Assistant's configured addresses, which each wave's head reads. There is no redirect: a printer's connection follows none, an integration is re-entered anyway, and a browser's would last days, until the zone goes in Wave D |
-| The discovery server on 443 | A TLS passthrough beside the zone's wildcard listener is dropped with it, so the server is a raw port on 8443 (§4.1) | Each device's discovery address is re-entered once, as `https://syncapi…:8443/` |
 | The matrix identity SRV, with `Extra`, `Srv` and `SELF` | The code deploys no identity service, so the record has no target | Nothing. Its one row was why the types existed |
 | `matrix` published direct | The delegation kluster-code declares puts federation on 443, which the proxy carries. The reason on the legacy record says otherwise, and the delegation is what servers follow | Nothing from the body limit, §4.1. A request running past the proxy's 125 seconds answers 524, where continuwuity would allow 180 |
 | Jellyfin's ports 8096, 8920 and 1900 | A home client uses the one name. kluster-code declares 1900, core binds nothing there, and it serves DLNA's plugin alone, which no code declares: without the plugin losing it costs nothing, and with it a DLNA renderer stops finding the server (below). 7359 stays, heard on the home segments (§5.6) | Each client's saved address, at the host's name and port, is re-entered once |
@@ -1959,9 +2018,11 @@ branch.
     learns the balancer's address, and how devices find each other with
     the homelab down, and retiring it would be a change on every device. **Data**: none; its
     announcements are rebuilt within minutes. **Verified** by a client's
-    announcement and lookup on 8443, at the balancer and at the LAN VIP.
-    **Cut**: `syncapi`, and each device's discovery address re-entered
-    with the port.
+    announcement and lookup on 8443, at the balancer and at the LAN VIP,
+    and on 443 through the redirect. After the cut, a device still on
+    `https://syncapi…` with no port shows global discovery OK, and the
+    server logs its announcement. **Cut**: `syncapi`, with no device
+    edited.
 
 Legacy splitpro and matrix run on the homelab host, so Wave A frees
 homelab memory and asks for no growth (§6).
@@ -2543,12 +2604,12 @@ worker has given the memory back. **New rule**, landing in migration.md
 | [cluster/migration.md](../cluster/migration.md) | migration.md §0 rule 1: build, land, verify, cut, the stop and removal in kluster-code, and the legacy services that outlive their successor's land, from §3. migration.md §0 rule 4: growing to fit, the windows, the reading before each growth and the rollback across one, from §6. migration.md §1: the legacy key's carry and the writer keys' seal, from §4.6. migration.md §2: `haos` on a device relay in the cluster, with its home side on `media`, the UPS card's and thread-dashboard's names cut in Wave B, Wave B's head waiting on the operations handler's first delivered push (Aetf/kluster-ops#715) and slice 47, exim at Wave A1's head, syncthing and the WebDAV server in Wave A2, hath after it, one window at Wave C, the legacy monitoring until Wave C's head, and thread-dashboard staying on the host, from §5 and §11.4. migration.md §3: the stream through the API server, recovery from the legacy store, the JuiceFS row's replica gone and its two copies, from §4.3 and §5. migration.md §4: what the decommission inherits, from §5.8 |
 | [cluster/nodes.md](../cluster/nodes.md) | nodes.md §2.1: large syncs, from §4.1. nodes.md §4.1: thread-dashboard stays on the host, with its name served through a device relay, and the discovery relay is the unit of its `Heard` row, at the media VIP, from §4.1, §5.6 and §11.4. nodes.md §4.2: the transitional and end-state ceilings, and the end state as the decommission's decision, grown to fit, from §6 |
 | [declarative/workloads.md](../declarative/workloads.md) | workloads.md §1: a component receives its `Exposure` and merges unwired, one `Port` shape, the gate on `internet`, a raw port's allow, the discovery server, from §3.1 and §4.1. workloads.md §2: `claim` with its required retention and `off`, `cloud-block-<row>`, and the thumbnails, from §4.2. workloads.md §3: the namespace's sealed writer key in each repository Secret, and where freshness is read, from §4.2 and §4.6. workloads.md §4: the block-volume application over `local-path`, the dedicated-VIP pattern on the node's primary address, one database instance with recovery and the drill, the static site's apex, the single sign-on census, and an end the data plane does not reach as `device` or `Heard`, with the device relay in place of the selectorless backend, from §4 and §5.4. workloads.md §5: a ported ciphertext keeps its namespace, from §4.6 |
-| [declarative/dns.md](../declarative/dns.md) | dns.md §1: the order of the stacks' applies, and the reference `k8s-base` makes, from §3.4 and §5.5. dns.md §2: an apex row's record is the web origin, from §4.1 and §4.5. dns.md §5: the composed declaration, one name per service, `Held`, bare names, ports' rewrites, from §3.3 and §4.1. dns.md §6: the cut's pull request and the land's, from §3.2 |
+| [declarative/dns.md](../declarative/dns.md) | dns.md §1: the order of the stacks' applies, and the reference `k8s-base` makes, from §3.4 and §5.5. dns.md §2: an apex row's record is the web origin, from §4.1 and §4.5. dns.md §5: the composed declaration, one name per service, `Held`, bare names, ports' rewrites, the redirect to a raw port, and the census with every `Held` taken off, from §3.3 and §4.1. dns.md §6: the cut's pull request and the land's, from §3.2 |
 | [declarative/README.md](../declarative/README.md) | §2: the StackReferences `apps` makes for the pool's members and `k8s-base` makes for the zone identifiers, from §4.1 and §5.5 |
 | [framework/rfc.md](../framework/rfc.md) | rfc.md §2: an intention is read from what is declared, and a reading is evidence for it, from §4.1 |
 | [framework/ci.md](../framework/ci.md) | ci.md §3: `up-k8s-base` and `up-apps` after `up-dns`, from §3.4; the handler's member among what `credentials derived sync` pushes, `HA_WEBHOOK_URL` at Home Assistant's overlay address, and `deploy.yml` ending in the `alert` job with its webhook secret gone, from §4.1 |
 | [sources-of-truth.md](../sources-of-truth.md) | sources-of-truth.md §3: a component that has not migrated is not wired, from §3.1. Note N4 replaced by its answer, from §3.2 and §3.4. Rows R12 and R13: each flip is a cut, and its pull request edits the row; R12's arrangements, from §5.5 and §5.6; R13 without thread-dashboard, from §11.4 |
-| [cluster/architecture.md](../cluster/architecture.md) | architecture.md §3.2 and §3.5: hath's address and egress on its node's primary private address, from §5.4. architecture.md §3.4: Home Assistant's reach, and `haos` among the names `media-gw` answers, from §4.1. architecture.md §4.3: the operations handler's post over the overlay, from §4.1. architecture.md §5.1: the device relays reaching Home Assistant on the IoT VLAN, the UPS card on the Default LAN and the host's leg on the cluster VLAN, from §4.1. architecture.md §3.5: large syncs, from §4.1. architecture.md §3.6: the two dimensions, and the raw home row on its Gateway's VIP, from §4.1. architecture.md §3.6 and §6.7: a TLS passthrough is dropped beside the zone's wildcard listener, so the discovery server is a raw port on 8443, from §4.1 |
+| [cluster/architecture.md](../cluster/architecture.md) | architecture.md §3.2 and §3.5: hath's address and egress on its node's primary private address, from §5.4. architecture.md §3.4: Home Assistant's reach, and `haos` among the names `media-gw` answers, from §4.1. architecture.md §4.3: the operations handler's post over the overlay, from §4.1. architecture.md §5.1: the device relays reaching Home Assistant on the IoT VLAN, the UPS card on the Default LAN and the host's leg on the cluster VLAN, from §4.1. architecture.md §3.5: large syncs, from §4.1. architecture.md §3.6: the two dimensions, and the raw home row on its Gateway's VIP, from §4.1. architecture.md §3.6 and §6.7: a TLS passthrough is dropped beside the zone's wildcard listener, so the discovery server is a raw port on 8443, with a redirect to it on 443, from §4.1 |
 | [declarative/physical.md](../declarative/physical.md) | physical.md §1: the reserved address on the node's primary private address, and no secondary address, from §5.4. physical.md §2: the node volume's label, which hath selects, from §4.2. physical.md §6: a claim made with the volume unmounted stays pending, from §4.2 |
 | [declarative/cluster-infra.md](../declarative/cluster-infra.md) | cluster-infra.md §1.1: the writer keys' channel, from §4.6. cluster-infra.md §2: the canary as built with authelia, the apex listeners, a pod's device and route MTU and the discovery mode, from §4.1 and §5.2. cluster-infra.md §3: the `mon` route and the Cloudflare provider of `k8s-base`, from §5.5 |
 | [credentials.md](../credentials.md) | credentials.md §3: the operations handler's overlay member and its webhook at Home Assistant's overlay address, `HAOS_DEPLOY_WEBHOOK_URL` gone with `deploy.yml`'s own alert, the alert webhook as Home Assistant's own address, the writer keys' sealed delivery, the zones token's `k8s-base` target, the legacy sealing key's row, from §4.6 and §5.5. credentials.md §4: the seal of the writer keys from `physical`'s state, and the sentence on a new volume, from §4.6 |

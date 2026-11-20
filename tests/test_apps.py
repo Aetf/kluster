@@ -55,6 +55,7 @@ from kluster.conventions.routes import (
     Host,
     Passthrough,
     Port,
+    PortRedirect,
     Proxied,
     Route,
     SiteForward,
@@ -120,6 +121,10 @@ EXPOSURES: dict[str, Exposure] = {
     'site': Exposure(routes=(Apex(('a.example', 'b.example')), Route('www', internet=PROXIED, zones=('a.example',)))),
     'held': Exposure(routes=(Held(Route('held', internet=PROXIED)),)),
     'upload': Exposure(routes=(Route('upload', internet=Direct('bodies larger than the proxy accepts')),)),
+    'find': Exposure(
+        routes=(PortRedirect('find', 8443, internet=Direct('a raw port'), lan=REWRITE),),
+        ports=(Port('find', 8443, Transports.TCP, internet=Balancer(), lan=Vip('find')),),
+    ),
 }
 
 
@@ -310,6 +315,49 @@ def test_a_bare_name_redirects_at_lan_gws_listener_for_its_label_to_the_full_nam
 def test_a_held_row_attaches_all_the_same(exposed: Recorder) -> None:
     """The legacy VPS holds the name, and the route is how the new application is verified before the cut."""
     assert [parents(it) for it in in_namespace(exposed, HTTP_ROUTE, 'held')] == [[conventions.GATEWAY_INTERNET]]
+
+
+# -- the redirect --------------------------------------------------------------
+
+
+def test_a_redirect_answers_its_name_on_each_gateway_with_a_308_to_its_port_and_forwards_nothing(
+    exposed: Recorder,
+) -> None:
+    """The client asked for the name with no port, and is sent to the same name at the raw port, with its path.
+
+    The redirect names no hostname, no path and no scheme, which keeps each
+    as the request had them; a scheme named on it would never fire on an
+    HTTPS listener at the pinned Cilium (cilium/cilium#48373). A `308`
+    keeps the method and the body. With no backend nothing reaches a pod on
+    this leg, so there is nothing to gate.
+    """
+    routes = {parents(it)[0]: it for it in in_namespace(exposed, HTTP_ROUTE, 'find')}
+
+    assert sorted(routes) == sorted([conventions.GATEWAY_INTERNET, conventions.GATEWAY_LAN])
+    for route in routes.values():
+        assert route['spec']['hostnames'] == [f'find.{conventions.ZONE_PRIMARY}']
+        (rule,) = route['spec']['rules']
+        assert 'backendRefs' not in rule
+        assert rule['filters'] == [{'type': 'RequestRedirect', 'requestRedirect': {'port': 8443, 'statusCode': 308}}]
+
+
+@pytest.mark.asyncio
+async def test_an_exposure_whose_only_route_rows_are_redirects_needs_no_backend() -> None:
+    """A redirect forwards to nothing, so an application reached otherwise at a raw port alone names no Service."""
+    monitor = await run_with(Recorder(), stack='apps')
+    async with declaring():
+        exposed = expose(
+            'find',
+            EXPOSURES['find'],
+            namespace='find',
+            backend=None,
+            selector=selector('find'),
+            fronts=FRONTS,
+            zone_ids=ZONE_IDS,
+        )
+
+    assert len(exposed.http_routes) == 2
+    assert len(in_namespace(monitor, HTTP_ROUTE, 'find')) == 2
 
 
 # -- the passthrough and the apex ----------------------------------------------
@@ -671,6 +719,7 @@ def test_a_record_is_declared_for_each_name_on_internet_and_for_no_other(exposed
             f'peer.{primary}',
             'www.a.example',
             f'upload.{primary}',
+            f'find.{primary}',
         ]
     )
 

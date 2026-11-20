@@ -7,13 +7,18 @@ itself: no proxy may stand between it and the device.
 
 **It is reached at a raw port** ([Aetf/kluster-ops#723](https://github.com/Aetf/kluster-ops/issues/723)):
 its exposure is one `Port` on TCP, which `expose` serves at the fronts the row
-sets with the allow that admits the world to it. A route row is refused here,
-since a Gateway would end the TLS that carries a device's ID, and a
-`Passthrough` is no row the cluster can carry
-(`kluster.lib.k8s.refuse_passthrough`). The server listens on the row's port,
-which its Services forward to unchanged, so a device dials the name and the
-port the row states, `https://<name>:<port>/`, which is what syncthing's
-component configures its instance to announce to.
+sets with the allow that admits the world to it. The server listens on the
+row's port, which its Services forward to unchanged, so a device dials the
+name and the port the row states, `https://<name>:<port>/`, which is what
+syncthing's component configures its instance to announce to.
+
+**A device that names it with no port is redirected to that port**: a
+`PortRedirect` row answers 443 at the name with a `308` to the port, which the
+device follows, method and body kept, and presents its certificate on the
+second leg, where the server asks for it. That leg on 443 carries no ID, so
+it is the one row by name the server takes. Any other is refused here, since a
+Gateway would end the TLS that carries a device's ID, and a `Passthrough` is
+no row the cluster can carry (`kluster.lib.k8s.refuse_passthrough`).
 
 **Its certificate is the cluster issuer's, for each name the row is dialed at**
 (`kluster.components.apps.dialed_names`, whose first is the name syncthing's
@@ -21,10 +26,10 @@ component announces to): the names its balancer front publishes, held or not,
 and the name its home side is rewritten for, each under the primary zone. A
 balancer front that publishes none is dialed at its home side's name, which
 another row publishes: the discovery server's front is reached at `syncapi`,
-the peer port's name. A device has no ID of the server's to pin, so it checks
-the certificate against the public roots, as it would any HTTPS server's. The
-server reads the certificate at its start alone, so Reloader rolls the pod when
-a renewal rewrites the Secret.
+which its own redirect publishes and the peer port shares. A device has no ID
+of the server's to pin, so it checks the certificate against the public roots,
+as it would any HTTPS server's. The server reads the certificate at its start
+alone, so Reloader rolls the pod when a renewal rewrites the Secret.
 
 **It runs on the cloud pool**, so devices away from home find each other with
 the homelab down. Behind a raw port's `Cluster` policy it sees the client's
@@ -53,7 +58,7 @@ import pulumi_kubernetes as k8s
 from kluster.components.apps import Exposed, Fronts, dialed_names, expose
 from kluster.components.certificates import ISSUER
 from kluster.conventions.cluster import Transports
-from kluster.conventions.routes import Exposure, Port
+from kluster.conventions.routes import Exposure, Port, PortRedirect, unwrapped
 from kluster.lib.k8s import CLOUD_POD_AFFINITY, ApplicationNamespace, application_namespace
 from kluster.lib.versions import ImagePin
 from putils import Component
@@ -80,10 +85,11 @@ DATABASE = '/var/stdiscosrv'
 
 def _discovery(exposure: Exposure) -> Port:
     """The exposure's one raw port, refused unless the server can serve it."""
-    if exposure.routes:
+    if not all(isinstance(unwrapped(row), PortRedirect) for row in exposure.routes):
         raise ValueError(
             "the discovery server reads each device's ID from the device's TLS client certificate, so it is reached "
-            'at a raw port and at no route, where a Gateway would end that TLS (Aetf/kluster-ops#723)'
+            'at a raw port, and by name only through a redirect to it: a Gateway would end that TLS on any other '
+            'route (Aetf/kluster-ops#723)'
         )
     if len(exposure.ports) != 1:
         raise ValueError(f'the discovery server listens on one port, and its exposure holds {len(exposure.ports)}')
@@ -138,10 +144,11 @@ def _container(image: ImagePin, row: Port) -> k8s.core.v1.ContainerArgs:
 class Stdiscosrv(Component, pulumi_type='kluster:apps:Stdiscosrv'):
     """The discovery server's namespace, its certificate, its Deployment, and what its exposure derives.
 
-    `exposure` is its row of the census, one raw port on TCP dialed at a
-    name; `image` is the pin it runs, and `fronts` and `zone_ids` what the
-    program read for `expose`. The providers arrive in `opts`: the Kubernetes
-    provider for the cluster's objects and the Cloudflare one for its records.
+    `exposure` is its row of the census, one raw port on TCP dialed at a name,
+    and any redirect to it; `image` is the pin it runs, and `fronts` and
+    `zone_ids` what the program read for `expose`. The providers arrive in
+    `opts`: the Kubernetes provider for the cluster's objects and the
+    Cloudflare one for its records.
     """
 
     namespace: ApplicationNamespace

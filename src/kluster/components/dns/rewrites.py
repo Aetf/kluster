@@ -59,11 +59,12 @@ def rewrites(exposures: Iterable[conventions.routes.Exposure]) -> tuple[Rewrite,
 
     Each row's home side decides its answer: a row on `lan` is rewritten to
     the LAN VIP and one on `media` to the media VIP, a `Route` in every zone
-    it is published in and a `Passthrough` in the primary; `Bare` adds the
-    bare label, which the LAN Gateway redirects to the name. A raw port's
-    `Vip` rewrites its host in the primary to its Gateway's VIP, and a heard
-    side has no host to rewrite. A name published nowhere else is rewritten
-    all the same, since a home-only name resolves for a home client alone.
+    it is published in and a `Passthrough` or a `PortRedirect` in the primary;
+    `Bare` adds the bare label, which the LAN Gateway redirects to the name.
+    A raw port's `Vip` rewrites its host in the primary to its Gateway's
+    VIP, and a heard side has no host to rewrite. A name published nowhere
+    else is rewritten all the same, since a home-only name resolves for a
+    home client alone.
 
     **A held row publishes no rewrite** (rfc-008 §3.3), and neither does a
     raw port's VIP host that a held row shares: the name resolves where the
