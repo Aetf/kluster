@@ -1,4 +1,4 @@
-"""Jellyfin on the worker, declared against mocks.
+"""Jellyfin on the worker, declared against mocks, and its network configuration's merge and server run as the pod runs them.
 
 Every row here is the test's own: an interface route held while the legacy
 VPS keeps its name, on `internet` and on `media`, and a discovery port heard
@@ -7,25 +7,59 @@ sign-on client under the route's name. So what is held is how the rows a
 component is handed decide what it declares, never what the census happens to
 say. The server's pin is the test's own too.
 
+The cases that run the merge, and the server after it, run the image
+`Pulumi.yaml` pins, with podman, as the pod runs it: the declared command,
+user, group and environment, with every capability dropped and no network,
+the claim and the rendered files' mount each a scratch filesystem the case
+lays the files out in. The server's callers ask from a container of the curl
+image `Pulumi.yaml` pins, which holds the network the server's container
+joins and gives it the callers' addresses. They run as `pinned_image` has it:
+skipped where podman is not on `PATH`, as in a cloud session, and failed on
+CI's runner, which has podman; each image pulled by its digest; and every
+container carrying `--rm`, a `--timeout` and the module's label
+(framework/testing.md §1).
+
 Literals written here are the upstream projects' contracts: the elements of
-Jellyfin's network configuration (`NetworkConfiguration.cs` at v10.11.4) and
-the environment its server reads its directories and published address from,
-the font directory its image scans, Kubernetes' Pod Security label, and the Gateway API's spellings.
+Jellyfin's network configuration (`NetworkConfiguration.cs` at v10.11.4, and
+one of v10.8.13's that v10.11.4's no longer holds), the shape its serializer
+writes the file in and the byte order mark its migration writes ahead of it,
+the answers of its health check and the lines it logs its
+network settings with, the `X-Forwarded-For` header it judges a forwarded
+request by, an address of Cloudflare's edge, the environment its server reads its directories and
+published address from, the font directory its image scans, Kubernetes' Pod
+Security label, and the Gateway API's spellings.
 """
 
 from __future__ import annotations
 
+import io
 import ipaddress
+import json
 import re
+import shlex
+import subprocess
+import tarfile
+import uuid
 import xml.etree.ElementTree as ET
+from collections.abc import Mapping, Sequence
 from ipaddress import IPv4Network, IPv6Network
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from typing import Any
 from urllib.parse import urlsplit
 
+import process_sessions
 import pytest
 import pytest_asyncio
 from mock_monitor import Recorder, declaring, run_with
+from pinned_image import (
+    COMMAND_TIMEOUT,
+    CONTAINER_TIMEOUT,
+    LARGE_PULL_TIMEOUT,
+    PULL_TIMEOUT,
+    pinned,
+    pulled,
+    require_podman,
+)
 
 from kluster import conventions
 from kluster.components.apps import Fronts
@@ -194,10 +228,34 @@ def interface_service(monitor: Recorder) -> dict[str, Any]:
     return service
 
 
-def network_config(monitor: Recorder) -> ET.Element:
+def network_init(pod: dict[str, Any]) -> dict[str, Any]:
+    """The init container that mounts the ConfigMap.
+
+    The ConfigMap is autonamed, a name the mock never computes, so the volume
+    is held to being the namespace's one ConfigMap.
+    """
+    (init,) = [
+        it
+        for it in pod['spec']['initContainers']
+        if any('configMap' in mounted['volume'] for mounted in mounts(pod, it['name']).values())
+    ]
+    return init
+
+
+def rendered_files(monitor: Recorder) -> dict[str, str]:
+    """The files the ConfigMap holds, by name."""
     (config_map,) = in_namespace(monitor, CONFIG_MAP)
-    (text,) = config_map['data'].values()
-    return ET.fromstring(text)
+    return dict(config_map['data'])
+
+
+def rendered_network(monitor: Recorder) -> str:
+    """The rendered network configuration, the file the init container merges from."""
+    *_, source = network_init(pod_of(monitor))['command']
+    return rendered_files(monitor)[PurePosixPath(source).name]
+
+
+def network_config(monitor: Recorder) -> ET.Element:
+    return ET.fromstring(rendered_network(monitor))
 
 
 def strings(element: ET.Element, name: str) -> list[str]:
@@ -350,32 +408,28 @@ def test_discovery_hands_a_client_the_routes_name_over_https(declared: Recorder)
 # -- the network configuration ---------------------------------------------------
 
 
-def test_the_server_reads_the_network_configuration_the_init_container_installs(declared: Recorder) -> None:
+def test_the_server_reads_the_network_configuration_the_init_container_merges_into(declared: Recorder) -> None:
     """The file lands in the directory the server reads its settings from, on the claim both containers mount there.
 
-    The rendered file is the ConfigMap's, mounted where the init container
-    reads it.
+    The merge and the rendered file are the ConfigMap's, mounted where the
+    init container reads them.
     """
     pod = pod_of(declared)
-    # The init container that mounts the ConfigMap. It is autonamed, a name
-    # the mock never computes, so the volume is held to being the namespace's
-    # one ConfigMap.
-    (init,) = [
-        it
-        for it in pod['spec']['initContainers']
-        if any('configMap' in mounted['volume'] for mounted in mounts(pod, it['name']).values())
-    ]
-    *_, source, target = init['command']
+    init = network_init(pod)
+    shell, script, target, source = init['command']
     settings = environment(declared)['JELLYFIN_CONFIG_DIR']
     data = environment(declared)['JELLYFIN_DATA_DIR']
-    (config_map,) = in_namespace(declared, CONFIG_MAP)
-    rendered = mounts(pod, init['name'])[str(PurePosixPath(source).parent)]['volume']
+    files = rendered_files(declared)
 
+    assert shell == '/bin/sh'
     assert target == f'{settings}/network.xml'
     assert PurePosixPath(settings).is_relative_to(data)
     assert claim_at(pod, init['name'], data) == claim_at(pod, jellyfin_app.NAME, data)
-    assert 'configMap' in rendered
-    assert PurePosixPath(source).name in config_map['data']
+    for path in (script, source):
+        mounted = mounts(pod, init['name'])[str(PurePosixPath(path).parent)]
+        assert 'configMap' in mounted['volume'], path
+        assert mounted['mount']['readOnly'] is True, path
+        assert PurePosixPath(path).name in files, path
 
 
 def test_the_network_configuration_states_only_what_the_server_reads(declared: Recorder) -> None:
@@ -387,14 +441,13 @@ def test_the_network_configuration_states_only_what_the_server_reads(declared: R
 
 
 def test_the_server_serves_plain_http_on_the_port_its_service_forwards_to(declared: Recorder) -> None:
-    """The Gateway terminates TLS for the name, so the server neither serves HTTPS nor redirects to it."""
+    """The Gateway terminates TLS for the name, so the server serves no HTTPS, and redirects to it only while it does."""
     config = network_config(declared)
     (port,) = interface_service(declared)['spec']['ports']
     named = {it['name']: it['containerPort'] for it in server(declared)['ports']}
 
     assert int(text(config, 'InternalHttpPort')) == named[port['targetPort']]
     assert text(config, 'EnableHttps') == 'false'
-    assert text(config, 'RequireHttps') == 'false'
 
 
 def test_the_server_trusts_what_the_gateways_forward_from_the_pod_ranges(declared: Recorder) -> None:
@@ -416,6 +469,391 @@ def test_the_server_answers_discovery_and_clients_from_outside(declared: Recorde
 
     assert text(config, 'AutoDiscovery') == 'true'
     assert text(config, 'EnableRemoteAccess') == 'true'
+
+
+def test_the_server_answers_a_client_from_outside_whatever_its_address(declared: Recorder) -> None:
+    """Behind the Gateway a request is judged by the address Envoy was handed, Cloudflare's edge's for the internet route, which no filter written for the old network names."""
+    assert strings(network_config(declared), 'RemoteIPFilter') == []
+
+
+def test_the_server_answers_at_the_root_of_the_name(declared: Recorder) -> None:
+    """The route, the probes and the single sign-on client's redirect addresses are under no base path."""
+    assert text(network_config(declared), 'BaseUrl') == ''
+
+
+def test_the_server_binds_every_ipv4_address_of_the_pod(declared: Recorder) -> None:
+    """A bind address the file names is one of the host it came from, and the Service and the probes reach the pod on IPv4."""
+    config = network_config(declared)
+
+    assert strings(config, 'LocalNetworkAddresses') == []
+    assert text(config, 'EnableIPv4') == 'true'
+
+
+# -- the merge, and the server after it, as the pod runs them -----------------------
+
+#: The label a container started here carries, and so the census of what a run
+#: has left: `podman ps --all --filter label=kluster-test=test_apps_jellyfin`.
+LABEL = f'kluster-test={Path(__file__).stem}'
+
+#: Why the cases that run the pod's containers need podman.
+WHY = "the pod's containers are run from the pinned image with it"
+
+#: The prefix of the variables a container is handed the files it lays out in.
+FILE_VARIABLE = 'KLUSTER_TEST_FILE_'
+
+#: The pin of the container the server's callers ask from: curl, beside a
+#: busybox whose `ip` gives its network the callers' addresses. The pin is a
+#: multi-platform index, so `pulled` takes the host's own platform from it.
+PROBER = 'auth-canary'
+
+#: The bound on a case that runs the merge, which can make the first pull of
+#: the server's image, a download over half a gigabyte: the pull, the check
+#: before it, and the merge's container. A stop-loss, which nothing asserts on.
+MERGE_CASE_TIMEOUT = LARGE_PULL_TIMEOUT + 2 * COMMAND_TIMEOUT
+
+#: The bound on the case that starts the server: the server's image's pull,
+#: the prober's, which is small, the merge, the server's start, which takes
+#: seconds, and the probes. A stop-loss, which nothing asserts on.
+SERVER_CASE_TIMEOUT = LARGE_PULL_TIMEOUT + PULL_TIMEOUT + 5 * COMMAND_TIMEOUT + 60
+
+#: A network configuration the server keeps, in the shape its serializer writes
+#: it: every element the component owns but `AutoDiscovery` at a value of the
+#: host it came from, a remote allowlist written for that host's network among
+#: them; settings the component leaves to the dashboard, the local subnets
+#: among them; and an element of v10.8.13's class that v10.11.4's no longer
+#: holds.
+KEPT = """<?xml version="1.0" encoding="utf-8"?>
+<NetworkConfiguration xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+  <BaseUrl>/jf</BaseUrl>
+  <EnableHttps>true</EnableHttps>
+  <RequireHttps>true</RequireHttps>
+  <CertificatePath>/config/ssl/jf.pfx</CertificatePath>
+  <CertificatePassword />
+  <InternalHttpPort>8097</InternalHttpPort>
+  <EnableIPv4>false</EnableIPv4>
+  <EnableRemoteAccess>false</EnableRemoteAccess>
+  <LocalNetworkSubnets>
+    <string>192.0.2.0/24</string>
+  </LocalNetworkSubnets>
+  <LocalNetworkAddresses>
+    <string>198.51.100.7</string>
+  </LocalNetworkAddresses>
+  <KnownProxies>
+    <string>198.51.100.1</string>
+  </KnownProxies>
+  <RemoteIPFilter>
+    <string>203.0.113.0/24</string>
+  </RemoteIPFilter>
+  <IsRemoteIPFilterBlacklist>false</IsRemoteIPFilterBlacklist>
+  <HDHomerunPortRange>65001-65100</HDHomerunPortRange>
+</NetworkConfiguration>
+"""
+
+#: The UTF-8 byte order mark the server's network-configuration migration
+#: writes ahead of the declaration (`MigrateNetworkConfiguration`, through an
+#: `XmlWriter` whose encoding is UTF-8 with its preamble).
+BOM = '\N{ZERO WIDTH NO-BREAK SPACE}'
+
+#: The subnets `KEPT` names as its local network.
+KEPT_SUBNETS = strings(ET.fromstring(KEPT), 'LocalNetworkSubnets')
+
+#: An address of Cloudflare's edge, which the internet route reaches the
+#: Gateway from and which `KEPT`'s allowlist leaves out.
+CLOUDFLARE_EDGE = '172.68.10.20'
+
+
+def shape(element: ET.Element) -> tuple[str, str, list[Any]]:
+    """An element as the server reads it: its name, its text, and each child's shape, whatever its indentation."""
+    return element.tag, (element.text or '').strip(), [shape(it) for it in element]
+
+
+def lay_out(files: Mapping[str, str]) -> tuple[list[str], str]:
+    """The `podman run` options handing a container `files`, by path, and the shell lines that write each at its path."""
+    options = [f'--env={FILE_VARIABLE}{n}={contents}' for n, contents in enumerate(files.values())]
+    lines = [
+        f'mkdir -p {shlex.quote(str(PurePosixPath(path).parent))} && printf %s "${FILE_VARIABLE}{n}" >{shlex.quote(path)}'
+        for n, path in enumerate(files)
+    ]
+    return options, '\n'.join(lines)
+
+
+def run_options(monitor: Recorder, name: str, mounted: Sequence[str], *, network: str = 'none') -> list[str]:
+    """The options of a `podman run` of the pod's image as the pod runs its containers, with a scratch filesystem at each of `mounted`."""
+    context = pod_of(monitor)['spec']['securityContext']
+    return [
+        '--rm',
+        f'--timeout={CONTAINER_TIMEOUT}',
+        f'--label={LABEL}',
+        f'--name={name}',
+        f'--network={network}',
+        '--cap-drop=all',
+        '--security-opt=no-new-privileges',
+        f'--user={int(context["runAsUser"])}:{int(context["runAsGroup"])}',
+        *(f'--mount=type=tmpfs,destination={path},tmpfs-mode=1777' for path in mounted),
+    ]
+
+
+def network_files(monitor: Recorder, kept: str | None) -> dict[str, str]:
+    """What the network init container finds on its mounts: the ConfigMap's files, and `kept` as the server's file where it is not `None`."""
+    pod = pod_of(monitor)
+    init = network_init(pod)
+    *_, target, _ = init['command']
+    (rendered_mount,) = [path for path, it in mounts(pod, init['name']).items() if 'configMap' in it['volume']]
+    files = {f'{rendered_mount}/{name}': contents for name, contents in rendered_files(monitor).items()}
+    return files | ({} if kept is None else {target: kept})
+
+
+def run_merge(monitor: Recorder, kept: str | None) -> tuple[subprocess.CompletedProcess[bytes], dict[str, bytes]]:
+    """The declared network init container run over `kept`, or over none, and each file of the directory it writes, by name."""
+    require_podman(WHY)
+    reference = pulled(pinned('jellyfin'), timeout=LARGE_PULL_TIMEOUT)
+    pod = pod_of(monitor)
+    init = network_init(pod)
+    *_, target, _ = init['command']
+    options, layout = lay_out(network_files(monitor, kept))
+    name = f'kluster-test-jellyfin-{uuid.uuid4().hex[:12]}'
+    # The merge's output goes to stderr, so stdout carries the directory alone.
+    script = '\n'.join(
+        [
+            'set -e',
+            layout,
+            'set +e',
+            '"$@" >&2',
+            'status=$?',
+            f'tar -c -C {shlex.quote(str(PurePosixPath(target).parent))} .',
+            'exit "$status"',
+        ]
+    )
+
+    with process_sessions.removing(name, timeout=COMMAND_TIMEOUT):
+        ran = process_sessions.run(
+            [
+                'podman',
+                'run',
+                *run_options(monitor, name, list(mounts(pod, init['name']))),
+                *options,
+                '--entrypoint=/bin/sh',
+                reference,
+                '-c',
+                script,
+                'sh',
+                *init['command'],
+            ],
+            timeout=COMMAND_TIMEOUT,
+        )
+
+    written: dict[str, bytes] = {}
+    with tarfile.open(fileobj=io.BytesIO(ran.stdout)) as archive:
+        for member in archive.getmembers():
+            extracted = archive.extractfile(member)
+            if extracted is not None:
+                written[PurePosixPath(member.name).name] = extracted.read()
+    return ran, written
+
+
+def merged(monitor: Recorder, kept: str) -> ET.Element:
+    """The server's network configuration after the declared init container has run over `kept`."""
+    ran, written = run_merge(monitor, kept)
+    assert ran.returncode == 0, ran.stderr
+    return ET.fromstring(written['network.xml'])
+
+
+@pytest.fixture(scope='module', name='kept_merged')
+def kept_merged_fixture(declared: Recorder) -> ET.Element:
+    """The server's network configuration after the declared init container has run over `KEPT`."""
+    return merged(declared, KEPT)
+
+
+@pytest.mark.timeout(MERGE_CASE_TIMEOUT)
+def test_a_server_with_no_network_configuration_takes_the_rendered_one_as_its_initial_state(
+    declared: Recorder,
+) -> None:
+    ran, written = run_merge(declared, None)
+
+    assert ran.returncode == 0, ran.stderr
+    assert written == {'network.xml': rendered_network(declared).encode()}
+
+
+@pytest.mark.timeout(MERGE_CASE_TIMEOUT)
+def test_the_merge_sets_each_setting_the_component_owns(declared: Recorder, kept_merged: ET.Element) -> None:
+    """Each element the rendered file holds is the merged file's one of that name, whether the server's file held it at another value or not at all."""
+    kept = ET.fromstring(KEPT)
+
+    for element in network_config(declared):
+        assert [shape(it) for it in kept_merged.findall(element.tag)] == [shape(element)], element.tag
+        assert [shape(it) for it in kept.findall(element.tag)] != [shape(element)], element.tag
+
+
+@pytest.mark.timeout(MERGE_CASE_TIMEOUT)
+def test_the_merge_reads_a_file_the_servers_migration_wrote_with_a_byte_order_mark(declared: Recorder) -> None:
+    """The mark stays where it was, and each setting the component owns is set as in a file without one."""
+    ran, written = run_merge(declared, BOM + KEPT)
+    result = ET.fromstring(written['network.xml'])
+
+    assert ran.returncode == 0, ran.stderr
+    assert written['network.xml'].startswith(BOM.encode())
+    for element in network_config(declared):
+        assert [shape(it) for it in result.findall(element.tag)] == [shape(element)], element.tag
+
+
+@pytest.mark.timeout(MERGE_CASE_TIMEOUT)
+def test_the_merge_keeps_every_other_setting_where_the_server_had_it(
+    declared: Recorder, kept_merged: ET.Element
+) -> None:
+    """A setting the dashboard set, and one this server no longer reads, stay as the server's file holds them, in its order."""
+    owned = {it.tag for it in network_config(declared)}
+    kept = [shape(it) for it in ET.fromstring(KEPT) if it.tag not in owned]
+
+    assert [shape(it) for it in kept_merged if it.tag not in owned] == kept
+    assert ('HDHomerunPortRange', '65001-65100', []) in kept
+    assert ('LocalNetworkSubnets', '', [('string', KEPT_SUBNETS[0], [])]) in kept
+
+
+@pytest.mark.timeout(MERGE_CASE_TIMEOUT)
+@pytest.mark.parametrize(
+    'kept',
+    [
+        pytest.param('', id='empty'),
+        pytest.param(KEPT[: KEPT.index('<string>192.0.2.0/24') + len('<string>192.0')], id='cut-within-a-line'),
+        pytest.param(KEPT[: KEPT.index('  <KnownProxies>')], id='cut-between-lines'),
+    ],
+)
+def test_the_merge_refuses_a_file_cut_short_and_leaves_it_as_it_was(declared: Recorder, kept: str) -> None:
+    """The server reads a file it cannot parse as no configuration, and a merge over one would write back only what the cut left.
+
+    The init container fails instead, so the pod does not start, and the file
+    is left for whoever restores it.
+    """
+    ran, written = run_merge(declared, kept)
+
+    assert ran.returncode != 0
+    assert written == {'network.xml': kept.encode()}
+
+
+def asked(prober: str, url: str, source: ipaddress.IPv4Address, forwarded: str | None) -> list[str]:
+    """What `url` answers `prober`'s curl from `source`, with `forwarded` as its `X-Forwarded-For`: the body's words, then the status."""
+    header = [] if forwarded is None else ['-H', f'X-Forwarded-For: {forwarded}']
+    return (
+        process_sessions.run(
+            ['podman', 'exec', prober, 'curl', '-s', '-w', ' %{http_code}', '--interface', str(source), *header, url],
+            timeout=COMMAND_TIMEOUT,
+        )
+        .stdout.decode()
+        .split()
+    )
+
+
+@pytest.mark.timeout(SERVER_CASE_TIMEOUT)
+def test_the_server_answers_the_probe_and_every_route_through_the_filter_the_file_kept(declared: Recorder) -> None:
+    """Run as the pod runs it after the merge over `KEPT`, the server answers the kubelet's probe and each request the Gateways forward.
+
+    Each caller asks from an address of its own in the network the server's
+    container shares: from loopback, or from the pod's own address, the
+    server exempts a request from its filter. The kubelet probes from the
+    address `cilium_host` holds, in the pod range, with no forwarded
+    address. Envoy connects from the pod range and appends its peer to
+    `X-Forwarded-For`, and the server, which trusts the pod ranges, judges
+    the request by the address before Envoy's: Cloudflare's edge for the
+    internet route, the client for one that dials the balancer, and a home
+    client, on a subnet `KEPT` counts as local, for `media`. `KEPT`'s
+    allowlist leaves out every address but the home client's, so a server
+    that kept it would refuse both internet callers. `KEPT` also names
+    another port, a base path, a bind address the pod does not have and IPv4
+    off, so a server that read it unmerged would answer none. While it
+    starts the server answers from a placeholder, which listens whatever the
+    base path, so the callers ask once the server has logged its start
+    complete, in the log directory its image names.
+    """
+    require_podman(WHY)
+    reference = pulled(pinned('jellyfin'), timeout=LARGE_PULL_TIMEOUT)
+    prober_reference = pulled(pinned(PROBER))
+    pod = pod_of(declared)
+    init = network_init(pod)
+    serving = server(declared)
+    probe = serving['readinessProbe']['httpGet']
+    (port,) = [it['containerPort'] for it in serving['ports'] if it['name'] == probe['port']]
+    entrypoint = json.loads(
+        process_sessions.run(
+            ['podman', 'image', 'inspect', '--format', '{{json .Config.Entrypoint}}', reference],
+            timeout=COMMAND_TIMEOUT,
+            check=True,
+        ).stdout
+    )
+    options, layout = lay_out(network_files(declared, KEPT))
+    mounted = {
+        *mounts(pod, init['name']),
+        environment(declared)['JELLYFIN_DATA_DIR'],
+        environment(declared)['JELLYFIN_CACHE_DIR'],
+    }
+    cilium_host, pod_address, envoy = (conventions.POD_CIDR_V4[n] for n in (1, 10, 20))
+    home_client = next(ipaddress.ip_network(KEPT_SUBNETS[0]).hosts())
+    # Each caller: the address it connects from, and the `X-Forwarded-For` it sends.
+    callers: dict[str, tuple[ipaddress.IPv4Address, str | None]] = {
+        'kubelet': (cilium_host, None),
+        'internet': (envoy, f'198.51.100.50, {CLOUDFLARE_EDGE}'),
+        'balancer': (envoy, '198.51.100.77'),
+        'media': (envoy, str(home_client)),
+    }
+    run = uuid.uuid4().hex[:12]
+    name, prober = f'kluster-test-jellyfin-{run}', f'kluster-test-jellyfin-prober-{run}'
+    url = f'http://{pod_address}:{int(port)}{probe["path"]}'
+
+    with process_sessions.removing(name, prober, timeout=COMMAND_TIMEOUT):
+        # The network the server joins, its addresses given by the prober,
+        # which alone holds the capability to.
+        _ = process_sessions.run(
+            [
+                'podman', 'run', '--detach', '--rm', f'--timeout={CONTAINER_TIMEOUT}', f'--label={LABEL}',
+                f'--name={prober}', '--network=none', '--user=0:0', '--cap-drop=all', '--cap-add=NET_ADMIN',
+                '--entrypoint=sleep', prober_reference, str(CONTAINER_TIMEOUT),
+            ],
+            timeout=COMMAND_TIMEOUT,
+            check=True,
+        )  # fmt: skip
+        for address in {pod_address, *(source for source, _ in callers.values())}:
+            _ = process_sessions.run(
+                ['podman', 'exec', prober, 'ip', 'address', 'add', f'{address}/32', 'dev', 'lo'],
+                timeout=COMMAND_TIMEOUT,
+                check=True,
+            )
+        _ = process_sessions.run(
+            [
+                'podman',
+                'run',
+                '--detach',
+                *run_options(declared, name, sorted(mounted), network=f'container:{prober}'),
+                *(f'--env={key}={value}' for key, value in environment(declared).items()),
+                *options,
+                '--entrypoint=/bin/sh',
+                reference,
+                '-c',
+                f'set -e\n{layout}\n"$@"\nexec {shlex.join(entrypoint)}',
+                'sh',
+                *init['command'],
+            ],
+            timeout=COMMAND_TIMEOUT,
+            check=True,
+        )
+        _ = process_sessions.run(
+            [
+                'podman',
+                'exec',
+                name,
+                'sh',
+                '-c',
+                'until grep -qs "Startup complete" "$JELLYFIN_LOG_DIR"/*.log; do sleep 0.2; done',
+            ],
+            timeout=COMMAND_TIMEOUT + 30,
+            check=True,
+        )
+        answers = {caller: asked(prober, url, *how) for caller, how in callers.items()}
+        logged = process_sessions.run(['podman', 'logs', name], timeout=COMMAND_TIMEOUT, check=True)
+
+    log = logged.stdout.decode() + logged.stderr.decode()
+    (subnets,) = re.findall(r'Defined LAN subnets: (\[.*\])', log)
+    assert answers == {caller: ['Healthy', '200'] for caller in callers}
+    assert 'Bind Addresses ["0.0.0.0"]' in log
+    assert set(KEPT_SUBNETS) <= set(json.loads(subnets))
 
 
 # -- the storage -----------------------------------------------------------------
