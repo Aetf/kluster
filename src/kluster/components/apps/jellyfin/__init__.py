@@ -42,31 +42,69 @@ it as its parent, and the runtime creates a missing parent as root, where the
 server, which writes its marker there before it opens its database, could not
 write.
 
-**The network configuration is the component's, whole.** An init container
-installs `templates/network.xml.j2`, rendered, as the server's `network.xml`,
-over whatever the directory held: a setting changed in the dashboard's
-networking page lasts until the next start. Every element it does not state
-takes the server's default, so an address the server once bound to, a base
-path or a certificate does not follow the data in. What it states:
+**The network configuration is the server's, and the component owns the
+settings the pod's wiring decides.** The server's `network.xml` is in its
+claim beside its database and comes over with it, holding what the
+dashboard's networking page set there. Before the server starts, an init
+container merges `templates/network.xml.j2`, rendered, into it
+(`shell/network-merge.sh`): each element the rendered file holds replaces the
+server's of that name, and every other element stays as the file holds it,
+one the server no longer reads among them. So a setting the component does
+not own lasts, and one it owns returns to the rendered value on the next
+start. A server with no network configuration yet takes the rendered one as
+its initial state. A file the merge cannot read in the shape the server writes is
+refused, and the pod does not start: an emptied file, or one cut short, holds
+less than the server kept, and a merge over it would write that back whole.
+The merge is shell and awk, the tools the server's image carries, which has
+no Python.
 
+The component owns a setting when the pod's own wiring decides its value --
+the Service's port, the probes, the Gateways in front of it, the exposure's
+rows -- so a value carried over from the host the file came from would break
+the pod. Every other setting, which clients the server serves and which
+address it publishes, is the dashboard's. What it owns today, and why:
+
+-   no base path, since the route, the probes and the single sign-on client's
+    redirect addresses are at the root of the name;
 -   plain HTTP on `HTTP_PORT`, which the Service forwards to, and no HTTPS:
-    the Gateway terminates TLS for the name;
+    the Gateway terminates TLS for the name. With HTTPS off the server
+    serves no certificate and redirects nothing to HTTPS, which it does only
+    while it serves HTTPS, so the certificate's path and password, and the
+    setting that asks for the redirect, stay as the file holds them;
+-   every IPv4 address of the pod bound, with no bind address named and IPv4
+    on: the Service and the probes reach the pod on IPv4, and a bind address
+    the file names is one of the host the file came from, which the pod does
+    not have;
 -   the cluster's pod ranges as the known proxies. The Gateways' Envoy
     reaches the pod from an address in them, and the server reads a
     request's client from `X-Forwarded-For` only when the connection comes
     from a known proxy. Without them every client is the Gateway's address,
-    which is private, and the server counts every private address as on its
-    local network, so a client from the internet would pass as a home one.
-    The IPv6 range takes effect only where the server's IPv6 is turned on;
--   discovery answered and remote access allowed.
+    which is private, and a private address is on the server's local
+    network unless the file's local subnets leave it out, so a client from
+    the internet could pass as a home one. The IPv6 range takes effect only
+    where the server's IPv6 is turned on;
+-   discovery answered and remote access allowed, which the exposure's
+    discovery row and its internet side need;
+-   no remote address filter, so the server answers every client outside its
+    local network, which the internet side needs. Behind the Gateway the
+    server judges a request by the address nearest the end of
+    `X-Forwarded-For` that is no known proxy: Cloudflare's edge's, for a
+    request through the proxied internet route, or a client's. On the path
+    the file was written for, every client reached the server behind an
+    address of the old cluster's own, which is what the filter it holds
+    names, so a filter carried over would refuse every client from the
+    internet. Whether the filter is an allowlist or a blocklist stays as the
+    file holds it, since the server reads that only beside a filter.
 
 **Discovery replies with the one name.** `JELLYFIN_PublishedServerUrl` is the
 route's name as an `https` URL, which the server hands a client in reply to
 its broadcast whatever address the broadcast came from, so a client
 dials the name on 443 and reaches the server through the Gateway on its
-segment. The server listens for discovery on `DISCOVERY_PORT` on every IPv4
-address of the pod; the port is fixed in the server's code, so an exposure
-whose discovery row states another is refused.
+segment. The server prefers it to any address its network configuration
+publishes by subnet, so those stay as the file holds them. The server listens
+for discovery on `DISCOVERY_PORT` on every IPv4 address of the pod; the port
+is fixed in the server's code, so an exposure whose discovery row states
+another is refused.
 
 **The server transcodes on the A380**, requesting one
 `kluster.components.gpu.GPU_RESOURCE`, which the device plugin offers from
@@ -135,7 +173,10 @@ LABELS: Mapping[str, str] = {'app.kubernetes.io/name': NAME}
 USER = 1000
 
 #: The port the server serves HTTP on, which the rendered network
-#: configuration states and the Service forwards to.
+#: configuration states and the Service forwards to. It is the server's
+#: default (`NetworkConfiguration.DefaultHttpPort`), which leaving the HTTPS
+#: port to the file relies on: where the two collide the server resets both
+#: to their defaults (`ApplicationHost.Init`), which lands back on this one.
 HTTP_PORT = 8096
 
 #: The port the server listens for discovery on, fixed in its code
@@ -149,7 +190,8 @@ DATA_DIR = '/config'
 #: The directory the server reads its settings from, `network.xml` among them.
 CONFIG_DIR = f'{DATA_DIR}/config'
 
-#: The server's network configuration, which an init container installs.
+#: The server's network configuration, which an init container merges the
+#: rendered one into.
 NETWORK_CONFIG = f'{CONFIG_DIR}/network.xml'
 
 #: The server's cache directory, transcodes among them, an `emptyDir`.
@@ -181,8 +223,8 @@ MEDIA = '/media'
 #: each in a directory of its own.
 NAS_DERIVED = 'Jellyfin'
 
-#: Where the rendered network configuration is mounted, read by the init
-#: container alone.
+#: Where the rendered network configuration and the merge are mounted, read
+#: by the init container alone.
 RENDERED_MOUNT = '/rendered'
 
 #: The claim of the server's data directory, in GiB: its database, settings,
@@ -197,7 +239,8 @@ _DATA_SIZE = 4
 #: transcoded at a television's bitrate with room beside it.
 _CACHE_GIB = conventions.HOMELAB_DISK_GIB // 3
 
-#: What each init container asks for and is held to: one short `install`.
+#: What each init container asks for and is held to: one short `install`, or
+#: one `awk` over a file of a few dozen lines.
 _INIT_RESOURCES = k8s.core.v1.ResourceRequirementsArgs(
     requests={'cpu': '10m', 'memory': '16Mi'},
     limits={'cpu': '100m', 'memory': '64Mi'},
@@ -208,10 +251,12 @@ _INIT_RESOURCES = k8s.core.v1.ResourceRequirementsArgs(
 _FONTS = '/usr/local/share/fonts/custom'
 _FONTS_DIR = 'fonts'
 
-#: The rendered network configuration's template, beside this module, and its
-#: key in the ConfigMap.
+#: The rendered network configuration's template and the merge, beside this
+#: module, and their keys in the ConfigMap.
 _TEMPLATE = 'templates/network.xml.j2'
 _RENDERED = 'network.xml'
+_MERGE = 'network-merge.sh'
+_MERGE_SOURCE = f'shell/{_MERGE}'
 
 
 @dataclass(frozen=True)
@@ -335,12 +380,12 @@ class Jellyfin(Component, pulumi_type='kluster:apps:Jellyfin'):
             f'{name}-derived', 'derived', NAS_DERIVED, namespace=NAME, read_only=False, opts=in_namespace
         )
         self.media = nas_claim(f'{name}-media', 'media', LIBRARY, namespace=NAME, read_only=True, opts=in_namespace)
-        # Autonamed, so a change to the file is a new ConfigMap, and the
+        # Autonamed, so a change to either file is a new ConfigMap, and the
         # Deployment that names it rolls.
         self.network = k8s.core.v1.ConfigMap(
             f'{name}-network',
             metadata=k8s.meta.v1.ObjectMetaArgs(namespace=namespace),
-            data={_RENDERED: rendered},
+            data={_RENDERED: rendered, _MERGE: templates.load(__name__, _MERGE_SOURCE)},
             opts=self.child_opts(),
         )
 
@@ -412,7 +457,7 @@ class Jellyfin(Component, pulumi_type='kluster:apps:Jellyfin'):
                 k8s.core.v1.ContainerArgs(
                     name='network',
                     image=str(image),
-                    command=['install', '-D', '-m', '0600', f'{RENDERED_MOUNT}/{_RENDERED}', NETWORK_CONFIG],
+                    command=['/bin/sh', f'{RENDERED_MOUNT}/{_MERGE}', NETWORK_CONFIG, f'{RENDERED_MOUNT}/{_RENDERED}'],
                     resources=_INIT_RESOURCES,
                     security_context=_container_security(),
                     volume_mounts=[
