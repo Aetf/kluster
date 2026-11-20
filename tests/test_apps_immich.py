@@ -32,7 +32,15 @@ import process_sessions
 import pytest
 import pytest_asyncio
 from mock_monitor import Recorder, declaring, run_with
-from pinned_image import COMMAND_TIMEOUT, CONTAINER_TIMEOUT, PULL_TIMEOUT, pinned, pulled, require_podman
+from pinned_image import (
+    COMMAND_TIMEOUT,
+    CONTAINER_TIMEOUT,
+    LARGE_PULL_TIMEOUT,
+    PULL_TIMEOUT,
+    pinned,
+    pulled,
+    require_podman,
+)
 
 from kluster import conventions
 from kluster.components.apps import Fronts, exim
@@ -614,7 +622,7 @@ def test_the_watchdogs_script_is_given_every_setting_it_reads(declared: Recorder
     assert script['data'] == {watchdog_layer.SCRIPT: SCRIPT.read_text()}
 
 
-@pytest.mark.timeout(PULL_TIMEOUT + 3 * COMMAND_TIMEOUT)
+@pytest.mark.timeout(LARGE_PULL_TIMEOUT + 3 * COMMAND_TIMEOUT)
 def test_the_pinned_server_still_ships_the_postgres_js_that_leaks_slots() -> None:
     """The layer's tripwire: red on the bump of the server's pin that ships the fix, and where the script's path moved.
 
@@ -623,7 +631,8 @@ def test_the_pinned_server_still_ships_the_postgres_js_that_leaks_slots() -> Non
     the pin runs it on CI's runner.
     """
     require_podman("the watchdog's tripwire reads the pinned server image")
-    reference = pulled(pinned('immich-server'))
+    # The server image's download is over half a gigabyte.
+    reference = pulled(pinned('immich-server'), timeout=LARGE_PULL_TIMEOUT)
     container = f'kluster-test-immich-server-{uuid.uuid4().hex[:12]}'
     with process_sessions.removing(container, timeout=COMMAND_TIMEOUT):
         done = process_sessions.run(
