@@ -11,8 +11,9 @@ changes.
 > `expose` with the records left out (§1), and its storage through `claim`
 > and `nas_claim` (§2, §3). The database shape is written, `database`,
 > and no component calls it yet (§4). The single sign-on census is
-> written, and no component reads it yet (§4). Nothing else is
-> implemented.
+> written, and matrix reads its client from it (§4). The static site is
+> written, `StaticSite`, with both sources and its apex's documents (§4).
+> Nothing else is implemented.
 
 ## 1. The component contract
 
@@ -333,40 +334,65 @@ per-app number:
     barman restore is the rollback, and until the database's monthly
     drill has run it is an undrilled one.
 -   **Static-site template (one component, two content sources)**: a
-    single `StaticSite` component — stock static server, multi-vhost
-    (one instance serves several hostnames), `route` per zone —
+    single `StaticSite` component (`kluster.components.apps.static_site`)
+    — stock static server (`nginx-unprivileged`), multi-vhost (one
+    instance serves several hostnames, each from a directory under its
+    content, the content's root unless the call names another; a name no
+    row serves is answered 404). Its routes are `expose`'s, from its rows
+    (§1), and the apex's documents add one of their own. It is
     parameterized by where the content comes from:
-    -   **Git source** (blog: the apex/www of three zones): the blog
-        repo *drives* publishing — its CI pushes the generated
-        `public/` to a **built branch** (hexo's git deployer, the
-        repo's original GitHub-Pages shape); the cluster side adds a
-        **git-sync sidecar** pulling that branch into an emptyDir.
-        Decided 2026-08-22 over a content-baked image (content is
-        data, not an artifact — no image rebuild per post). Properties:
-        **zero cross-system credentials** (the cluster pulls; blog CI
-        holds nothing of the cluster's), push-to-live in ~a sync
-        interval, rollback = git revert on the built branch, no PVC
-        (truly stateless → 2 replicas across cloud nodes, ingress HA
-        for the blog). A private repo would work too (git-sync + a
-        read-only deploy-key SealedSecret) — noted, not currently used.
+    -   **Git source** (blog: the apex and `www` of each website zone,
+        `conventions.WEB_ZONES`): the blog repo *drives* publishing — its
+        CI pushes the generated `public/` to a **built branch** (hexo's
+        git deployer, the repo's original GitHub-Pages shape); the
+        cluster side adds a **git-sync sidecar** pulling that branch into
+        an emptyDir, behind a link it swaps to each new checkout in one
+        rename. The same sync runs once ahead of the server, in the
+        pod's `initContainers`, so a pod serves nothing before the
+        branch is there, and the sidecar retries a failed fetch for as
+        long as it fails, serving the last checkout meanwhile. Decided
+        2026-08-22 over a content-baked image (content is data, not an
+        artifact — no image rebuild per post).
+        Properties: **zero cross-system credentials** (the cluster
+        pulls; blog CI holds nothing of the cluster's), push-to-live in
+        ~a sync interval, rollback = git revert on the built branch, no
+        PVC (truly stateless → 2 replicas, one per cloud node by a
+        topology spread over the cloud pool, ingress HA for the blog). A
+        private repo would work too (git-sync + a read-only deploy-key
+        SealedSecret) — noted, not currently used.
     -   **NAS source** (the "doors" instance: `door-jiahui` on the
         jiahui.love apex, `door-shiyu`, `door` — three vhosts, one
         instance): frozen low-traffic assets whose content must not
         live in a public repo (decided 2026-08-23). They are fixed
         assets, and fixed assets live on the NAS (§2): a read-only
-        NAS-backed volume, pod pinned to the homelab pool, ingress
-        still via `internet-gw` (cloud → KubeSpan → homelab). Editing
-        = dropping files on the existing NAS share — no deploy chain
-        at all, which beats both a public repo and an inconvenient
-        image/hostPath arrangement.
+        `nas_claim`, one pod on the worker, ingress still via
+        `internet-gw` (cloud → KubeSpan → homelab). Editing = dropping
+        files on the existing NAS share — no deploy chain at all, which
+        beats both a public repo and an inconvenient image/hostPath
+        arrangement.
 
-    The **matrix `.well-known` delegation** rides the blog instance:
-    `/.well-known/matrix/{server,client}` become two static files in
-    the blog source repo (hexo passthrough into the built branch —
-    their content is public by definition), with the CORS header added
-    by an HTTPRoute `ResponseHeaderModifier` on the apex route — no
-    server-config magic (the legacy shape was two nginx
-    `extraConfig` fixed-responses).
+    **The apex**: a row's `Apex` is one `HTTPRoute` at `internet-gw`'s
+    apex listener of each of its zones (`expose`), and the apex's address
+    is the `dns` stack's web origin, which the cut retargets to the
+    balancer (rfc-008 §4.5). Its `www` is a `Route` of the same
+    exposure, a CNAME to the cluster anchor.
+
+    The **matrix `.well-known` delegation** rides the blog instance as
+    the apex's own documents: `/.well-known/matrix/{server,client}`, the
+    two JSON bodies matrix's `delegation` renders from the census's
+    `matrix` client, which the program hands the site, so the Matrix
+    server's name is stated once, in the census. They are a
+    `ConfigMap` the server reads, served at the apex's names alone as
+    `application/json`, since the files have no extension to read a type
+    from. The CORS header
+    (`Access-Control-Allow-Origin: *`) is added by an HTTPRoute
+    `ResponseHeaderModifier` on a route of their own at the apex
+    listeners, matching their paths exactly, so no other path of the site
+    carries it: an exact match outranks the apex route's prefix match.
+    The server's configuration gives each document a `location` of its
+    own, which sets its type; the header is the route's. That route is
+    the component's and not `expose`'s, since no second program reads it
+    (rfc-008 §4.1).
 
     Retired with the migration: the rsync deployer + SSH pinhole, the
     hostPath webroots (blog *and* doors), kluster-code's nginx

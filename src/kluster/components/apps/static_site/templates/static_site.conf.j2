@@ -1,0 +1,43 @@
+# nginx's servers for one static site, rendered by
+# `kluster.components.apps.static_site`. The image's `nginx.conf` includes it
+# from `conf.d`, and keeps its pid and temporary files under `/tmp`.
+
+# A redirect names the path alone. The server is reached through a Gateway,
+# over HTTPS on 443, and an absolute redirect would name the scheme and the
+# port the server itself listens on, where nothing serves the site: a
+# directory asked for without its trailing slash would send a browser to
+# `http://<name>:8080/<path>/`.
+absolute_redirect off;
+
+# A name no site serves, and the kubelet's probe, which asks by address.
+server {
+    listen {{ port }} default_server;
+
+    location = {{ health }} {
+        access_log off;
+        return 204;
+    }
+
+    location / {
+        return 404;
+    }
+}
+{% for server in servers %}
+server {
+    listen {{ port }};
+    server_name {{ server.names | join(' ') }};
+    root {{ server.root }};
+    error_page 404 /404.html;
+{%- if server.documents %}
+
+    # The apex's own documents, whose files have no extension to read a type
+    # from.
+{%- for path in server.documents %}
+    location = {{ path }} {
+        root {{ documents_root }};
+        default_type application/json;
+    }
+{%- endfor %}
+{%- endif %}
+}
+{% endfor -%}
