@@ -1,4 +1,8 @@
-"""Every tool `mise.toml` pins is held to its bytes by `mise.lock`.
+"""Every tool a mise configuration of this repository pins is held to its bytes by its lock.
+
+The configurations are `mise.toml` and each environment's beside it,
+`mise.<env>.toml`, which mise loads only where `MISE_ENV` names that
+environment, and each has its own lock, `mise.lock` and `mise.<env>.lock`.
 
 A version names a release and not its contents, so a release asset uploaded
 again under the same version moves under a pin written as a version alone.
@@ -8,8 +12,9 @@ that sum before it installs it (`verify_checksum` in mise's `src/backend`, at
 the release CI pins). That check can only refuse a sum that is recorded, and
 mise records one on its own for whatever it fetched when an entry is missing.
 So what is held here is the shape that leaves no such gap: `mise.toml` declares
-its tools locked, which turns a missing entry into a refusal, and every pin has
-one entry, at its own version, carrying a sha256.
+its tools locked, which turns a missing entry into a refusal in every
+configuration loaded beside it, and every pin has one entry in its own
+configuration's lock, at its own version, carrying a sha256.
 
 Whether a recorded sum is the *right* one is not answerable without the
 artifact. The install answers it: a sum that does not match what the release
@@ -37,10 +42,25 @@ PLATFORM = 'linux-x64'
 SHA256 = re.compile(r'sha256:[0-9a-f]{64}')
 
 
-def _pins() -> dict[str, tuple[str, dict[str, Any]]]:
+def _configurations() -> list[Path]:
+    """`mise.toml` and every environment's configuration beside it, a personal `.local.` one excepted, which nothing tracks."""
+    return sorted(path for path in ROOT.glob('mise*.toml') if '.local.' not in path.name)
+
+
+def _lock(configuration: Path) -> Path:
+    return configuration.with_suffix('.lock')
+
+
+def _relock(configuration: str, name: str) -> str:
+    """The command that moves `name`'s entry in `configuration`'s lock: an environment's under `MISE_ENV`."""
+    environment = configuration.removeprefix('mise').removesuffix('.toml').removeprefix('.')
+    return f'MISE_ENV={environment} mise lock {name}' if environment else f'mise lock {name}'
+
+
+def _pins(configuration: Path) -> dict[str, tuple[str, dict[str, Any]]]:
     """Each `[tools]` key, with its version and the options it is written with."""
     pins: dict[str, tuple[str, dict[str, Any]]] = {}
-    for name, pin in tomllib.loads((ROOT / 'mise.toml').read_text())['tools'].items():
+    for name, pin in tomllib.loads(configuration.read_text())['tools'].items():
         if isinstance(pin, str):
             pins[name] = (pin, {})
         else:
@@ -49,11 +69,14 @@ def _pins() -> dict[str, tuple[str, dict[str, Any]]]:
     return pins
 
 
-def _entries() -> dict[str, list[dict[str, Any]]]:
-    return cast(dict[str, list[dict[str, Any]]], tomllib.loads((ROOT / 'mise.lock').read_text())['tools'])
+def _entries(configuration: Path) -> dict[str, list[dict[str, Any]]]:
+    return cast(dict[str, list[dict[str, Any]]], tomllib.loads(_lock(configuration).read_text())['tools'])
 
 
-PINS = _pins()
+CONFIGURATIONS = _configurations()
+
+#: Each pin, as the configuration's name and the tool's.
+PINS = [(configuration.name, name) for configuration in CONFIGURATIONS for name in sorted(_pins(configuration))]
 
 
 def _as_mise_spells(value: object) -> str:
@@ -69,13 +92,24 @@ def test_the_lock_is_binding() -> None:
     assert config.get('tool_config', {}).get('locked') is True
 
 
-def test_the_lock_holds_the_pinned_tools_and_no_others() -> None:
+def test_every_environment_a_workflow_selects_is_held() -> None:
+    """An environment a workflow selects whose configuration the census missed would have its pins held to nothing."""
+    selected = {
+        match.group(1)
+        for workflow in (ROOT / '.github' / 'workflows').glob('*.yml')
+        for match in re.finditer(r'MISE_ENV:\s*([\w-]+)', workflow.read_text())
+    }
+    assert {f'mise.{environment}.toml' for environment in selected} <= {path.name for path in CONFIGURATIONS}
+
+
+@pytest.mark.parametrize('configuration', CONFIGURATIONS, ids=lambda path: path.name)
+def test_the_lock_holds_the_pinned_tools_and_no_others(configuration: Path) -> None:
     """A tool respelled under another backend leaves its entry behind as a stray."""
-    assert sorted(_entries()) == sorted(PINS)
+    assert sorted(_entries(configuration)) == sorted(_pins(configuration))
 
 
-@pytest.mark.parametrize('name', sorted(PINS))
-def test_each_pin_has_one_entry_at_its_version(name: str) -> None:
+@pytest.mark.parametrize(('configuration', 'name'), PINS)
+def test_each_pin_has_one_entry_at_its_version(configuration: str, name: str) -> None:
     """The entry is the pin's: its version, and every option it records written in the pin with that value.
 
     An entry records only the options its backend keys an install by -- a
@@ -90,18 +124,20 @@ def test_each_pin_has_one_entry_at_its_version(name: str) -> None:
     every option as a string, so the pin's value is compared as mise spells
     it.
     """
-    version, options = PINS[name]
-    entries = _entries().get(name, [])
+    version, options = _pins(ROOT / configuration)[name]
+    entries = _entries(ROOT / configuration).get(name, [])
 
-    assert [entry['version'] for entry in entries] == [version], f'run `mise lock {name}` after moving its pin'
+    assert [entry['version'] for entry in entries] == [version], (
+        f'run `{_relock(configuration, name)}` after moving its pin'
+    )
     recorded: dict[str, Any] = entries[0].get('options', {})
     pinned = {key: _as_mise_spells(options[key]) for key in recorded if key in options}
-    assert pinned == recorded, f'run `mise lock {name}` after changing its options'
+    assert pinned == recorded, f'run `{_relock(configuration, name)}` after changing its options'
 
 
-@pytest.mark.parametrize('name', sorted(PINS))
-def test_each_entry_records_the_artifact_and_its_sum(name: str) -> None:
-    (entry,) = _entries()[name]
+@pytest.mark.parametrize(('configuration', 'name'), PINS)
+def test_each_entry_records_the_artifact_and_its_sum(configuration: str, name: str) -> None:
+    (entry,) = _entries(ROOT / configuration)[name]
     platform = entry.get(f'platforms.{PLATFORM}', {})
 
     assert str(platform.get('url', '')).startswith('https://')

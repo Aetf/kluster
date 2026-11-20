@@ -178,7 +178,8 @@ Every release the installation runs and did not write:
 -   the packages the build environments `uv sync` builds the project and
     the SDKs in install;
 -   GitHub Actions;
--   mise, and the tools `mise.toml` pins;
+-   mise, the tools `mise.toml` pins, and those `mise.ci.toml` adds for
+    the `checks` job, the podman its cases run containers on among them;
 -   the ZeroTier client the CI member installs;
 -   the Pulumi providers and the bridged SDKs;
 -   the Helm charts and the manifests the cluster installs;
@@ -200,8 +201,9 @@ Today:
     build waits out the release age below as the uv that carries it does;
 -   the Python packages, by the hashes `uv.lock` records;
 -   the Actions, by commit;
--   the tools `mise.toml` pins, by the sha256 `mise.lock` records for each
-    one's artifact, which `mise.toml`'s `locked` makes binding;
+-   the tools `mise.toml` and `mise.ci.toml` pin, by the sha256 their
+    locks, `mise.lock` and `mise.ci.lock`, record for each one's artifact,
+    which `mise.toml`'s `locked` makes binding on both;
 -   every container image the `versions:` block of `Pulumi.yaml` pins, by
     digest, because an image pin is a whole reference that the parser
     refuses without one: today the gateway's root filesystems,

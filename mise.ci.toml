@@ -1,0 +1,21 @@
+# The tools the `checks` job adds to `mise.toml`'s, and nothing else reads.
+# mise loads this file beside `mise.toml` only where `MISE_ENV` is `ci`, which
+# the `checks` job sets and nothing else does, so a workstation's or a cloud
+# session's `mise x` never puts these on its path. Its lock is `mise.ci.lock`,
+# held as `mise.lock` is: `mise.toml`'s `[tool_config] locked` binds it too,
+# `mise lock` with `MISE_ENV=ci` moves an entry, and `tests/test_mise_lock.py`
+# holds every pin here to an entry carrying a sum. Renovate reads this file
+# and writes its lock the same way, by its name.
+[tools]
+# The podman every case that runs a container runs on in CI: a podman 6
+# release, the line the workstations run, moved by renovate once it is a
+# release-age old, so a case judges the podman the suite is written against
+# rather than the runner image's. The podman project
+# publishes no engine for Linux, only its remote client, so the pin is
+# `mgoltzsche/podman-static`: upstream's podman built statically with the
+# runtime it calls -- conmon, crun, runc, netavark, aardvark-dns, pasta,
+# fuse-overlayfs and catatonit -- at the releases its `Dockerfile` names, one
+# release per podman release, under podman's version. The archive's
+# configuration is not taken: `checks`' Podman step points the runner's own
+# `/etc/containers` at these binaries (framework/ci.md §3).
+"github:mgoltzsche/podman-static" = { version = "6.2.0", bin_path = "podman-linux-amd64/usr/local/bin" }

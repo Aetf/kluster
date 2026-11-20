@@ -32,7 +32,8 @@
   //
   // Today the routes CI executes are the GitHub Actions and the runner
   // images their jobs run on; the Python dependencies; the `mise.toml`
-  // toolchain, and the mise CI and a cloud session install it with; the
+  // toolchain and the podman `mise.ci.toml` adds for `checks`, and the mise
+  // CI and a cloud session install them with; the
   // ZeroTier release the CI member installs; the Pulumi providers, the
   // bridged providers and their bridge, which run in `plan-physical` and
   // the previews with the stack secrets; and the packages and releases a
@@ -257,10 +258,15 @@
       // noop-automerge's allow-list (framework/ci.md §3), so a person merges
       // it.
       //
-      // A bump is finished when `mise.lock` holds the new version and its
-      // sum: `mise.toml` declares its tools locked, so an install refuses a
-      // pin the lock has no entry for, and a test holds every pin to one. The
-      // mise manager runs `mise lock <tool>` on the branch, with the mise
+      // A bump is finished when the lock of the pin's configuration holds
+      // the new version and its sum -- `mise.lock` for `mise.toml`, and
+      // `mise.<env>.lock` for an environment's `mise.<env>.toml`, today
+      // `mise.ci.toml` -- and `mise lock <tool>`, under `MISE_ENV=<env>` for
+      // an environment's pin, is what moves the entry. `mise.toml` declares
+      // its tools locked, which binds every configuration loaded beside it,
+      // so an install refuses a pin its lock has no entry for, and a test
+      // holds every pin to one. The mise manager runs that command on the
+      // branch, with the mise
       // `constraints.mise` names, under mise's safe mode (`MISE_SAFE=1`)
       // unless renovate's host lists mise in its `allowedUnsafeExecutions`.
       // Safe mode needs a mise from 2026.7.12 on, which that one is. A step
@@ -269,7 +275,7 @@
       // whose `mise version` probe fails cannot tell it may use safe mode and
       // is skipped: the pull request arrives without the entry and without
       // that mark, and `checks` refuses it at the install. Either way a
-      // person runs `mise lock <tool>` onto the branch. The same holds for
+      // person runs that command onto the branch. The same holds for
       // every mise pin a rule below takes out of this group, today
       // `kubeseal`, `talosctl`, `age`, the `vmutils` archive
       // (`github:VictoriaMetrics/VictoriaMetrics`) and a major release of
