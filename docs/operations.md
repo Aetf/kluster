@@ -1421,7 +1421,7 @@ for its place. The last column says which run, as of 2026-11-17:
 | CNPG barman backups, per database cluster | The cluster: the operator's own schedule, its retention class's, beside continuous WAL archiving (storage.md §5) | The namespace's writer key, sealed | The backup-freshness family, then the cluster's check-in | No: no series reports a barman backup's age, which the CNPG backup-freshness issue builds (`kluster-ops#872`), and no application declares a database yet |
 | The metrics stores' backups, hourly | The cluster: a CronJob per store, in `monitoring` (storage.md §5) | The `vm` writer key, sealed | The family's rules (§6.2), then the cluster's check-in | No: declared once bring-up stage 6 seals the `vm` key (storage.md §5) |
 | The block volumes' metrics, pulled hourly into the history store | The cluster: a CronJob in `monitoring` | The OCI metrics reader's key, sealed (credentials.md §3) | The family's rules (§6.3), then the cluster's check-in | No (`kluster-ops#790`) |
-| The authentication canary, every few minutes | The cluster: a CronJob in Authelia's namespace that requests a protected path with no credential (declarative/cluster-infra.md §2) | None: it presents none | Its own rule, which fires on anything but a refusal; the family's rules for the job; then the cluster's check-in | No: it ships with Authelia (rfc-008 §5.2) |
+| The authentication canary, every five minutes | The cluster: the CronJob `auth-canary` in a namespace of its own, `auth-canary`, which requests the canary's protected path with no credential and fails on anything but a refusal (declarative/cluster-infra.md §2) | None: it presents none | The family's rules (§10.2), whose failed alert is any answer but a refusal; then the cluster's check-in | No: Authelia's component declares it, and runs from Wave A1's land, which wires the component (rfc-008 §5.2) |
 | The state table's upkeep, daily: the census, the prune of the rows the retention rule expires, and the ceiling | The cluster: the CronJob `state-upkeep` in a namespace of its own, on the control planes, as the role `upkeep` (state-backend.md §2). It is no device's job: it deletes rows of the live table and checks the box, and a check never runs on what it watches. What it holds reads and deletes rows that an unmerged ref's runs already read and write (threat-model.md §3.1) | The `upkeep` client bundle, sealed (credentials.md §3) | The family's rules (state-backend.md §7.6), then the cluster's check-in | No: the first `up-k8s-base` after its merge declares it, its bundle sealed in ahead of it (`kluster-ops#784`) |
 | State-backend dump age, hourly | The cluster: the CronJob `state-backend-dumps` in `monitoring`, listing `pulumi-state/` (state-backend.md §6) | The list-only `B2 freshness key (state dumps)`, sealed | The family's rules (state-backend.md §6), then the cluster's check-in | Yes |
 | State-backend server certificate's expiry, hourly | The cluster: the CronJob `state-backend-certificate` in `monitoring`, reading the leaf off a Postgres STARTTLS handshake with the appliance (state-backend.md §6) | None: the box sends its certificate before anything authenticates | The family's rules (state-backend.md §6), then the cluster's check-in | Yes |
@@ -1629,6 +1629,7 @@ Owning docs keep the content — the index only locates it.
 | Backup restores (CNPG, VolSync, etcd) | storage.md §5; the drills are §4 here |
 | The databases (a restore drill that failed or went stale) | §9 here |
 | The applications (immich's job-slot watchdog: a run that failed, a leak it released, or the watchdog gone stale) | §10 here |
+| The authentication canary (a run the gate did not refuse, or a canary gone stale) | §10.2 here |
 | Alert-channel failure (HA push down → meta-alert; GitHub leg down; a scheduled ops-repo workflow that stopped checking in) | architecture.md §4.3; the contract and the dead-man are §4 here |
 | CI alerts (a red `checks` or `images` run; a drift diff) | framework/ci.md §3.1 and §3.2 |
 | The metrics stores (rows a store ignores; a backup run that failed, a backup gone stale or refused, or a store that does not restore; a pull of OCI's block-volume series that failed or went stale; a scrape job that reports nothing, or no scrape job at all) | §6 here |
@@ -2662,8 +2663,8 @@ from which the database's backups are not known to restore.
 ## 10. The applications' playbooks
 
 What to do when a scheduled job of an application's own reports on
-itself. Each is declared by its application's component, in the
-application's namespace, beside the scheduled-job family's rules over
+itself. Each is declared by its application's component, in a namespace
+the component declares, beside the scheduled-job family's rules over
 it (§4). The commands below run from the root of the checkout.
 
 ### 10.1 immich's job-slot watchdog failed or is stale
@@ -2737,3 +2738,84 @@ is the module's docstring.
    reads `Complete`, its log ends in the `checked …` line with none
    stuck, and both alerts resolve at the next evaluation after the
    CronJob records a success.
+### 10.2 The authentication canary failed or is stale
+
+**Trigger**: the scheduled-job family's two alerts on the CronJob
+`auth-canary` in the namespace `auth-canary`, both `actionable`, which
+Authelia's component (`kluster.components.apps.authelia`,
+[declarative/cluster-infra.md](declarative/cluster-infra.md) §2) declares
+beside it from its `ScheduledJob`,
+`kluster.components.apps.authelia.AUTH_CANARY`. `AuthCanaryFailed`: its
+last run, scheduled after its last success, has not succeeded within the
+minute a run is cut off at. `AuthCanaryStale`: it has not succeeded for
+one and a half of its five-minute periods. A run requests the canary's
+path, `/canary`, on the portal's name with no credential, at the
+balancer's IPv4; the path is a static responder in the same namespace,
+behind a route of its own whose filter is the session form of the gate,
+asking the portal in `serving-system` across namespaces through the
+portal's `ReferenceGrant`, as every gated route does. A run passes on a
+refusal alone, a `401` or a `302` to the portal. A failed run is an
+answer other than the portal's refusal, and every gated route rides the
+same filter, so the failed alert is the time from which no gated route
+is known to refuse a request that carries no session. While the land
+streams the portal's claim in, between Wave A1's land and the merge
+that starts the server, the portal's pod is a receiver that answers
+nothing: the gate fails closed for every request, every run fails by
+design, and `AuthCanaryFailed` fires through that window. The canary
+green Wave A1 verifies is read after the second merge (rfc-008 §5.2).
+
+**Gist**:
+
+1. **Which alert.** `AuthCanaryFailed` is a run that failed, and the
+   steps from step 2 on find why. `AuthCanaryStale` firing without it is
+   a job no run of which was scheduled after its last success:
+   `mise x -- kubectl -n auth-canary get cronjob auth-canary` shows
+   whether it is suspended, and its last schedule. A run the controller
+   could not start within half a minute of its time is skipped rather
+   than run late, and leaves no Job.
+2. **Read the last run.**
+   `mise x -- kubectl -n auth-canary get jobs --sort-by=.metadata.creationTimestamp`
+   lists the runs from the oldest, and
+   `mise x -- kubectl -n auth-canary logs job/<run>` ends in an
+   `auth-canary: FAILED` line saying what came back, or, for a run that
+   passed, in `auth-canary: ok`. The steps below go by those lines.
+3. **`FAILED — answered 200` or `answered 404`: the gate is open.** The
+   request reached the target, which is the canary's path served
+   without a sign-in, and every gated route is to be taken as serving
+   unauthenticated too. Stop the gated applications first, by scaling
+   each one's Deployment to zero, and leave them stopped until a run
+   passes again. Then find why the filter let the request through:
+   `mise x -- kubectl -n auth-canary get httproute auth-canary -o yaml`
+   shows whether the route is accepted with the filter on it, and
+   Cilium's version is held to the gate's floor
+   (declarative/cluster-infra.md §2), below which a filter whose target
+   is not declared is dropped from the route rather than closing it.
+4. **`FAILED — answered 403` or a 5xx: the gate fails closed, and the
+   portal did not answer it.** Every gated route refuses everyone, the
+   signed-in included; through the receiving window of the trigger, this
+   is the expected answer. A `500` is the gateway's own for a filter whose
+   target it cannot resolve: the `authelia` Service in `serving-system`
+   missing, or the `ReferenceGrant` named `gate` beside it not naming
+   the route's namespace, which
+   `mise x -- kubectl -n serving-system get referencegrant gate -o yaml`
+   shows. A `403` is the gateway not reaching the portal: read it with
+   `mise x -- kubectl -n serving-system get pods,endpoints`, then
+   `mise x -- kubectl -n serving-system logs deploy/authelia`. A pod that
+   does not start names a Secret it waits on, or its configuration's
+   refusal in its log.
+5. **`FAILED — answered 302 <address>`, to anywhere but the portal.**
+   Either something other than the portal answered, or the portal sends
+   a browser to a name other than the one the canary requests: compare
+   `session.cookies[].authelia_url` in the `ConfigMap` named `authelia`
+   with the CronJob's `CANARY_PORTAL`.
+6. **`FAILED — no answer from <address>`.** curl's own error is the
+   line above it. A refused or timed-out connection is the Gateway's
+   address on the run's node:
+   `mise x -- kubectl -n gateways get gateway internet-gw` shows whether
+   it is programmed with the balancer's addresses. A certificate error
+   is the wildcard certificate of the portal's zone.
+7. **Done when** a run's log ends in `auth-canary: ok`, and both alerts
+   resolve at the next evaluation after the CronJob records a success,
+   which
+   `mise x -- kubectl -n auth-canary get cronjob auth-canary -o jsonpath='{.status.lastSuccessfulTime}'`
+   reads. Gated applications stopped at step 3 start again then.

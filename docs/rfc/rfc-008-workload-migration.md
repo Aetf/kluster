@@ -186,6 +186,21 @@
     a migration layer of its component's own, as splitpro's is, and slice
     41 deletes it, with the component and its tests among its owned paths
     (§10.3).
+*   **Updated:** 2026-11-20. authelia moves in three merges (§5.2), as
+    matrix does: the land wires it with a receiver in the server's place,
+    which the legacy claim is streamed into, since the server started on
+    an empty claim makes a database of its own there; a second merge
+    starts the server, and the canary green is read after it; then the
+    cut, which deletes the receiver. §3.2's exceptions name authelia;
+    §10.3's opening and slice 28's row say authelia lands in two pull
+    requests; slice 29's owned paths gain the component's module and its
+    tests. The portal also serves the endpoints the legacy forward-auth
+    checks ask from the cut on (§3.5), a layer of its component's own
+    that slice 38 deletes with the checks' target. The canary's target
+    stands in a namespace of its own rather than authelia's, named in
+    the portal's grant as a gated namespace is, so its request takes
+    the path across namespaces every gated route takes
+    ([Aetf/kluster#885](https://github.com/Aetf/kluster/pull/885)).
 *   **Authority:** AGENTS.md,
     [framework/dispatch.md](../framework/dispatch.md),
     [framework/rfc.md](../framework/rfc.md) and the style rules
@@ -379,7 +394,8 @@ ahead of the cluster:
 ### 3.2 Land, verify, cut
 
 An application then moves in two merges and one verification between
-them, save hath (§5.4) and matrix (§5.3), which move in three:
+them, save hath (§5.4), authelia (§5.2) and matrix (§5.3), which move
+in three:
 
 1.  **Land.** The legacy application is stopped (§3.5) and its data
     moved (§5, by storage kind). The land pull request wires the
@@ -1903,12 +1919,21 @@ legacy image is built for.
     relay holds no state.
 *   **authelia** declares its server with its configuration rendered
     from the component, its access-control rules ported with it, every
-    client of the census (§4.4), and the `ext_authz` endpoint the
-    gateway filter calls. Its users and second factors are backed up
-    nowhere today; the backed claim is what changes that. **Data**: the
-    legacy claim's users file and SQLite database, by stream. **Verified**
-    before the cut by a login with a second factor at the balancer and by
-    the canary green. The legacy applications and the legacy forward-auth
+    client of the census (§4.4), the `ext_authz` endpoints the gateway
+    filter calls, and the endpoints the legacy forward-auth checks ask
+    from the cut until Wave B's (§3.5), a layer of the component's own
+    that goes with them (slice 38). Its users and second factors are
+    backed up nowhere today; the backed claim is what changes that.
+    **Data**: the legacy claim's users file and SQLite database, by
+    stream. authelia moves in three merges. The land wires it with
+    `receiving`, and the legacy claim is streamed into the receiver,
+    while the gate fails closed and the canary fails by design. A
+    second merge wires it without, which starts the server on what was
+    streamed. Then the cut, which deletes the receiver, a migration layer
+    of the component's own whose boundary is stated in the component
+    (slice 29). **Verified** after the second merge and before the cut by
+    a login with a second factor at the balancer and by the canary
+    green. The legacy applications and the legacy forward-auth
     checks reach the service by its public name, which resolves to the
     stopped legacy service until the cut, so they are **verified after
     it**, as the cut's own done-means: a sign-in to one legacy application
@@ -1919,8 +1944,10 @@ legacy image is built for.
 
 **The canary of cluster-infra.md §2 ships with authelia**, with a target
 of its own, because no gated route exists before Wave A2: a protected
-path on the portal's name, served by a static responder in authelia's
-namespace. A `CronJob` requests it with no credential every few
+path on the portal's name, served by a static responder in a namespace
+of its own, which the portal's grant names as it names each gated
+namespace, so that the request takes the path across namespaces every
+gated route takes. A `CronJob` requests it with no credential every few
 minutes, at the Gateway's address with the portal's name as its host,
 so that it answers the same before the cut as after, and publishes the
 result, and a rule fires on anything but a refusal, with its tier and
@@ -3255,7 +3282,8 @@ documents before it; slice 37 shares its paths and comes after it.
 
 Each window is a sequence of slices, in the order below within it;
 Wave B and hath overlap, and §5.9 gives the days. Each pull request is
-its own slice, save matrix's two in slice 31, and so is each step with
+its own slice, save authelia's two in slice 28 and matrix's two in slice
+31, and so is each step with
 none. A removal waits for its
 wave's soak (§3.5), so a head carries only the removals whose soak has
 ended, and slice 45 carries the rest.
@@ -3263,8 +3291,8 @@ ended, and slice 45 carries the rest.
 | Slice | Window | What | Owned paths |
 | --- | --- | --- | --- |
 | 27 | A1 | The head: Home Assistant's configured addresses read; physical/bring-up.md's last stage has run; kluster-code stops authelia and points its forward-auth checks at the new service | kluster-code |
-| 28 | A1 | **Land**: exim and authelia wired, `auth` held; the echo component, its row, its pin and its tests deleted | `src/kluster/stacks/apps.py`, `src/kluster/conventions/routes.py`, `docs/sources-of-truth.md`, the echo component's module, `tests/test_apps.py`, `Pulumi.yaml` |
-| 29 | A1 | **Cut**: `auth` | `src/kluster/conventions/routes.py`, `src/kluster/components/dns/legacy.py`, `docs/sources-of-truth.md` |
+| 28 | A1 | **Land**: exim and authelia wired, `auth` held; the echo component, its row, its pin and its tests deleted; authelia lands in two pull requests, its receiver's and then its server's (§5.2) | `src/kluster/stacks/apps.py`, `src/kluster/conventions/routes.py`, `docs/sources-of-truth.md`, the echo component's module, `tests/test_apps.py`, `Pulumi.yaml` |
+| 29 | A1 | **Cut**: `auth`; authelia's receiver deleted | `src/kluster/conventions/routes.py`, `src/kluster/components/dns/legacy.py`, `docs/sources-of-truth.md`, `src/kluster/components/apps/authelia/`, `tests/test_apps_authelia.py` |
 | 30 | A2 | The head: A1's legacy authelia removed; Home Assistant's configured addresses read; both instances' devices and folders read, and each gap fixed on the device; the DNS-01 token minted for the co-host zone into the land's branch; kluster-code stops A2's applications | kluster-code |
 | 31 | A2 | **Land**: blog, splitpro, matrix, syncthing, stdiscosrv; stdiscosrv's row already stands in `EXPOSURES` (§3.1), so the land changes no `physical` plan for it; matrix lands in two pull requests, its receiver's and then its server's (§5.3) | as slice 28, and `Pulumi.k8s-base.yaml` |
 | 32 | A2 | **Cut**: `split`, `matrix` with its SRV, `dav`, `sync`, `syncapi`, the web origin's served apex and both `www`; the `sync-nas` and `btsync` records deleted; matrix's receiver deleted; splitpro's recovery from the legacy store deleted, once its database has archived a base backup of its own | as slice 29, and `src/kluster/components/dns/base.py`, `src/kluster/components/apps/matrix/`, `tests/test_apps_matrix.py`, `src/kluster/components/apps/splitpro/`, `tests/test_apps_splitpro.py` |
@@ -3273,7 +3301,7 @@ ended, and slice 45 carries the rest.
 | 35 | after A2 | **Cut**: the re-registration; the copy pair and the not-started parameter deleted | as slice 28, and `src/kluster/components/apps/hath/`, `tests/test_apps_hath.py` |
 | 36 | B | The head: slice 47 merged; the doors' content; Home Assistant's configured addresses read; the UPS card's address read and reserved; the DNS-01 token minted for `jiahui.love` and Grafana's values sealed afresh, both into the land's branch; kluster-code stops Wave B's applications | kluster-code |
 | 37 | B | **Land**: Wave B's applications and the device relays, the UPS card's address and the host leg's beside their rows, the worker's address and Cloudflare's published ranges in Home Assistant's trusted proxies, `k8s-base` hands the monitoring component the held `mon` row and Grafana's client, and builds the Cloudflare provider and the reference to `dns` | as slice 28, and `src/kluster/conventions/__init__.py`, `src/kluster/conventions/site.py`, `src/kluster/conventions/homelab.py`, `docs/physical/homelab-host.md` (§2), `src/kluster/stacks/k8s_base.py`, `src/kluster/scripts/credentials/slots.py`, `Pulumi.k8s-base.yaml`, `tests/test_stack_programs.py`, `tests/test_slots.py`, `docs/credentials.md`, `docs/declarative/cluster-infra.md`, `docs/style/pulumi.md`, `docs/declarative/README.md`, `docs/declarative/dns.md` (§1) |
-| 38 | B | **Cut**: `spool`, `haos`, `mon`, `games`, `game`, `jiahui.love`'s apex, and the B rows of `LEGACY_VHOSTS`, with the UPS card's; R13 loses thread-dashboard; kluster-code drops the transitional target of the legacy forward-auth checks | as slice 32, and `src/kluster/conventions/gateway.py`, `docs/physical/gateway.md`, `docs/cluster/security-audit.md`, `docs/cluster/architecture.md`; kluster-code |
+| 38 | B | **Cut**: `spool`, `haos`, `mon`, `games`, `game`, `jiahui.love`'s apex, and the B rows of `LEGACY_VHOSTS`, with the UPS card's; R13 loses thread-dashboard; kluster-code drops the transitional target of the legacy forward-auth checks, and authelia's endpoints for them are deleted | as slice 32, and `src/kluster/conventions/gateway.py`, `docs/physical/gateway.md`, `docs/cluster/security-audit.md`, `docs/cluster/architecture.md`; kluster-code |
 | 39 | C | The head: the library re-owned on the host; Home Assistant's configured addresses read; Wave B's legacy applications and the JuiceFS stack removed; the legacy GPU plugin onto the iGPU; kluster-code stops legacy immich, jellyfin, shoko, the legacy monitoring and the legacy mail relay; the legacy proxy's address out of Home Assistant's trusted proxies; the host's unit for the `jellyfin-discovery` row pointed at the media VIP, with no `k3s` dependency, a task ceiling and a restart; then the window: growth and the A380's bind | `src/kluster/conventions/homelab.py`, `src/kluster/components/homelab/`, `tests/test_homelab.py`, `docs/physical/homelab-host.md`; aconfmgr; yadm; kluster-code |
 | 40 | C | **Land**: immich, jellyfin and shoko | as slice 28 |
 | 41 | C | **Cut**: `photos`, `tube`, their rewrite rules, and the `tube` vhost row; immich's recovery from the legacy store deleted, once its database has archived a base backup of its own | as slice 38, and `src/kluster/components/apps/immich/`, `tests/test_apps_immich.py` |

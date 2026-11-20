@@ -94,6 +94,7 @@ __all__ = (
     'bare_listener',
     'client_certificate_expiry',
     'find_rendered',
+    'gate_filter',
     'helm_chart',
     'identity_stripped',
     'in_denied_space',
@@ -1355,7 +1356,9 @@ class Portal:
 #: `apps` stack, where Authelia's component is declared too, so it is no
 #: convention two programs share and lives beside the helper that reads it.
 PORTAL = Portal(
-    namespace='authelia',
+    # The legacy server's namespace, which the portal keeps: its ported
+    # ciphertexts open there alone (rfc-008 §4.6).
+    namespace='serving-system',
     service='authelia',
     port=9091,
     paths={Gate.SESSION: '/api/authz/ext-authz/', Gate.BASIC: '/api/authz/ext-authz-basic/'},
@@ -1410,7 +1413,13 @@ def row_gateways(row: Route | Passthrough | PortRedirect | Port) -> tuple[str, .
     return tuple(gateway for side, gateway in fields if side is not None)
 
 
-def _gate_filter(gate: Gate) -> crds.gateway.v1.HTTPRouteSpecRulesFiltersArgs:
+def gate_filter(gate: Gate) -> crds.gateway.v1.HTTPRouteSpecRulesFiltersArgs:
+    """The authentication filter of one form of the gate: ask `PORTAL` at the form's path, and pass on its identity headers.
+
+    `route` puts it on a gated row's `internet` route; a component whose route
+    guards one path of its own, the portal's canary, puts it there itself, so
+    the canary's route carries the filter every gated row does.
+    """
     return crds.gateway.v1.HTTPRouteSpecRulesFiltersArgs(
         type='ExternalAuth',
         external_auth=crds.gateway.v1.HTTPRouteSpecRulesFiltersExternalAuthArgs(
@@ -1562,7 +1571,7 @@ def route(
                     hostnames=hostnames,
                     rules=[
                         crds.gateway.v1.HTTPRouteSpecRulesArgs(
-                            filters=[identity_stripped() if gate is None else _gate_filter(gate)],
+                            filters=[identity_stripped() if gate is None else gate_filter(gate)],
                             backend_refs=[
                                 crds.gateway.v1.HTTPRouteSpecRulesBackendRefsArgs(
                                     name=backend.service, port=backend.port

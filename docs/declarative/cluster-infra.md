@@ -1018,7 +1018,9 @@ All decided behavior from architecture.md §3, expressed as config:
     the filter names — Authelia's namespace, Service, port and each
     form's path — is served by Authelia's component in `apps`, with the
     `ReferenceGrant` that lets a route in an application's namespace name
-    that Service. **Below Cilium 1.20.2 a target that is not declared
+    that Service, each such namespace named in it. The namespace is the
+    legacy server's, `serving-system`, where its ported ciphertexts open
+    (workloads.md §5). **Below Cilium 1.20.2 a target that is not declared
     drops the gate rather than closing it**: a filter whose Service is
     missing, or whose reference no grant allows, is left out of the
     route, which is programmed with its backend and serves
@@ -1047,9 +1049,22 @@ All decided behavior from architecture.md §3, expressed as config:
     gated app (qbittorrent Web UI included — its "run external
     program" setting makes fail-open an RCE) rides this one mechanism,
     fail-closed is also **verified continuously, not only at
-    bootstrap**: a standing **auth canary** — a synthetic
-    unauthenticated probe against a protected route, with a vmalert
-    rule firing on anything but a 401/302 — so a Cilium upgrade
+    bootstrap**: a standing **auth canary**, which Authelia's component
+    declares in a namespace of its own, `auth-canary`, which the
+    portal's grant names as it names every gated namespace. Its target
+    is a static responder behind a route of its own on the portal's
+    name, whose path `/canary` the session form of the gate guards with
+    the filter every session-gated row carries (`gate_filter`), asking
+    the portal across namespaces through the grant as a gated route
+    does, and which an access rule admits the administrators alone to. The CronJob `auth-canary` requests that
+    path every five minutes with no credential, at the balancer's IPv4
+    under the portal's name, so it is answered on the caller's own node
+    and the same before the portal's cut as after. A run passes on a
+    refusal alone, a 401 or a 302 to the portal: the target's own answer
+    is the gate failing open, and an error status is the gate failing
+    closed without the portal. The scheduled-job family's rules over the
+    CronJob are its alerts, the failed one firing on any run that was
+    not refused (operations.md §10.2). So a Cilium upgrade
     regressing to fail-open pages instead of silently exposing every
     gated app, and Cilium bumps merge only with the canary green.
     (Per-app fallback auth layers were considered and rejected: N app
