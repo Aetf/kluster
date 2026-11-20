@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<NetworkConfiguration xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+  <BaseUrl />
+  <EnableHttps>false</EnableHttps>
+  <RequireHttps>false</RequireHttps>
+  <InternalHttpPort>{{ http_port }}</InternalHttpPort>
+  <AutoDiscovery>true</AutoDiscovery>
+  <EnableRemoteAccess>true</EnableRemoteAccess>
+  <KnownProxies>
+{%- for proxy in known_proxies %}
+    <string>{{ proxy }}</string>
+{%- endfor %}
+  </KnownProxies>
+</NetworkConfiguration>

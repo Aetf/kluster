@@ -40,6 +40,7 @@ from putils import Component
 
 __all__ = (
     'GPU_NODE_LABEL',
+    'GPU_RESOURCE',
     'IntelGpuPlugin',
     'NodeFeatureDiscovery',
     'gpu_values',
@@ -50,6 +51,12 @@ __all__ = (
 #: The label the plugin chart's `NodeFeatureRule` sets on a node with an Intel
 #: GPU, and that the plugin selects its nodes by.
 GPU_NODE_LABEL = 'intel.feature.node.kubernetes.io/gpu'
+
+#: The resource the plugin offers a GPU bound to `i915` as, which a pod
+#: requests to be given the worker's GPU. `i915` is the driver the worker's
+#: image carries (`kluster.components.talos.image.HOMELAB_EXTENSIONS`); a GPU
+#: bound to `xe` is offered as `gpu.intel.com/xe` instead.
+GPU_RESOURCE = 'gpu.intel.com/i915'
 
 
 def nfd_values() -> dict[str, object]:
