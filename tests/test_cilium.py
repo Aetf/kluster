@@ -55,6 +55,7 @@ from kluster.lib.versions import versions
 
 CONFIG_GROUP = 'kubernetes:yaml/v2:ConfigGroup'
 SERVICE = 'kubernetes:core/v1:Service'
+SERVICE_PATCH = 'kubernetes:core/v1:ServicePatch'
 CLASS_CONFIG = 'crds:cilium.io/v2alpha1:CiliumGatewayClassConfig'
 GATEWAY_CLASS = 'crds:gateway.networking.k8s.io/v1:GatewayClass'
 POOL = 'crds:cilium.io/v2:CiliumLoadBalancerIPPool'
@@ -235,6 +236,29 @@ def test_a_pod_detects_a_path_that_drops_what_is_too_big_on_its_own(applied: Run
     it keeps a moved default from taking it away.
     """
     assert applied.values('cilium')['pmtuDiscovery']['packetizationLayerPMTUDMode'] == 'blackhole'
+
+
+def test_a_service_that_prefers_its_clients_zone_is_routed_by_the_zone_hints(applied: Run) -> None:
+    """The proxy replacement reads a Service's zone hints only with `serviceTopology` on.
+
+    The EndpointSlice controller writes the hints for a Service's
+    `trafficDistribution`, and Cilium's kube-proxy replacement honors them
+    when `loadBalancer.serviceTopology` is set (`kubeproxy-free.rst` at
+    v1.20.4, "Traffic Distribution and Topology Aware Hints"); without it a
+    client reaches any endpoint, at either site. Every Service the stack
+    declares or patches with a distribution counts on it.
+    """
+    distributed = [
+        it.name
+        for kind in (SERVICE, SERVICE_PATCH)
+        for it in applied.monitor.of_type(kind)
+        if 'trafficDistribution' in it.inputs.get('spec', {})
+    ]
+    values = applied.values('cilium')
+
+    assert distributed
+    assert values['kubeProxyReplacement'] is True
+    assert values['loadBalancer']['serviceTopology'] is True
 
 
 def test_hubble_exports_flow_metrics(applied: Run) -> None:

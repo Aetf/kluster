@@ -167,6 +167,14 @@ def chart_values() -> dict[str, Any]:
         # its load-balancer address, which on the `internet` pool is a node's
         # own address, ahead of the node firewall (cluster-infra.md §2).
         'nodePort': {'enableHealthCheckLoadBalancerIP': False},
+        # The zone hints the EndpointSlice controller writes for a Service's
+        # `trafficDistribution`, honored by the proxy replacement: a client
+        # reaches an endpoint in its own zone, which is its site
+        # (`kubeproxy-free.rst` at v1.20.4, "Traffic Distribution and
+        # Topology Aware Hints"). Off by default. `kube-dns` prefers its
+        # client's zone, so a pod at home resolves at the home replica
+        # (`components.coredns`).
+        'loadBalancer': {'serviceTopology': True},
         # Linux's own detection of a path that drops what is too big, in every
         # pod: after about three seconds of silence a connection's segment size
         # falls to 1024 bytes and is probed upward again. A balancer front
