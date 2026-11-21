@@ -429,8 +429,10 @@ class BlockioClass:
 #: control plane. 12 MB/s is the peak rate the volume takes beside etcd
 #: (rule 3): a writer held there kept an etcd-shaped `fdatasync` at a p99 of
 #: 1.6 ms (Aetf/kluster-ops#785). 300 write operations a second is rule 2's
-#: steady figure, the operations figure until a reading beside random writes
-#: in this class replaces it. The cap is on operations as well as bandwidth
+#: steady figure, kept below the 1,200 overwrites a second the volume took
+#: beside etcd within rule 1, because writes into allocated, unwritten space
+#: cost journal work the cap does not see (nodes.md §1.2, Aetf/kluster-ops#78).
+#: The cap is on operations as well as bandwidth
 #: because the same reproduction's random 4 KiB writes, 2,924 a second at
 #: only 11.4 MB/s, took the probe's p99 to 34.9 ms, past rule 1's 10 ms. At
 #: 800,000 bytes and 20 operations a second, 15 containers fit both

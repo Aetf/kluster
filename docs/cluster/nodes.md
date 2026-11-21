@@ -266,9 +266,11 @@ scheduler places on the node, each written in `etcd-disk-writer`
     matches nothing and on a rate that does not parse, which a live read
     of a pod's `io.max` catches on the class's first apply and nothing
     catches after. VolSync's movers carry no class and are uncapped. The
-    300 is rule 2's steady figure until a reading of
-    Aetf/kluster-ops#785's rig beside random writes in the class
-    replaces it.
+    300 sits below what the volume takes: random 4 KiB overwrites at
+    1,200 a second held etcd within rule 1 beside a probe shaped like
+    its log, and 2,400 broke it (Aetf/kluster-ops#78, 2026-11-21). It stays at
+    300 because a write into space a file has allocated but not written
+    costs more than its own operation (the `blockio` class, below).
 
 **What the readings show** (2026-11-17, on the cluster a from-scratch
 rebuild brought up):
@@ -412,6 +414,16 @@ rate rule 5 sets. Kubernetes schedules no disk I/O, so the cap is the runtime's:
     reproduction's random 4 KiB writes, 2,924 a second at only 11.4
     MB/s, under the bandwidth figure, took the probe's p99 to 34.9 ms,
     past rule 1's 10 ms.
+-   **The operations cap bounds a container's data writes, not the
+    journal work they cause.** A write into an extent the filesystem
+    has allocated but not yet written converts the extent with a
+    transaction in XFS's log, which the kernel writes outside the
+    container's group and which etcd's `fdatasync` waits on. Fifteen
+    containers in the class writing random 4 KiB blocks into such space
+    took the member's WAL sync p99 to 15.2 ms, past rule 1; the same
+    writers overwriting files they had written first left it at its
+    baseline of about 4 ms (Aetf/kluster-ops#78, 2026-11-21, read on a
+    follower beside the probe).
 -   **What it costs.** A capped writer is slow on a control plane: at 20
     write operations a second a database commits on the order of ten
     transactions a second, and 1 GiB written at 0.8 MB/s takes about 22
@@ -432,6 +444,8 @@ rate rule 5 sets. Kubernetes schedules no disk I/O, so the cap is the runtime's:
 -   A class that fails open is caught by a live read of a pod's
     `io.max` on its first apply, and by nothing after.
 -   VolSync's movers are uncapped.
+-   Writes into allocated, unwritten space, whose journal work the
+    operations cap does not see.
 
 ## 2. The deciding factor is egress, not compute
 
