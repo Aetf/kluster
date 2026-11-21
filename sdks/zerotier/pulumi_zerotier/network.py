@@ -575,6 +575,38 @@ class Network(pulumi.CustomResource):
         __props__.__dict__["routes"] = routes
         return Network(resource_name, opts=opts, __props__=__props__)
 
+    @staticmethod
+    def exists(id: pulumi.Input[str],
+            opts: Optional[pulumi.ResourceOptions] = None,
+            assign_ipv4s: pulumi.Input[Optional[Sequence[pulumi.Input[Union['NetworkAssignIpv4Args', 'NetworkAssignIpv4ArgsDict', 'outputs.NetworkAssignIpv4']]]]] = None,
+            assign_ipv6s: pulumi.Input[Optional[Sequence[pulumi.Input[Union['NetworkAssignIpv6Args', 'NetworkAssignIpv6ArgsDict', 'outputs.NetworkAssignIpv6']]]]] = None,
+            assignment_pools: pulumi.Input[Optional[Sequence[pulumi.Input[Union['NetworkAssignmentPoolArgs', 'NetworkAssignmentPoolArgsDict', 'outputs.NetworkAssignmentPool']]]]] = None,
+            creation_time: pulumi.Input[Optional[_builtins.float]] = None,
+            description: pulumi.Input[Optional[_builtins.str]] = None,
+            dns: pulumi.Input[Optional[Sequence[pulumi.Input[Union['NetworkDnArgs', 'NetworkDnArgsDict', 'outputs.NetworkDn']]]]] = None,
+            enable_broadcast: pulumi.Input[Optional[_builtins.bool]] = None,
+            flow_rules: pulumi.Input[Optional[_builtins.str]] = None,
+            multicast_limit: pulumi.Input[Optional[_builtins.float]] = None,
+            name: pulumi.Input[Optional[_builtins.str]] = None,
+            network_id: pulumi.Input[Optional[_builtins.str]] = None,
+            private: pulumi.Input[Optional[_builtins.bool]] = None,
+            routes: pulumi.Input[Optional[Sequence[pulumi.Input[Union['NetworkRouteArgs', 'NetworkRouteArgsDict', 'outputs.NetworkRoute']]]]] = None) -> pulumi.Output[bool]:
+        __props__: dict = {}
+        __props__["assignIpv4s"] = assign_ipv4s
+        __props__["assignIpv6s"] = assign_ipv6s
+        __props__["assignmentPools"] = assignment_pools
+        __props__["creationTime"] = creation_time
+        __props__["description"] = description
+        __props__["dns"] = dns
+        __props__["enableBroadcast"] = enable_broadcast
+        __props__["flowRules"] = flow_rules
+        __props__["multicastLimit"] = multicast_limit
+        __props__["name"] = name
+        __props__["networkId"] = network_id
+        __props__["private"] = private
+        __props__["routes"] = routes
+        return pulumi.runtime.exists_resource(None, 'zerotier:index/network:Network', id, __props__, opts or pulumi.ResourceOptions(), package_ref=_utilities.get_package())
+
     @_builtins.property
     @pulumi.getter(name="assignIpv4s")
     def assign_ipv4s(self) -> pulumi.Output[Optional[Sequence['outputs.NetworkAssignIpv4']]]:

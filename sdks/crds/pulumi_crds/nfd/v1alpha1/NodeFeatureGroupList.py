@@ -186,6 +186,12 @@ class NodeFeatureGroupList(pulumi.CustomResource):
         __props__.__dict__["metadata"] = None
         return NodeFeatureGroupList(resource_name, opts=opts, __props__=__props__)
 
+    @staticmethod
+    def exists(id: pulumi.Input[str],
+            opts: Optional[pulumi.ResourceOptions] = None) -> pulumi.Output[bool]:
+        __props__: dict = {}
+        return pulumi.runtime.exists_resource(None, 'crds:nfd.k8s-sigs.io/v1alpha1:NodeFeatureGroupList', id, __props__, opts or pulumi.ResourceOptions())
+
     @_builtins.property
     @pulumi.getter(name="apiVersion")
     def api_version(self) -> pulumi.Output[Literal['nfd.k8s-sigs.io/v1alpha1']]:

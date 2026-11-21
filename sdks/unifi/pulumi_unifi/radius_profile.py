@@ -584,6 +584,34 @@ class RadiusProfile(pulumi.CustomResource):
         __props__.__dict__["vlan_wlan_mode"] = vlan_wlan_mode
         return RadiusProfile(resource_name, opts=opts, __props__=__props__)
 
+    @staticmethod
+    def exists(id: pulumi.Input[str],
+            opts: Optional[pulumi.ResourceOptions] = None,
+            accounting_enabled: pulumi.Input[Optional[_builtins.bool]] = None,
+            acct_servers: pulumi.Input[Optional[Sequence[pulumi.Input[Union['RadiusProfileAcctServerArgs', 'RadiusProfileAcctServerArgsDict', 'outputs.RadiusProfileAcctServer']]]]] = None,
+            auth_servers: pulumi.Input[Optional[Sequence[pulumi.Input[Union['RadiusProfileAuthServerArgs', 'RadiusProfileAuthServerArgsDict', 'outputs.RadiusProfileAuthServer']]]]] = None,
+            interim_update_enabled: pulumi.Input[Optional[_builtins.bool]] = None,
+            interim_update_interval: pulumi.Input[Optional[_builtins.float]] = None,
+            name: pulumi.Input[Optional[_builtins.str]] = None,
+            site: pulumi.Input[Optional[_builtins.str]] = None,
+            use_usg_acct_server: pulumi.Input[Optional[_builtins.bool]] = None,
+            use_usg_auth_server: pulumi.Input[Optional[_builtins.bool]] = None,
+            vlan_enabled: pulumi.Input[Optional[_builtins.bool]] = None,
+            vlan_wlan_mode: pulumi.Input[Optional[_builtins.str]] = None) -> pulumi.Output[bool]:
+        __props__: dict = {}
+        __props__["accountingEnabled"] = accounting_enabled
+        __props__["acctServers"] = acct_servers
+        __props__["authServers"] = auth_servers
+        __props__["interimUpdateEnabled"] = interim_update_enabled
+        __props__["interimUpdateInterval"] = interim_update_interval
+        __props__["name"] = name
+        __props__["site"] = site
+        __props__["useUsgAcctServer"] = use_usg_acct_server
+        __props__["useUsgAuthServer"] = use_usg_auth_server
+        __props__["vlanEnabled"] = vlan_enabled
+        __props__["vlanWlanMode"] = vlan_wlan_mode
+        return pulumi.runtime.exists_resource(None, 'unifi:index/radiusProfile:RadiusProfile', id, __props__, opts or pulumi.ResourceOptions(), package_ref=_utilities.get_package())
+
     @_builtins.property
     @pulumi.getter(name="accountingEnabled")
     def accounting_enabled(self) -> pulumi.Output[Optional[_builtins.bool]]:

@@ -760,6 +760,46 @@ class Member(pulumi.CustomResource):
         __props__.__dict__["zerotier_member_id"] = zerotier_member_id
         return Member(resource_name, opts=opts, __props__=__props__)
 
+    @staticmethod
+    def exists(id: pulumi.Input[str],
+            opts: Optional[pulumi.ResourceOptions] = None,
+            allow_ethernet_bridging: pulumi.Input[Optional[_builtins.bool]] = None,
+            authorized: pulumi.Input[Optional[_builtins.bool]] = None,
+            capabilities: pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.float]]]] = None,
+            description: pulumi.Input[Optional[_builtins.str]] = None,
+            hidden: pulumi.Input[Optional[_builtins.bool]] = None,
+            ip_assignments: pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]] = None,
+            ipv4_assignments: pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]] = None,
+            ipv6_assignments: pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]] = None,
+            member_id: pulumi.Input[Optional[_builtins.str]] = None,
+            name: pulumi.Input[Optional[_builtins.str]] = None,
+            network_id: pulumi.Input[Optional[_builtins.str]] = None,
+            no_auto_assign_ips: pulumi.Input[Optional[_builtins.bool]] = None,
+            rfc4193: pulumi.Input[Optional[_builtins.str]] = None,
+            sixplane: pulumi.Input[Optional[_builtins.str]] = None,
+            sso_exempt: pulumi.Input[Optional[_builtins.bool]] = None,
+            tags: pulumi.Input[Optional[Sequence[pulumi.Input[Sequence[pulumi.Input[_builtins.float]]]]]] = None,
+            zerotier_member_id: pulumi.Input[Optional[_builtins.str]] = None) -> pulumi.Output[bool]:
+        __props__: dict = {}
+        __props__["allowEthernetBridging"] = allow_ethernet_bridging
+        __props__["authorized"] = authorized
+        __props__["capabilities"] = capabilities
+        __props__["description"] = description
+        __props__["hidden"] = hidden
+        __props__["ipAssignments"] = ip_assignments
+        __props__["ipv4Assignments"] = ipv4_assignments
+        __props__["ipv6Assignments"] = ipv6_assignments
+        __props__["memberId"] = member_id
+        __props__["name"] = name
+        __props__["networkId"] = network_id
+        __props__["noAutoAssignIps"] = no_auto_assign_ips
+        __props__["rfc4193"] = rfc4193
+        __props__["sixplane"] = sixplane
+        __props__["ssoExempt"] = sso_exempt
+        __props__["tags"] = tags
+        __props__["zerotierMemberId"] = zerotier_member_id
+        return pulumi.runtime.exists_resource(None, 'zerotier:index/member:Member', id, __props__, opts or pulumi.ResourceOptions(), package_ref=_utilities.get_package())
+
     @_builtins.property
     @pulumi.getter(name="allowEthernetBridging")
     def allow_ethernet_bridging(self) -> pulumi.Output[Optional[_builtins.bool]]:

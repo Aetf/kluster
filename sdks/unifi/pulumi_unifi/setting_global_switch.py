@@ -263,6 +263,20 @@ class SettingGlobalSwitch(pulumi.CustomResource):
         __props__.__dict__["switch_exclusions"] = switch_exclusions
         return SettingGlobalSwitch(resource_name, opts=opts, __props__=__props__)
 
+    @staticmethod
+    def exists(id: pulumi.Input[str],
+            opts: Optional[pulumi.ResourceOptions] = None,
+            acl_device_isolations: pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]] = None,
+            acl_l3_isolations: pulumi.Input[Optional[Sequence[pulumi.Input[Union['SettingGlobalSwitchAclL3IsolationArgs', 'SettingGlobalSwitchAclL3IsolationArgsDict', 'outputs.SettingGlobalSwitchAclL3Isolation']]]]] = None,
+            site: pulumi.Input[Optional[_builtins.str]] = None,
+            switch_exclusions: pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]] = None) -> pulumi.Output[bool]:
+        __props__: dict = {}
+        __props__["aclDeviceIsolations"] = acl_device_isolations
+        __props__["aclL3Isolations"] = acl_l3_isolations
+        __props__["site"] = site
+        __props__["switchExclusions"] = switch_exclusions
+        return pulumi.runtime.exists_resource(None, 'unifi:index/settingGlobalSwitch:SettingGlobalSwitch', id, __props__, opts or pulumi.ResourceOptions(), package_ref=_utilities.get_package())
+
     @_builtins.property
     @pulumi.getter(name="aclDeviceIsolations")
     def acl_device_isolations(self) -> pulumi.Output[Sequence[_builtins.str]]:

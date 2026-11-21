@@ -216,6 +216,18 @@ class BucketNotificationRules(pulumi.CustomResource):
         __props__.__dict__["notification_rules"] = notification_rules
         return BucketNotificationRules(resource_name, opts=opts, __props__=__props__)
 
+    @staticmethod
+    def exists(id: pulumi.Input[str],
+            opts: Optional[pulumi.ResourceOptions] = None,
+            bucket_id: pulumi.Input[Optional[_builtins.str]] = None,
+            bucket_notification_rules_id: pulumi.Input[Optional[_builtins.str]] = None,
+            notification_rules: pulumi.Input[Optional[Sequence[pulumi.Input[Union['BucketNotificationRulesNotificationRuleArgs', 'BucketNotificationRulesNotificationRuleArgsDict', 'outputs.BucketNotificationRulesNotificationRule']]]]] = None) -> pulumi.Output[bool]:
+        __props__: dict = {}
+        __props__["bucketId"] = bucket_id
+        __props__["bucketNotificationRulesId"] = bucket_notification_rules_id
+        __props__["notificationRules"] = notification_rules
+        return pulumi.runtime.exists_resource(None, 'b2:index/bucketNotificationRules:BucketNotificationRules', id, __props__, opts or pulumi.ResourceOptions(), package_ref=_utilities.get_package())
+
     @_builtins.property
     @pulumi.getter(name="bucketId")
     def bucket_id(self) -> pulumi.Output[_builtins.str]:

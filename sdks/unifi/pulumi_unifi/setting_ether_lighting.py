@@ -224,6 +224,18 @@ class SettingEtherLighting(pulumi.CustomResource):
         __props__.__dict__["speed_overrides"] = speed_overrides
         return SettingEtherLighting(resource_name, opts=opts, __props__=__props__)
 
+    @staticmethod
+    def exists(id: pulumi.Input[str],
+            opts: Optional[pulumi.ResourceOptions] = None,
+            network_overrides: pulumi.Input[Optional[Sequence[pulumi.Input[Union['SettingEtherLightingNetworkOverrideArgs', 'SettingEtherLightingNetworkOverrideArgsDict', 'outputs.SettingEtherLightingNetworkOverride']]]]] = None,
+            site: pulumi.Input[Optional[_builtins.str]] = None,
+            speed_overrides: pulumi.Input[Optional[Sequence[pulumi.Input[Union['SettingEtherLightingSpeedOverrideArgs', 'SettingEtherLightingSpeedOverrideArgsDict', 'outputs.SettingEtherLightingSpeedOverride']]]]] = None) -> pulumi.Output[bool]:
+        __props__: dict = {}
+        __props__["networkOverrides"] = network_overrides
+        __props__["site"] = site
+        __props__["speedOverrides"] = speed_overrides
+        return pulumi.runtime.exists_resource(None, 'unifi:index/settingEtherLighting:SettingEtherLighting', id, __props__, opts or pulumi.ResourceOptions(), package_ref=_utilities.get_package())
+
     @_builtins.property
     @pulumi.getter(name="networkOverrides")
     def network_overrides(self) -> pulumi.Output[Sequence['outputs.SettingEtherLightingNetworkOverride']]:

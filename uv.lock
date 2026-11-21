@@ -2130,7 +2130,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "packaging", specifier = ">=24.0" },
-    { name = "pulumi", specifier = ">=3.247.0,<4.0.0" },
+    { name = "pulumi", specifier = ">=3.269.0,<4.0.0" },
     { name = "semver", specifier = ">=2.8.1" },
     { name = "typing-extensions", marker = "python_full_version < '3.11'", specifier = ">=4.11,<5" },
 ]
@@ -2164,7 +2164,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "packaging", specifier = ">=24.0" },
-    { name = "pulumi", specifier = ">=3.247.0,<4.0.0" },
+    { name = "pulumi", specifier = ">=3.269.0,<4.0.0" },
     { name = "pulumi-kubernetes", specifier = ">=4.34.2" },
     { name = "requests", specifier = ">=2.21,<3.0" },
     { name = "semver", specifier = ">=2.8.1" },
@@ -2270,7 +2270,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "packaging", specifier = ">=24.0" },
-    { name = "pulumi", specifier = ">=3.247.0,<4.0.0" },
+    { name = "pulumi", specifier = ">=3.269.0,<4.0.0" },
     { name = "semver", specifier = ">=2.8.1" },
     { name = "typing-extensions", marker = "python_full_version < '3.11'", specifier = ">=4.11,<5" },
 ]
@@ -2288,7 +2288,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "packaging", specifier = ">=24.0" },
-    { name = "pulumi", specifier = ">=3.247.0,<4.0.0" },
+    { name = "pulumi", specifier = ">=3.269.0,<4.0.0" },
     { name = "semver", specifier = ">=2.8.1" },
     { name = "typing-extensions", marker = "python_full_version < '3.11'", specifier = ">=4.11,<5" },
 ]

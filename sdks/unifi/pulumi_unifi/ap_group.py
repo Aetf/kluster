@@ -223,6 +223,18 @@ class ApGroup(pulumi.CustomResource):
         __props__.__dict__["site"] = site
         return ApGroup(resource_name, opts=opts, __props__=__props__)
 
+    @staticmethod
+    def exists(id: pulumi.Input[str],
+            opts: Optional[pulumi.ResourceOptions] = None,
+            device_macs: pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]] = None,
+            name: pulumi.Input[Optional[_builtins.str]] = None,
+            site: pulumi.Input[Optional[_builtins.str]] = None) -> pulumi.Output[bool]:
+        __props__: dict = {}
+        __props__["deviceMacs"] = device_macs
+        __props__["name"] = name
+        __props__["site"] = site
+        return pulumi.runtime.exists_resource(None, 'unifi:index/apGroup:ApGroup', id, __props__, opts or pulumi.ResourceOptions(), package_ref=_utilities.get_package())
+
     @_builtins.property
     @pulumi.getter(name="deviceMacs")
     def device_macs(self) -> pulumi.Output[Sequence[_builtins.str]]:
