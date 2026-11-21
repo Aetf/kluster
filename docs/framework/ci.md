@@ -259,7 +259,10 @@ push                          (AGENTS.md's gate as CI runs it, without
                                `checks` is the one required context it
                                reports (§5) — the step list is the
                                workflow's own; the `alert` job beside it
-                               runs only on a push)
+                               runs only on a push; a pull request of
+                               the fast path's shape runs the cases that
+                               read the stack files and skips the rest —
+                               see the fast-path bullet)
                             ──failed on a push──→ alert
 
 PR      preview.yml:        changes ─→ preview (dns | k8s-base | apps)
@@ -345,6 +348,30 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     runs the step against a stand-in checker and holds each annotation
     whole.
 
+-   **`checks` takes a fast path for one shape of pull request.** The
+    shape is a pull request that changes nothing but what a committed
+    `Pulumi.<stack>.yaml` holds under the sealed key or the kubeconfig
+    copy, or the etcd restore-verify's recipient file committed beside
+    them: what a sealing sitting and `credentials derived sync` write.
+    The `Scope` step runs `checks-scope`, which answers `stack-files` for
+    that shape and `full` for anything else, an error included; the
+    conditions it checks are in `kluster.scripts.checks_scope`. Under
+    `stack-files` the job runs its setup, the cases marked `stack_files`, and the prose
+    step, and skips every other step, since none of them reads anything
+    the shape can move. `ruff`, the type check and the import contract
+    read Python. The `Podman` step makes local the images the appliance's
+    roles are tested in, which `settings` pins. `state-backend pins` reads
+    `settings` and the network. The prose step runs, and finds no markdown
+    changed. The marked cases are every case that reads a committed stack
+    file, through the one fixture [testing.md](testing.md) §2 makes the
+    only way to read one, so they are what judges the new ciphertexts and
+    copies; the recipient is judged by the reader the stack program reads
+    it with, which `checks-scope` runs on the head. Everything stays in
+    the one job, so `checks` is still the one required context (§5). **A
+    push always runs in full:** it skips the `Scope` step, so a case that
+    reads a stack file by hand, and was left out on the pull request,
+    fails on `main` and the alert fires. `preview.yml` still previews the
+    stacks against the new ciphertexts and copies.
 -   **The images the appliance's roles are tested in are on the runner
     before the tests start.** `tests/test_state_roles.py` runs the
     appliance's Postgres and the pooler in front of it in the images

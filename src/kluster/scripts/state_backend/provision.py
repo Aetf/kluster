@@ -5,7 +5,9 @@ the box (rfc-006 §4.5): neither creates nor changes anything the stack
 declares, and neither needs an OCI credential.
 
 -   `verify_pins`, behind `state-backend pins`: the pinned artifacts checked
-    against their digests, which CI runs on every pull request.
+    against their digests, which CI runs on every push to `main` and on every
+    pull request outside the fast path of `checks`, which admits no change to
+    the pins (framework/ci.md §3).
 -   `ssh`, behind `state-backend ssh`: a login for diagnosis, held to the host
     key whose public half is committed beside the Butane template
     (`kluster.lib.state_backend.committed.HOST_KEY`), at the address the
@@ -310,9 +312,11 @@ def verify_pins() -> bool:
     """Check the pinned artifacts are what settings.py claims they are.
 
     Renovate can bump a version but cannot compute the tarball's digest, and
-    a digest written by hand can name an image nobody published, so this runs
-    in CI on every PR: a bump that leaves AGE_SHA256 stale, or an image pin
-    whose digest the registry does not serve, fails here rather than at first
+    a digest written by hand can name an image nobody published, so CI runs
+    this on every push to `main` and on every pull request that could change
+    a pin (the fast path of `checks` admits none): a bump that leaves
+    AGE_SHA256 stale, or an image pin whose digest the registry does not
+    serve, fails here rather than at first
     boot -- where the first strands the appliance without an encryptor, a bad
     Postgres pin leaves it without a database, and a bad PgBouncer pin
     leaves the database out of every client's reach.

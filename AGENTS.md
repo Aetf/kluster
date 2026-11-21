@@ -42,7 +42,9 @@ except where a bullet says otherwise:
   case by name and lets the run go on to its summary; the outer `timeout`
   is a hang guard for what that bound cannot reach, an order of magnitude
   above the run's duration. Which form and why:
-  [docs/framework/testing.md](docs/framework/testing.md) §1.
+  [docs/framework/testing.md](docs/framework/testing.md) §1. On a pull
+  request of the fast path's shape ([ci.md](docs/framework/ci.md) §3), CI
+  runs only the cases marked `stack_files` and none of the checks above.
 * `ltex-cli-plus` on every markdown file touched outside the generated
   `sdks/`, one file at a time — how it reaches the repository's word
   lists is under "Writing the prose". CI runs it the same way, over the
@@ -95,9 +97,9 @@ documentation the change makes true ships with it rather than after it.
   handful of lines with no logic, or a context with no interpreter). They
   live under `src/kluster/scripts/` and are exposed as console scripts in
   `pyproject.toml` (`update_crds`, `credentials`, `state-backend`,
-  `operator-stack`, `stack-plan`, `typecheck`, `perf`), the same way for every
-  script; `just` recipes or symlinks are for convenience on top, never the
-  home of the logic.
+  `operator-stack`, `stack-plan`, `typecheck`, `perf`, `checks-scope`),
+  the same way for every script; `just` recipes or symlinks are for
+  convenience on top, never the home of the logic.
 * How code and prose are written — naming, comments, component and
   provider architecture — is `docs/style/`, and a reviewer holds every
   change to it.

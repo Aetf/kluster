@@ -38,12 +38,13 @@ import uuid
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import process_sessions
 import pytest
 import pytest_asyncio
 import yaml
+from committed_stack_files import StackFiles
 from mock_monitor import Recorder, declaring, run_with
 from node_selection import CLOUD, NODES, schedulable
 from pinned_image import COMMAND_TIMEOUT, CONTAINER_TIMEOUT, pinned, pulled, require_podman
@@ -480,11 +481,16 @@ def test_the_ported_secrets_are_declared_namespace_wide_and_the_storage_key_stri
     assert storage['spec']['encryptedData'] == STORAGE_KEY
 
 
-def test_the_stacks_configuration_holds_every_key_the_ported_secrets_are_read_with() -> None:
+def test_the_stacks_configuration_holds_every_key_the_ported_secrets_are_read_with(
+    committed_stack_files: StackFiles,
+) -> None:
     """The `apps` stack's file carries the ported ciphertexts, which the program reads by these keys."""
-    configured = yaml.safe_load((ROOT / 'Pulumi.apps.yaml').read_text())['config'][
-        f'kluster-py:{conventions.sealed.CONFIG_KEY}'
-    ]
+    configured = cast(
+        'dict[str, dict[str, str]]',
+        committed_stack_files.config(conventions.STACK_NAMES.apps)[
+            f'{committed_stack_files.project}:{conventions.sealed.CONFIG_KEY}'
+        ],
+    )
 
     for value in (SECRETS, CONFIG_SECRETS):
         assert set(sealed_ciphertext(value, configured)) == set(value.keys)

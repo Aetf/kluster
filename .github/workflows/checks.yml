@@ -4,7 +4,9 @@ name: checks
 # types, unit tests, the appliance's pinned digests, and the prose of the
 # markdown a change touches. The checks read no secret, so they run for forks
 # too; the one job that does -- `alert`, on a red push to `main` -- never runs
-# for a pull request.
+# for a pull request. A pull request of the fast path's shape runs a part of
+# them, which the `Scope` step decides; a push always runs them all
+# (framework/ci.md §3).
 
 on:
   pull_request:
@@ -26,7 +28,7 @@ jobs:
     # the alert below fires for it. This one is the sum of theirs, a `uses:`
     # step twice for its `post` phase, plus five minutes for the runner's own
     # phases -- a backstop for what no step bound reaches (framework/ci.md §3).
-    timeout-minutes: 155
+    timeout-minutes: 160
     # Every mise command in the job reads `mise.ci.toml` beside `mise.toml`,
     # so the install puts the pinned podman in, and every `mise x` puts it on
     # the path ahead of the runner image's (framework/ci.md §3).
@@ -60,11 +62,31 @@ jobs:
           mise x uv -- uv sync --locked
           mise x uv -- uv run python -c 'import ssl, sys; print(sys.version, ssl.OPENSSL_VERSION)'
 
+      # `stack-files` for a pull request of the fast path's shape
+      # (framework/ci.md §3, `kluster.scripts.checks_scope`); `full` for
+      # anything else, and for a run whose verdict is missing. Under
+      # `stack-files` the steps that read nothing such a change can move are
+      # skipped -- each one carries the `if` -- and the tests run only the
+      # cases that read a committed stack file. A push skips this step, so it
+      # runs every step in full.
+      - name: Scope
+        id: scope
+        if: github.event_name == 'pull_request'
+        timeout-minutes: 5
+        env:
+          EVENT: ${{ github.event_name }}
+          # The base the prose step diffs against on a pull request, for the
+          # reason given there.
+          BASE: HEAD^1
+        run: mise x uv -- uv run checks-scope --event "$EVENT" --base "$BASE" --github-output "$GITHUB_OUTPUT"
+
       - name: Format
+        if: steps.scope.outputs.scope != 'stack-files'
         timeout-minutes: 5
         run: mise x uv -- uv run ruff format --check .
 
       - name: Lint
+        if: steps.scope.outputs.scope != 'stack-files'
         timeout-minutes: 5
         run: mise x uv -- uv run ruff check .
 
@@ -74,6 +96,7 @@ jobs:
       # `# pyright: ignore` that suppresses nothing in every file parsed
       # again after it (`kluster.scripts.typecheck`).
       - name: Types
+        if: steps.scope.outputs.scope != 'stack-files'
         timeout-minutes: 10
         run: mise x uv -- uv run typecheck
 
@@ -81,14 +104,15 @@ jobs:
       # one of them reaches upwards: a wrong import type-checks and passes
       # its tests. The contract is in `pyproject.toml`.
       - name: Imports
+        if: steps.scope.outputs.scope != 'stack-files'
         timeout-minutes: 5
         run: mise x uv -- uv run lint-imports
 
       # `tests/test_state_roles.py` runs the appliance's Postgres roles in the
       # images the box runs, Postgres and the PgBouncer in front of it, and
       # skips where no copy of either is local rather than fetch one mid-run;
-      # this step makes both local, so those cases run on every event
-      # (framework/ci.md §3). The images are the ones
+      # this step makes both local, so those cases run on every event that
+      # runs the whole suite (framework/ci.md §3). The images are the ones
       # `settings.POSTGRES_IMAGE` and `settings.PGBOUNCER_IMAGE` pin, by
       # their tags and digests.
       #
@@ -116,6 +140,7 @@ jobs:
       # runtime piece, by path and version -- which is what the suite's
       # podman and pasta workarounds name as their removal conditions.
       - name: Podman
+        if: steps.scope.outputs.scope != 'stack-files'
         timeout-minutes: 5
         run: |
           set -euo pipefail
@@ -170,14 +195,24 @@ jobs:
       # cannot reach, an order of magnitude above the run so that the
       # ordinary run never meets it (framework/testing.md §1). The step's own
       # bound sits above that outer one, so the hang that one can catch is
-      # reported by it.
+      # reported by it. Under `stack-files` the run is the cases marked
+      # `stack_files`, every case that reads a committed stack file
+      # (framework/testing.md §2), under the same bounds.
       - name: Tests
         timeout-minutes: 30
-        run: timeout 1200 mise x -- uv run pytest -q
+        env:
+          SCOPE: ${{ steps.scope.outputs.scope }}
+        run: |
+          if [ "$SCOPE" = stack-files ]; then
+            timeout 1200 mise x -- uv run pytest -q -m stack_files
+          else
+            timeout 1200 mise x -- uv run pytest -q
+          fi
 
       # Renovate can bump a pinned version but cannot recompute its digest;
       # this is what stops a stale hash from reaching the appliance.
       - name: Pinned artifacts
+        if: steps.scope.outputs.scope != 'stack-files'
         timeout-minutes: 5
         run: mise x uv -- uv run state-backend pins
 

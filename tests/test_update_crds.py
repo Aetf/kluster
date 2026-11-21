@@ -38,6 +38,7 @@ import pytest
 import requests
 import ruamel.yaml.main as ruamel_yaml_main
 import scratch_projects
+from committed_stack_files import StackFiles
 from renovate_text import (
     as_python_spells_it,
     as_renovate_spells_it,
@@ -230,14 +231,14 @@ def test_version_tuple(version: str, expected: tuple[int, ...]) -> None:
 # -- the pins the script reads ------------------------------------------------
 
 
-def test_no_stack_file_overrides_a_pin_the_script_reads() -> None:
+def test_no_stack_file_overrides_a_pin_the_script_reads(committed_stack_files: StackFiles) -> None:
     """A stack's own file can override a project value, and the script reads only `Pulumi.yaml`.
 
     A pin of a kind the script reads overridden in `Pulumi.<stack>.yaml` would
     install one release while the bundle describes another, with every check
     green.
     """
-    stack_files = sorted(ROOT.glob('Pulumi.*.yaml'))
+    stack_files = [committed_stack_files.path(stack) for stack in committed_stack_files.stacks()]
     # Not vacuous: the stacks have files of their own.
     assert stack_files
     overriding = [

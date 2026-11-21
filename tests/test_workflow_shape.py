@@ -1216,8 +1216,14 @@ PROJECT_SCRIPTS = frozenset(tomllib.loads((ROOT / 'pyproject.toml').read_text())
 #: the arguments it is given, or `None` for one that runs no `pulumi`
 #: subcommand of the program: `stack-plan` previews the stack it is given
 #: (`kluster.scripts.stack_plan.cli`), `state-backend` releases a lock or
-#: prints pins, and `typecheck` runs `basedpyright`.
-SCRIPT_SUBCOMMANDS: Mapping[str, str | None] = {'stack-plan': 'preview', 'state-backend': None, 'typecheck': None}
+#: prints pins, `typecheck` runs `basedpyright`, and `checks-scope` reads git
+#: and runs no `pulumi` (`kluster.scripts.checks_scope`).
+SCRIPT_SUBCOMMANDS: Mapping[str, str | None] = {
+    'stack-plan': 'preview',
+    'state-backend': None,
+    'typecheck': None,
+    'checks-scope': None,
+}
 
 
 def _uv_run_script(simple: list[str], where: str) -> str | None:

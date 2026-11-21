@@ -17,7 +17,7 @@ from typing import Any
 import pulumi
 import pytest
 import pytest_asyncio
-import yaml
+from committed_stack_files import StackFiles
 from mock_monitor import Recorder, declaring, run_under_backstop
 
 from kluster import conventions
@@ -359,7 +359,7 @@ def test_the_zones_token_is_read_where_that_provider_is_built(stack: AppliedPhys
     assert ':' not in dns.CLOUDFLARE_API_TOKEN
 
 
-def test_the_mint_writes_the_key_the_stack_reads() -> None:
+def test_the_mint_writes_the_key_the_stack_reads(committed_stack_files: StackFiles) -> None:
     """One key, named in three places, held equal here.
 
     The value is delivered by `credentials derived cloudflare-zones mint`, so a
@@ -369,15 +369,15 @@ def test_the_mint_writes_the_key_the_stack_reads() -> None:
     the key the program asks its configuration for, and the key the committed
     stack file carries are compared directly.
     """
-    from kluster.scripts.credentials import derived, pulumi_config
+    from kluster.scripts.credentials import derived
     from kluster.stacks import dns
 
     assert dns.CLOUDFLARE_API_TOKEN == derived.API_TOKEN_KEY
-    committed = (pulumi_config.project_dir() / f'Pulumi.{derived.ZONES_STACK}.yaml').read_text()
-    assert f'\n  {_project_name()}:{derived.API_TOKEN_KEY}:\n' in committed
+    committed = committed_stack_files.text(derived.ZONES_STACK)
+    assert f'\n  {committed_stack_files.project}:{derived.API_TOKEN_KEY}:\n' in committed
 
 
-def test_the_account_the_zones_are_declared_against_is_not_configuration() -> None:
+def test_the_account_the_zones_are_declared_against_is_not_configuration(committed_stack_files: StackFiles) -> None:
     """A fact with one home is not copied into a second.
 
     The account names the account rather than opening it, so it is code beside
@@ -385,14 +385,14 @@ def test_the_account_the_zones_are_declared_against_is_not_configuration() -> No
     stack's configuration keys. The name it used to be addressed as answers
     with where the fact went rather than with "no such row".
     """
-    from kluster.scripts.credentials import derived, pulumi_config, slots
+    from kluster.scripts.credentials import derived, slots
 
-    committed = (pulumi_config.project_dir() / f'Pulumi.{derived.ZONES_STACK}.yaml').read_text()
+    committed = committed_stack_files.text(derived.ZONES_STACK)
     assert 'cloudflareAccountId' not in committed
     assert 'cloudflareAccountId' in slots.RETIRED
 
 
-def test_default_providers_stay_disabled_for_the_package_this_key_left() -> None:
+def test_default_providers_stay_disabled_for_the_package_this_key_left(committed_stack_files: StackFiles) -> None:
     """The list names `cloudflare` and never becomes `*`.
 
     Naming the package is what makes an explicit provider the only Cloudflare
@@ -401,17 +401,8 @@ def test_default_providers_stay_disabled_for_the_package_this_key_left() -> None
     are declared through the `pulumi-python` default provider (rfc-002 §8.1),
     and disabling that one would leave them undeclarable.
     """
-    from kluster.scripts.credentials import derived, pulumi_config
+    from kluster.scripts.credentials import derived
 
-    committed = (pulumi_config.project_dir() / f'Pulumi.{derived.ZONES_STACK}.yaml').read_text()
-    config = yaml.safe_load(committed)['config']
+    config = committed_stack_files.config(derived.ZONES_STACK)
 
     assert config['pulumi:disable-default-providers'] == ['cloudflare']
-
-
-def _project_name() -> str:
-    """What `pulumi config set` prefixes an unqualified key with, out of `Pulumi.yaml`."""
-    from kluster.scripts.credentials import pulumi_config
-
-    manifest = (pulumi_config.project_dir() / 'Pulumi.yaml').read_text()
-    return next(line.removeprefix('name:').strip() for line in manifest.splitlines() if line.startswith('name:'))

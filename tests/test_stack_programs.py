@@ -24,8 +24,8 @@ from typing import Any
 import pulumi
 import pytest
 import pytest_asyncio
-import yaml
 from client_kubeconfig import KUBECONFIG
+from committed_stack_files import StackFiles
 from k8s_base_installation import (
     PUBLISHED,
     VERSIONS_CONFIG,
@@ -370,7 +370,7 @@ def test_the_zones_token_is_delivered_under_the_key_apps_reads() -> None:
 
 @pytest.mark.parametrize('name', PROGRAMS)
 def test_each_stack_file_disables_the_defaults_of_every_package_its_program_uses(
-    applied: dict[str, Run], name: str
+    applied: dict[str, Run], name: str, committed_stack_files: StackFiles
 ) -> None:
     """The committed configuration turns a missed provider into an error.
 
@@ -383,7 +383,6 @@ def test_each_stack_file_disables_the_defaults_of_every_package_its_program_uses
     it counts as that provider (`EXTENSIONS`). The equality runs the other way
     too, so a package the program no longer uses is a stale entry.
     """
-    committed = CHECKOUT / f'Pulumi.{name}.yaml'
     run = applied[name]
 
     def serving(package: str) -> str:
@@ -393,7 +392,7 @@ def test_each_stack_file_disables_the_defaults_of_every_package_its_program_uses
     used = {serving(typ.partition(':')[0]) for typ in run.types} | {
         serving(token.partition(':')[0]) for token, _ in run.called
     }
-    config = yaml.safe_load(committed.read_text()).get('config', {})
+    config = committed_stack_files.config(name)
 
     assert set(config.get('pulumi:disable-default-providers', ())) == built | (used - NOT_PACKAGES)
 

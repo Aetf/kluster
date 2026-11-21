@@ -460,6 +460,19 @@ Two things make such an import wrong even where it works:
 `tests/test_suite_imports.py` holds the rule, and the unique names, over every
 module under `tests/`.
 
+**A case reads a committed `Pulumi.<stack>.yaml` only through the
+`committed_stack_files` fixture**, asking for it as a parameter, its own
+or that of a fixture it uses. The fixture and the hook that marks
+`stack_files` every case that asks for it are a plugin module of their
+own, `tests/committed_stack_files.py`, which `tests/conftest.py` loads.
+The marker is what `checks` runs on a pull request of the fast path's
+shape: `-m stack_files`, and no other case ([ci.md](ci.md) §3). So the
+selection is a definition rather than a list: a new reader is selected by
+being written the one sanctioned way, and a case that opens a stack file
+by hand is not, which the full run on `main` after the merge is left to
+catch. The project file `Pulumi.yaml` is not a stack file, and a case
+reads it as it reads any other file.
+
 **An async fixture scoped wider than a case states its `loop_scope`.** In the
 strict mode the suite runs in, an async fixture is one decorated with
 `pytest_asyncio.fixture`, and `pyproject.toml` sets

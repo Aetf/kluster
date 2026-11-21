@@ -38,8 +38,8 @@ import oci_clock
 import pinned_tools
 import process_sessions
 import pytest
-import yaml
 from cloudflare_api import ACCOUNT_ID, FakeApi, console_seed
+from committed_stack_files import StackFiles
 from credentials_command_tree import named_leaves
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
@@ -1980,16 +1980,14 @@ def test_the_etcd_drill_generator_needs_no_kit_on_a_machine_holding_both_passphr
 # -- what the stack files hold ------------------------------------------------
 
 
-def committed_sealed() -> dict[str, dict[str, dict[str, str]]]:
+def committed_sealed(files: StackFiles) -> dict[str, dict[str, dict[str, str]]]:
     """What every committed `Pulumi.<stack>.yaml` holds under the sealed key, by stack."""
-    project = pulumi_config.project_dir()
-    key = f'{yaml.safe_load((project / "Pulumi.yaml").read_text())["name"]}:{conventions.sealed.CONFIG_KEY}'
+    key = f'{files.project}:{conventions.sealed.CONFIG_KEY}'
     found: dict[str, dict[str, dict[str, str]]] = {}
-    for path in sorted(project.glob('Pulumi.*.yaml')):
-        config = cast('dict[str, object]', yaml.safe_load(path.read_text()).get('config') or {})
-        held = config.get(key)
+    for stack in files.stacks():
+        held = files.config(stack).get(key)
         if held is not None:
-            found[path.name.removeprefix('Pulumi.').removesuffix('.yaml')] = cast('dict[str, dict[str, str]]', held)
+            found[stack] = cast('dict[str, dict[str, str]]', held)
     return found
 
 
@@ -2020,14 +2018,14 @@ def test_the_ciphertext_check_takes_what_kubeseal_seals_and_refuses_a_value_in_t
     assert not is_sealed(base64.b64encode(b'a password in the clear').decode())
 
 
-def test_every_value_a_stack_file_holds_sealed_is_ciphertext() -> None:
+def test_every_value_a_stack_file_holds_sealed_is_ciphertext(committed_stack_files: StackFiles) -> None:
     """Nothing under the sealed key is a secret in the clear, ported or sealed here.
 
     The ciphertexts ported from the legacy cluster are copied in by hand
     (declarative/workloads.md §5), and a hand can paste the wrong half of a
     manifest. `apps` holds them, so it has something under the key.
     """
-    held = committed_sealed()
+    held = committed_sealed(committed_stack_files)
 
     assert held.get(APPS)
     for stack, values in held.items():
@@ -2037,14 +2035,16 @@ def test_every_value_a_stack_file_holds_sealed_is_ciphertext() -> None:
             assert not unsealed, f'{stack}: {name} holds {unsealed} as something other than kubeseal ciphertext'
 
 
-def test_a_value_a_stack_file_holds_under_a_census_rows_name_carries_that_rows_keys() -> None:
+def test_a_value_a_stack_file_holds_under_a_census_rows_name_carries_that_rows_keys(
+    committed_stack_files: StackFiles,
+) -> None:
     """A value under the name of a census row is that row's, so no ported value is named like one.
 
     Both live under the one sealed key of the declaring stack, keyed by name:
     a writer key named like an application's own ported Secret would land
     beside that Secret's data keys, and the program would read the two as one.
     """
-    for stack, values in committed_sealed().items():
+    for stack, values in committed_sealed(committed_stack_files).items():
         for name, data in values.items():
             row = conventions.sealed.VALUES.get(name)
             if row is not None and row.stack == stack:

@@ -37,7 +37,7 @@ from typing import Any, cast
 import process_sessions
 import pytest
 import pytest_asyncio
-import yaml
+from committed_stack_files import StackFiles
 from mock_monitor import Recorder, declaring, run_with
 from node_selection import ARCHITECTURE_LABEL, NODES, matches, schedulable
 from pinned_image import COMMAND_TIMEOUT, CONTAINER_TIMEOUT, pinned, pulled, require_podman
@@ -48,8 +48,6 @@ from kluster.components.dns import base as dns_base
 from kluster.components.dns.record import zone_records
 from kluster.lib.k8s import sealed_ciphertext
 from kluster.lib.versions import ImagePin
-
-ROOT = Path(__file__).resolve().parents[1]
 
 NAMESPACE_TYPE = 'kubernetes:core/v1:Namespace'
 DEPLOYMENT = 'kubernetes:apps/v1:Deployment'
@@ -203,16 +201,14 @@ def test_the_relay_signs_under_the_selector_every_mail_zone_publishes_in_a_zone_
 # -- the SMTP credential ---------------------------------------------------------
 
 
-def stack_sealed_values() -> object:
+def stack_sealed_values(files: StackFiles) -> object:
     """What the `apps` stack's configuration holds under the sealed key, as the program reads it."""
-    project = yaml.safe_load((ROOT / 'Pulumi.yaml').read_text())['name']
-    config = yaml.safe_load((ROOT / f'Pulumi.{conventions.STACK_NAMES.apps}.yaml').read_text())['config']
-    return config[f'{project}:{conventions.sealed.CONFIG_KEY}']
+    return files.config(conventions.STACK_NAMES.apps)[f'{files.project}:{conventions.sealed.CONFIG_KEY}']
 
 
-def test_the_ported_credential_is_read_from_the_stack_configuration() -> None:
+def test_the_ported_credential_is_read_from_the_stack_configuration(committed_stack_files: StackFiles) -> None:
     """Each data key the relay reads is one the `apps` stack holds the ported ciphertext under."""
-    held = cast('dict[str, dict[str, str]]', stack_sealed_values())
+    held = cast('dict[str, dict[str, str]]', stack_sealed_values(committed_stack_files))
 
     assert sealed_ciphertext(SMTP, held) == {key: held[SMTP.name][key] for key in SMTP.keys}
 
