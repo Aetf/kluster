@@ -134,6 +134,14 @@ SITE_LABEL = 'topology.kubernetes.io/zone'
 #: scheduler preempts a free pod to place a held one that fits nowhere else.
 HELD_PRIORITY_CLASS = 'held'
 
+#: The `PriorityClass` a per-node agent runs at: a pod its DaemonSet keeps on
+#: the node it serves, the node exporter, NFD's worker and the GPU plugin
+#: among them. A free pod runs at 0 and a held one at `HELD_PRIORITY_CLASS`,
+#: which is below every class the system reserves, so neither can take a
+#: node's room from an agent, nor leave one pending it cannot preempt for.
+#: The class is the system's own, the one Cilium's agent runs at.
+NODE_AGENT_PRIORITY_CLASS = 'system-node-critical'
+
 #: A Service opts into a pool by carrying this label; the pools'
 #: `serviceSelector` matches on it.
 LB_POOL_LABEL = f'{LABEL_DOMAIN}/lb-pool'
