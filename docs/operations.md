@@ -2339,7 +2339,7 @@ cluster makes through it.
 3.  **No leader.** A member with no leader is cut off from the others
     or has lost quorum. The members reach one another over KubeSpan:
     the dashboard's Network row shows each member's connected peers and
-    the worker's scrapes of each control plane, and
+    whether each node reaches every node's host, and
     `mise x -- talosctl -n <node> get kubespanpeerstatuses` lists each
     peer and whether it is up. Two members down is quorum lost, which
     is §3's.

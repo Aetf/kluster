@@ -61,10 +61,12 @@ KUBEPRISM_PORT = 7445
 #: and etcd's health endpoints (`/health`, `/livez`, `/readyz`), never a key
 #: or a value. Talos starts etcd with none, so
 #: `components.talos.control_plane_patch` declares one. 2381 is none of
-#: Talos' fixed ports and none in Cilium's port table (rfc-007 §4.3). It takes
-#: no opening (`components.talos.HOST_OPENINGS`). Its readers are the
-#: operator, through the API server's node proxy (declarative/physical.md
-#: §6), and vmagent, from the worker over KubeSpan (`components.monitoring`).
+#: Talos' fixed ports and none in Cilium's port table (rfc-007 §4.3). A
+#: control plane opens it to the pod ranges alone
+#: (`components.talos.CONTROL_PLANE_OPENINGS`). Its readers are the operator,
+#: through the API server's node proxy (declarative/physical.md §6), and
+#: vmagent, a free pod, from whichever node it runs on
+#: (`components.monitoring`).
 ETCD_METRICS_PORT = 2381
 
 #: BGP (cluster-infra.md §2). The UDM's FRR is AS 65000; the cluster peers

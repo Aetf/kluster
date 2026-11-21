@@ -77,6 +77,7 @@ from kluster.conventions.schedule import ScheduledJob
 from kluster.lib.monitoring import readings
 from kluster.lib.monitoring.jobs import (
     APISERVER_JOB,
+    CILIUM_AGENT_JOB,
     ETCD_JOB,
     KUBE_STATE_METRICS_JOB,
     KUBELET_JOB,
@@ -1270,8 +1271,12 @@ def network(group: Group) -> Iterator[Case]:
     """A control plane's bond and its member link, KubeSpan, a dummy and a pod's link; another's bond; the worker's link.
 
     The bond carries what its member does, so the uplink is read by the bond.
-    etcd's peers and the worker's scrapes stand for KubeSpan's paths. And the
-    legacy cluster's series alone.
+    etcd's peers and each node's Cilium agent's probes of every node's host
+    stand for KubeSpan's paths: a path that missed a probe reads as down, an
+    agent its scrape missed, or one that publishes no count, reads as its
+    paths down, and a path not yet probed (`unknown`) and a health endpoint
+    that missed one (`type="endpoint"`) read as nothing. And the legacy
+    cluster's series alone.
     """
     until = _minutes(30)
     at = _minutes(20)
@@ -1303,12 +1308,16 @@ def network(group: Group) -> Iterator[Case]:
     drops = [(link('bond0'), 1.0), (link('enp0s6'), 0.0), (link(readings.KUBESPAN), 0.0), (link('dummy0'), 5.0)]
     peer = {JOB_LABEL: ETCD_JOB, 'node': CONTROL, 'Local': 'a'}
     blip = at - _minutes(2)
+    joining = conventions.CLOUD_NODES[2]
+    # An agent that answers its scrape and publishes no count, as one does
+    # before its first probe report.
+    silent = 'node-silent'
 
-    def up(job: str, node: str, value: float, down: dt.timedelta | None = None) -> Series:
-        points: dict[dt.timedelta, Point] = {start: value}
-        if down is not None:
-            points |= {down: 0, down + SCRAPE_INTERVAL: value}
-        return series('up', {JOB_LABEL: job, 'node': node, 'instance': f'{node}.internal'}, points, until)
+    def agent(node: str) -> dict[str, str]:
+        return {JOB_LABEL: CILIUM_AGENT_JOB, 'node': node, 'instance': f'{node}.internal:9962'}
+
+    def paths(node: str, kind: str, status: str, points: Mapping[dt.timedelta, Point]) -> Series:
+        return series(readings.NODE_HEALTH, {**agent(node), 'type': kind, 'status': status}, points, until)
 
     inputs = [
         *(
@@ -1325,11 +1334,17 @@ def network(group: Group) -> Iterator[Case]:
             'etcd_network_active_peers', {**peer, 'Remote': 'c'}, {start: 1, blip: 0, blip + SCRAPE_INTERVAL: 1}, until
         ),
         *(_server_id(member, until) for member in ('a', 'b', 'c')),
-        up(ETCD_JOB, CONTROL, 1),
-        up(NODE_EXPORTER_JOB, CONTROL, 1),
-        up(ETCD_JOB, peers, 1, down=blip),
-        up(NODE_EXPORTER_JOB, peers, 1),
-        up(NODE_EXPORTER_JOB, WORKER, 0),
+        *(series('up', agent(node), {start: 1}, until) for node in (CONTROL, peers, joining, silent)),
+        paths(CONTROL, 'node', 'unreachable', {start: 0}),
+        paths(CONTROL, 'node', 'reachable', {start: 8}),
+        paths(CONTROL, 'endpoint', 'unreachable', {start: 2}),
+        paths(peers, 'node', 'unreachable', {start: 0, blip: 2, blip + SCRAPE_INTERVAL: 0}),
+        paths(joining, 'node', 'unreachable', {start: 0}),
+        paths(joining, 'node', 'unknown', {start: 2}),
+        # The worker's agent stops answering its scrape: its counts go stale
+        # and its `up` reads 0.
+        series('up', agent(WORKER), {start: 1, blip: 0}, until),
+        paths(WORKER, 'node', 'unreachable', {start: 0, blip: STALE}),
     ]
     node = {'node': CONTROL}
     worker = {'node': WORKER}
@@ -1359,7 +1374,11 @@ def network(group: Group) -> Iterator[Case]:
                 ],
             ),
             Sample(at, group.record('etcd_active_peers'), [({**node, 'Remote': 'b'}, 1), ({**node, 'Remote': 'c'}, 0)]),
-            Sample(at, group.record('control_plane_scrapes_up'), [(node, 1), ({'node': peers}, 0)]),
+            Sample(
+                at,
+                group.record('kubespan_paths_reachable'),
+                [(node, 1), ({'node': peers}, 0), ({'node': joining}, 1), (worker, 0), ({'node': silent}, 0)],
+            ),
         ],
     )
     yield Case("the legacy cluster's nodes alone", _legacy(inputs), samples=_empty(group, at))

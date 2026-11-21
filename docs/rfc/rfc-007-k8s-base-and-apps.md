@@ -216,6 +216,15 @@
     rulings of 2026-11-19 and 2026-11-20 on Aetf/kluster-ops#78 hold no
     pod to a pool. This replaces the placement §7.1 and slice 11 gave
     monitoring.
+*   **Updated:** 2026-11-20 — §7.1, as
+    [Aetf/kluster-ops#893](https://github.com/Aetf/kluster-ops/issues/893)
+    built it: a control plane opens etcd's metrics listener to the pod
+    ranges alone, so vmagent reads its own node's from a control plane
+    too and is a free pod, with no home site, held priority or
+    toleration; the line above that holds it at the home site no longer
+    stands
+    ([declarative/physical.md](../declarative/physical.md) §2,
+    [declarative/cluster-infra.md](../declarative/cluster-infra.md) §1).
 *   **Authority:** AGENTS.md,
     [framework/dispatch.md](../framework/dispatch.md),
     [framework/rfc.md](../framework/rfc.md) and the style rules

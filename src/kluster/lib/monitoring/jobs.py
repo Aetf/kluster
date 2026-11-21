@@ -10,7 +10,15 @@ from __future__ import annotations
 
 import datetime as dt
 
-__all__ = ('APISERVER_JOB', 'ETCD_JOB', 'KUBELET_JOB', 'KUBE_STATE_METRICS_JOB', 'NODE_EXPORTER_JOB', 'SCRAPE_INTERVAL')
+__all__ = (
+    'APISERVER_JOB',
+    'CILIUM_AGENT_JOB',
+    'ETCD_JOB',
+    'KUBELET_JOB',
+    'KUBE_STATE_METRICS_JOB',
+    'NODE_EXPORTER_JOB',
+    'SCRAPE_INTERVAL',
+)
 
 #: How often vmagent scrapes every job, the chart's kubelet scrapes and
 #: etcd's included: one interval, so that a rate over a window reads the same
@@ -26,6 +34,12 @@ ETCD_JOB = 'etcd'
 #: metrics and cAdvisor's alike, which the monitoring component's relabeling
 #: writes (`components.monitoring.KUBELET_RELABELING`) as the chart's own does.
 KUBELET_JOB = 'kubelet'
+
+#: The `job` the Cilium agent's own series carry, which its scrape writes along
+#: with each series' node (`components.monitoring.CILIUM_AGENT_ENDPOINT`).
+#: Stated, because the operator's default is the scrape object's namespace and
+#: name, and the object's name is autonamed.
+CILIUM_AGENT_JOB = 'cilium-agent'
 
 #: The `job` the node exporter's series carry: the chart's scrape of it takes
 #: the job from its Service's `jobLabel` label (`values.yaml` L2201 at stack
