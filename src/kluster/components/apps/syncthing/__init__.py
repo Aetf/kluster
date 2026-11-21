@@ -84,7 +84,7 @@ import pulumi
 import pulumi_kubernetes as k8s
 
 from kluster.components.apps import Backend, Exposed, Fronts, declared_constraints, dialed_names, expose
-from kluster.components.apps.storage import Claim, NasClaim, claim, nas_claim
+from kluster.components.apps.storage import Claim, NasClaim, backed, claim, nas_claim
 from kluster.conventions.backup import STANDARD
 from kluster.conventions.cluster import Transports
 from kluster.conventions.routes import Exposure, Port
@@ -311,10 +311,9 @@ class Syncthing(Component, pulumi_type='kluster:apps:Syncthing'):
             f'{name}-state',
             'state',
             _STATE_SIZE,
-            STANDARD,
+            backed(STANDARD, writer_key),
             namespace=NAME,
             uid=USER,
-            writer_key=writer_key,
             constraints=self.constraints & self.sync.constraints,
             opts=in_namespace,
         )

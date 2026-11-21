@@ -3,11 +3,12 @@
 Two calls, and a class for a node volume that is not a call at all
 (declarative/workloads.md §2, rfc-008 §4.2):
 
--   **`claim`** is the one claim on a node. Its `retention` is required: a
-    retention class (`conventions.backup`), which backs the claim up to the
-    bucket on the class's schedule, or `off('<reason>')`, which emits the claim
-    alone, so that an unbacked claim is a decision on record rather than an
-    omission. A claim of a node volume is an ordinary `claim` whose
+-   **`claim`** is the one claim on a node. Its `retention` is required:
+    `backed(<class>, <key>)`, a retention class (`conventions.backup`) with
+    the namespace's writer key, which backs the claim up to the bucket on the
+    class's schedule, or `off('<reason>')`, which emits the claim alone and
+    takes no key, so that an unbacked claim is a decision on record rather
+    than an omission. A claim of a node volume is an ordinary `claim` whose
     `storage_class` is `conventions.node_volume_class(row)`.
 -   **`nas_claim`** is a static PersistentVolume over a path of the host's one
     export and its claim, for data the cluster does not own, scheduled to the
@@ -129,11 +130,13 @@ __all__ = (
     'MOVER_LABEL',
     'MOVER_RESOURCES',
     'RSYNC_TLS_PORT',
+    'Backed',
     'Claim',
     'Move',
     'MoveOffBinder',
     'NasClaim',
     'Off',
+    'backed',
     'claim',
     'claim_hold',
     'claim_name',
@@ -184,6 +187,25 @@ def off(reason: str) -> Off:
     return Off(reason)
 
 
+@dataclass(frozen=True)
+class Backed:
+    """A claim backed up under a retention class, and the writer key its repository Secret carries."""
+
+    retention: RetentionClass
+    writer_key: Mapping[str, pulumi.Input[str]]
+    """The ciphertext of the namespace's sealed writer key, as the program read it."""
+
+
+def backed(retention: RetentionClass, writer_key: Mapping[str, pulumi.Input[str]]) -> Backed:
+    """A backup under `retention`, written with `writer_key`, which is refused unless it holds a mover's fields."""
+    if frozenset(writer_key) != WRITER_KEY_FIELDS:
+        raise ValueError(
+            f'a writer key under {retention.name!r} holds {sorted(writer_key)}, '
+            f'and a repository Secret carries {sorted(WRITER_KEY_FIELDS)}'
+        )
+    return Backed(retention, writer_key)
+
+
 def claim_name(name: str, generation: int) -> str:
     """The name of a claim of one generation, which its restic source shares."""
     return f'{name}-g{generation}'
@@ -228,11 +250,10 @@ def claim(
     resource_name: str,
     name: str,
     size: int,
-    retention: RetentionClass | Off,
+    retention: Backed | Off,
     *,
     namespace: str,
     uid: int,
-    writer_key: Mapping[str, pulumi.Input[str]],
     constraints: Constraints,
     generation: int = 0,
     moving_to: Mapping[str, str] | None = None,
@@ -255,16 +276,26 @@ def claim(
     :param name: The base name, which the claim's of each generation, the
         repository's path and its Secret are derived from.
     :param size: The claim's size, in GiB.
-    :param retention: A retention class, or `off` with its reason.
+    :param retention: `backed(<class>, <key>)` or `off('<reason>')`. Under
+        `backed`, the key is the ciphertext of the namespace's sealed writer
+        key, as the program read it, sealed namespace-wide so that it opens
+        under the repository Secret's name
+        (`kluster.lib.k8s.sealed_ciphertext`). The class and the key are one
+        value because each is correct only with the other: a claim under a
+        class with no key, and a claim under `off` with one, do not
+        type-check. `off` has no writer scope, so a namespace's `volsync`
+        family is minted only where a claim of it is under a class
+        (`conventions.backup.BACKED_NAMESPACES`), and the key a namespace
+        whose claims are all `off` could hand is one of another family. A
+        move changes neither: its pair copies over `rsync-tls` with the key
+        VolSync generates for it (`_pair`), and reaches no bucket, so a
+        moving claim takes what its retention does.
     :param namespace: The application's namespace, which the repository's
         path is under; the caller's `opts` carries the dependency on the
         Namespace resource, since this is a plain name.
     :param uid: The user the workload runs as, and so every mover, which has
         to read and write the data as the workload does; the mover's group
         and its volumes' group take the same number.
-    :param writer_key: The ciphertext of the namespace's sealed writer key, as
-        the program read it, sealed namespace-wide so that it opens under the
-        repository Secret's name (`kluster.lib.k8s.sealed_ciphertext`).
     :param constraints: Every node constraint the workload is under: a pod
         that mounts a `nas_claim` beside this claim states its home site
         (`NasClaim.constraints`), a pod that mounts a second claim hands
@@ -305,13 +336,9 @@ def claim(
     if size < 1:
         raise ValueError(f'{resource_name}: a claim is at least 1 GiB, and {name!r} asks for {size}')
     copy = _copy(resource_name, name, generation, moving_to, stopped, constraints.binder_requirements)
-    if frozenset(writer_key) != WRITER_KEY_FIELDS:
-        raise ValueError(
-            f'{resource_name}: the writer key of {namespace!r} holds {sorted(writer_key)}, '
-            f'and a repository Secret carries {sorted(WRITER_KEY_FIELDS)}'
-        )
+    backing = retention if isinstance(retention, Backed) else None
 
-    backed = isinstance(retention, RetentionClass)
+    backed = backing is not None
     mover = constraints.binder_requirements if backed else ()
     try:
         held = constraints & claim_hold(
@@ -335,7 +362,7 @@ def claim(
     repository: crds.bitnami.v1alpha1.SealedSecret | None = None
     move: Move | None = None
 
-    if isinstance(retention, RetentionClass):
+    if backing is not None:
         password = random.RandomPassword(
             f'{resource_name}-restic-password',
             length=64,
@@ -347,7 +374,7 @@ def claim(
             opts=pulumi.ResourceOptions.merge(opts, pulumi.ResourceOptions(protect=True)),
         )
         repository = _repository(
-            resource_name, name, namespace=namespace, password=password, writer_key=writer_key, opts=opts
+            resource_name, name, namespace=namespace, password=password, writer_key=backing.writer_key, opts=opts
         )
 
     if copy is not None:
@@ -373,23 +400,30 @@ def claim(
         # The copied claim keeps its own source until the finish removes both:
         # a source on the new claim would back up a claim the copy has not
         # filled, on its first reconcile.
-        if isinstance(retention, RetentionClass):
+        if backing is not None:
             sources.append(
                 _restic(
                     resource_name,
                     name,
                     generation - 1,
-                    retention,
+                    backing.retention,
                     namespace=namespace,
                     uid=uid,
                     affinity=affinity,
                     opts=opts,
                 )
             )
-    elif isinstance(retention, RetentionClass):
+    elif backing is not None:
         sources.append(
             _restic(
-                resource_name, name, generation, retention, namespace=namespace, uid=uid, affinity=affinity, opts=opts
+                resource_name,
+                name,
+                generation,
+                backing.retention,
+                namespace=namespace,
+                uid=uid,
+                affinity=affinity,
+                opts=opts,
             )
         )
 

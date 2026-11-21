@@ -99,7 +99,7 @@ from kluster import conventions
 from kluster.components.apps import Backend, Exposed, Fronts, declared_constraints, expose
 from kluster.components.apps.exim import HOST as SMTP_HOST
 from kluster.components.apps.exim import PORT as SMTP_PORT
-from kluster.components.apps.storage import Claim, claim
+from kluster.components.apps.storage import Claim, backed, claim
 from kluster.components.monitoring.operator_objects import operator_object
 from kluster.components.monitoring.rules import RuleGroup, rule_group_spec, scheduled_job_rules
 from kluster.conventions.alert import Playbook
@@ -908,10 +908,9 @@ class Authelia(Component, pulumi_type='kluster:apps:Authelia'):
             f'{name}-storage',
             _CLAIM,
             _CLAIM_GIB,
-            PRECIOUS,
+            backed(PRECIOUS, writer_key),
             namespace=NAMESPACE,
             uid=AUTHELIA_USER,
-            writer_key=writer_key,
             constraints=self.constraints,
             protect=True,
             opts=behind,

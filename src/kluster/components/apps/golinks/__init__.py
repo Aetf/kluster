@@ -35,7 +35,7 @@ import pulumi_kubernetes as k8s
 
 from kluster import conventions
 from kluster.components.apps import Backend, Exposed, Fronts, declared_constraints, expose
-from kluster.components.apps.storage import Claim, claim
+from kluster.components.apps.storage import Claim, backed, claim
 from kluster.conventions.backup import STANDARD
 from kluster.conventions.routes import Bare, Exposure, Proxied, Route
 from kluster.lib.k8s import ApplicationNamespace, application_namespace
@@ -137,10 +137,9 @@ class Golinks(Component, pulumi_type='kluster:apps:Golinks'):
             f'{name}-data',
             'data',
             _DATA_SIZE,
-            STANDARD,
+            backed(STANDARD, writer_key),
             namespace=NAME,
             uid=USER,
-            writer_key=writer_key,
             constraints=self.constraints,
             opts=self.child_opts(depends_on=[self.namespace.namespace]),
         )

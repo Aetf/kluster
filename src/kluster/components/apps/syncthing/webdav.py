@@ -30,7 +30,7 @@ import pulumi
 import pulumi_kubernetes as k8s
 
 from kluster.components.apps import Backend, Exposed, Fronts, declared_constraints, expose
-from kluster.components.apps.storage import Claim, NasClaim, claim, nas_claim
+from kluster.components.apps.storage import Claim, NasClaim, backed, claim, nas_claim
 from kluster.components.apps.syncthing import SYNC
 from kluster.conventions.backup import STANDARD
 from kluster.conventions.routes import Exposure
@@ -111,10 +111,9 @@ class WebDav(Component, pulumi_type='kluster:apps:WebDav'):
             f'{name}-files',
             'files',
             _FILES_SIZE,
-            STANDARD,
+            backed(STANDARD, writer_key),
             namespace=NAME,
             uid=USER,
-            writer_key=writer_key,
             constraints=self.constraints & self.stuff.constraints,
             opts=in_namespace,
         )

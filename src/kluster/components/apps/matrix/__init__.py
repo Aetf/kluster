@@ -54,7 +54,7 @@ import pulumi_kubernetes as k8s
 
 from kluster import conventions
 from kluster.components.apps import Backend, Exposed, Fronts, declared_constraints, expose, issuer_aliases
-from kluster.components.apps.storage import Claim, claim
+from kluster.components.apps.storage import Claim, backed, claim
 from kluster.conventions.backup import PRECIOUS
 from kluster.conventions.routes import Exposure, Held, Proxied, Route
 from kluster.lib import templates
@@ -485,10 +485,9 @@ class Matrix(Component, pulumi_type='kluster:apps:Matrix'):
             f'{name}-data',
             _CLAIM,
             _CLAIM_GIB,
-            PRECIOUS,
+            backed(PRECIOUS, writer_key),
             namespace=NAMESPACE,
             uid=MATRIX_USER,
-            writer_key=writer_key,
             constraints=self.constraints,
             protect=True,
             opts=behind,

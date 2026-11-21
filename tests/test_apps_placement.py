@@ -256,8 +256,6 @@ def _components() -> dict[str, Declared]:
             exposure=Exposure(ports=(Port('hh-serve', 60123, Transports.TCP, internet=Dedicated()),)),
             image=pin('hath'),
             login=sealed(hath_app.PORTED.keys),
-            # What `claim` takes whatever the retention; no mover of an `off` claim reads it.
-            writer_key=writer_key(hath_app.NAMESPACE),
             started=True,
             fronts=FRONTS,
             zone_ids=ZONE_IDS,

@@ -71,8 +71,6 @@ SERVE = Port('hh-serve', 60123, Transports.TCP, internet=Dedicated())
 CLIENT = Exposure(ports=(SERVE,))
 
 IMAGE = ImagePin('registry.example.invalid/hath', 'v9.9.9', f'sha256:{"5" * 64}')
-#: What `claim` takes whatever the retention; no mover of an `off` claim reads it.
-WRITER_KEY = {'AWS_ACCESS_KEY_ID': 'hath-id', 'AWS_SECRET_ACCESS_KEY': 'hath-secret'}
 #: Ciphertext of each key of the ported Secret, which names the key.
 CIPHERTEXT = {key: f'sealed-{key}' for key in hath_app.PORTED.keys}
 
@@ -82,7 +80,6 @@ def declare(**changed: Any) -> None:
         'exposure': CLIENT,
         'image': IMAGE,
         'login': CIPHERTEXT,
-        'writer_key': WRITER_KEY,
         'started': True,
         'fronts': FRONTS,
         'zone_ids': ZONE_IDS,

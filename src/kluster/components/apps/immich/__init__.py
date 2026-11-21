@@ -844,9 +844,6 @@ class Immich(Component, pulumi_type='kluster:apps:Immich'):
             off('the models, which the service downloads again'),
             namespace=NAMESPACE,
             uid=USER,
-            # Read by no mover under `off`; the namespace's one writer key is
-            # the barman family's.
-            writer_key=writer_key,
             constraints=self.constraints & GPU_HOLD,
             opts=behind,
         )

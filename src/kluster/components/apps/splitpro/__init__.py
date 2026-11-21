@@ -50,7 +50,7 @@ import pulumi_kubernetes as k8s
 from kluster import conventions
 from kluster.components.apps import Backend, Exposed, Fronts, declared_constraints, expose, issuer_aliases
 from kluster.components.apps.database import API_CLIENTS, Database, Drill, Recovery, Resources, database
-from kluster.components.apps.storage import Claim, claim
+from kluster.components.apps.storage import Claim, backed, claim
 from kluster.conventions.backup import PRECIOUS
 from kluster.conventions.routes import Exposure, Held, Proxied, Route
 from kluster.lib.k8s import (
@@ -558,10 +558,9 @@ class SplitPro(Component, pulumi_type='kluster:apps:SplitPro'):
             f'{name}-receipts',
             _RECEIPTS,
             _RECEIPTS_GIB,
-            PRECIOUS,
+            backed(PRECIOUS, receipts_writer_key),
             namespace=NAMESPACE,
             uid=SPLITPRO_USER,
-            writer_key=receipts_writer_key,
             constraints=self.constraints,
             protect=True,
             opts=behind,
