@@ -80,6 +80,7 @@ operator-stack = 'kluster.scripts.operator_stack.cli:main'
 stack-plan = 'kluster.scripts.stack_plan.cli:main'
 typecheck = 'kluster.scripts.typecheck:main'
 perf = 'kluster.scripts.perf.cli:main'
+checks-scope = 'kluster.scripts.checks_scope:main'
 
 [dependency-groups]
 dev = [

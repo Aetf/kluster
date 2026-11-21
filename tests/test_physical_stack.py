@@ -37,6 +37,7 @@ import pulumi
 import pytest
 import pytest_asyncio
 import yaml
+from committed_stack_files import StackFiles
 from device_places import DEVICE_FILE, DEVICE_TYPE_PREFIX, PLACES, stated_type
 from google.protobuf import json_format
 from mock_monitor import Recorder, declaring, run_under_backstop
@@ -1776,7 +1777,7 @@ def test_the_signing_configuration_is_read_from_the_keys_the_mint_writes() -> No
     assert APPLICATION_KEY == derived.B2_KEY_KEY
 
 
-def test_no_provider_namespace_is_configured_at_all() -> None:
+def test_no_provider_namespace_is_configured_at_all(committed_stack_files: StackFiles) -> None:
     """Every key the committed configuration holds belongs to this repository or the engine (rfc-002 §8.1, §10.3).
 
     A provider namespace is configuration acting at a distance: the same
@@ -1788,9 +1789,8 @@ def test_no_provider_namespace_is_configured_at_all() -> None:
     program reads (framework/pulumi.md §3.2). The packages are the ones the
     stack file disables the defaults of.
     """
-    root = Path(__file__).resolve().parents[1]
-    project = yaml.safe_load((root / 'Pulumi.yaml').read_text())
-    stack = yaml.safe_load((root / f'Pulumi.{conventions.PHYSICAL}.yaml').read_text())['config']
+    project = yaml.safe_load((committed_stack_files.directory / 'Pulumi.yaml').read_text())
+    stack = committed_stack_files.config(conventions.PHYSICAL)
     namespaces = {key.partition(':')[0] for key in [*stack, *project['config']]}
     packages = set(stack['pulumi:disable-default-providers'])
 
@@ -1998,7 +1998,7 @@ def test_every_talos_call_is_signed_by_the_stack_programs_provider(ran: Run) -> 
 NOT_PACKAGES = frozenset({'pulumi', 'pulumi-python', 'kluster'})
 
 
-def test_every_package_the_program_uses_has_its_default_disabled(ran: Run) -> None:
+def test_every_package_the_program_uses_has_its_default_disabled(ran: Run, committed_stack_files: StackFiles) -> None:
     """The committed configuration turns a missed provider into an error.
 
     A resource or invoke that misses its explicit provider falls back to the
@@ -2016,9 +2016,6 @@ def test_every_package_the_program_uses_has_its_default_disabled(ran: Run) -> No
     used = {typ.partition(':')[0] for typ in ran.recorded.types} | {
         token.partition(':')[0] for token, _ in ran.recorded.called
     }
-    # The checkout this file sits in, not `workstation.repo_root()`: the
-    # installation points that at a scratch directory.
-    committed = Path(__file__).resolve().parents[1] / f'Pulumi.{conventions.PHYSICAL}.yaml'
-    config = yaml.safe_load(committed.read_text())['config']
+    config = committed_stack_files.config(conventions.PHYSICAL)
 
     assert set(config['pulumi:disable-default-providers']) == used - NOT_PACKAGES

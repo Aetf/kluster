@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import cast, get_args
 
 import pytest
-import yaml
+from committed_stack_files import StackFiles
 from credentials_command_tree import commands as cli_commands
 from credentials_command_tree import named_commands, quoted_commands
 from cryptography import x509
@@ -687,7 +687,7 @@ NOT_CREDENTIALS: Mapping[str, str] = {
 }
 
 
-def committed_secrets() -> dict[str, set[str]]:
+def committed_secrets(files: StackFiles) -> dict[str, set[str]]:
     """Every `secure:` key in every committed `Pulumi.<stack>.yaml`, by stack, in the map's own key form.
 
     Read out of the files rather than listed, for the reason §3 is read out of
@@ -699,20 +699,18 @@ def committed_secrets() -> dict[str, set[str]]:
     one (rfc-002 §8.1 puts no credential of this repository in a provider's
     namespace).
     """
-    project = pulumi_config.project_dir()
-    prefix = f'{yaml.safe_load((project / "Pulumi.yaml").read_text())["name"]}:'
+    prefix = f'{files.project}:'
     found: dict[str, set[str]] = {}
-    for path in sorted(project.glob('Pulumi.*.yaml')):
-        stack = path.name.removeprefix('Pulumi.').removesuffix('.yaml')
-        config = cast('dict[str, object]', yaml.safe_load(path.read_text()).get('config') or {})
+    for stack in files.stacks():
+        config = files.config(stack)
         found[stack] = {
             key.removeprefix(prefix) for key, value in config.items() if isinstance(value, dict) and 'secure' in value
         }
     return found
 
 
-def test_every_committed_config_secret_is_a_slot_map_target() -> None:
-    committed = committed_secrets()
+def test_every_committed_config_secret_is_a_slot_map_target(committed_stack_files: StackFiles) -> None:
+    committed = committed_secrets(committed_stack_files)
     # Spelled out so that a glob or a parse that stopped matching cannot make
     # the comparison below pass by finding nothing to compare.
     assert set(committed) >= {PHYSICAL_STACK, DNS_STACK}
@@ -740,8 +738,8 @@ def test_every_committed_config_secret_is_a_slot_map_target() -> None:
     assert unmapped == []
 
 
-def test_the_exemptions_are_committed_and_not_delivered() -> None:
-    committed = {key for keys in committed_secrets().values() for key in keys}
+def test_the_exemptions_are_committed_and_not_delivered(committed_stack_files: StackFiles) -> None:
+    committed = {key for keys in committed_secrets(committed_stack_files).values() for key in keys}
     delivered = {
         target.key for row in slots.ROWS.values() for target in row.targets if isinstance(target, slots.PulumiConfig)
     }

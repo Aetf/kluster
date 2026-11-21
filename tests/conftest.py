@@ -34,6 +34,10 @@ refused or a duplicate URN among them, or in an output nothing declared reads
 -- that nothing the case awaited received
 (`mock_monitor.fail_on_unreceived_failures`).
 
+The committed stack files are read through one fixture, which a plugin
+module of its own carries with the hook that marks the cases asking for it
+(`committed_stack_files`); this file loads it for every suite.
+
 The last two are workarounds for the Pulumi SDK, each kept apart so that it
 can be deleted whole: `mocked_runs_release_their_tasks` drops from the SDK's
 set of tracked outputs every task whose event loop has closed; and the last
@@ -88,6 +92,8 @@ if TYPE_CHECKING:
 # conftest above this one; a test module added outside this tree would be
 # outside this too.
 root_credentials.strip(os.environ)
+
+pytest_plugins = ('committed_stack_files',)
 
 #: Argon2 at its cheapest, in the names KDBX gives the parameters: one pass
 #: (`I`), one lane (`P`), and the least memory the algorithm accepts for one
