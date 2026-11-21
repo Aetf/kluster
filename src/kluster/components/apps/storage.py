@@ -11,7 +11,9 @@ Two calls, and a class for a node volume that is not a call at all
     `storage_class` is `conventions.node_volume_class(row)`.
 -   **`nas_claim`** is a static PersistentVolume over a path of the host's one
     export and its claim, for data the cluster does not own, scheduled to the
-    home site alone, since no node elsewhere can reach the export.
+    home site alone, since no node elsewhere can reach the export. The two
+    are named with a digest of what neither can change once it exists, so a
+    change to any of it is a new volume and claim.
 
 **A backed claim** carries a VolSync `ReplicationSource` with the restic mover,
 `copyMethod: Direct` since `local-path` has no snapshots, to the repository at
@@ -72,6 +74,8 @@ host before the application that writes it lands (rfc-008 §4.2).
 
 from __future__ import annotations
 
+import hashlib
+import json
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -89,6 +93,7 @@ from kluster.conventions.cluster import RETENTION_LABEL, WRITER_KEY_FIELDS
 from kluster.conventions.sealed import SealingScope
 from kluster.lib.k8s import (
     HOME_NODE_SELECTOR,
+    HOME_NODE_SELECTOR_JSON,
     BackedVolumeBesideNodeVolume,
     Constraints,
     Keeper,
@@ -727,6 +732,16 @@ _NAS_NOMINAL_SIZE = '1Gi'
 _ON_THE_NAS = at_home("mounts the NAS's export, which only the home site reaches (physical/homelab-host.md §5)")
 
 
+#: How many hex digits of the digest a NAS claim's name carries.
+_NAS_DIGEST_DIGITS = 8
+
+
+def _nas_claim_name(name: str, fixed: Mapping[str, Any]) -> str:
+    """The name of a NAS claim: its base name and a digest of the fields its volume and it cannot change."""
+    canonical = json.dumps(fixed, sort_keys=True, separators=(',', ':'))
+    return f'{name}-{hashlib.sha256(canonical.encode()).hexdigest()[:_NAS_DIGEST_DIGITS]}'
+
+
 @dataclass(frozen=True)
 class NasClaim:
     """What `nas_claim` emitted: the volume, bound to its claim alone, and the claim."""
@@ -759,12 +774,24 @@ def nas_claim(
     class no StorageClass answers to, so no provisioner touches either, and it
     reclaims `Retain`: removing the claim never touches the data.
 
+    **Its name carries what neither object can change.** The API server
+    refuses a change to a volume's source and node affinity once it exists,
+    and to a claim's spec, whose request only a class that allows expansion
+    may grow, and no StorageClass answers to the NAS's; so `name` is a base
+    name, and the claim and the volume carry it with a digest of those fields
+    as declared (`_nas_claim_name`), as a claim moved to a new generation
+    carries the generation (`claim_name`). A change to any of them is a volume and a claim
+    of a new name: both are created, the workload, which mounts the claim by
+    its name, rolls onto the new one, and the old claim and volume are
+    deleted after it, unmounted and then unbound.
+
     A pod writes through it as the export's anonymous user, whatever it runs as
     (`conventions.NAS_EXPORT`).
 
     :param resource_name: The logical name, which carries the declaring
         component's name.
-    :param name: The claim's name in its namespace.
+    :param name: The claim's base name in its namespace; the claim is named
+        `NasClaim.claim`'s `metadata.name`, which a pod mounts.
     :param namespace: The claim's namespace; the caller's `opts` carries the
         dependency on the Namespace resource, since this is a plain name.
     :param path: The path under the export, relative, the empty string for the
@@ -775,35 +802,49 @@ def nas_claim(
     if path.startswith('/') or '..' in parts or '.' in parts:
         raise ValueError(f'{resource_name}: a NAS path is relative to the export and stays under it, not {path!r}')
     access = 'ReadOnlyMany' if read_only else 'ReadWriteMany'
-    volume_name = f'{namespace}-{name}'
+    server = str(conventions.HOMELAB_HOST_LEG_IPV4)
+    export_path = '/'.join([conventions.NAS_EXPORT, *parts])
+    requests = {'storage': _NAS_NOMINAL_SIZE}
+    # Each value below is the one the specs further down declare, as the
+    # Kubernetes API spells the field: the volume's source and node affinity,
+    # and the claim's spec but its `volumeName`, which is this name itself.
+    # `HOME_NODE_SELECTOR_JSON` is the typed selector's JSON, written with it.
+    claim_name = _nas_claim_name(
+        name,
+        {
+            'volume': {
+                'nfs': {'server': server, 'path': export_path, 'readOnly': read_only},
+                'nodeAffinity': {'required': HOME_NODE_SELECTOR_JSON},
+            },
+            'claim': {
+                'accessModes': [access],
+                'storageClassName': conventions.SC_NAS,
+                'resources': {'requests': requests},
+            },
+        },
+    )
     volume = k8s.core.v1.PersistentVolume(
         f'{resource_name}-nas',
-        metadata=k8s.meta.v1.ObjectMetaArgs(name=volume_name),
+        metadata=k8s.meta.v1.ObjectMetaArgs(name=f'{namespace}-{claim_name}'),
         spec=k8s.core.v1.PersistentVolumeSpecArgs(
             capacity={'storage': _NAS_NOMINAL_SIZE},
             access_modes=[access],
             persistent_volume_reclaim_policy='Retain',
             storage_class_name=conventions.SC_NAS,
-            claim_ref=k8s.core.v1.ObjectReferenceArgs(namespace=namespace, name=name),
-            nfs=k8s.core.v1.NFSVolumeSourceArgs(
-                server=str(conventions.HOMELAB_HOST_LEG_IPV4),
-                path='/'.join([conventions.NAS_EXPORT, *parts]),
-                read_only=read_only,
-            ),
-            # Immutable once the volume is created: the API server refuses a
-            # change to it, so a different affinity is a new volume and claim.
+            claim_ref=k8s.core.v1.ObjectReferenceArgs(namespace=namespace, name=claim_name),
+            nfs=k8s.core.v1.NFSVolumeSourceArgs(server=server, path=export_path, read_only=read_only),
             node_affinity=k8s.core.v1.VolumeNodeAffinityArgs(required=HOME_NODE_SELECTOR),
         ),
         opts=opts,
     )
     volume_claim = k8s.core.v1.PersistentVolumeClaim(
         f'{resource_name}-nas',
-        metadata=k8s.meta.v1.ObjectMetaArgs(name=name, namespace=namespace),
+        metadata=k8s.meta.v1.ObjectMetaArgs(name=claim_name, namespace=namespace),
         spec=k8s.core.v1.PersistentVolumeClaimSpecArgs(
             access_modes=[access],
             storage_class_name=conventions.SC_NAS,
             volume_name=volume.metadata.name,
-            resources=k8s.core.v1.VolumeResourceRequirementsArgs(requests={'storage': _NAS_NOMINAL_SIZE}),
+            resources=k8s.core.v1.VolumeResourceRequirementsArgs(requests=requests),
         ),
         opts=opts,
     )

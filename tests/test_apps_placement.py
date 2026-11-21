@@ -610,6 +610,19 @@ def test_a_pod_that_mounts_a_nas_claim_admits_exactly_the_nodes_its_volume_does(
                 assert schedulable(pod.spec) == selected(term, NODES), (pod.namespace, pod.name)
 
 
+def test_every_nas_claim_is_mounted_by_a_pod_of_its_namespace(program: Program) -> None:
+    """A NAS claim's name carries a digest of what its volume and it cannot change, so a pod mounts it by the name it was given.
+
+    A pod that named it any other way, by its base name say, would mount a
+    claim that is not there, and the claim would serve nothing.
+    """
+    mounted = {(pod.namespace, it) for pod in pods(program.monitor) for it in pod.claims}
+    claims = set(nas_volumes(program.monitor))
+
+    assert claims
+    assert claims <= mounted, sorted(claims - mounted)
+
+
 def test_a_restic_mover_admits_exactly_the_nodes_its_workload_does(program: Program) -> None:
     """A claim binds where the first of its mover and its workload is placed, so the two admit one set of nodes."""
     by_claim = {(pod.namespace, it): pod for pod in pods(program.monitor) for it in pod.claims}
