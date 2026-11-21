@@ -20,6 +20,8 @@ import datetime as dt
 import json
 import os
 import re
+import signal
+import sys
 import tomllib
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
@@ -40,7 +42,7 @@ from kluster.scripts.credentials import devices, oci_recovery
 from kluster.scripts.drill import capacity, chain, cli, readings, record, scope, steps, tools
 from kluster.scripts.drill.readings import NoReading
 from kluster.scripts.drill.record import Verdict
-from kluster.scripts.drill.tools import Completed, Environments, Mode
+from kluster.scripts.drill.tools import Completed, Mode
 from kluster.scripts.perf import cluster
 from kluster.stacks import physical
 
@@ -49,6 +51,14 @@ RUNBOOK = ROOT / 'docs' / 'operations.md'
 
 #: A fixed moment every case's clock reads.
 NOW = dt.datetime(2026, 11, 21, 8, 0, tzinfo=dt.UTC)
+
+#: The environment `mise x` starts the drill with: the stack passphrase and
+#: the estate's backend, both from the checkout's slots.
+BASE = {
+    'PATH': os.environ.get('PATH', ''),
+    'PULUMI_CONFIG_PASSPHRASE': 'the-stack-passphrase',
+    'PULUMI_BACKEND_URL': 'postgres://operator@192.0.2.10:5432/pulumi_state',
+}
 
 #: What the stand-in prints under `--show-secrets` and nowhere else.
 SECRET = 'a-value-only-show-secrets-prints'
@@ -304,11 +314,17 @@ class Drill:
         context.kubeconfig = self.checkout / 'home' / 'kubeconfig'
         context.talosconfig = self.checkout / 'home' / 'talosconfig'
 
-    def run(self, step: str | None = None, *, require_main: Callable[[Path], None] = lambda _: None) -> int:
+    def run(
+        self,
+        step: str | None = None,
+        *,
+        require_main: Callable[[Path], None] = lambda _: None,
+        base: dict[str, str] = BASE,
+    ) -> int:
         return cli.rebuild(
             self.checkout,
             step,
-            base={'PATH': os.environ.get('PATH', ''), 'PULUMI_CONFIG_PASSPHRASE': 'the-stack-passphrase'},
+            base=base,
             helm=self.checkout / 'helm',
             ask=self.person,
             say=self.said.append,
@@ -557,30 +573,38 @@ def test_a_value_printed_under_show_secrets_never_reaches_the_run_directory(dril
     assert SECRET in (drill.checkout / 'home' / 'kubeconfig').read_text(), 'the client configuration was not written'
 
 
-def test_every_command_runs_under_cis_helm_environment_and_its_stacks_passphrase(drill: Drill, tmp_path: Path) -> None:
-    helm = tmp_path / 'helm'
-    environments = Environments(
-        base={
-            'PULUMI_CONFIG_PASSPHRASE': 'the-stack-passphrase',
-            'PULUMI_CONFIG_PASSPHRASE_FILE': '/elsewhere/passphrase',
-            'HELM_REPOSITORY_CONFIG': '/caller/repositories.yaml',
-            'PULUMI_K8S_HELM_REPOSITORY_CACHE': '/caller/cache',
-        },
-        helm=helm,
-        physical=lambda: 'physicals-own-passphrase',
+@pytest.mark.parametrize('backend', [None, ''], ids=['absent', 'empty'])
+def test_a_pulumi_run_whose_environment_names_no_backend_is_refused_before_it_starts(
+    drill: Drill, backend: str | None
+) -> None:
+    base = {name: value for name, value in BASE.items() if name != 'PULUMI_BACKEND_URL'}
+    if backend is not None:
+        base['PULUMI_BACKEND_URL'] = backend
+
+    assert drill.run('0', base=base) == cli.STOPPED
+
+    assert drill.stand.ran('pulumi') == []
+    assert 'names no PULUMI_BACKEND_URL' in (drill.directory / 'step-0.log').read_text()
+
+
+#: A child that writes, to the file it is handed, the disposition of SIGINT
+#: it started with: `SIG_IGN` where it inherited an ignored one, and Python's
+#: own handler where it started at the default.
+SIGINT_AT_START = 'import signal, sys; open(sys.argv[1], "w").write(str(signal.getsignal(signal.SIGINT)))'
+
+
+@pytest.mark.parametrize('mode', list(Mode))
+def test_a_command_starts_with_sigint_at_its_default_in_every_mode(mode: Mode, tmp_path: Path) -> None:
+    # The drill ignores SIGINT while a command runs, so that the command
+    # answers a ^C itself; a disposition left ignored would survive `exec`.
+    written = tmp_path / 'sigint'
+
+    done = tools.shell(
+        [sys.executable, '-I', '-c', SIGINT_AT_START, str(written)], env=dict(os.environ), cwd=tmp_path, mode=mode
     )
 
-    handed = {stack: environments.pulumi(stack) for stack in (steps.PHYSICAL, steps.DNS, steps.APPS)}
-
-    assert {stack: env.get('PULUMI_CONFIG_PASSPHRASE') for stack, env in handed.items()} == {
-        steps.PHYSICAL: 'physicals-own-passphrase',
-        steps.DNS: 'the-stack-passphrase',
-        steps.APPS: 'the-stack-passphrase',
-    }
-    assert ['PULUMI_CONFIG_PASSPHRASE_FILE' in env for env in handed.values()] == [False] * len(handed)
-    for env in [*handed.values(), environments.tool()]:
-        assert {name for name in env if name.startswith(manual_run.HELM_STEERING)} == set(manual_run.HELM_HOMES)
-        assert all(Path(env[name]).is_relative_to(helm) for name in manual_run.HELM_HOMES)
+    assert done.ok
+    assert written.read_text() == str(signal.default_int_handler)
 
 
 # --------------------------------------------------------------------------

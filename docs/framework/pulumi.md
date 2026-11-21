@@ -700,15 +700,20 @@ through `mise.toml`'s `[env]`, and no `mise` task runs one
 -   **Anything else is passed to `pulumi`**, as
     `operator-stack <stack> pulumi <arguments>`, with the stack added
     ahead of any `--`. An `up` passed through this way skips the
-    driver's question, not the engine's own refusals. A `config cp` with
-    a `--dest` or `-d` is refused like a `--stack`, since it names the
-    stack it writes. An `import` or a `stack import` passed through for a
-    stack whose state is committed is refused, for the reason below.
+    driver's question, not the engine's own refusals. A `--dest` or `-d`
+    in a `config` command is refused like a `--stack`, since
+    `config copy` (alias `cp`) names the stack it writes with it, and so
+    are `-C`, `--cwd`, `--config-file` and `--client`, which point
+    `pulumi` at another program, another configuration file or a
+    language host already running (`manual_run.elsewhere_word`). An `import` or a `stack import` passed
+    through for a stack whose state is committed is refused, for the
+    reason below.
     These refusals read every word ahead of a `--` that is not a flag,
     wherever it stands, since `pulumi` takes a flag between a command's
     words: `stack --color=never import` is a `stack import`.
 -   Exit 2 is a refusal, a failed preview, or a committed checkpoint that
-    failed its checks.
+    failed its checks. A passed-through `pulumi` killed by signal N exits
+    128+N, as a shell reports it (`manual_run.exit_status`).
 -   **A stack with a gate of its own has it applied around `plan` and
     `up`.** The `state-backend` stack's is the one today
     ([physical/state-backend.md](../physical/state-backend.md) §1): an
@@ -864,6 +869,93 @@ untouched, however the run was started. The driver sets it on the one
 `pulumi up` that `up --force` or `up --replace` starts, and takes it out
 of every other `pulumi` run of the stack, so a caller's shell that
 exported it grants nothing, to a passed-through `up` least of all.
+
+### 3.4 A stack CI deploys, run by hand
+
+**Every `pulumi` command a person types against a stack CI deploys goes
+through `ci-stack`**, every command, reads included, and so does every
+such command a runbook writes for a person to type. Some runbooks
+still carry a `physical()` shell function, or run
+`pulumi … --stack <stack>` directly:
+[Aetf/kluster-ops#919](https://github.com/Aetf/kluster-ops/issues/919)
+moves them onto `ci-stack` and adds `tests/test_runbook_runs.py` to hold
+this rule. The stacks it runs are the census less the operator
+stacks (`ci_stack.stacks()`, from `STACK_NAMES` and `OPERATOR_STACKS`),
+derived rather than listed: today `physical`, `dns`, `k8s-base` and
+`apps`. An operator stack is refused, naming `operator-stack`, and
+`physical` is no operator stack, since CI's jobs run it under its own
+passphrase (§3.3's definition).
+
+**A tool that starts `pulumi` itself applies what such a run needs**,
+rather than going through `ci-stack`. The drill takes all of
+`kluster.scripts.manual_run` around each command of a rebuild
+(operations.md §3.5). `perf record` reads `physical`'s
+`node_private_ips` under `Environments` and from a working copy that holds
+the forge's `main` (`require_main`), since the rule covers reads. The
+`credentials` commands read a stack's outputs and state and read and
+write its configuration, running no program. Every run starts from
+`pulumi_config.Stack`'s environment, derived from the stack's name
+(`BackendEnvironment`), and is refused before it starts where the machine
+has no backend for the stack (`require_backend`), and a passphrase
+`pulumi` finds wrong is refused naming the slot that holds it
+(`MachineRefused`), which `require_passphrase` asks ahead of a mint.
+
+    mise x uv -- uv run ci-stack physical preview --diff
+    mise x uv -- uv run ci-stack physical refresh --run-program --target '<urn>'
+    mise x uv -- uv run ci-stack k8s-base up --refresh
+    mise x uv -- uv run ci-stack physical stack output kubeconfig --show-secrets > ~/.kube/kluster
+
+-   **The environment is a CI job's.** The passphrase is the stack's
+    own: for `physical`, the one in its workstation slot
+    (`.credentials/physical.passphrase`), and for every other stack, the
+    stack passphrase `mise.toml` gives. `pulumi_config.BackendEnvironment`
+    chooses it, the one place that maps a stack to its passphrase
+    (`kluster.scripts.manual_run.Environments`, which the drill and
+    `perf record` take too). A caller's `PULUMI_CONFIG_PASSPHRASE_FILE`
+    is removed, since `pulumi` refuses it beside the passphrase. The
+    backend is the caller's `PULUMI_BACKEND_URL`, which `mise.toml` sets
+    from the checkout's slot, and a run whose environment names none, or
+    names an empty one, is refused: `pulumi` would otherwise fall back to
+    the backend its own login names. Helm's environment is §3.3's "Helm's
+    environment is a CI runner's", on every run of every stack. Where
+    charts render would be a conclusion about today's programs; the
+    environment is the invariant.
+-   **Every command starts from the forge's `main`**, by §3.3's bullet of
+    that name, reads included. A rule by verb would be a list of
+    `pulumi`'s read-only commands that rots with the CLI, and
+    `config get` reads the working copy's stack file. The check is the
+    ancestry, so a branch rebased onto `main` previews its own change.
+-   **The refusals, in order**, each before `pulumi` starts: a run that
+    names no `pulumi` command; a run under a `.claude/` directory, where
+    the slots do not answer; a word that names a stack, by the rule §3.3
+    gives the driver (a `--stack`, an `-s`, a single-dash cluster holding
+    an `s`, and a `--dest` or `-d` in a `config` command, which
+    `config copy`, alias `cp`, writes into, each ahead of a `--` and
+    wherever global flags put `config`), read by `manual_run.stack_word`;
+    a word that points `pulumi` at another program or configuration,
+    `-C` or `--cwd`, `--config-file` and `--client`
+    (`manual_run.elsewhere_word`), since the main check speaks for this
+    checkout's program and the stack's own file; the environment, which
+    refuses a run with no backend, and a `physical` run where the slot
+    holds no passphrase; and then the main check.
+-   **Everything after the stack goes to `pulumi` whole**, with
+    `--stack <stack>` added ahead of any `--` and nothing else added, so
+    `--run-program` stays the runbook's word. `pulumi` runs from the
+    checkout's root, attached to the caller's standard input, output and
+    error (`manual_run.attached`): a value a `--show-secrets` read prints
+    reaches the caller's pipe or file untouched, and nothing is kept.
+    `ci-stack`'s own lines, the check and a refusal with its remedy, go
+    to standard error alone. A runbook that needs a transcript is a
+    drill.
+-   **A ^C is `pulumi`'s to answer**, as in §3.3: `ci-stack` ignores
+    SIGINT while `pulumi` runs and waits for it, and `pulumi` starts with
+    SIGINT at its default, since an ignored disposition is inherited
+    across `exec`.
+-   **The exit is `pulumi`'s**, and 128+N where `pulumi` was killed by
+    signal N, as a shell reports it. A refusal before `pulumi` starts exits
+    125, the convention of wrappers such as `env` and `timeout`, so a
+    caller can tell it from any exit of `pulumi`'s, and a `pulumi` not on
+    `PATH` exits 127, as `env` does.
 
 ## 4. CRD Types Handling
 

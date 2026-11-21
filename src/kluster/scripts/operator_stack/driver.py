@@ -10,9 +10,10 @@ What every run shares (framework/pulumi.md §3.3):
     caller's Helm settings (`manual_run.ci_helm`).
 -   **Every command starts from the forge's `main`**: a working copy behind
     it is refused before `pulumi` starts (`manual_run.require_main`).
--   **The stack is the driver's argument**, never a flag it passes through,
-    and a run refuses inside a `jj` workspace under `.claude/`, where the
-    slots do not answer.
+-   **The stack is the driver's argument**, never a flag it passes through
+    (`manual_run.stack_word`), nor is the program or the stack's
+    configuration file (`manual_run.elsewhere_word`), and a run refuses
+    inside a `jj` workspace under `.claude/`, where the slots do not answer.
 -   **`plan` is a refreshed preview** that exits 0 when nothing is planned
     and 1 when something is. Where the refreshed preview plans no step, a
     second preview, without a refresh, reads what an `up` would write with
@@ -127,6 +128,8 @@ class Why(enum.Enum):
     NO_COMMAND = 'no command'
     #: A passthrough named a stack, or may have.
     NAMES_A_STACK = 'names a stack'
+    #: A passthrough pointed `pulumi` at another program or configuration.
+    POINTS_ELSEWHERE = 'points elsewhere'
     #: A passthrough would import into a stack whose state is committed.
     IMPORTS_UNMARKED = 'imports unmarked'
     #: The preview without a refresh exited with neither 0 nor a step's refusal.
@@ -249,7 +252,7 @@ class Cli:
                 env=dict(env),
                 stdout=stdout,
                 text=True,
-                preexec_fn=_default_sigint,
+                preexec_fn=manual_run.default_sigint,
             ) as child:
                 while True:
                     try:
@@ -280,10 +283,6 @@ class Cli:
                 why=Why.PULUMI_FAILED,
             )
         return completed.stdout
-
-
-def _default_sigint() -> None:
-    _ = signal.signal(signal.SIGINT, signal.SIG_DFL)
 
 
 def ask(question: str) -> bool:
@@ -629,15 +628,22 @@ class Run:
                 f'name the pulumi command first, as in `operator-stack {self.stack} pulumi stack --show-urns`',
                 why=Why.NO_COMMAND,
             )
-        flags = _flags(args)
+        named = manual_run.stack_word(args)
+        if named is not None:
+            raise Refused(
+                f'`{named}` names a stack, or may: this run is against {self.stack} alone', why=Why.NAMES_A_STACK
+            )
+        named = manual_run.elsewhere_word(args)
+        if named is not None:
+            raise Refused(
+                f'`{named}` points pulumi at another program or configuration: this run is of the program in '
+                f"{self.checkout}, under the {self.stack} stack's own configuration",
+                why=Why.POINTS_ELSEWHERE,
+            )
         words = _words(args)
-        copies = words[0] == 'config' and 'cp' in words[1:]
-        for arg in flags:
-            if _names_a_stack(arg) or (copies and _names_a_destination(arg)):
-                raise Refused(
-                    f'`{arg}` names a stack, or may: this run is against {self.stack} alone', why=Why.NAMES_A_STACK
-                )
-        imports = words[0] == 'import' or (words[0] == 'stack' and 'import' in words[1:])
+        # `import` among the words wherever it stands, `stack import` and a
+        # global flag's value ahead of it included (`_words`).
+        imports = 'import' in words
         if self.committed and imports:
             raise Refused(
                 f'the {self.stack} stack keeps its state in this repository, and `pulumi {" ".join(args)}` '
@@ -646,15 +652,13 @@ class Run:
                 why=Why.IMPORTS_UNMARKED,
             )
         self._require_current()
-        return self._write(list(args))
+        # A `pulumi` killed by signal N answers 128+N, as `ci-stack`'s does.
+        return manual_run.exit_status(self._write(list(args)))
 
     # ----------------------------------------------------------------------
 
     def _with_stack(self, args: Sequence[str]) -> list[str]:
-        """`args` with `--stack <this stack>` ahead of any `--`, past which a word is not a flag."""
-        args = list(args)
-        at = args.index('--') if '--' in args else len(args)
-        return [*args[:at], '--stack', self.stack, *args[at:]]
+        return manual_run.with_stack(args, self.stack)
 
     def _require_current(self) -> None:
         """Refuse a working copy behind the forge's `main`, for every stack, and a conflicted checkpoint after it."""
@@ -889,22 +893,3 @@ def _words(args: Sequence[str]) -> list[str]:
     than where it stands, which such a value cannot hide.
     """
     return [arg for arg in _flags(args) if not arg.startswith('-')]
-
-
-def _names_a_stack(arg: str) -> bool:
-    """Whether `arg` can name a stack: `--stack` in either spelling, or a short-flag cluster holding an `s`.
-
-    `-s dev`, `-sdev` and `-ys dev` all reach the `-s` shorthand, so any single
-    dash cluster with an `s` in it is refused; a short flag's value is written
-    as `--flag=value` or as a word of its own instead.
-    """
-    if arg == '--stack' or arg.startswith('--stack='):
-        return True
-    return arg.startswith('-') and not arg.startswith('--') and 's' in arg[1:]
-
-
-def _names_a_destination(arg: str) -> bool:
-    """Whether `arg` is `config cp`'s `--dest`, which names the stack it copies into, or its `-d` shorthand."""
-    if arg == '--dest' or arg.startswith('--dest='):
-        return True
-    return arg.startswith('-') and not arg.startswith('--') and 'd' in arg[1:]

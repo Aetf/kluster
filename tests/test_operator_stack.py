@@ -571,6 +571,10 @@ def test_the_slots_the_driver_reads_are_the_ones_the_credentials_commands_write(
         # A flag, or a flag and its value, between the command's words.
         (['config', '--color=never', 'cp', '--dest', 'dev'], '--dest'),
         (['config', '--color', 'never', 'cp', '-d', 'dev'], '-d'),
+        # `config copy` is the command, `cp` its alias.
+        (['config', 'copy', '-d', 'dev'], '-d'),
+        (['config', 'copy', '--dest=dev'], '--dest=dev'),
+        (['config', '--color', 'never', 'copy', '-d', 'dev'], '-d'),
     ],
 )
 def test_an_argument_naming_another_stack_is_refused_naming_it(tmp_path: Path, args: list[str], naming: str) -> None:
@@ -583,6 +587,42 @@ def test_an_argument_naming_another_stack_is_refused_naming_it(tmp_path: Path, a
         _ = run.passthrough(args)
     assert f'`{naming}`' in str(refused.value)
     assert fake.streamed == []
+
+
+@pytest.mark.parametrize(
+    'naming',
+    [
+        '-C',
+        '-yC',
+        '--cwd',
+        '--cwd=/elsewhere/old-clone',
+        '--config-file',
+        '--config-file=Pulumi.other.yaml',
+        '--client',
+        '--client=127.0.0.1:50051',
+    ],
+)
+def test_an_argument_pointing_pulumi_at_another_program_or_configuration_is_refused_naming_it(
+    tmp_path: Path, naming: str
+) -> None:
+    checkout = tmp_path / 'kluster'
+    _fill_slots(checkout)
+    fake = FakePulumi()
+    run = driver.Run.open('github', checkout, pulumi=fake, base=AMBIENT)
+    args = ['up', naming] if '=' in naming else ['up', naming, '/elsewhere/old-clone']
+
+    with pytest.raises(driver.Refused) as refused:
+        _ = run.passthrough(args)
+    assert refused.value.why is driver.Why.POINTS_ELSEWHERE
+    assert f'`{naming}`' in str(refused.value)
+    assert fake.streamed == []
+
+
+def test_a_passed_through_pulumi_killed_by_a_signal_exits_128_plus_the_signal(repository: Repository) -> None:
+    fake = FakePulumi(code=-signal.SIGTERM)
+    run = driver.Run.open('github', repository.checkout, pulumi=fake, base=AMBIENT)
+
+    assert run.passthrough(['up', '--yes']) == 128 + signal.SIGTERM
 
 
 def test_the_stack_goes_ahead_of_a_double_dash_and_words_after_it_are_the_callers(repository: Repository) -> None:
@@ -624,6 +664,8 @@ def test_the_command_line_refuses_a_stack_outside_the_census(capsys: pytest.Capt
         # A flag, or a flag and its value, between the command's words.
         ['stack', '--color=never', 'import', '--file', 'edited.json'],
         ['stack', '--color', 'never', 'import', '--file', 'edited.json'],
+        ['import', '--color', 'never', 'oci:Core/instance:Instance', 'box', 'ocid1.instance.oc1..x'],
+        ['stack', '--color', 'never', '--non-interactive', 'import', '--file', 'edited.json'],
     ],
 )
 def test_a_passed_through_import_is_refused_for_a_committed_stack(

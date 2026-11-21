@@ -7,8 +7,10 @@ plane by its VCN address;
 `kubectl` under the cluster-admin kubeconfig, through the API server's node
 proxy to etcd's metrics listener and its service proxy to the history store;
 and the `pulumi` CLI for `physical`'s `node_private_ips`, under `physical`'s
-own passphrase (credentials.md §4.4). Every call is bounded, so a node that
-does not answer costs a round its bound and nothing more.
+own passphrase (credentials.md §4.4), in the environment `ci-stack` gives a
+run of that stack (`manual_run.Environments`) and from a working copy that
+holds the forge's `main` (`manual_run.require_main`). Every call is bounded,
+so a node that does not answer costs a round its bound and nothing more.
 """
 
 from __future__ import annotations
@@ -16,14 +18,16 @@ from __future__ import annotations
 import json
 import os
 import subprocess as sp
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
 from kluster import conventions
-from kluster.lib import pulumi_cli, stack_addresses, stack_environment, workstation
+from kluster.lib import pulumi_cli, stack_addresses, stack_environment
 from kluster.lib.monitoring.vmsingle import VMSINGLE_PORT, vmsingle_workload
+from kluster.scripts import manual_run
+from kluster.scripts.credentials import oci_recovery
 
 __all__ = (
     'CALL_TIMEOUT',
@@ -142,24 +146,36 @@ class Node:
     address: str
 
 
-def control_planes(run: pulumi_cli.Runner = pulumi_cli.run_pulumi) -> list[Node]:
+def control_planes(
+    run: pulumi_cli.Runner = pulumi_cli.run_pulumi,
+    *,
+    physical: Callable[[], str] = oci_recovery.slot_passphrase,
+    require_main: Callable[[Path], None] = manual_run.require_main,
+) -> list[Node]:
     """The control planes, from `physical`'s `node_private_ips`, read under `physical`'s passphrase.
 
-    The ambient `PULUMI_CONFIG_PASSPHRASE` is the stack passphrase, which
-    opens every stack but `physical`, so it is left out of the run's
-    environment rather than overridden, as the operator's `physical` helper
-    does (declarative/physical.md §6).
+    The run's environment is the one every manual run of a stack CI deploys
+    is given (`manual_run.Environments`), as `ci-stack physical` gives it:
+    `physical`'s passphrase from `physical`, its workstation slot, in place of
+    the ambient stack passphrase, the estate's backend, and CI's Helm
+    environment. It is the run's whole environment
+    (`pulumi_cli.WholeEnvironment`): one laid over this process's would bring
+    a passphrase file of the caller's back. It starts from a working copy that
+    holds the forge's `main` (`require_main`), refused as
+    `manual_run.CheckRefused` otherwise, since the rule for a manual run of a
+    stack CI deploys covers reads (framework/pulumi.md §3.4).
     """
     output = conventions.PHYSICAL_OUTPUTS.node_private_ips
-    environment = pulumi_cli.WholeEnvironment(
-        {name: value for name, value in os.environ.items() if name != 'PULUMI_CONFIG_PASSPHRASE'}
-        | {'PULUMI_CONFIG_PASSPHRASE_FILE': str(workstation.directory() / stack_environment.PHYSICAL_PASSPHRASE_SLOT)}
-    )
-    printed = run(
-        ['stack', 'output', output, '--json', '--stack', stack_environment.PHYSICAL_STACK],
-        cwd=pulumi_cli.project_dir(),
-        env=environment,
-        stdin=None,
-    )
+    checkout = pulumi_cli.project_dir()
+    with manual_run.helm_homes(checkout, prefix='perf-helm-') as helm:
+        environments = manual_run.Environments(base=os.environ, helm=helm, physical=physical)
+        env = pulumi_cli.WholeEnvironment(environments.pulumi(stack_environment.PHYSICAL_STACK))
+        require_main(checkout)
+        printed = run(
+            ['stack', 'output', output, '--json', '--stack', stack_environment.PHYSICAL_STACK],
+            cwd=checkout,
+            env=env,
+            stdin=None,
+        )
     addresses = stack_addresses.usable_addresses(output, 4, json.loads(printed or 'null'))
     return [Node(name, address) for name, address in sorted(addresses.items())]
