@@ -564,6 +564,46 @@ through `mise.toml`'s `[env]`, and no `mise` task runs one
     rather than laying it over the caller's
     (`pulumi_cli.WholeEnvironment`), and for `github` it carries the
     three files of the bundle its URL was read from.
+-   **Helm's environment is a CI runner's.** The Kubernetes provider
+    takes its Helm settings from the environment: the Helm SDK's
+    `helmcli.New()`, overridden only by
+    `kubernetes:config:helmReleaseSettings`, which this repository does
+    not set, and by the `PULUMI_K8S_HELM_*` variables
+    ([`Configure` at v4.34.2](https://github.com/pulumi/pulumi-kubernetes/blob/v4.34.2/provider/pkg/provider/provider.go#L578-L580),
+    [and its overrides](https://github.com/pulumi/pulumi-kubernetes/blob/v4.34.2/provider/pkg/provider/provider.go#L831-L859)).
+    Every path that SDK keeps defaults to one under Helm's three homes,
+    and a variable naming one of them outright, such as
+    `HELM_REPOSITORY_CONFIG`, wins over its home
+    ([`New` at Helm v3.20.2](https://github.com/helm/helm/blob/v3.20.2/pkg/cli/environment.go#L106-L109)).
+    So the process starts with none of the caller's `HELM_` or
+    `PULUMI_K8S_HELM_` variables, and with `HELM_CONFIG_HOME`,
+    `HELM_CACHE_HOME` and `HELM_DATA_HOME` under a temporary directory
+    of the run's own, empty when the run starts
+    (`kluster.scripts.manual_run.ci_helm`): what a CI runner's empty
+    home gives a job, and no `repositories.yaml` of the caller's naming a
+    repository whose cache it lacks. The directory is removed with the
+    run, on every way out the driver lives through; a driver ended by a
+    signal it does not handle (SIGKILL, SIGTERM, a hang-up) leaves it in
+    the temporary directory, as it leaves its progress log. One that
+    resolves inside the checkout refuses the run, since what Helm writes
+    there would enter the next `jj` snapshot. No operator stack renders
+    a chart today, so this holds the environment for the first one that
+    does. `update_crds` runs
+    `helm` under the same environment (§4).
+-   **Every command starts from the forge's `main`**, whatever stack it
+    runs against: a run from an older working copy plans against older
+    code. Before `pulumi` starts, the driver reads the forge's `main`
+    with `git ls-remote origin refs/heads/main`, which writes no ref, and
+    runs `git merge-base --is-ancestor` of it against the working copy:
+    `jj`'s `@`, or git's `HEAD` in a plain clone
+    (`kluster.scripts.manual_run.require_main`). An answer of 1, the
+    forge's `main` fetched but `@` not on it, names the rebase; any
+    other, the commit never fetched, names `jj git fetch` first; and a
+    forge that cannot be read is a refusal of its own. `jj` is asked
+    with the snapshot every `jj` command takes, so a working copy
+    another workspace made stale — its `@` rebased from there, while the
+    files on disk are still the older ones `pulumi` would read — is
+    refused by `jj` itself.
 -   **The stack is the driver's first argument, never a flag it passes
     through.** A `--stack`, an `-s`, or a single-dash cluster holding an
     `s` ahead of a `--` is refused rather than overridden, since a caller
@@ -712,16 +752,9 @@ driver checks on the workstation, around every command it runs against
 such a stack:
 
 1.  **Before the command, a working copy behind the forge's `main` is
-    refused.** The driver reads the forge's `main` with
-    `git ls-remote origin refs/heads/main`, which writes no ref, and runs
-    `git merge-base --is-ancestor` of it against the working copy: `jj`'s
-    `@`, or git's `HEAD` in a plain clone. An answer of 1, the forge's
-    `main` fetched but `@` not on it, names the rebase; any other, the
-    commit never fetched, names `jj git fetch` first. `jj` is asked with
-    the snapshot every `jj` command takes, so a working copy another
-    workspace made stale — its `@` rebased from there, while the files on
-    disk are still the older ones `pulumi` would read — is refused by
-    `jj` itself.
+    refused**, as for every stack (above). For this one, an older working
+    copy is also an older checkpoint, and a run from it plans against a
+    state that is not the latest.
 2.  **Then a conflicted checkpoint is refused**, naming the reconcile:
     keep `main`'s side (`jj restore --from main <path>`), run a refreshed
     `plan`, and bring in through the program's `import_` what the other

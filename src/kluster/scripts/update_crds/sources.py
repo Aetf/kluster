@@ -36,6 +36,7 @@ from tqdm import tqdm
 
 from kluster.lib import stack_environment, workstation
 from kluster.lib.versions import ChartPin, ProjectFile
+from kluster.scripts import manual_run
 from kluster.scripts.update_crds import pins
 from kluster.scripts.update_crds.pins import SourceTree
 from kluster.scripts.update_crds.values import ValuePaths, read_chart
@@ -355,17 +356,14 @@ def _chart_location(pin: ChartPin) -> list[str]:
 
 
 def _helm(helm: Path, arguments: list[str], *, workdir: Path) -> str:
-    """Run `helm` with its own state under `workdir`, and return what it prints.
+    """Run `helm` under CI's Helm environment, its homes under `workdir`, and return what it prints.
 
-    Helm writes its repository cache and its configuration under these; left
-    to their defaults it would read, and dirty, the caller's own Helm state.
+    Helm writes its repository cache and its configuration under its homes;
+    left to the caller's, it would read, and dirty, the caller's own Helm
+    state, and a variable of the caller's naming one of its paths would win
+    over any home (`manual_run.ci_helm`).
     """
-    environment = dict(
-        os.environ,
-        HELM_CONFIG_HOME=str(workdir / 'helm-config'),
-        HELM_CACHE_HOME=str(workdir / 'helm-cache'),
-        HELM_DATA_HOME=str(workdir / 'helm-data'),
-    )
+    environment = manual_run.ci_helm(os.environ, workdir / 'helm')
     return sp.check_output([str(helm), *arguments], env=environment, text=True)
 
 
