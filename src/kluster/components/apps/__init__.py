@@ -55,10 +55,11 @@ VIP's connection reaches a backend on any node. Beside these, a pod that
 requests the GPU is kept to a node offering it (`GPU_HOLD`), and a claim
 keeps its pod to the claim's node (`components.apps.storage`); neither states
 an affinity, since the scheduler reads both from the pod, and both hold the
-pod at the held priority. A restic mover requests no GPU, so a workload that
-does hands its backed claim `GPU_HOLD`, which names the label of the nodes
-the GPU plugin serves (`kluster.components.gpu.GPU_NODE`), and the mover is
-held to them. Those nodes offer `GPU_RESOURCE` while their GPU is bound to
+pod at the held priority. A restic mover and a move's destination request no
+GPU, so a workload that does hands each of its `local-path` claims
+`GPU_HOLD`, which names the label of the nodes the GPU plugin serves
+(`kluster.components.gpu.GPU_NODE`), and every binder of the claim is held
+to them. Those nodes offer `GPU_RESOURCE` while their GPU is bound to
 `i915`.
 
 A `Passthrough` row is refused, naming its host: Cilium drops a TLS
@@ -189,8 +190,9 @@ UPLINK_DOWN = 'keeps working while the uplink is down, which its component decla
 #: which the scheduler reads from the request, so no affinity, and the held
 #: priority. The nodes that offer it carry the label the GPU plugin's node
 #: rule sets (`kluster.components.gpu.GPU_NODE`), which a pod that binds a
-#: claim in the workload's stead is held to, so the workload hands its backed
-#: claim this hold too.
+#: claim in the workload's stead, a restic mover or a move's destination, is
+#: held to, so the workload hands each of its `local-path` claims this hold
+#: too.
 GPU_HOLD = kept(
     Keeper.DEVICE,
     f'requests the GPU ({GPU_RESOURCE}), which the nodes the GPU plugin serves offer',

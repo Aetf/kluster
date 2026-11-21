@@ -57,13 +57,14 @@ from kluster.lib.k8s import (
     UNCONSTRAINED,
     AbsentSealedValue,
     BackedVolumeBesideNodeVolume,
-    BackedVolumeOffBinder,
     Constraints,
     Keeper,
+    MovingVolumeBesideVolume,
     NodeRequirement,
     PortedSecret,
     TwoBackedVolumes,
     UnusableKubeconfig,
+    VolumeOffBinder,
     at_home,
     client_certificate_expiry,
     kept,
@@ -1658,22 +1659,62 @@ def test_a_backed_volume_whose_binder_is_held_to_a_constraint_is_not_refused_bes
     assert {it.keeper for it in both.kept} >= {Keeper.BACKED_VOLUME, Keeper.VOLUME}
 
 
+#: Each kind of volume another pod may bind in the pod's stead: a backed
+#: volume's restic mover, a moving volume's copy destination.
+WITH_A_BINDER = [it for it in Keeper if it.has_binder]
+
+
+@pytest.mark.parametrize('keeper', WITH_A_BINDER, ids=str)
+@pytest.mark.parametrize('constraint', list(BINDER_KINDS.values()), ids=list(BINDER_KINDS))
+def test_a_volume_whose_binder_is_held_to_a_constraint_is_not_refused_beside_it(
+    keeper: Keeper, constraint: Constraints
+) -> None:
+    """The binder binds the volume only where the constraint admits, so the pod finds it there."""
+    volume = kept(keeper, 'a claim', binder_held_to=constraint.binder_requirements)
+
+    assert {it.keeper for it in (volume & constraint).kept} >= {keeper}
+    assert {it.keeper for it in (constraint & volume).kept} >= {keeper}
+
+
+@pytest.mark.parametrize('keeper', WITH_A_BINDER, ids=str)
 @pytest.mark.parametrize('constraint', list(BINDER_KINDS.values()), ids=list(BINDER_KINDS))
 @pytest.mark.parametrize(
     'binder_held_to', [(), (NodeRequirement('example.com/other', 'elsewhere'),)], ids=['nothing', 'elsewhere']
 )
 @pytest.mark.parametrize('order', ['volume first', 'constraint first'])
-def test_a_backed_volume_beside_a_constraint_its_binder_was_not_given_is_refused_naming_both(
-    constraint: Constraints, binder_held_to: tuple[NodeRequirement, ...], order: str
+def test_a_volume_beside_a_constraint_its_binder_was_not_given_is_refused_naming_both(
+    keeper: Keeper, constraint: Constraints, binder_held_to: tuple[NodeRequirement, ...], order: str
 ) -> None:
     """The binder may bind the volume first on a node the constraint refuses, and the pod, which needs both, would run nowhere."""
-    backed = kept(Keeper.BACKED_VOLUME, 'the data', binder_held_to=binder_held_to)
+    volume = kept(keeper, 'the data', binder_held_to=binder_held_to)
 
-    with pytest.raises(BackedVolumeOffBinder) as refused:
-        _ = backed & constraint if order == 'volume first' else constraint & backed
+    with pytest.raises(VolumeOffBinder) as refused:
+        _ = volume & constraint if order == 'volume first' else constraint & volume
 
     assert 'the data' in str(refused.value)
     assert 'the constraint' in str(refused.value)
+
+
+@pytest.mark.parametrize('second', [it for it in Keeper if it is not Keeper.DEVICE], ids=str)
+@pytest.mark.parametrize('order', ['moved first', 'second first'])
+def test_a_moving_volume_beside_a_second_volume_is_refused_naming_both(second: Keeper, order: str) -> None:
+    """The destination binds the moving volume on its target, apart from where the second is bound or from its own destination."""
+    moved = kept(Keeper.MOVING_VOLUME, 'the moved claim')
+    other = kept(second, 'the second claim')
+
+    with pytest.raises(MovingVolumeBesideVolume) as refused:
+        _ = moved & other if order == 'moved first' else other & moved
+
+    assert 'the moved claim' in str(refused.value)
+    assert 'the second claim' in str(refused.value)
+
+
+def test_a_moving_volume_is_not_refused_beside_a_device_its_destination_is_held_to() -> None:
+    """A device is no volume: the destination is held to the nodes that offer it, and the pod runs where it binds."""
+    device = hold(Keeper.DEVICE, 'a device')
+    moved = kept(Keeper.MOVING_VOLUME, 'the moved claim', binder_held_to=(HOME & device).binder_requirements)
+
+    assert {it.keeper for it in (HOME & device & moved).kept} == {Keeper.DEVICE, Keeper.MOVING_VOLUME}
 
 
 def test_a_binder_is_held_to_the_pods_requirements_and_the_nodes_of_each_device_it_requests() -> None:
@@ -1699,10 +1740,10 @@ def test_a_binder_is_held_to_the_pods_requirements_and_the_nodes_of_each_device_
     ],
     ids=['a device naming no nodes', 'nodes for a volume', 'a binder of a volume', 'a binder of a device'],
 )
-def test_a_hold_names_the_nodes_of_a_device_alone_and_the_binder_of_a_backed_volume_alone(
+def test_a_hold_names_the_nodes_of_a_device_alone_and_a_binder_only_where_its_keeper_has_one(
     keeper: Keeper, offered_on: NodeRequirement | None, binder_held_to: tuple[NodeRequirement, ...]
 ) -> None:
-    with pytest.raises(ValueError, match=r'a device|a backed volume'):
+    with pytest.raises(ValueError, match=r'a device|has no binder'):
         _ = kept(keeper, 'a hold', offered_on=offered_on, binder_held_to=binder_held_to)
 
 

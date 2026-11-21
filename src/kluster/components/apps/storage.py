@@ -44,7 +44,7 @@ given, so the composition is refused (`kluster.lib.k8s.TwoBackedVolumes`,
 `BackedVolumeBesideNodeVolume`), and so is a constraint composed onto a
 backed claim's constraints that its mover was not given: a site, an
 architecture or a device the claim was not handed
-(`BackedVolumeOffBinder`; cluster/storage.md §3.1).
+(`kluster.lib.k8s.VolumeOffBinder`; cluster/storage.md §3.1).
 
 **The `Claim` says what the workload's pod carries for it.** Its
 `constraints` are the workload's with the claim's own hold composed in
@@ -67,7 +67,16 @@ started by hand and waited for by the apply. The destination's mover is the
 new claim's first consumer, so it binds the claim in the workload's stead,
 and it carries `moving_to` beside the claim's binder requirements; a
 `moving_to` that gives one of their labels another value is refused, since
-no node admits both (`MoveOffBinder`). Restic has no retention of zero,
+no node admits both (`MoveOffBinder`). Whatever its class and retention,
+the new claim's hold is a moving volume's
+(`kluster.lib.k8s.Keeper.MOVING_VOLUME`), which records what the destination
+was given, so a constraint composed onto the `Claim`'s constraints that the
+destination was not given is refused (`kluster.lib.k8s.VolumeOffBinder`). **A claim is moved only while it is
+the one claim on a node its pod mounts**, and two claims of one pod are not
+moved together: the pod's second claim stays bound where it is, and a second
+move's destination is placed apart from the first's, so after the finish
+the pod could find its claims on two nodes and run on neither
+(`kluster.lib.k8s.MovingVolumeBesideVolume`). Restic has no retention of zero,
 so a copy through the bucket would leave a snapshot behind; `rsync-tls` needs
 no bucket, repository or credential. The finish is a claim of the new
 generation without `moving_to`, whose source, under a class, syncs to the same
@@ -105,6 +114,7 @@ from kluster.lib.k8s import (
     BackedVolumeBesideNodeVolume,
     Constraints,
     Keeper,
+    MovingVolumeBesideVolume,
     NodeRequirement,
     SecretTemplate,
     TwoBackedVolumes,
@@ -271,7 +281,10 @@ def claim(
         they are the workload's on the claim being copied: the workload moves
         to the target in the finish. The copy's destination, under any
         retention, binds the new claim, and carries the same requirements
-        beside `moving_to`.
+        beside `moving_to`; the `Claim` records them in the claim's hold, so
+        a constraint composed onto its constraints afterwards that they
+        leave out is refused, and so is a claim moved beside a second claim
+        on a node of its pod, whichever of the two is made first.
     :param generation: The claim's generation, raised by one for each move.
     :param moving_to: The node labels the new generation's claim is made on,
         which the destination's mover selects beside the binder requirements
@@ -302,9 +315,15 @@ def claim(
     mover = constraints.binder_requirements if backed else ()
     try:
         held = constraints & claim_hold(
-            f'its claim {claim_name(name, generation)!r}', storage_class, backed=backed, binder_held_to=mover
+            f'its claim {claim_name(name, generation)!r}',
+            storage_class,
+            backed=backed,
+            # The claim the pod mounts during a copy is the new one, which the
+            # destination binds, held to what `_copy` gave it.
+            binder_held_to=mover if copy is None else copy[0],
+            moving=copy is not None,
         )
-    except (TwoBackedVolumes, BackedVolumeBesideNodeVolume) as refused:
+    except (TwoBackedVolumes, BackedVolumeBesideNodeVolume, MovingVolumeBesideVolume) as refused:
         raise type(refused)(f'{resource_name}: {refused}') from None
     affinity = _mover_affinity(mover) if backed else None
 
@@ -393,19 +412,32 @@ def claim(
 
 
 def claim_hold(
-    what: str, storage_class: str, *, backed: bool, binder_held_to: tuple[NodeRequirement, ...] = ()
+    what: str,
+    storage_class: str,
+    *,
+    backed: bool,
+    binder_held_to: tuple[NodeRequirement, ...] = (),
+    moving: bool = False,
 ) -> Constraints:
     """The hold of a pod to the node a claim of `storage_class` is bound on, saying `what` the claim is.
 
-    A node volume's claim is on its node before any pod is placed
-    (`Keeper.NODE_VOLUME`). A `local-path` claim binds on the node its first
-    consumer is placed on: the pod's, or, for a backed claim, a restic
-    mover's (`Keeper.BACKED_VOLUME`), since VolSync places a mover of a claim
-    no running pod uses wherever its own affinity admits. The backed claim's
-    hold records `binder_held_to`, the requirements its mover carries, so a
-    constraint whose requirement they leave out is refused beside it
-    (`kluster.lib.k8s.BackedVolumeOffBinder`).
+    The new claim of a move's copy, `moving`, is bound by the copy's
+    destination (`Keeper.MOVING_VOLUME`), whatever its class and retention.
+    Otherwise, a node volume's claim is on its node before any pod is placed
+    (`Keeper.NODE_VOLUME`), and a `local-path` claim binds on the node its
+    first consumer is placed on: the pod's, or, for a backed claim, a restic
+    mover's (`Keeper.BACKED_VOLUME`), since VolSync places a mover of a
+    claim no running pod uses wherever its own affinity admits. The hold of
+    a claim with a binder records `binder_held_to`, the requirements the
+    binder carries, so a constraint whose requirement they leave out is
+    refused beside it (`kluster.lib.k8s.VolumeOffBinder`).
     """
+    if moving:
+        return kept(
+            Keeper.MOVING_VOLUME,
+            f"{what} is bound on the node its copy's destination is placed on",
+            binder_held_to=binder_held_to,
+        )
     if storage_class != conventions.SC_LOCAL_PATH:
         return kept(Keeper.NODE_VOLUME, f'{what} is on the node its node volume is attached to')
     if backed:

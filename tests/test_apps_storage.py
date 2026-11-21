@@ -42,11 +42,12 @@ from kluster.conventions.backup import RetentionClass
 from kluster.lib.k8s import (
     UNCONSTRAINED,
     BackedVolumeBesideNodeVolume,
-    BackedVolumeOffBinder,
     Constraints,
     Keeper,
+    MovingVolumeBesideVolume,
     NodeRequirement,
     TwoBackedVolumes,
+    VolumeOffBinder,
     at_home,
     kept,
     on_architecture,
@@ -516,7 +517,7 @@ async def test_a_device_composed_onto_a_backed_claims_constraints_after_it_was_m
     """Its mover was not held to the nodes that offer the device, so it may bind the claim on a node without it."""
     made, _ = await _backed(HOME)
 
-    with pytest.raises(BackedVolumeOffBinder) as refused:
+    with pytest.raises(VolumeOffBinder) as refused:
         _ = made.constraints & DEVICE
 
     assert 'requests a device of the test' in str(refused.value)
@@ -657,6 +658,171 @@ async def test_a_move_restating_a_required_label_admits_what_one_to_the_target_a
     target_alone, restated = admitted
     assert target_alone
     assert restated == target_alone
+
+
+async def _moved(constraints: Constraints, retention: RetentionClass | Off) -> storage.Claim:
+    """The copy of a move of a claim handed `constraints`, under `retention`."""
+    _ = await run_with(Recorder(), stack='apps')
+    async with declaring():
+        workload = k8s.core.v1.ConfigMap('workload')
+        return claim(
+            'moving',
+            'data',
+            1,
+            retention,
+            namespace='moving',
+            uid=UID,
+            writer_key=writer_key('moving'),
+            constraints=constraints,
+            generation=1,
+            moving_to=TARGET,
+            stopped=workload,
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('retention', [off('a cache, fetched again'), WEEKDAY], ids=['unbacked', 'backed'])
+@pytest.mark.parametrize('order', ['claim first', 'device first'])
+async def test_a_device_composed_onto_a_moved_claims_constraints_after_it_was_made_is_refused(
+    retention: RetentionClass | Off, order: str
+) -> None:
+    """The copy's destination binds the new claim, and it was not held to the nodes that offer the device.
+
+    So it may bind the claim on a node without the device, which the
+    workload, back after the finish, needs beside the claim.
+    """
+    made = await _moved(HOME, retention)
+
+    with pytest.raises(VolumeOffBinder) as refused:
+        _ = made.constraints & DEVICE if order == 'claim first' else DEVICE & made.constraints
+
+    assert 'requests a device of the test' in str(refused.value)
+    assert "its claim 'data-g1'" in str(refused.value)
+
+
+#: Each kind of second claim on a node a pod could mount beside a claim being
+#: moved: its class, its retention, and whether it is moved in the same copy.
+SECOND_CLAIMS: dict[str, tuple[str, RetentionClass | Off, bool]] = {
+    'unbacked': (conventions.SC_LOCAL_PATH, off('a cache'), False),
+    'backed': (conventions.SC_LOCAL_PATH, WEEKDAY, False),
+    'node volume': (NODE_VOLUME_CLASS, off('a cache'), False),
+    'moved with it': (conventions.SC_LOCAL_PATH, off('a cache'), True),
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('second', list(SECOND_CLAIMS.values()), ids=list(SECOND_CLAIMS))
+@pytest.mark.parametrize('moved_first', [True, False], ids=['moved claim made first', 'second claim made first'])
+@pytest.mark.parametrize(
+    'moved_class', [conventions.SC_LOCAL_PATH, NODE_VOLUME_CLASS], ids=['into local-path', "into a node volume's class"]
+)
+async def test_a_claim_moved_beside_a_second_claim_on_a_node_of_its_pod_is_refused(
+    second: tuple[str, RetentionClass | Off, bool], moved_first: bool, moved_class: str
+) -> None:
+    """The destination binds the moved claim on the target, apart from the second claim.
+
+    The second stays bound where it is, or, moved too, is bound by a
+    destination of its own, placed apart from the first's: after the finish
+    the pod, which needs both, could find them on two nodes and run on
+    neither. That holds whatever class the claim is moved into, a node
+    volume's included, whose node the move names. The second claim is
+    handed the first's constraints, the form a pod's second claim takes.
+    """
+    storage_class, retention, also_moved = second
+    _ = await run_with(Recorder(), stack='apps')
+    async with declaring():
+        workload = k8s.core.v1.ConfigMap('workload')
+
+        def moved(constraints: Constraints) -> storage.Claim:
+            return claim(
+                'pair-moved',
+                'moved',
+                1,
+                off('a cache'),
+                namespace='pair',
+                uid=UID,
+                writer_key=writer_key('pair'),
+                constraints=constraints,
+                generation=1,
+                moving_to=TARGET,
+                stopped=workload,
+                storage_class=moved_class,
+            )
+
+        def other(constraints: Constraints) -> storage.Claim:
+            return claim(
+                'pair-other',
+                'other',
+                1,
+                retention,
+                namespace='pair',
+                uid=UID,
+                writer_key=writer_key('pair'),
+                constraints=constraints,
+                storage_class=storage_class,
+                generation=1 if also_moved else 0,
+                moving_to=TARGET if also_moved else None,
+                stopped=workload if also_moved else None,
+            )
+
+        first, then = (moved, other) if moved_first else (other, moved)
+        made = first(HOME)
+        with pytest.raises(MovingVolumeBesideVolume) as refused:
+            _ = then(made.constraints)
+
+    assert "its claim 'moved-g1'" in str(refused.value)
+    assert "its claim 'other-g" in str(refused.value)
+
+
+@pytest.mark.asyncio
+async def test_a_claim_moved_as_the_one_claim_on_a_node_of_its_pod_is_admitted_and_the_finish_lifts_the_rule() -> None:
+    """A NAS claim keeps its pod to a site rather than to one node, and after the finish the claim is moved no longer, so a second claim may join it.
+
+    The moved claim's pod mounts a NAS claim beside it; once the move is
+    finished, the claim of the new generation takes an unbacked second claim
+    beside it, which binds where the pod is placed.
+    """
+    _ = await run_with(Recorder(), stack='apps')
+    async with declaring():
+        workload = k8s.core.v1.ConfigMap('workload')
+        library = nas_claim('beside-library', 'library', 'Photos/Library', namespace='beside', read_only=False)
+        moved = claim(
+            'beside-moved',
+            'moved',
+            1,
+            off('a cache'),
+            namespace='beside',
+            uid=UID,
+            writer_key=writer_key('beside'),
+            constraints=library.constraints,
+            generation=1,
+            moving_to=TARGET,
+            stopped=workload,
+        )
+        finished = claim(
+            'beside-finished',
+            'finished',
+            1,
+            WEEKDAY,
+            namespace='beside',
+            uid=UID,
+            writer_key=writer_key('beside'),
+            constraints=library.constraints,
+            generation=1,
+        )
+        second = claim(
+            'beside-second',
+            'second',
+            1,
+            off('a cache'),
+            namespace='beside',
+            uid=UID,
+            writer_key=writer_key('beside'),
+            constraints=finished.constraints,
+        )
+
+    assert Keeper.MOVING_VOLUME in {it.keeper for it in (moved.constraints & library.constraints).kept}
+    assert {it.keeper for it in second.constraints.kept} == {Keeper.BACKED_VOLUME, Keeper.VOLUME}
 
 
 def test_a_copy_is_ordered_after_a_workload_it_is_handed() -> None:
