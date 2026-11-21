@@ -34,8 +34,8 @@ locked = true
 # Renovate maintains these -- it cannot bump `latest`, which is why they are
 # written out.
 [tools]
-pulumi = "3.274.1"
-uv = "0.13.7"
+pulumi = "3.276.0"
+uv = "0.13.8"
 # age is the tool this repository escrows with rather than a format it
 # reimplements: `age`/`age-keygen` write and open every ciphertext under
 # `escrow/`, and the box's dumps are age-encrypted too; butane renders the
@@ -56,7 +56,7 @@ age = "1.3.1"
 # of a newer major writes is not guaranteed to load into the appliance's
 # server, even when it was dumped from that server -- a test holds the two
 # majors equal.
-postgres = { version = "17.11", channel = "conda-forge" }
+postgres = { version = "17.12", channel = "conda-forge" }
 # The awk the appliance's dump script runs under, so the suite judges the
 # script's parser with the interpreter the box judges it with rather than
 # whichever `awk` a host has. The box's `awk` is Fedora CoreOS's gawk, at the
