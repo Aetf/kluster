@@ -118,15 +118,19 @@ annotation its pod takes (`pod_annotations`); a mover carries none.
 (`kluster.components.apps.storage`), and the class is a name:
 
 -   **`claim(resource_name, name, size, retention, *, namespace, uid,
-    writer_key, constraints, generation=0, moving_to=None, stopped=None,
+    constraints, generation=0, moving_to=None, stopped=None,
     storage_class=local-path, protect=False)`** is the one claim on a
-    node, of `size` GiB. `retention` is a retention class (§3) or
-    `off('<reason>')`, which emits the claim alone. `uid` is the user
-    the workload runs as, which every mover of the claim runs as too, so
-    that it reads and writes the data as the workload does.
-    `writer_key` is the ciphertext of the namespace's sealed writer key
-    as the program read it, which a stack that does not hold it stops at
-    (§3, `kluster.lib.k8s.sealed_ciphertext`). `constraints` are the
+    node, of `size` GiB. `retention` is `backed(<class>, <key>)`, a
+    retention class (§3) with the namespace's writer key, or
+    `off('<reason>')`, which emits the claim alone and takes no key,
+    since `off` has no writer scope. The key is the ciphertext of the
+    namespace's sealed writer key as the program read it, which a stack
+    that does not hold it stops at (§3,
+    `kluster.lib.k8s.sealed_ciphertext`). The class and the key are one
+    value, so a claim under a class with no key, and one under `off`
+    with a key, do not type-check. `uid` is the user the workload runs
+    as, which every mover of the claim runs as too, so that it reads and
+    writes the data as the workload does. `constraints` are the
     workload's (`kluster.lib.k8s.Constraints`), the home site a NAS claim
     beside it forces included (`NasClaim.constraints`), and so is the
     hold of a GPU the pod requests (`GPU_HOLD`); the returned

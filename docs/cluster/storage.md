@@ -70,9 +70,16 @@ resort, object storage used directly where an app supports it.
 
 **Two calls claim them, and a class is named.** `claim` is the one
 claim on a node, under `local-path` or a node volume's class, and its
-retention is required: a retention class, or `off('<reason>')`, which
-emits the claim alone. `nas_claim` is the one claim on the NAS, with no
-retention to set, since the source's own regime is its safety net.
+retention is required: `backed(<class>, <key>)`, a retention class with
+the namespace's writer key (§4), which the claim's repository Secret
+carries, or `off('<reason>')`, which emits the claim alone. A claim
+under `off` has no writer scope and takes no key. The class and the key
+are one value, so a claim under a class with no key, and one under
+`off` with a key, do not type-check. A namespace with no claim under a
+class has no `volsync` family in `conventions.backup.BACKED_NAMESPACES`,
+so `physical` mints it no such key. `nas_claim` is the one claim on the
+NAS, with no retention to set, since the source's own regime is its
+safety net.
 declarative/workloads.md §2 says how each is chosen.
 
 **What local-path data outlives.** `/var/mnt/storage` is a Talos

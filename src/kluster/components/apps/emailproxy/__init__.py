@@ -57,7 +57,7 @@ import pulumi_crds as crds
 import pulumi_kubernetes as k8s
 
 from kluster.components.apps import Exposed, Fronts, declared_constraints, dialed_names, expose
-from kluster.components.apps.storage import Claim, claim
+from kluster.components.apps.storage import Claim, backed, claim
 from kluster.conventions.backup import STANDARD
 from kluster.conventions.cluster import Transports
 from kluster.conventions.routes import Exposure, Port
@@ -255,10 +255,9 @@ class EmailProxy(Component, pulumi_type='kluster:apps:EmailProxy'):
             f'{name}-cache',
             'cache',
             _CACHE_SIZE,
-            STANDARD,
+            backed(STANDARD, writer_key),
             namespace=NAMESPACE,
             uid=USER,
-            writer_key=writer_key,
             constraints=self.constraints,
             opts=in_namespace,
         )

@@ -132,7 +132,7 @@ import pulumi_kubernetes as k8s
 
 from kluster import conventions
 from kluster.components.apps import GPU_HOLD, Backend, Exposed, Fronts, declared_constraints, expose, issuer_aliases
-from kluster.components.apps.storage import Claim, NasClaim, claim, nas_claim
+from kluster.components.apps.storage import Claim, NasClaim, backed, claim, nas_claim
 from kluster.components.gpu import GPU_RESOURCE
 from kluster.conventions.backup import STANDARD
 from kluster.conventions.cluster import Transports
@@ -382,10 +382,9 @@ class Jellyfin(Component, pulumi_type='kluster:apps:Jellyfin'):
             f'{name}-data',
             'data',
             _DATA_SIZE,
-            STANDARD,
+            backed(STANDARD, writer_key),
             namespace=NAME,
             uid=USER,
-            writer_key=writer_key,
             constraints=self.constraints & self.derived.constraints & self.media.constraints & GPU_HOLD,
             opts=in_namespace,
         )

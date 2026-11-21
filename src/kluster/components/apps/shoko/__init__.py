@@ -44,7 +44,7 @@ import pulumi
 import pulumi_kubernetes as k8s
 
 from kluster.components.apps import Backend, Exposed, Fronts, declared_constraints, expose
-from kluster.components.apps.storage import Claim, NasClaim, claim, nas_claim
+from kluster.components.apps.storage import Claim, NasClaim, backed, claim, nas_claim
 from kluster.conventions.backup import STANDARD
 from kluster.conventions.routes import Exposure, Proxied, Route
 from kluster.lib.k8s import ApplicationNamespace, application_namespace
@@ -181,10 +181,9 @@ class Shoko(Component, pulumi_type='kluster:apps:Shoko'):
             f'{name}-configuration',
             'configuration',
             _CONFIGURATION_SIZE,
-            STANDARD,
+            backed(STANDARD, writer_key),
             namespace=NAME,
             uid=USER,
-            writer_key=writer_key,
             constraints=self.constraints & self.library.constraints,
             opts=in_namespace,
         )

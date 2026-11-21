@@ -4,7 +4,8 @@ Every claim here is the test's own, each in a namespace of its own, so what is
 held is how a claim's arguments decide what is emitted. The retention class is
 the test's own too, with a schedule and counts no class of `conventions`
 carries, so a source scheduled from anything but the class it is handed reads
-differently. The writer keys are the test's own ciphertext, one per namespace.
+differently. The writer keys are the test's own ciphertext, one per namespace,
+handed to the claims under a class and to none under `off`.
 
 Each namespace's workload is a pod of the test's own, under constraints of the
 test's own that hold it to some of the cluster's nodes, or to none, and that
@@ -36,7 +37,7 @@ from pulumi import runtime
 
 from kluster import conventions
 from kluster.components.apps import storage
-from kluster.components.apps.storage import Off, claim, nas_claim, off
+from kluster.components.apps.storage import Backed, Off, backed, claim, nas_claim, off
 from kluster.components.backup import s3_endpoint
 from kluster.conventions.backup import RetentionClass
 from kluster.lib.k8s import (
@@ -131,20 +132,18 @@ async def declared() -> Recorder:
             'notes',
             'data',
             2,
-            WEEKDAY,
+            backed(WEEKDAY, writer_key('notes')),
             namespace='notes',
             uid=UID,
-            writer_key=writer_key('notes'),
             constraints=CONSTRAINTS['notes'],
         )
         _ = claim(
             'notes-index',
             'index',
             1,
-            WEEKDAY,
+            backed(WEEKDAY, writer_key('notes')),
             namespace='notes',
             uid=UID,
-            writer_key=writer_key('notes'),
             constraints=CONSTRAINTS['notes'],
         )
         models = claim(
@@ -154,7 +153,6 @@ async def declared() -> Recorder:
             off('re-derived on start'),
             namespace='models',
             uid=UID,
-            writer_key=writer_key('models'),
             constraints=CONSTRAINTS['models'],
             storage_class=NODE_VOLUME_CLASS,
         )
@@ -163,10 +161,9 @@ async def declared() -> Recorder:
             'copying',
             'data',
             3,
-            WEEKDAY,
+            backed(WEEKDAY, writer_key('copying')),
             namespace='copying',
             uid=UID,
-            writer_key=writer_key('copying'),
             constraints=CONSTRAINTS['copying'],
             generation=1,
             moving_to=TARGET,
@@ -177,10 +174,9 @@ async def declared() -> Recorder:
             'moved',
             'data',
             3,
-            WEEKDAY,
+            backed(WEEKDAY, writer_key('moved')),
             namespace='moved',
             uid=UID,
-            writer_key=writer_key('moved'),
             constraints=CONSTRAINTS['moved'],
             generation=1,
         )
@@ -192,7 +188,6 @@ async def declared() -> Recorder:
             off('its network is its redundancy'),
             namespace='cache',
             uid=UID,
-            writer_key=writer_key('cache'),
             constraints=CONSTRAINTS['cache'],
             generation=2,
             moving_to=TARGET,
@@ -207,7 +202,6 @@ async def declared() -> Recorder:
             off('re-derived on start'),
             namespace='transcode',
             uid=UID,
-            writer_key=writer_key('transcode'),
             constraints=CONSTRAINTS['transcode'],
             generation=1,
             moving_to=TARGET,
@@ -218,10 +212,9 @@ async def declared() -> Recorder:
             'anywhere',
             'data',
             1,
-            WEEKDAY,
+            backed(WEEKDAY, writer_key('anywhere')),
             namespace='anywhere',
             uid=UID,
-            writer_key=writer_key('anywhere'),
             constraints=CONSTRAINTS['anywhere'],
         )
         # Each workload states what its claims record.
@@ -344,7 +337,7 @@ def test_the_repository_secret_carries_the_namespaces_writer_key_and_a_password_
 def test_a_claim_of_less_than_a_gib_is_refused() -> None:
     with pytest.raises(ValueError, match='1 GiB'):
         _ = claim(
-            'empty', 'data', 0, WEEKDAY, namespace='empty', uid=UID, writer_key=writer_key('empty'), constraints=HOME
+            'empty', 'data', 0, backed(WEEKDAY, writer_key('empty')), namespace='empty', uid=UID, constraints=HOME
         )
 
 
@@ -360,18 +353,65 @@ def test_a_protected_claim_is_registered_protected_and_so_is_the_claim_it_copies
     assert not declared.options_of('moved-g1', CLAIM).protect
 
 
+# -- the writer key -----------------------------------------------------------
+
+
 def test_a_writer_key_of_other_fields_is_refused() -> None:
     with pytest.raises(ValueError, match='AWS_SECRET_ACCESS_KEY'):
-        _ = claim(
-            'bad',
-            'data',
+        _ = backed(WEEKDAY, {'AWS_ACCESS_KEY_ID': 'only-half'})
+
+
+def test_a_backed_retention_cannot_be_made_without_a_writer_key() -> None:
+    """Its repository Secret carries the namespace's writer key, which its restic mover writes to the bucket with.
+
+    The ignore is the half the type check holds: were the key optional, it
+    would suppress nothing, which the type check refuses.
+    """
+    with pytest.raises(TypeError, match='writer_key'):
+        backed(WEEKDAY)  # pyright: ignore[reportCallIssue]
+
+
+def test_a_claim_takes_no_writer_key_beside_its_retention() -> None:
+    """A key travels in `backed` alone, so an `off` claim, which has no writer scope, has nowhere to be handed one.
+
+    The ignore is the half the type check holds, as above.
+    """
+    with pytest.raises(TypeError, match='writer_key'):
+        claim(
+            'keyed',
+            'cache',
             1,
-            WEEKDAY,
-            namespace='bad',
+            off('a cache'),
+            namespace='keyed',
             uid=UID,
-            writer_key={'AWS_ACCESS_KEY_ID': 'only-half'},
+            writer_key=writer_key('keyed'),  # pyright: ignore[reportCallIssue]
             constraints=HOME,
         )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('moving_to', [None, TARGET], ids=['in place', 'under a move'])
+async def test_an_off_claim_takes_no_writer_key_and_seals_nothing(moving_to: dict[str, str] | None) -> None:
+    """No password, no repository and no SealedSecret, in place or under a move, whose copy is made all the same."""
+    monitor = await run_with(Recorder(), stack='apps')
+    async with declaring():
+        workload = k8s.core.v1.ConfigMap('workload')
+        made = claim(
+            'keyless',
+            'cache',
+            1,
+            off('a cache'),
+            namespace='keyless',
+            uid=UID,
+            constraints=HOME,
+            generation=0 if moving_to is None else 1,
+            moving_to=moving_to,
+            stopped=None if moving_to is None else workload,
+        )
+
+    assert (made.password, made.repository) == (None, None)
+    assert monitor.of_type(SEALED_SECRET) == []
+    assert (made.move is None) == (moving_to is None)
 
 
 def pods(monitor: Recorder) -> dict[str, dict[str, Any]]:
@@ -442,13 +482,13 @@ def test_a_node_volumes_pod_writes_in_no_class(declared: Recorder) -> None:
 @pytest.mark.parametrize(
     ('first_class', 'first_retention', 'refusal'),
     [
-        (conventions.SC_LOCAL_PATH, WEEKDAY, TwoBackedVolumes),
+        (conventions.SC_LOCAL_PATH, backed(WEEKDAY, writer_key('pair')), TwoBackedVolumes),
         (NODE_VOLUME_CLASS, off('a cache'), BackedVolumeBesideNodeVolume),
     ],
     ids=['beside a backed claim', 'beside a node volume'],
 )
 async def test_a_backed_claim_beside_a_claim_its_mover_could_bind_it_away_from_is_refused(
-    first_class: str, first_retention: RetentionClass | Off, refusal: type[ValueError]
+    first_class: str, first_retention: Backed | Off, refusal: type[ValueError]
 ) -> None:
     """The mover binds the backed claim apart from the first claim, so the two could bind on two nodes, and the pod run on neither."""
     _ = await run_with(Recorder(), stack='apps')
@@ -460,7 +500,6 @@ async def test_a_backed_claim_beside_a_claim_its_mover_could_bind_it_away_from_i
             first_retention,
             namespace='pair',
             uid=UID,
-            writer_key=writer_key('pair'),
             constraints=UNCONSTRAINED,
             storage_class=first_class,
         )
@@ -469,17 +508,18 @@ async def test_a_backed_claim_beside_a_claim_its_mover_could_bind_it_away_from_i
                 'pair-two',
                 'two',
                 1,
-                WEEKDAY,
+                backed(WEEKDAY, writer_key('pair')),
                 namespace='pair',
                 uid=UID,
-                writer_key=writer_key('pair'),
                 constraints=first.constraints,
             )
 
 
-async def _backed(
-    constraints: Constraints, retention: RetentionClass | Off = WEEKDAY
-) -> tuple[storage.Claim, Recorder]:
+#: What `_backed` declares its claim under unless it is handed otherwise.
+BACKED_DEVICE = backed(WEEKDAY, writer_key('device'))
+
+
+async def _backed(constraints: Constraints, retention: Backed | Off = BACKED_DEVICE) -> tuple[storage.Claim, Recorder]:
     monitor = await run_with(Recorder(), stack='apps')
     async with declaring():
         made = claim(
@@ -489,7 +529,6 @@ async def _backed(
             retention,
             namespace='device',
             uid=UID,
-            writer_key=writer_key('device'),
             constraints=constraints,
         )
     return made, monitor
@@ -622,7 +661,6 @@ def test_a_move_to_a_label_value_its_workloads_binder_requirements_refuse_is_ref
             off('a cache'),
             namespace='astray',
             uid=UID,
-            writer_key=writer_key('astray'),
             constraints=constraints,
             generation=1,
             moving_to=moving_to,
@@ -645,7 +683,6 @@ async def test_a_move_restating_a_required_label_admits_what_one_to_the_target_a
                 off('a cache'),
                 namespace='restated',
                 uid=UID,
-                writer_key=writer_key('restated'),
                 constraints=HOME,
                 generation=1,
                 moving_to=moving_to,
@@ -660,7 +697,7 @@ async def test_a_move_restating_a_required_label_admits_what_one_to_the_target_a
     assert restated == target_alone
 
 
-async def _moved(constraints: Constraints, retention: RetentionClass | Off) -> storage.Claim:
+async def _moved(constraints: Constraints, retention: Backed | Off) -> storage.Claim:
     """The copy of a move of a claim handed `constraints`, under `retention`."""
     _ = await run_with(Recorder(), stack='apps')
     async with declaring():
@@ -672,7 +709,6 @@ async def _moved(constraints: Constraints, retention: RetentionClass | Off) -> s
             retention,
             namespace='moving',
             uid=UID,
-            writer_key=writer_key('moving'),
             constraints=constraints,
             generation=1,
             moving_to=TARGET,
@@ -681,10 +717,12 @@ async def _moved(constraints: Constraints, retention: RetentionClass | Off) -> s
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('retention', [off('a cache, fetched again'), WEEKDAY], ids=['unbacked', 'backed'])
+@pytest.mark.parametrize(
+    'retention', [off('a cache, fetched again'), backed(WEEKDAY, writer_key('moving'))], ids=['unbacked', 'backed']
+)
 @pytest.mark.parametrize('order', ['claim first', 'device first'])
 async def test_a_device_composed_onto_a_moved_claims_constraints_after_it_was_made_is_refused(
-    retention: RetentionClass | Off, order: str
+    retention: Backed | Off, order: str
 ) -> None:
     """The copy's destination binds the new claim, and it was not held to the nodes that offer the device.
 
@@ -702,9 +740,9 @@ async def test_a_device_composed_onto_a_moved_claims_constraints_after_it_was_ma
 
 #: Each kind of second claim on a node a pod could mount beside a claim being
 #: moved: its class, its retention, and whether it is moved in the same copy.
-SECOND_CLAIMS: dict[str, tuple[str, RetentionClass | Off, bool]] = {
+SECOND_CLAIMS: dict[str, tuple[str, Backed | Off, bool]] = {
     'unbacked': (conventions.SC_LOCAL_PATH, off('a cache'), False),
-    'backed': (conventions.SC_LOCAL_PATH, WEEKDAY, False),
+    'backed': (conventions.SC_LOCAL_PATH, backed(WEEKDAY, writer_key('pair')), False),
     'node volume': (NODE_VOLUME_CLASS, off('a cache'), False),
     'moved with it': (conventions.SC_LOCAL_PATH, off('a cache'), True),
 }
@@ -717,7 +755,7 @@ SECOND_CLAIMS: dict[str, tuple[str, RetentionClass | Off, bool]] = {
     'moved_class', [conventions.SC_LOCAL_PATH, NODE_VOLUME_CLASS], ids=['into local-path', "into a node volume's class"]
 )
 async def test_a_claim_moved_beside_a_second_claim_on_a_node_of_its_pod_is_refused(
-    second: tuple[str, RetentionClass | Off, bool], moved_first: bool, moved_class: str
+    second: tuple[str, Backed | Off, bool], moved_first: bool, moved_class: str
 ) -> None:
     """The destination binds the moved claim on the target, apart from the second claim.
 
@@ -741,7 +779,6 @@ async def test_a_claim_moved_beside_a_second_claim_on_a_node_of_its_pod_is_refus
                 off('a cache'),
                 namespace='pair',
                 uid=UID,
-                writer_key=writer_key('pair'),
                 constraints=constraints,
                 generation=1,
                 moving_to=TARGET,
@@ -757,7 +794,6 @@ async def test_a_claim_moved_beside_a_second_claim_on_a_node_of_its_pod_is_refus
                 retention,
                 namespace='pair',
                 uid=UID,
-                writer_key=writer_key('pair'),
                 constraints=constraints,
                 storage_class=storage_class,
                 generation=1 if also_moved else 0,
@@ -793,7 +829,6 @@ async def test_a_claim_moved_as_the_one_claim_on_a_node_of_its_pod_is_admitted_a
             off('a cache'),
             namespace='beside',
             uid=UID,
-            writer_key=writer_key('beside'),
             constraints=library.constraints,
             generation=1,
             moving_to=TARGET,
@@ -803,10 +838,9 @@ async def test_a_claim_moved_as_the_one_claim_on_a_node_of_its_pod_is_admitted_a
             'beside-finished',
             'finished',
             1,
-            WEEKDAY,
+            backed(WEEKDAY, writer_key('beside')),
             namespace='beside',
             uid=UID,
-            writer_key=writer_key('beside'),
             constraints=library.constraints,
             generation=1,
         )
@@ -817,7 +851,6 @@ async def test_a_claim_moved_as_the_one_claim_on_a_node_of_its_pod_is_admitted_a
             off('a cache'),
             namespace='beside',
             uid=UID,
-            writer_key=writer_key('beside'),
             constraints=finished.constraints,
         )
 
@@ -831,10 +864,9 @@ def test_a_copy_is_ordered_after_a_workload_it_is_handed() -> None:
             'early',
             'data',
             1,
-            WEEKDAY,
+            backed(WEEKDAY, writer_key('early')),
             namespace='early',
             uid=UID,
-            writer_key=writer_key('early'),
             constraints=HOME,
             generation=1,
             moving_to=TARGET,
@@ -848,10 +880,9 @@ def test_a_copy_names_where_it_moves_to() -> None:
             'nowhere',
             'data',
             1,
-            WEEKDAY,
+            backed(WEEKDAY, writer_key('nowhere')),
             namespace='nowhere',
             uid=UID,
-            writer_key=writer_key('nowhere'),
             constraints=HOME,
             generation=1,
             moving_to={},
@@ -867,10 +898,9 @@ def test_a_copy_of_a_name_too_long_for_the_destinations_service_is_refused() -> 
             'long',
             'x' * 40,
             1,
-            WEEKDAY,
+            backed(WEEKDAY, writer_key('long')),
             namespace='long',
             uid=UID,
-            writer_key=writer_key('long'),
             constraints=HOME,
             generation=1,
             moving_to=TARGET,
@@ -884,10 +914,9 @@ def test_a_copy_raises_the_generation() -> None:
             'flat',
             'data',
             1,
-            WEEKDAY,
+            backed(WEEKDAY, writer_key('flat')),
             namespace='flat',
             uid=UID,
-            writer_key=writer_key('flat'),
             constraints=HOME,
             moving_to=TARGET,
         )

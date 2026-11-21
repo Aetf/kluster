@@ -176,13 +176,11 @@ class Hath(Component, pulumi_type='kluster:apps:Hath'):
     `exposure` is its row of the census, one raw port at the `Dedicated`
     front; `image` is the pin it runs; `login` the ciphertext of each key of
     `PORTED`, as the program read it with
-    `kluster.lib.k8s.sealed_ciphertext`; `writer_key` the namespace's sealed
-    writer key, which `claim` takes whatever the retention and no mover of an
-    `off` claim reads; `started` whether the client runs, the migration's
-    layer, false while the legacy client serves; and `fronts` and `zone_ids`
-    what the program read for `expose`. The providers arrive in `opts`: the
-    Kubernetes provider for the cluster's objects and the Cloudflare one for
-    its records.
+    `kluster.lib.k8s.sealed_ciphertext`; `started` whether the client runs,
+    the migration's layer, false while the legacy client serves; and `fronts`
+    and `zone_ids` what the program read for `expose`. The providers arrive in
+    `opts`: the Kubernetes provider for the cluster's objects and the
+    Cloudflare one for its records.
     """
 
     namespace: ApplicationNamespace
@@ -198,7 +196,6 @@ class Hath(Component, pulumi_type='kluster:apps:Hath'):
         exposure: Exposure,
         image: ImagePin,
         login: Mapping[str, pulumi.Input[str]],
-        writer_key: Mapping[str, pulumi.Input[str]],
         started: bool,
         fronts: Fronts,
         zone_ids: pulumi.Input[Mapping[str, str]],
@@ -226,7 +223,6 @@ class Hath(Component, pulumi_type='kluster:apps:Hath'):
             off("a slice of the H@H network's archive, whose redundancy is the network it came from"),
             namespace=NAMESPACE,
             uid=USER,
-            writer_key=writer_key,
             constraints=self.constraints,
             storage_class=cache_class,
             protect=True,
