@@ -3,10 +3,12 @@
 An admission policy is evaluated by the API server the cluster runs: the
 `kube-apiserver` and `etcd` images the pinned Talos release names by default
 (`talosctl images default`), which is what the cluster's control plane runs.
-The two are pinned here by the tag the release names and that tag's digest
-(`CONTROL_PLANE_PINS`), and pulled by the digest (`tests/pinned_image.py`);
-`tests/test_apps_database.py` holds the tags to the release's, so a Talos bump
-onto another Kubernetes is red until the pins move with it.
+Each image of the control plane run here, those two and the
+`kube-controller-manager` below, is pinned by the tag the release names and
+that tag's digest (`CONTROL_PLANE_PINS`), and pulled by the digest
+(`tests/pinned_image.py`); `tests/test_apps_database.py` holds the tags to
+the release's, so a Talos bump onto another Kubernetes is red until the pins
+move with it.
 
 The server and `etcd` share one network namespace of their own and publish
 nothing, so the client runs inside it too, the way a suite hands it
@@ -16,6 +18,16 @@ nothing, so the client runs inside it too, the way a suite hands it
 so what a case reads is admission alone; a request is sent as an account by
 impersonating it, and a write is sent with `--dry-run=server`, which
 admission judges and mutates as it does the write itself.
+
+**A suite that has a controller act on what it stores** runs the
+controller beside the server, in that network namespace, as the server's
+`ADMIN` through a kubeconfig (`ApiServer.alongside`): the suite's own image
+and arguments, for an operator a suite pins itself. The workload
+controllers are the release's `kube-controller-manager`, pulled and run
+only for a suite that names the controllers it runs (`running`'s
+`controllers`), today the tripwire of `tests/test_operator_updates.py`. No
+node registers and no scheduler runs, so a workload of zero replicas is the
+one a controller reports ready.
 """
 
 from __future__ import annotations
@@ -38,7 +50,8 @@ from cryptography.hazmat.primitives.serialization import Encoding, NoEncryption,
 from kluster.lib.versions import ImagePin
 
 #: The control plane's images, each the tag the pinned Talos release names
-#: and the digest the registry serves for it, by name.
+#: and the digest the registry serves for it, by the name the release lists
+#: it under.
 CONTROL_PLANE_PINS = {
     'kube-apiserver': ImagePin(
         'registry.k8s.io/kube-apiserver',
@@ -48,7 +61,15 @@ CONTROL_PLANE_PINS = {
     'etcd': ImagePin(
         'registry.k8s.io/etcd', 'v3.6.12', 'sha256:3c2ced08f23b1183e8bd4613064c3fb6b8db5057a4d1f13c3518c76e357a07a8'
     ),
+    'kube-controller-manager': ImagePin(
+        'registry.k8s.io/kube-controller-manager',
+        'v1.36.3',
+        'sha256:ed56454bf514916079a227f5765b64524fde52106dfcc52978b28634765b78b8',
+    ),
 }
+#: The images every server runs; the controller manager runs only where a
+#: suite names controllers.
+_SERVER_IMAGES = ('kube-apiserver', 'etcd')
 #: The server's port, inside the network namespace the containers share.
 SERVER_PORT = 6443
 #: The user the server's one token authenticates, who sets the server up.
@@ -66,6 +87,9 @@ CASE_TIMEOUT = 2 * pinned_image.PULL_TIMEOUT + 2 * READY_TIMEOUT
 #: directory it caches discovery in, on the container's writable mount.
 _IN_SERVER_KUBECTL = '/kubectl'
 _IN_SERVER_CACHE = '/certs/kubectl-cache'
+#: Where a container beside the server reads its kubeconfig from, named by
+#: `KUBECONFIG` in its environment and by the controller manager's flag.
+_KUBECONFIG = '/kubeconfig'
 
 
 @dataclass(frozen=True)
@@ -110,6 +134,34 @@ class ApiServer:
     kubectl_argv: tuple[str, ...]
     """The command that runs `kubectl` inside the server's network namespace, before its own arguments."""
     token: str
+    label: str
+    """The label every container beside the server carries."""
+    network: str
+    """The `--network` a container beside the server joins: the server's namespace."""
+    kubeconfig: Path
+    """A kubeconfig that reaches the server as `ADMIN` from inside its network namespace."""
+
+    @contextmanager
+    def alongside(self, role: str, image: str, *args: str, env: Mapping[str, str] | None = None) -> Generator[str]:
+        """A container from `image` running `args`, beside the server as `ADMIN`, for as long as the block lasts.
+
+        Its name, which is what the block yields, carries `role`. The
+        kubeconfig is at `_KUBECONFIG`, which `KUBECONFIG` names, in an
+        environment that also holds `env`. The container carries the
+        server's label and the bound every container here does, and is
+        removed after the block, before the server's own.
+        """
+        name = f'kluster-test-{role}-{uuid.uuid4().hex[:12]}'
+        environment = {'KUBECONFIG': _KUBECONFIG, **(env or {})}
+        with process_sessions.removing(name, timeout=COMMAND_TIMEOUT):
+            _ = podman(
+                'create', '--name', name, *_common(self.label), '--network', self.network,
+                *(f'--env={key}={value}' for key, value in environment.items()),
+                image, *args,
+            )  # fmt: skip
+            _ = podman('cp', str(self.kubeconfig), f'{name}:{_KUBECONFIG}')
+            _ = podman('start', name)
+            yield name
 
     def kubectl(
         self, *args: str, user: str | None = None, document: Mapping[str, Any] | None = None
@@ -147,23 +199,51 @@ class ApiServer:
         return self.written('create', document, user)
 
 
+def _common(label: str) -> list[str]:
+    """What every container here is started with: removed once it stops, labeled `label`, bounded, logging to a file."""
+    return ['--rm', '--label', label, '--timeout', str(pinned_image.CONTAINER_TIMEOUT), process_sessions.LOG_TO_FILE]
+
+
+def _kubeconfig(token: str) -> dict[str, object]:
+    """A kubeconfig that reaches the server as the user `token` authenticates, from inside its network namespace."""
+    return {
+        'apiVersion': 'v1',
+        'kind': 'Config',
+        'clusters': [
+            {
+                'name': 'server',
+                'cluster': {'server': f'https://127.0.0.1:{SERVER_PORT}', 'insecure-skip-tls-verify': True},
+            }
+        ],
+        'users': [{'name': ADMIN, 'user': {'token': token}}],
+        'contexts': [{'name': ADMIN, 'context': {'cluster': 'server', 'user': ADMIN}}],
+        'current-context': ADMIN,
+    }
+
+
 @contextmanager
-def running(label: str, files: Path, client: Client) -> Generator[ApiServer]:
+def running(label: str, files: Path, client: Client, *, controllers: tuple[str, ...] = ()) -> Generator[ApiServer]:
     """The server, answering, with `client` beside it, for as long as the block lasts; every container is removed after.
 
     Each container carries `label`, the census of what a run left, and is
     bounded by `pinned_image.CONTAINER_TIMEOUT`. `files` is a directory of the
-    caller's, which takes the server's service-account key and token file.
+    caller's, which takes the server's service-account key, token file and
+    kubeconfig. Where `controllers` names any, the controller manager runs
+    those controllers beside the server, as `ADMIN`, with no leader election
+    and nothing served.
     """
-    images = {name: pinned_image.pulled(pin) for name, pin in CONTROL_PLANE_PINS.items()}
+    names = (*_SERVER_IMAGES, *(('kube-controller-manager',) if controllers else ()))
+    images = {name: pinned_image.pulled(CONTROL_PLANE_PINS[name]) for name in names}
     key = ec.generate_private_key(ec.SECP256R1())
     _ = (files / 'sa.key').write_bytes(key.private_bytes(Encoding.PEM, PrivateFormat.PKCS8, NoEncryption()))
     _ = (files / 'sa.pub').write_bytes(key.public_key().public_bytes(Encoding.PEM, PublicFormat.SubjectPublicKeyInfo))
     token = uuid.uuid4().hex
     _ = (files / 'tokens.csv').write_text(f'{token},{ADMIN},{ADMIN},"system:masters"\n')
+    kubeconfig = files / 'kubeconfig'
+    _ = kubeconfig.write_text(json.dumps(_kubeconfig(token)))
     suffix = uuid.uuid4().hex[:12]
     etcd, server, beside = (f'kluster-test-{role}-{suffix}' for role in ('etcd', 'apiserver', 'client'))
-    common = ['--rm', '--label', label, '--timeout', str(pinned_image.CONTAINER_TIMEOUT), process_sessions.LOG_TO_FILE]
+    common = _common(label)
     shared = ['--network', f'container:{etcd}']
     # The two beside etcd go first: podman refuses to remove a container whose network another shares.
     with process_sessions.removing(beside, server, etcd, timeout=COMMAND_TIMEOUT):
@@ -201,6 +281,14 @@ def running(label: str, files: Path, client: Client) -> Generator[ApiServer]:
                 _ = podman('run', '--detach', '--name', beside, *common, *shared, '--entrypoint', 'sleep', image,
                            str(pinned_image.CONTAINER_TIMEOUT))  # fmt: skip
                 argv = ('podman', 'exec', '--interactive', beside, 'kubectl')
-        apiserver = ApiServer(argv, token)
+        apiserver = ApiServer(argv, token, label, f'container:{etcd}', kubeconfig)
         until(lambda: apiserver.kubectl('get', '--raw', '/readyz').returncode == 0, 'the API server did not answer')
-        yield apiserver
+        if not controllers:
+            yield apiserver
+            return
+        with apiserver.alongside(
+            'controller-manager', images['kube-controller-manager'], 'kube-controller-manager',
+            f'--kubeconfig={_KUBECONFIG}', f'--controllers={",".join(controllers)}', '--leader-elect=false',
+            '--secure-port=0',
+        ):  # fmt: skip
+            yield apiserver
