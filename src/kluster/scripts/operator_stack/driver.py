@@ -5,7 +5,11 @@ What every run shares (framework/pulumi.md §3.3):
 -   **The environment is the driver's**, set on the process it starts: the
     stack's backend and the operator passphrase, and none of the
     caller's variables that could steer `pulumi` or its backend
-    (`kluster.lib.stack_environment`).
+    (`kluster.lib.stack_environment`); and CI's Helm environment over it,
+    Helm's homes under an empty directory of the run's own and none of the
+    caller's Helm settings (`manual_run.ci_helm`).
+-   **Every command starts from the forge's `main`**: a working copy behind
+    it is refused before `pulumi` starts (`manual_run.require_main`).
 -   **The stack is the driver's argument**, never a flag it passes through,
     and a run refuses inside a `jj` workspace under `.claude/`, where the
     slots do not answer.
@@ -20,8 +24,9 @@ What every run shares (framework/pulumi.md §3.3):
     `import` or a `stack import` into a stack whose state is committed, which
     would record what it brings in without the program's secret markings.
 -   **A ^C is `pulumi`'s to answer** (`Cli`).
--   **A stack whose state is committed** is checked before every command and
-    after every command that can write (`checkpoint`).
+-   **A stack whose state is committed** is checked for a conflicted
+    checkpoint before every command, and after every command that can write
+    (`checkpoint`).
 -   **A stack with a gate of its own** has it applied around `plan` and `up`:
     the `state-backend` stack's, which holds a replacement of the box for
     `--force` and reads the estate's backend after every run (`appliance`).
@@ -36,18 +41,21 @@ import enum
 import json
 import logging
 import os
+import shutil
 import signal
 import subprocess as sp
 import tempfile
 import time
+import weakref
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol, cast
 
 from kluster.conventions import identity
-from kluster.lib import stack_environment, state_only
+from kluster.lib import pulumi_cli, stack_environment, state_only
 from kluster.lib.state_backend import permission
+from kluster.scripts import manual_run
 from kluster.scripts.operator_stack import appliance, checkpoint, progress
 
 log = logging.getLogger(__name__)
@@ -129,20 +137,22 @@ class Why(enum.Enum):
     #: The temporary directory for that preview's event log is inside the
     #: checkout. Its reading's own, it goes with `kluster.lib.state_only`.
     UNREFRESHED_LOG_IN_CHECKOUT = 'preview without a refresh logs into the checkout'
+    #: The temporary directory for the run's Helm homes is inside the checkout.
+    HELM_IN_CHECKOUT = 'helm homes in the checkout'
 
 
 class Refused(RuntimeError):
     """The run would not start, or `pulumi` failed where the driver needed an answer.
 
     `why` says which: one of the driver's own reasons, or, for a working copy
-    a run may not start from, the checkpoint check's, with its `remedy` as
+    a run may not start from, the working-copy check's, with its `remedy` as
     the commands that clear it.
     """
 
-    def __init__(self, message: str, *, why: Why | checkpoint.Unready, remedy: checkpoint.Remedy = ()) -> None:
+    def __init__(self, message: str, *, why: Why | manual_run.Unready, remedy: manual_run.Remedy = ()) -> None:
         super().__init__(message)
-        self.why: Why | checkpoint.Unready = why
-        self.remedy: checkpoint.Remedy = remedy
+        self.why: Why | manual_run.Unready = why
+        self.remedy: manual_run.Remedy = remedy
 
 
 class Pulumi(Protocol):
@@ -452,6 +462,26 @@ class Run:
     base: Mapping[str, str] = field(default_factory=lambda: dict(os.environ), repr=False)
     #: The stack's own gate, where it has one (`appliance`).
     gate: appliance.Gate | None = None
+    #: The directory Helm's homes are under for every `pulumi` run of the stack
+    #: (`manual_run.ci_helm`): a fresh temporary directory, made empty with
+    #: the run and removed with it, on every way out the driver lives through.
+    #: A driver ended by a signal it does not handle (SIGKILL, SIGTERM, a
+    #: hang-up) leaves it in the temporary directory, as it leaves its
+    #: progress log (`progress.observed`).
+    helm_homes: Path = field(init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        """Make the run's Helm directory, refused inside the checkout, where `jj` would snapshot what Helm writes."""
+        helm = Path(tempfile.mkdtemp(prefix='operator-stack-helm-'))
+        if helm.resolve().is_relative_to(self.checkout.resolve()):
+            helm.rmdir()
+            raise Refused(
+                f'the temporary directory {helm} is inside {self.checkout}, where `jj` would snapshot what Helm '
+                f'writes in a run of {self.stack}: set TMPDIR outside the checkout',
+                why=Why.HELM_IN_CHECKOUT,
+            )
+        self.helm_homes = helm
+        _ = weakref.finalize(self, shutil.rmtree, helm, ignore_errors=True)
 
     @classmethod
     def open(cls, stack: str, checkout: Path, **overrides: Any) -> Run:
@@ -482,13 +512,20 @@ class Run:
     def env(self) -> dict[str, str]:
         """The environment every `pulumi` run of the stack is given, the replacement permission never among it.
 
+        The stack's (`stack_environment.process`), with CI's Helm environment
+        laid over it (`manual_run.ci_helm`): the Kubernetes provider takes
+        its Helm settings from the environment, so a chart a run renders
+        reads no repository, cache or configuration of the caller's.
+
         `up --force` grants the permission on the one `pulumi up` it starts
         (`_write`); a caller's shell that exported it grants nothing, to a
         passed-through `up` least of all. The backend read and the `git` and
         `jj` checks start processes of their own environment, which run no
         program and so act on no permission.
         """
-        env = stack_environment.process(self.base, self.variables)
+        env = pulumi_cli.WholeEnvironment(
+            manual_run.ci_helm(stack_environment.process(self.base, self.variables), self.helm_homes)
+        )
         _ = env.pop(permission.ENV, None)
         return env
 
@@ -620,12 +657,15 @@ class Run:
         return [*args[:at], '--stack', self.stack, *args[at:]]
 
     def _require_current(self) -> None:
-        if self.committed:
-            log.info("checking the working copy against the forge's main")
-            try:
+        """Refuse a working copy behind the forge's `main`, for every stack, and a conflicted checkpoint after it."""
+        log.info("checking the working copy against the forge's main")
+        try:
+            if self.committed:
                 checkpoint.require_current(self.checkout, stack_environment.checkpoint(self.checkout, self.stack))
-            except checkpoint.CheckRefused as exc:
-                raise Refused(str(exc), why=exc.why, remedy=exc.remedy) from exc
+            else:
+                manual_run.require_main(self.checkout)
+        except manual_run.CheckRefused as exc:
+            raise Refused(str(exc), why=exc.why, remedy=exc.remedy) from exc
 
     def _settle(self, code: int) -> int:
         """`code`, unless the gate reads the estate's backend as owed a restore or not answering.

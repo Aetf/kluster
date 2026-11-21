@@ -5,9 +5,10 @@ the push**: a branch carrying it is public from the moment it reaches the
 forge, before any review. So the checks here run on the workstation, where the
 file is still private:
 
--   **Before a run**, that the working copy holds the forge's current `main`
-    (`require_current`), and that the checkpoint is not conflicted. A run from
-    an older checkpoint plans against a state that is not the latest one.
+-   **Before a run**, that the working copy holds the forge's current `main`,
+    as every operator stack's run is checked for (`manual_run.require_main`),
+    and then that the checkpoint is not conflicted (`require_current`). A run
+    from an older checkpoint plans against a state that is not the latest one.
 -   **After a run**, that the file holds no secret value in the clear
     (`cleartext`), and that every property the engine marks secret is
     ciphertext wherever the file records it (`undeclared`). Both name the
@@ -28,14 +29,13 @@ from __future__ import annotations
 import copy
 import enum
 import json
-import shlex
-import subprocess as sp
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
 from kluster.lib import dependency_sets, stack_environment
+from kluster.scripts import manual_run
 
 #: The two keys of Pulumi's secret envelope: the signature key, and the value
 #: it holds in every envelope. A file carries the value encrypted beside them
@@ -44,56 +44,11 @@ from kluster.lib import dependency_sets, stack_environment
 SECRET_SIG = '4dabf18193072939515e22adb298388d'
 SECRET_MARK = '1b47061264138c4ac30d75fd1eb44270'
 
-#: Where the forge's `main` is read from, as `git ls-remote` names it.
-REMOTE = 'origin'
-MAIN = 'refs/heads/main'
-
 #: The shortest string searched for as a secret. A value this short carries too
 #: little to be told apart from ordinary text in the file, so searching for it
 #: would find it everywhere; the secrets this repository keeps are keys and
 #: tokens, many times longer.
 SHORTEST = 8
-
-#: How long one `git` or `jj` query may take. `ls-remote` talks to the forge.
-TIMEOUT = 60
-
-
-class Unready(enum.Enum):
-    """Why a working copy is not one a run of this stack may start from."""
-
-    #: The forge's `main` answered with no commit.
-    NO_MAIN = 'no main'
-    #: The forge's `main` is not in this repository.
-    MAIN_NOT_FETCHED = 'main not fetched'
-    #: The forge's `main` is fetched and the working copy is not on it.
-    BEHIND_MAIN = 'behind main'
-    #: The checkpoint holds conflict markers.
-    CONFLICTED = 'conflicted'
-    #: A `git` or `jj` query failed, a stale working copy among them.
-    UNREADABLE = 'unreadable'
-
-
-#: A remedy: the commands that clear a refusal, in the order they run.
-Remedy = tuple[tuple[str, ...], ...]
-
-
-def spelled(remedy: Remedy) -> str:
-    """`remedy` as a refusal's sentence names it: each command in backticks, in order."""
-    return ', then '.join(f'`{shlex.join(command)}`' for command in remedy)
-
-
-class CheckRefused(RuntimeError):
-    """The working copy is not one a run of this stack may start from.
-
-    `why` says which, and `remedy` is what clears it, as commands rather than
-    words, so a reader can run them and a case can hold them to the tool's own
-    grammar. The message names the same commands, spelled from `remedy`.
-    """
-
-    def __init__(self, message: str, *, why: Unready, remedy: Remedy = ()) -> None:
-        super().__init__(message)
-        self.why: Unready = why
-        self.remedy: Remedy = remedy
 
 
 class Kind(enum.Enum):
@@ -158,85 +113,24 @@ class Finding:
 def require_current(checkout: Path, checkpoint: Path | None) -> None:
     """Refuse a run from a working copy behind the forge's `main`, or over a conflicted checkpoint.
 
-    **The ancestry comes first**, because of what the conflict's remedy does.
-    After a checkpoint lands, the fetch that abandons the landed change can
-    leave a second, unlanded run's checkpoint conflicted in the working copy
-    until the rebase resolves it; checked first, the conflict's remedy would
-    throw that unlanded run away, where the ancestry's refusal sends the
-    operator to the rebase that resolves it.
+    **The ancestry comes first** (`manual_run.require_main`), because of what
+    the conflict's remedy does. After a checkpoint lands, the fetch that
+    abandons the landed change can leave a second, unlanded run's checkpoint
+    conflicted in the working copy until the rebase resolves it; checked
+    first, the conflict's remedy would throw that unlanded run away, where the
+    ancestry's refusal sends the operator to the rebase that resolves it.
     """
-    _require_ancestry(checkout)
+    manual_run.require_main(checkout)
     if checkpoint is not None and conflicted(checkpoint):
-        remedy: Remedy = (('jj', 'restore', '--from', 'main', str(checkpoint.relative_to(checkout))),)
-        raise CheckRefused(
+        remedy: manual_run.Remedy = (('jj', 'restore', '--from', 'main', str(checkpoint.relative_to(checkout))),)
+        raise manual_run.CheckRefused(
             f"{checkpoint} is conflicted: two runs wrote it from one base. Keep main's side "
-            f'({spelled(remedy)}), run a refreshed `plan`, and bring in '
+            f'({manual_run.spelled(remedy)}), run a refreshed `plan`, and bring in '
             "through the program's `import_` what the other run created, or delete it by hand. An instance "
             'the other run created is terminated by hand, never imported.',
-            why=Unready.CONFLICTED,
+            why=manual_run.Unready.CONFLICTED,
             remedy=remedy,
         )
-
-
-def _require_ancestry(checkout: Path) -> None:
-    """The forge's `main`, read without writing a ref, must be an ancestor of the working copy.
-
-    `git merge-base --is-ancestor` answers 0 when it is, 1 when it is not, and
-    128 when the commit is not in this repository at all — the forge's `main`
-    never fetched. Every answer but 0 is a refusal, and the remedy is the
-    step that is missing.
-    """
-    listed = _run(['git', 'ls-remote', REMOTE, MAIN], checkout, what="reading the forge's main")
-    fields = listed.split()
-    if not fields:
-        raise CheckRefused(
-            f'`git ls-remote {REMOTE} {MAIN}` names no commit, so there is no main to start from', why=Unready.NO_MAIN
-        )
-    forge_main = fields[0]
-    head = working_copy(checkout)
-    answer = sp.run(
-        ['git', 'merge-base', '--is-ancestor', forge_main, head],
-        cwd=checkout,
-        capture_output=True,
-        text=True,
-        timeout=TIMEOUT,
-        check=False,
-    )
-    # Onto the forge's main as the remote bookmark names it, which is what was
-    # checked: a local `main` that does not track it would leave the working
-    # copy where it is.
-    rebase = ('jj', 'rebase', '-b', '@', '-d', f'main@{REMOTE}')
-    if answer.returncode == 1:
-        remedy: Remedy = (rebase,)
-        raise CheckRefused(
-            f"the forge's main ({forge_main[:12]}) is fetched but the working copy is not on it: "
-            f'{spelled(remedy)}, then run again',
-            why=Unready.BEHIND_MAIN,
-            remedy=remedy,
-        )
-    if answer.returncode != 0:
-        remedy = (('jj', 'git', 'fetch'), rebase)
-        raise CheckRefused(
-            f"the forge's main ({forge_main[:12]}) is not in this repository: {spelled(remedy)}, then run again",
-            why=Unready.MAIN_NOT_FETCHED,
-            remedy=remedy,
-        )
-
-
-def working_copy(checkout: Path) -> str:
-    """The commit the working copy is: `jj`'s `@` in a `jj` checkout, git's `HEAD` in a plain clone.
-
-    `jj` snapshots the working copy first, as every `jj` command does, and
-    refuses one that is stale — one whose `@` another workspace rewrote, by a
-    rebase or by a fetch that abandoned what `@` sat on. The files on disk are
-    then not `@`'s, and they are what the conflict check and `pulumi` read, so
-    a stale working copy is refused here rather than read past.
-    """
-    if (checkout / '.jj').is_dir():
-        command = ['jj', 'log', '--no-graph', '-r', '@', '-T', 'commit_id']
-    else:
-        command = ['git', 'rev-parse', 'HEAD']
-    return _run(command, checkout, what='reading the working copy').strip()
 
 
 def conflicted(checkpoint: Path) -> bool:
@@ -248,16 +142,6 @@ def conflicted(checkpoint: Path) -> bool:
     with `{`.
     """
     return any(line.startswith('<<<<<<<') for line in checkpoint.read_text().splitlines())
-
-
-def _run(command: Sequence[str], cwd: Path, *, what: str) -> str:
-    completed = sp.run(list(command), cwd=cwd, capture_output=True, text=True, timeout=TIMEOUT, check=False)
-    if completed.returncode != 0:
-        raise CheckRefused(
-            f'{what} failed: `{" ".join(command)}`: {completed.stderr.strip() or completed.returncode}',
-            why=Unready.UNREADABLE,
-        )
-    return completed.stdout
 
 
 # --------------------------------------------------------------------------

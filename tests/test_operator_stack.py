@@ -75,6 +75,7 @@ from scratch_projects import cli_directories
 from kluster.conventions import identity
 from kluster.lib import acquisition, bundle, pulumi_cli, stack_environment, state_only, workstation
 from kluster.lib.state_backend import permission, settings, state, table
+from kluster.scripts import manual_run
 from kluster.scripts.credentials import derived, escrow
 from kluster.scripts.credentials import workstation as credential_slots
 from kluster.scripts.operator_stack import appliance, checkpoint, cli, driver
@@ -375,9 +376,8 @@ def _plaintext(value: object) -> dict[str, str]:
 # --------------------------------------------------------------------------
 
 
-def test_the_estate_backend_stack_runs_under_its_slots_and_nothing_its_caller_carries(tmp_path: Path) -> None:
-    checkout = tmp_path / 'kluster'
-    _fill_slots(checkout)
+def test_the_estate_backend_stack_runs_under_its_slots_and_nothing_its_caller_carries(repository: Repository) -> None:
+    checkout = repository.checkout
     fake = FakePulumi()
     run = driver.Run.open('github', checkout, pulumi=fake, base=AMBIENT)
 
@@ -505,11 +505,10 @@ class _Terminal(io.StringIO):
 
 
 def test_a_run_at_a_terminal_is_asked_for_the_operator_passphrase_the_chain_does_not_hold(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    repository: Repository, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The chain's last layer as a run meets it: a prompt where standard input is a terminal, and its answer used."""
-    checkout = tmp_path / 'kluster'
-    _fill_slots(checkout)
+    checkout = repository.checkout
     (workstation.slots(checkout) / stack_environment.OPERATOR_PASSPHRASE_SLOT).unlink()
     monkeypatch.setattr('sys.stdin', _Terminal())
     asked: list[str] = []
@@ -586,9 +585,8 @@ def test_an_argument_naming_another_stack_is_refused_naming_it(tmp_path: Path, a
     assert fake.streamed == []
 
 
-def test_the_stack_goes_ahead_of_a_double_dash_and_words_after_it_are_the_callers(tmp_path: Path) -> None:
-    checkout = tmp_path / 'kluster'
-    _fill_slots(checkout)
+def test_the_stack_goes_ahead_of_a_double_dash_and_words_after_it_are_the_callers(repository: Repository) -> None:
+    checkout = repository.checkout
     fake = FakePulumi()
     run = driver.Run.open('github', checkout, pulumi=fake, base=AMBIENT)
 
@@ -640,11 +638,10 @@ def test_a_passed_through_import_is_refused_for_a_committed_stack(
     assert fake.streamed == []
 
 
-def test_a_passed_through_import_reaches_pulumi_for_a_backend_stack(tmp_path: Path) -> None:
+def test_a_passed_through_import_reaches_pulumi_for_a_backend_stack(repository: Repository) -> None:
     # The refusal is about a committed state; the estate's backend is not
     # published, and `framework/github.md` §3.1's adoption runs this way.
-    checkout = tmp_path / 'kluster'
-    _fill_slots(checkout)
+    checkout = repository.checkout
     fake = FakePulumi()
     run = driver.Run.open('github', checkout, pulumi=fake, base=AMBIENT)
 
@@ -666,9 +663,10 @@ def test_a_passed_through_import_reaches_pulumi_for_a_backend_stack(tmp_path: Pa
         ({'create': 1}, driver.PLANNED),
     ],
 )
-def test_plan_previews_with_a_refresh_and_makes_no_up(tmp_path: Path, changes: dict[str, int], expected: int) -> None:
-    checkout = tmp_path / 'kluster'
-    _fill_slots(checkout)
+def test_plan_previews_with_a_refresh_and_makes_no_up(
+    repository: Repository, changes: dict[str, int], expected: int
+) -> None:
+    checkout = repository.checkout
     fake = FakePulumi(changes=changes)
     run = driver.Run.open('github', checkout, pulumi=fake, base=AMBIENT)
 
@@ -680,9 +678,8 @@ def test_plan_previews_with_a_refresh_and_makes_no_up(tmp_path: Path, changes: d
     assert fake.ups() == []
 
 
-def test_up_with_nothing_planned_makes_no_up(tmp_path: Path) -> None:
-    checkout = tmp_path / 'kluster'
-    _fill_slots(checkout)
+def test_up_with_nothing_planned_makes_no_up(repository: Repository) -> None:
+    checkout = repository.checkout
     fake = FakePulumi()
     run = driver.Run.open('github', checkout, pulumi=fake, base=AMBIENT)
 
@@ -710,12 +707,11 @@ MARKS = 'test_operator_stack.runs'
 
 
 def test_a_plan_and_an_up_ask_for_their_runs_progress_and_a_passthrough_for_none(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
+    repository: Repository, caplog: pytest.LogCaptureFixture
 ) -> None:
     # What each run is said to be doing is a phrase the driver logged since
     # the run before it; the narration itself is `Cli`'s (`progress`).
-    checkout = tmp_path / 'kluster'
-    _fill_slots(checkout)
+    checkout = repository.checkout
     fake = Marking(changes={'same': 2, 'update': 1})
     run = driver.Run.open('github', checkout, pulumi=fake, base=AMBIENT)
 
@@ -737,9 +733,8 @@ def test_a_plan_and_an_up_ask_for_their_runs_progress_and_a_passthrough_for_none
 
 
 @pytest.mark.parametrize(('yes', 'answer', 'ups'), [(True, False, 1), (False, True, 1), (False, False, 0)])
-def test_up_applies_what_is_planned_once_confirmed(tmp_path: Path, yes: bool, answer: bool, ups: int) -> None:
-    checkout = tmp_path / 'kluster'
-    _fill_slots(checkout)
+def test_up_applies_what_is_planned_once_confirmed(repository: Repository, yes: bool, answer: bool, ups: int) -> None:
+    checkout = repository.checkout
     fake = FakePulumi(changes={'same': 2, 'update': 1})
     asked: list[str] = []
 
@@ -828,10 +823,9 @@ DEPENDENCY_ADDED = _unrefreshed(
 
 @pytest.mark.parametrize(('yes', 'answer', 'ups'), [(True, False, 1), (False, True, 1), (False, False, 0)])
 def test_a_field_the_preview_without_a_refresh_finds_is_planned_and_applied_once_confirmed(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str], yes: bool, answer: bool, ups: int
+    repository: Repository, capsys: pytest.CaptureFixture[str], yes: bool, answer: bool, ups: int
 ) -> None:
-    checkout = tmp_path / 'kluster'
-    _fill_slots(checkout)
+    checkout = repository.checkout
     fake = FakePulumi(unrefreshed=DEPENDENCY_ADDED)
     asked: list[str] = []
 
@@ -864,10 +858,9 @@ def test_a_field_the_preview_without_a_refresh_finds_is_planned_and_applied_once
     ],
 )
 def test_a_preview_without_a_refresh_that_finds_nothing_plans_nothing_and_makes_no_up(
-    tmp_path: Path, unrefreshed: Unrefreshed
+    repository: Repository, unrefreshed: Unrefreshed
 ) -> None:
-    checkout = tmp_path / 'kluster'
-    _fill_slots(checkout)
+    checkout = repository.checkout
     fake = FakePulumi(unrefreshed=unrefreshed)
     run = driver.Run.open('github', checkout, pulumi=fake, base=AMBIENT)
 
@@ -876,12 +869,11 @@ def test_a_preview_without_a_refresh_that_finds_nothing_plans_nothing_and_makes_
     assert fake.ups() == []
 
 
-def test_a_step_only_the_preview_without_a_refresh_plans_is_planned(tmp_path: Path) -> None:
+def test_a_step_only_the_preview_without_a_refresh_plans_is_planned(repository: Repository) -> None:
     # Previewed against the state the backend holds, the program plans a step
     # the refreshed preview does not: the stored state is behind what the
     # provider reads, and an `up`'s refresh writes it.
-    checkout = tmp_path / 'kluster'
-    _fill_slots(checkout)
+    checkout = repository.checkout
     fake = FakePulumi(unrefreshed=Unrefreshed(status=state_only.REFUSED, document='', events=None))
     run = driver.Run.open('github', checkout, pulumi=fake, base=AMBIENT)
 
@@ -890,12 +882,11 @@ def test_a_step_only_the_preview_without_a_refresh_plans_is_planned(tmp_path: Pa
     assert [_stack_of(up) for up in fake.ups()] == ['github']
 
 
-def test_the_preview_without_a_refresh_is_given_no_progress_of_its_own(tmp_path: Path) -> None:
+def test_the_preview_without_a_refresh_is_given_no_progress_of_its_own(repository: Repository) -> None:
     # `--event-log` names one file, and that file is the reading's: a run
     # handed a `doing` would get `progress`'s log as well, and the pinned CLI
     # writes only the last one it is given.
-    checkout = tmp_path / 'kluster'
-    _fill_slots(checkout)
+    checkout = repository.checkout
     fake = FakePulumi(unrefreshed=DEPENDENCY_ADDED)
     run = driver.Run.open('github', checkout, pulumi=fake, base=AMBIENT)
 
@@ -906,11 +897,10 @@ def test_the_preview_without_a_refresh_is_given_no_progress_of_its_own(tmp_path:
     assert unrefreshed is None
 
 
-def test_a_refreshed_preview_that_plans_a_step_makes_no_preview_without_a_refresh(tmp_path: Path) -> None:
+def test_a_refreshed_preview_that_plans_a_step_makes_no_preview_without_a_refresh(repository: Repository) -> None:
     # The fields an `up` writes beside a step are not listed: the steps are
     # what the question is about.
-    checkout = tmp_path / 'kluster'
-    _fill_slots(checkout)
+    checkout = repository.checkout
     fake = FakePulumi(changes={'same': 2, 'update': 1}, unrefreshed=Unrefreshed(status=255, document='', events=None))
     run = driver.Run.open('github', checkout, pulumi=fake, base=AMBIENT)
 
@@ -963,12 +953,11 @@ FAILURE = 'error: Program failed with an unhandled exception: RuntimeError: the 
     ],
 )
 def test_a_preview_without_a_refresh_that_does_not_say_what_an_up_writes_is_refused(
-    tmp_path: Path, unrefreshed: Unrefreshed, why: driver.Why, naming: str
+    repository: Repository, unrefreshed: Unrefreshed, why: driver.Why, naming: str
 ) -> None:
     # "Nothing to write" is the answer that stays quiet, so each of these is
     # a refusal, exit 2 at the command line, rather than a plan of nothing.
-    checkout = tmp_path / 'kluster'
-    _fill_slots(checkout)
+    checkout = repository.checkout
     fake = FakePulumi(unrefreshed=unrefreshed)
     run = driver.Run.open('github', checkout, pulumi=fake, base=AMBIENT)
 
@@ -982,21 +971,34 @@ def test_a_preview_without_a_refresh_that_does_not_say_what_an_up_writes_is_refu
 
 
 def test_the_preview_without_a_refresh_writes_its_event_log_outside_the_checkout_or_refuses(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    repository: Repository, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    checkout = tmp_path / 'kluster'
-    _fill_slots(checkout)
+    checkout = repository.checkout
+    fake = FakePulumi(unrefreshed=DEPENDENCY_ADDED)
+    run = driver.Run.open('github', checkout, pulumi=fake, base=AMBIENT)
     inside = checkout / 'tmp'
     inside.mkdir()
     monkeypatch.setattr(tempfile, 'tempdir', str(inside))
-    fake = FakePulumi(unrefreshed=DEPENDENCY_ADDED)
-    run = driver.Run.open('github', checkout, pulumi=fake, base=AMBIENT)
 
     with pytest.raises(driver.Refused) as refused:
         _ = run.plan()
 
     assert refused.value.why is driver.Why.UNREFRESHED_LOG_IN_CHECKOUT
     assert fake.previewed_without_refresh == []
+    assert list(inside.iterdir()) == []
+
+
+def test_a_run_whose_helm_homes_would_be_inside_the_checkout_is_refused_leaving_nothing(
+    repository: Repository, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    inside = repository.checkout / 'tmp'
+    inside.mkdir()
+    monkeypatch.setattr(tempfile, 'tempdir', str(inside))
+
+    with pytest.raises(driver.Refused) as refused:
+        _ = driver.Run.open('github', repository.checkout, pulumi=FakePulumi(), base=AMBIENT)
+
+    assert refused.value.why is driver.Why.HELM_IN_CHECKOUT
     assert list(inside.iterdir()) == []
 
 
@@ -1012,8 +1014,8 @@ def test_a_forge_main_never_fetched_is_refused_naming_the_fetch(repository: Repo
 
     with pytest.raises(driver.Refused) as refused:
         _ = run.plan()
-    assert refused.value.why is checkpoint.Unready.MAIN_NOT_FETCHED
-    assert checkpoint.spelled(refused.value.remedy) in str(refused.value)
+    assert refused.value.why is manual_run.Unready.MAIN_NOT_FETCHED
+    assert manual_run.spelled(refused.value.remedy) in str(refused.value)
     assert fake.streamed == []
 
 
@@ -1027,8 +1029,8 @@ def test_a_forge_main_fetched_but_not_under_the_working_copy_is_refused_naming_t
 
     with pytest.raises(driver.Refused) as refused:
         _ = run.plan()
-    assert refused.value.why is checkpoint.Unready.BEHIND_MAIN
-    assert checkpoint.spelled(refused.value.remedy) in str(refused.value)
+    assert refused.value.why is manual_run.Unready.BEHIND_MAIN
+    assert manual_run.spelled(refused.value.remedy) in str(refused.value)
     assert fake.streamed == []
 
 
@@ -1043,11 +1045,11 @@ def test_a_conflicted_checkpoint_is_refused_naming_the_reconcile(repository: Rep
 
     with pytest.raises(driver.Refused) as refused:
         _ = run.plan()
-    assert refused.value.why is checkpoint.Unready.CONFLICTED
+    assert refused.value.why is manual_run.Unready.CONFLICTED
     # Keeping main's side of the one file that is conflicted.
     ((*_, restored),) = refused.value.remedy
     assert restored == str(path.relative_to(repository.checkout))
-    assert checkpoint.spelled(refused.value.remedy) in str(refused.value)
+    assert manual_run.spelled(refused.value.remedy) in str(refused.value)
     assert fake.streamed == []
 
 
@@ -1062,7 +1064,97 @@ def test_behind_the_forge_and_conflicted_the_ancestry_is_what_is_refused(
 
     with pytest.raises(driver.Refused) as refused:
         _ = run.plan()
-    assert refused.value.why is checkpoint.Unready.BEHIND_MAIN
+    assert refused.value.why is manual_run.Unready.BEHIND_MAIN
+
+
+#: Each command of the driver, as a case runs it against a run.
+COMMANDS: dict[str, Callable[[driver.Run], int]] = {
+    'plan': lambda run: run.plan(),
+    'up': lambda run: run.up(yes=True),
+    'pulumi': lambda run: run.passthrough(['stack', 'output']),
+}
+
+
+@pytest.mark.parametrize('fetched', [False, True], ids=['main not fetched', 'main fetched'])
+@pytest.mark.parametrize('command', list(COMMANDS))
+def test_an_estate_stack_behind_the_forge_is_refused_before_pulumi_starts(
+    repository: Repository, command: str, fetched: bool
+) -> None:
+    # `github` keeps its state in the estate's backend, so no checkpoint of
+    # the checkout's is behind; the code a run plans against is.
+    assert stack_environment.home('github') is identity.StateHome.BACKEND
+    repository.advance_the_forge()
+    if fetched:
+        repository.fetch()
+    fake = FakePulumi()
+    run = driver.Run.open('github', repository.checkout, pulumi=fake, base=AMBIENT)
+
+    with pytest.raises(driver.Refused) as refused:
+        _ = COMMANDS[command](run)
+
+    assert refused.value.why is (manual_run.Unready.BEHIND_MAIN if fetched else manual_run.Unready.MAIN_NOT_FETCHED)
+    assert fake.envs == [], 'pulumi started before the working copy was checked'
+
+
+#: A `pulumi` that records the environment it was started with, and what the
+#: directory its Helm homes are under holds, in the file `STAND_IN_RECORD`
+#: names, and exits.
+PULUMI_RECORDING_ITS_ENVIRONMENT = f"""\
+#!{sys.executable}
+import json, os
+from pathlib import Path
+home = os.environ.get('HELM_CONFIG_HOME')
+homes = None if home is None else Path(home).parent
+held = sorted(os.listdir(homes)) if homes is not None and homes.is_dir() else None
+Path(os.environ['STAND_IN_RECORD']).write_text(
+    json.dumps({{'env': dict(os.environ), 'homes': None if homes is None else str(homes), 'held': held}})
+)
+"""
+
+#: A passed-through command of `github`'s, run by the production `Cli` in a
+#: process of its own, the secret store empty as the fixture `secret_store`
+#: leaves it.
+PASSED_THROUGH_IN_A_PROCESS = """\
+import json, sys
+from pathlib import Path
+sys.path.insert(0, {tests!r})
+from memory_keyring import MemoryKeyring, installed
+from kluster.scripts.operator_stack import driver
+with installed(MemoryKeyring()):
+    sys.exit(driver.Run.open('github', Path({checkout!r}), base=json.loads({base!r})).passthrough(['about']))
+"""
+
+#: A caller's Helm configuration: homes of its own, a variable that names
+#: `repositories.yaml` outright, and the Kubernetes provider's override of
+#: the repository cache.
+CALLERS_HELM = {
+    'HELM_CONFIG_HOME': '/caller/helm-config',
+    'HELM_REPOSITORY_CONFIG': '/caller/repositories.yaml',
+    'PULUMI_K8S_HELM_REPOSITORY_CACHE': '/caller/provider-cache',
+}
+
+
+def test_a_pulumi_the_driver_starts_is_handed_ci_helms_environment(repository: Repository, tmp_path: Path) -> None:
+    bin_dir = tmp_path / 'bin'
+    bin_dir.mkdir()
+    stand_in = bin_dir / 'pulumi'
+    _ = stand_in.write_text(PULUMI_RECORDING_ITS_ENVIRONMENT)
+    stand_in.chmod(0o755)
+    record = tmp_path / 'record.json'
+    base = os.environ | CALLERS_HELM | {'PATH': f'{bin_dir}:{os.environ["PATH"]}', 'STAND_IN_RECORD': str(record)}
+    script = PASSED_THROUGH_IN_A_PROCESS.format(
+        tests=str(Path(__file__).parent), checkout=str(repository.checkout), base=json.dumps(base)
+    )
+
+    _ = process_sessions.run([sys.executable, '-c', script], env=base, text=True, check=True, timeout=120)
+
+    recorded = json.loads(record.read_text())
+    assert recorded['homes'] is not None, 'pulumi was handed no Helm home'
+    handed, homes = recorded['env'], Path(recorded['homes'])
+    assert handed == manual_run.ci_helm(handed, homes)
+    assert {name: value for name, value in handed.items() if value in CALLERS_HELM.values()} == {}
+    assert recorded['held'] == [], 'the Helm homes were under a directory something had written to'
+    assert not homes.exists(), 'the run left its Helm directory behind'
 
 
 @pytest.fixture(scope='module')
@@ -1092,7 +1184,7 @@ def test_in_a_jj_checkout_the_working_copy_is_jjs(repository: Repository, commit
         timeout=60,
     ).stdout
 
-    assert checkpoint.working_copy(repository.checkout) == at
+    assert manual_run.working_copy(repository.checkout) == at
     assert driver.Run.open(committed, repository.checkout, pulumi=FakePulumi(), base=AMBIENT).plan() == 0
 
     # Fetched as an operator fetches in a jj checkout, which moves the main
@@ -1101,7 +1193,7 @@ def test_in_a_jj_checkout_the_working_copy_is_jjs(repository: Repository, commit
     _ = process_sessions.run(['jj', 'git', 'fetch'], cwd=repository.checkout, env=jj_env, check=True, timeout=60)
     with pytest.raises(driver.Refused) as refused:
         _ = driver.Run.open(committed, repository.checkout, pulumi=FakePulumi(), base=AMBIENT).plan()
-    assert refused.value.why is checkpoint.Unready.BEHIND_MAIN
+    assert refused.value.why is manual_run.Unready.BEHIND_MAIN
 
     # The remedy is commands this checkout's jj runs as written, and once they
     # have run the working copy is one a run starts from.
@@ -1144,10 +1236,10 @@ def test_a_primary_working_copy_another_workspace_rewrote_is_refused(
     _ = _jj('workspace', 'add', str(second), cwd=primary)
     _ = _jj('rebase', '-b', 'default@', '-d', 'main@origin', cwd=second)
 
-    with pytest.raises(checkpoint.CheckRefused) as refused:
+    with pytest.raises(manual_run.CheckRefused) as refused:
         checkpoint.require_current(primary, ours)
 
-    assert refused.value.why is checkpoint.Unready.UNREADABLE
+    assert refused.value.why is manual_run.Unready.UNREADABLE
 
 
 #: How long the stand-in below runs before it ends by itself: a bound on a
@@ -1536,10 +1628,10 @@ def test_one_place_holding_a_secret_is_one_finding_naming_every_source() -> None
 def test_a_failed_git_is_quoted_whole(tmp_path: Path) -> None:
     # Outside a repository `git ls-remote` explains itself over several lines,
     # and the one that says what failed is the first.
-    with pytest.raises(checkpoint.CheckRefused, match=r'fatal: .*\n') as refused:
+    with pytest.raises(manual_run.CheckRefused, match=r'fatal: .*\n') as refused:
         checkpoint.require_current(tmp_path, None)
 
-    assert refused.value.why is checkpoint.Unready.UNREADABLE
+    assert refused.value.why is manual_run.Unready.UNREADABLE
 
 
 # --------------------------------------------------------------------------
