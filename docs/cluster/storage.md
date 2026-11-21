@@ -253,18 +253,37 @@ which needs both, then runs on neither. A claim nothing backs up has no
 mover, and binds where its pod is placed. The render holds the rule too,
 whatever a component handed its claims (`tests/test_apps_placement.py`).
 
-A backed claim beside a GPU request is not refused, though the same can
-befall it: the mover carries the workload's constraints, not the GPU's
-node, so it could bind the claim on a node without the GPU, and the pod
-would then run nowhere. The pair is safe today only because the one pod
-that makes it, jellyfin's, is held at the home site, which is one node,
-and that node has the GPU.
+**New rule:** a workload that requests the GPU hands its backed claim
+the GPU's hold (`kluster.components.apps.GPU_HOLD`). The mover requests no
+GPU, so the scheduler would place it on a node without one, and the
+claim it binds there would leave the workload, which needs the claim and
+the GPU, no node to run on. The hold names the label and value the GPU
+plugin's node rule sets on a node with the GPU
+(`kluster.components.gpu.GPU_NODE`), which the plugin selects its nodes
+by, and the mover carries it in its affinity beside the workload's
+requirements (`kluster.lib.k8s.Constraints.binder_requirements`), so it
+binds the claim only on a node the GPU plugin serves. Such a node offers
+`GPU_RESOURCE` while its GPU is bound to `i915`, the one driver the
+worker's image carries; the rule labels a GPU bound to `xe` as well, which
+the plugin offers as another resource. The workload's pod states no such
+requirement, since the scheduler reads its request.
+
+A backed claim's hold records what its mover was given, and a constraint
+composed onto a backed claim's constraints that its mover was not given
+is refused (`BackedVolumeOffBinder`): a site, an architecture or a device
+the claim was not handed. So no constraint can reach the pod and miss
+the mover. A claim nothing backs up has no mover, so its pod may compose
+the GPU's hold onto the `Claim`'s constraints after it. No node
+carries the label until the worker's GPU is bound to the device plugin
+(declarative/cluster-infra.md §1, item 7), and until then the mover of a
+claim beside a GPU request stays pending, as the workload does.
 
 Every claim with a mover carries the allow for its movers' traffic,
 which reaches the claim's namespace, the cluster's DNS and, for a restic
 mover, the bucket's endpoint, and nothing else. **Unproven live**: the
 destination's mover placing a claim that is not yet bound, a restic
-mover's affinity holding such a claim to its workload's constraints, the
+mover's affinity holding such a claim to its workload's constraints and
+to the nodes the GPU plugin's rule labels, the
 destination's Service resolving by its DNS name in the source's
 `address`, the copy's timeout per GiB, the movers' resource figures,
 restic's calls on the bucket itself under a key scoped to one prefix,

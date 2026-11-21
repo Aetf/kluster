@@ -14,7 +14,9 @@ whichever component it is:
     down admits no cloud node, and a declaring client of the portal requires
     the portal to declare too (cluster/architecture.md §1.1);
 -   a pod that mounts a NAS claim admits exactly the nodes its volume does;
--   a restic mover admits exactly the nodes its workload does;
+-   a restic mover admits exactly the nodes its workload does, the GPU its
+    workload requests included, and the mover of a workload that requests
+    the GPU admits only nodes that offer it;
 -   a pod that mounts a `local-path` claim writes in the blockio class
     `conventions.ETCD_DISK_WRITER`, and a mover in none;
 -   a pod a volume or a device keeps to one node runs at the held priority;
@@ -38,7 +40,7 @@ import pytest_asyncio
 from component_census import components, stated
 from k8s_base_installation import Run, applied
 from mock_monitor import Recorder, declaring, run_with
-from node_selection import CLOUD, NODES, schedulable, selected
+from node_selection import CLOUD, NODES, schedulable, schedulable_among, selected
 
 from kluster import conventions
 from kluster.components.apps import UPLINK_DOWN, Fronts
@@ -64,7 +66,7 @@ from kluster.components.apps.stdiscosrv import Stdiscosrv
 from kluster.components.apps.syncthing import Syncthing
 from kluster.components.apps.syncthing.webdav import WebDav
 from kluster.components.cilium import InternetPoolMembers
-from kluster.components.gpu import GPU_RESOURCE
+from kluster.components.gpu import GPU_NODE, GPU_RESOURCE
 from kluster.components.monitoring.operator_objects import type_token
 from kluster.conventions.cluster import Transports
 from kluster.conventions.routes import (
@@ -106,6 +108,17 @@ MONITORING_CHART = 'monitoring'
 
 #: The key of the restore drill's ConfigMap that holds its recovered cluster.
 DRILL_MANIFEST = 'cluster.json'
+
+#: Each of the cluster's nodes twice, by its name and whether it offers the
+#: GPU: without the label the GPU plugin serves its nodes by
+#: (`kluster.components.gpu.GPU_NODE`) and with it. Which node carries the GPU
+#: is a fact of the hardware, so a pod's constraints are read on both, beside
+#: every node they otherwise admit.
+WITH_AND_WITHOUT_GPU: dict[tuple[str, bool], dict[str, str]] = {
+    (node, gpu): {**labels, **({GPU_NODE.key: GPU_NODE.value} if gpu else {})}
+    for node, labels in NODES.items()
+    for gpu in (False, True)
+}
 
 FRONTS = Fronts(
     internet=InternetPoolMembers(
@@ -534,7 +547,7 @@ def backed_claims(monitor: Recorder) -> set[tuple[str, str]]:
 
 
 def kept_by_a_volume_or_a_device(pod: Pod, monitor: Recorder) -> bool:
-    """Whether a claim bound on a node keeps the pod there, or a device one node offers; a drill's fresh claim keeps nothing."""
+    """Whether a claim bound on a node keeps the pod there, or a device a node offers; a drill's fresh claim keeps nothing."""
     on_a_node = local_path_claims(monitor) | node_volume_claims(monitor)
     if pod.kind == 'recovered':
         return False
@@ -544,9 +557,29 @@ def kept_by_a_volume_or_a_device(pod: Pod, monitor: Recorder) -> bool:
 
 
 def requests_a_device(pod: Pod) -> bool:
-    """Whether a container of the pod requests the GPU, which one node offers."""
+    """Whether a container of the pod requests the GPU, which the nodes the GPU plugin serves offer."""
     containers = cast('list[dict[str, Any]]', pod.spec.get('containers', []))
     return any(GPU_RESOURCE in container.get('resources', {}).get('requests', {}) for container in containers)
+
+
+def admitting(spec: Mapping[str, Any], *, gpu: bool) -> set[tuple[str, bool]]:
+    """The nodes of `WITH_AND_WITHOUT_GPU` a pod of `spec` may run on: its node constraints, and the GPU where it requests it.
+
+    The scheduler reads a request for the GPU off the pod and places it only
+    on a node whose device plugin offers it. The plugin serves the nodes its
+    chart labels, and a labeled node offers `GPU_RESOURCE` while its GPU is
+    bound to `i915`, which is the one driver the worker's image carries, so
+    the label is read as the offer.
+    """
+    return {node for node in schedulable_among(spec, WITH_AND_WITHOUT_GPU) if node[1] or not gpu}
+
+
+def restic_sources(monitor: Recorder) -> Iterator[tuple[Mapping[str, Any], Pod]]:
+    """Every restic source the run declares, beside the workload's pod that mounts its claim."""
+    by_claim = {(pod.namespace, it): pod for pod in pods(monitor) for it in pod.claims}
+    for it in monitor.of_type(SOURCE):
+        if 'restic' in it.inputs['spec']:
+            yield it.inputs, by_claim[it.inputs['metadata']['namespace'], it.inputs['spec']['sourcePVC']]
 
 
 def test_the_run_declares_every_kind_of_pod_these_relations_read(program: Program) -> None:
@@ -624,15 +657,40 @@ def test_every_nas_claim_is_mounted_by_a_pod_of_its_namespace(program: Program) 
 
 
 def test_a_restic_mover_admits_exactly_the_nodes_its_workload_does(program: Program) -> None:
-    """A claim binds where the first of its mover and its workload is placed, so the two admit one set of nodes."""
-    by_claim = {(pod.namespace, it): pod for pod in pods(program.monitor) for it in pod.claims}
-    sources = [it.inputs for it in program.monitor.of_type(SOURCE) if 'restic' in it.inputs['spec']]
+    """A claim binds where the first of its mover and its workload is placed, so the two admit one set of nodes.
+
+    The mover requests no GPU, so the nodes its workload admits are read with
+    the GPU the workload requests, on nodes with and without it.
+    """
+    sources = list(restic_sources(program.monitor))
 
     assert sources
-    for source in sources:
-        workload = by_claim[source['metadata']['namespace'], source['spec']['sourcePVC']]
+    for source, workload in sources:
         mover = {'affinity': source['spec']['restic'].get('moverAffinity')}
-        assert schedulable(mover) == schedulable(workload.spec), source['metadata']
+        assert admitting(mover, gpu=False) == admitting(workload.spec, gpu=requests_a_device(workload)), source[
+            'metadata'
+        ]
+
+
+def test_the_mover_of_a_claim_whose_workload_requests_the_gpu_admits_only_nodes_that_offer_it(
+    program: Program,
+) -> None:
+    """A mover placed first binds the claim where it lands, and the workload, which needs the claim and the GPU, runs only where both are.
+
+    Read on every node twice, with the GPU and without it: the mover admits
+    some node, and each node it admits carries the label of a node that
+    offers the GPU.
+    """
+    beside_the_gpu = [
+        (source, workload) for source, workload in restic_sources(program.monitor) if requests_a_device(workload)
+    ]
+
+    assert beside_the_gpu
+    for source, _ in beside_the_gpu:
+        mover = {'affinity': source['spec']['restic'].get('moverAffinity')}
+        admitted = admitting(mover, gpu=False)
+        assert admitted, source['metadata']
+        assert all(gpu for _, gpu in admitted), (source['metadata'], sorted(admitted))
 
 
 def test_a_pod_that_mounts_a_local_path_claim_writes_in_the_class_and_its_mover_in_none(program: Program) -> None:

@@ -30,17 +30,21 @@ none. So a source that reaches the claim before the workload's pod would bind
 it wherever its mover landed, which may be a node the workload can never run
 on. `claim` takes the workload's `constraints`
 (`kluster.lib.k8s.Constraints`), and the restic mover carries their node
-affinity, so whichever of the mover and the pod is scheduled first, the claim
-binds on a node the workload's constraints admit. A workload mounts at most
-one backed claim, and none beside a node volume's claim: a mover, placed
-apart from the pod's other claim, could bind its claim on another node than
-that claim's, and the pod, which needs both, would run on neither.
-`claim_hold` records which kind of claim keeps the pod, so the composition
-is refused (`kluster.lib.k8s.TwoBackedVolumes`,
-`BackedVolumeBesideNodeVolume`). A backed claim beside a GPU request is not
-refused, though its mover could bind it on a node without the GPU; that pair
-is safe only while the pod is held to a site of one node that has the GPU
-(cluster/storage.md §3.1).
+affinity as a pod that binds the claim in the workload's stead
+(`Constraints.binder_requirements`): the workload's own requirements, and
+the label of the nodes that offer each device the workload requests, which
+the mover does not request. So whichever of the mover and the pod is
+scheduled first, the claim binds on a node the workload's constraints and
+its devices admit. A workload mounts at most one backed claim, and none
+beside a node volume's claim: a mover, placed apart from the pod's other
+claim, could bind its claim on another node than that claim's, and the pod,
+which needs both, would run on neither. `claim_hold` records which kind of
+claim keeps the pod, and for a backed claim the requirements its mover was
+given, so the composition is refused (`kluster.lib.k8s.TwoBackedVolumes`,
+`BackedVolumeBesideNodeVolume`), and so is a constraint composed onto a
+backed claim's constraints that its mover was not given: a site, an
+architecture or a device the claim was not handed
+(`BackedVolumeOffBinder`; cluster/storage.md §3.1).
 
 **The `Claim` says what the workload's pod carries for it.** Its
 `constraints` are the workload's with the claim's own hold composed in
@@ -97,6 +101,7 @@ from kluster.lib.k8s import (
     BackedVolumeBesideNodeVolume,
     Constraints,
     Keeper,
+    NodeRequirement,
     SecretTemplate,
     TwoBackedVolumes,
     at_home,
@@ -243,9 +248,12 @@ def claim(
         repository Secret's name (`kluster.lib.k8s.sealed_ciphertext`).
     :param constraints: Every node constraint the workload is under: a pod
         that mounts a `nas_claim` beside this claim states its home site
-        (`NasClaim.constraints`), and a pod that mounts a second claim hands
-        it the first's (`<first>.constraints`). Every restic mover of the
-        claim carries their node affinity, so that it binds the claim only on
+        (`NasClaim.constraints`), a pod that mounts a second claim hands
+        it the first's (`<first>.constraints`), and a pod that requests a
+        device hands it the device's hold (`kluster.components.apps.GPU_HOLD`).
+        Every restic mover of the claim carries their node affinity with the
+        label of the nodes that offer each device
+        (`Constraints.binder_requirements`), so that it binds the claim only on
         a node they admit. The `Claim` records them with its own hold
         composed in, and the workload's pod states them from there, so the
         two are one value. A backed claim handed the constraints of another
@@ -278,11 +286,14 @@ def claim(
         )
 
     backed = isinstance(retention, RetentionClass)
+    mover = constraints.binder_requirements if backed else ()
     try:
-        held = constraints & claim_hold(f'its claim {claim_name(name, generation)!r}', storage_class, backed=backed)
+        held = constraints & claim_hold(
+            f'its claim {claim_name(name, generation)!r}', storage_class, backed=backed, binder_held_to=mover
+        )
     except (TwoBackedVolumes, BackedVolumeBesideNodeVolume) as refused:
         raise type(refused)(f'{resource_name}: {refused}') from None
-    affinity = _mover_affinity(constraints) if backed else None
+    affinity = _mover_affinity(mover) if backed else None
 
     child = pulumi.ResourceOptions.merge(opts, pulumi.ResourceOptions(protect=protect))
     target = _claim(resource_name, name, generation, size, storage_class, namespace=namespace, opts=child)
@@ -368,19 +379,28 @@ def claim(
     )
 
 
-def claim_hold(what: str, storage_class: str, *, backed: bool) -> Constraints:
+def claim_hold(
+    what: str, storage_class: str, *, backed: bool, binder_held_to: tuple[NodeRequirement, ...] = ()
+) -> Constraints:
     """The hold of a pod to the node a claim of `storage_class` is bound on, saying `what` the claim is.
 
     A node volume's claim is on its node before any pod is placed
     (`Keeper.NODE_VOLUME`). A `local-path` claim binds on the node its first
     consumer is placed on: the pod's, or, for a backed claim, a restic
     mover's (`Keeper.BACKED_VOLUME`), since VolSync places a mover of a claim
-    no running pod uses wherever its own affinity admits.
+    no running pod uses wherever its own affinity admits. The backed claim's
+    hold records `binder_held_to`, the requirements its mover carries, so a
+    constraint whose requirement they leave out is refused beside it
+    (`kluster.lib.k8s.BackedVolumeOffBinder`).
     """
     if storage_class != conventions.SC_LOCAL_PATH:
         return kept(Keeper.NODE_VOLUME, f'{what} is on the node its node volume is attached to')
     if backed:
-        return kept(Keeper.BACKED_VOLUME, f'{what} is bound on the node it or its mover is first placed on')
+        return kept(
+            Keeper.BACKED_VOLUME,
+            f'{what} is bound on the node it or its mover is first placed on',
+            binder_held_to=binder_held_to,
+        )
     return kept(Keeper.VOLUME, f'{what} is bound on the node it is first placed on')
 
 
@@ -541,11 +561,10 @@ def _restic(
 
 
 def _mover_affinity(
-    constraints: Constraints,
+    requirements: tuple[NodeRequirement, ...],
 ) -> crds.volsync.v1alpha1.ReplicationSourceSpecResticMoverAffinityArgs | None:
-    """The restic mover's affinity: the workload's node requirements, as one required term; none where they state none."""
+    """The restic mover's affinity: the requirements of a binder in the workload's stead, as one required term; none where there are none."""
     v = crds.volsync.v1alpha1
-    requirements = constraints.requirements
     if not requirements:
         return None
     return v.ReplicationSourceSpecResticMoverAffinityArgs(

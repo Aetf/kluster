@@ -57,8 +57,10 @@ from kluster.lib.k8s import (
     UNCONSTRAINED,
     AbsentSealedValue,
     BackedVolumeBesideNodeVolume,
+    BackedVolumeOffBinder,
     Constraints,
     Keeper,
+    NodeRequirement,
     PortedSecret,
     TwoBackedVolumes,
     UnusableKubeconfig,
@@ -1505,6 +1507,14 @@ async def _declared_pod(constraints: Constraints) -> dict[str, Any]:
 
 HOME = at_home('posts to an address at home')
 
+#: The label of the nodes that offer a device of the test's own.
+DEVICE_NODES = NodeRequirement('example.com/device', 'present')
+
+
+def hold(keeper: Keeper, declaration: str) -> Constraints:
+    """A hold by `keeper`, a device's naming the nodes that offer it."""
+    return kept(keeper, declaration, offered_on=DEVICE_NODES if keeper is Keeper.DEVICE else None)
+
 
 @pytest.mark.asyncio
 async def test_an_unconstrained_pod_carries_no_affinity_toleration_or_priority() -> None:
@@ -1524,7 +1534,7 @@ async def test_an_unconstrained_pod_carries_no_affinity_toleration_or_priority()
         HOME,
         on_architecture('amd64', 'an image built for amd64 alone'),
         HOME & on_architecture('amd64', 'an image built for amd64 alone'),
-        kept(Keeper.DEVICE, 'requests a device one node offers'),
+        kept(Keeper.DEVICE, 'requests a device a node offers', offered_on=DEVICE_NODES),
     ],
     ids=['free', 'home', 'amd64', 'both', 'kept'],
 )
@@ -1596,7 +1606,7 @@ def test_a_pod_kept_to_one_node_by_what_it_mounts_or_requests_is_held_with_no_af
     keeper: Keeper,
 ) -> None:
     """The scheduler reads the volume's node affinity or the device request from the pod; the priority keeps free pods from crowding it out."""
-    spec = kept(keeper, 'keeps it to one node').pod_fields_json()
+    spec = hold(keeper, 'keeps it to one node').pod_fields_json()
 
     assert spec == {'priorityClassName': conventions.HELD_PRIORITY_CLASS}
     assert schedulable(spec) == set(NODES)
@@ -1629,18 +1639,71 @@ def test_a_backed_volume_beside_a_node_volume_is_refused_naming_both() -> None:
     assert 'the data' in str(refused.value)
 
 
-def test_a_backed_volume_beside_a_volume_and_a_device_is_not_refused() -> None:
-    """A volume that binds where this pod is placed follows the backed one's node; a device is not refused, though it can part from it.
+#: A constraint of each kind a binder is held to, each saying what implies it.
+BINDER_KINDS = {
+    'device': hold(Keeper.DEVICE, 'the constraint'),
+    'site': at_home('the constraint'),
+    'architecture': on_architecture('amd64', 'the constraint'),
+}
 
-    Another pod may bind the backed volume first on a node without the
-    device, and the pod would then run nowhere. The pair is safe today only
-    because the pod that composes it, jellyfin's, is held at the home site,
-    which is one node, and that node offers the device. The composition is
-    not refused.
+
+@pytest.mark.parametrize('constraint', list(BINDER_KINDS.values()), ids=list(BINDER_KINDS))
+def test_a_backed_volume_whose_binder_is_held_to_a_constraint_is_not_refused_beside_it_or_a_volume(
+    constraint: Constraints,
+) -> None:
+    """A volume that binds where this pod is placed follows the backed one's node, and the binder binds that only where the constraint admits."""
+    backed = kept(Keeper.BACKED_VOLUME, 'a claim', binder_held_to=constraint.binder_requirements)
+    both = backed & kept(Keeper.VOLUME, 'a claim') & constraint
+
+    assert {it.keeper for it in both.kept} >= {Keeper.BACKED_VOLUME, Keeper.VOLUME}
+
+
+@pytest.mark.parametrize('constraint', list(BINDER_KINDS.values()), ids=list(BINDER_KINDS))
+@pytest.mark.parametrize(
+    'binder_held_to', [(), (NodeRequirement('example.com/other', 'elsewhere'),)], ids=['nothing', 'elsewhere']
+)
+@pytest.mark.parametrize('order', ['volume first', 'constraint first'])
+def test_a_backed_volume_beside_a_constraint_its_binder_was_not_given_is_refused_naming_both(
+    constraint: Constraints, binder_held_to: tuple[NodeRequirement, ...], order: str
+) -> None:
+    """The binder may bind the volume first on a node the constraint refuses, and the pod, which needs both, would run nowhere."""
+    backed = kept(Keeper.BACKED_VOLUME, 'the data', binder_held_to=binder_held_to)
+
+    with pytest.raises(BackedVolumeOffBinder) as refused:
+        _ = backed & constraint if order == 'volume first' else constraint & backed
+
+    assert 'the data' in str(refused.value)
+    assert 'the constraint' in str(refused.value)
+
+
+def test_a_binder_is_held_to_the_pods_requirements_and_the_nodes_of_each_device_it_requests() -> None:
+    """The binder requests no device, so it states the label of the nodes that offer each one beside the pod's own requirements.
+
+    The pod itself states none of the device's: the scheduler reads its
+    request.
     """
-    both = kept(Keeper.BACKED_VOLUME, 'a claim') & kept(Keeper.VOLUME, 'a claim') & kept(Keeper.DEVICE, 'a device')
+    constraints = HOME & hold(Keeper.DEVICE, 'a device')
 
-    assert {it.keeper for it in both.kept} == {Keeper.BACKED_VOLUME, Keeper.VOLUME, Keeper.DEVICE}
+    assert set(constraints.binder_requirements) == {*constraints.requirements, DEVICE_NODES}
+    assert DEVICE_NODES not in constraints.requirements
+    assert UNCONSTRAINED.binder_requirements == ()
+
+
+@pytest.mark.parametrize(
+    ('keeper', 'offered_on', 'binder_held_to'),
+    [
+        (Keeper.DEVICE, None, ()),
+        (Keeper.VOLUME, DEVICE_NODES, ()),
+        (Keeper.VOLUME, None, (DEVICE_NODES,)),
+        (Keeper.DEVICE, DEVICE_NODES, (DEVICE_NODES,)),
+    ],
+    ids=['a device naming no nodes', 'nodes for a volume', 'a binder of a volume', 'a binder of a device'],
+)
+def test_a_hold_names_the_nodes_of_a_device_alone_and_the_binder_of_a_backed_volume_alone(
+    keeper: Keeper, offered_on: NodeRequirement | None, binder_held_to: tuple[NodeRequirement, ...]
+) -> None:
+    with pytest.raises(ValueError, match=r'a device|a backed volume'):
+        _ = kept(keeper, 'a hold', offered_on=offered_on, binder_held_to=binder_held_to)
 
 
 def test_a_hold_says_what_keeps_the_pod() -> None:
