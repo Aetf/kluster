@@ -168,6 +168,13 @@ kubeseal = "0.39.1"
 # reading of the whole-cluster rebuild (docs/operations.md §3.5, `anchors`).
 # Its releases are static binaries.
 doggo = "1.4.2"
+# gh is GitHub's client, which the runbooks and `drill rebuild` read and
+# steer the forge with: the deploy chain's runs and workflows, a pull
+# request's merge, the Environments and their secret names. The drill parses
+# the JSON its `--json` fields print, so every workstation reads that output
+# from one release. mise's registry resolves the name to `aqua:cli/cli`. Its
+# releases are static binaries.
+gh = "2.104.0"
 # kubectl is the client a runbook reads and steers the cluster with, under the
 # kubeconfig `physical`'s outputs carry. kubectl is supported within one
 # minor of the API server, so its minor is the one of the Kubernetes the

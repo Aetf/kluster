@@ -459,7 +459,7 @@ ssh gw 'grep -c -E "mirrorakam|layer4" /data/caddy/config/caddy/Caddyfile'
 # K1
 (cd ~/kluster-code && mise x -- env PULUMI_CONFIG_PASSPHRASE=not-the-passphrase pulumi stack history --stack dev --json --page-size 5) | mise x -- jq -r '.[] | "\(.startTime)  \(.kind)  \(.result)  \(.environment["ci.build.url"] // "local")  @\((.environment["git.head"] // "?")[0:12])"'
 # K2
-gh api repos/Aetf/kluster-code/commits/main --jq '.sha[0:12]'
+mise x -- gh api repos/Aetf/kluster-code/commits/main --jq '.sha[0:12]'
 # K3
 mise x -- kubectl get nodes -o wide
 ```
@@ -476,15 +476,15 @@ mise x -- kubectl get nodes -o wide
 # G1
 mise x uv -- uv run operator-stack github plan; echo "exit=$?"
 # G2
-gh api repos/Aetf/kluster/environments --jq '.environments[] | "\(.name)\t\([.protection_rules[]?.type] | join(","))"'
+mise x -- gh api repos/Aetf/kluster/environments --jq '.environments[] | "\(.name)\t\([.protection_rules[]?.type] | join(","))"'
 # G3
-for e in dns physical physical-plan; do printf '%s: ' "$e"; gh api "repos/Aetf/kluster/environments/$e/secrets" --jq '[.secrets[].name] | join(" ")'; done
+for e in dns physical physical-plan; do printf '%s: ' "$e"; mise x -- gh api "repos/Aetf/kluster/environments/$e/secrets" --jq '[.secrets[].name] | join(" ")'; done
 # G4
-R="$(gh run list --repo Aetf/kluster --workflow deploy.yml --limit 1 --json databaseId --jq '.[0].databaseId')"; gh run view "$R" --repo Aetf/kluster --json jobs --jq '.jobs[] | "\(.name)\t\(.conclusion)"'
+R="$(mise x -- gh run list --repo Aetf/kluster --workflow deploy.yml --limit 1 --json databaseId --jq '.[0].databaseId')"; mise x -- gh run view "$R" --repo Aetf/kluster --json jobs --jq '.jobs[] | "\(.name)\t\(.conclusion)"'
 # G5
-gh api repos/Aetf/dns --jq .archived; gh api repos/Aetf/dns/commits/master --jq '.sha[0:12] + " " + (.commit.message | split("\n")[0])'; gh api repos/Aetf/dns/actions/secrets --jq '[.secrets[].name] | join(" ")'
+mise x -- gh api repos/Aetf/dns --jq .archived; mise x -- gh api repos/Aetf/dns/commits/master --jq '.sha[0:12] + " " + (.commit.message | split("\n")[0])'; mise x -- gh api repos/Aetf/dns/actions/secrets --jq '[.secrets[].name] | join(" ")'
 # G6
-gh run list --repo Aetf/kluster-code --workflow pulumi-deploy.yml --limit 3
+mise x -- gh run list --repo Aetf/kluster-code --workflow pulumi-deploy.yml --limit 3
 ```
 
 -   **G1** reads drift in the forge. `plan` is `pulumi preview

@@ -302,7 +302,8 @@ preview with `denydefaultprovider not registered`.
     `up-k8s-base` moves the rule's threshold a year on, which resolves
     the alert. If it writes neither, `physical` has not issued a new
     certificate: approve the `up-physical` a chain run is waiting on, or
-    start one with `gh workflow run deploy.yml --repo Aetf/kluster` and
+    start one with `mise x -- gh workflow run deploy.yml --repo
+    Aetf/kluster` and
     approve it, then run the sync. The sync may follow any approval of
     that step at once; the alert is for the time it did not.
 

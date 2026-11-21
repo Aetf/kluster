@@ -259,6 +259,17 @@ checksum = "sha256:634d88c92e1e98a8e5f6bc9758ca39a797f4237e4c542156e48c441be7027
 url = "https://github.com/mr-karan/doggo/releases/download/v1.4.2/doggo-linux-x86_64.tar.gz"
 url_api = "https://api.github.com/repos/mr-karan/doggo/releases/assets/664895944"
 
+[[tools.gh]]
+version = "2.104.0"
+backend = "aqua:cli/cli"
+specifiers = ["2.104.0"]
+
+[tools.gh."platforms.linux-x64"]
+checksum = "sha256:98cb101ad87dbbd3f6b2f2bfcbd43197ccd07643140121d8a9cfaa91eadbc24e"
+url = "https://github.com/cli/cli/releases/download/v2.104.0/gh_2.104.0_linux_amd64.tar.gz"
+url_api = "https://api.github.com/repos/cli/cli/releases/assets/740718892"
+provenance = "github-attestations"
+
 [[tools."github:VictoriaMetrics/VictoriaMetrics"]]
 version = "1.150.0"
 backend = "github:VictoriaMetrics/VictoriaMetrics"

@@ -1,11 +1,12 @@
 """How a step of the rebuild starts a command, and the environment the command gets.
 
-**Every command is a pinned tool on `PATH`.** The drill runs as
-`mise x -- uv run drill rebuild`, from the root of the checkout that holds
-`.credentials/`: `mise x` puts the pins of `mise.toml` on `PATH`, and `uv run`
-the project's console scripts, `credentials` and `perf` among them. `gh`,
-`curl` and `ssh` are found on `PATH` by the same name, the host's until
-`mise.toml` pins them, when `mise x` puts the pin there instead.
+**Every command is a pinned tool on `PATH`, or one of the host's.** The
+drill runs as `mise x -- uv run drill rebuild`, from the root of the checkout
+that holds `.credentials/`: `mise x` puts the pins of `mise.toml` on `PATH`,
+`gh` among them, and `uv run` the project's console scripts, `credentials`
+and `perf` among them, so a step names each tool bare and starts the pin.
+`HOST_TOOLS` are the commands found on `PATH` by the same name with no pin
+behind them, which run the host's own release.
 
 **A command is started in one of three modes** (`Mode`), and its transcript
 keeps what that mode lets it keep:
@@ -47,6 +48,12 @@ from kluster.lib import stack_environment
 from kluster.scripts import manual_run
 from kluster.scripts.credentials import oci_recovery, pulumi_config
 from kluster.scripts.drill import record
+
+#: The commands a step starts from the host's `PATH`, with no pin of
+#: `mise.toml` behind them: `ssh`, which reaches the gateway with the
+#: operator's own keys and configuration, and `curl`. Every other command a
+#: step starts is a pin or a console script of the project.
+HOST_TOOLS = frozenset({'curl', 'ssh'})
 
 #: The bound of a `CAPTURED` command: a stop-loss, since every such read
 #: answers within seconds. A `pulumi` export reads the backend, which is the

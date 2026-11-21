@@ -20,6 +20,7 @@ import datetime as dt
 import json
 import os
 import re
+import tomllib
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -36,7 +37,7 @@ from kluster import conventions
 from kluster.conventions import schedule, sealed
 from kluster.scripts import manual_run
 from kluster.scripts.credentials import devices, oci_recovery
-from kluster.scripts.drill import capacity, chain, cli, readings, record, scope, steps
+from kluster.scripts.drill import capacity, chain, cli, readings, record, scope, steps, tools
 from kluster.scripts.drill.readings import NoReading
 from kluster.scripts.drill.record import Verdict
 from kluster.scripts.drill.tools import Completed, Environments, Mode
@@ -1290,3 +1291,29 @@ def test_a_piped_field_that_is_not_secret_is_handed_the_files_contents(
 
     (ran,) = drill.stand.ran('credentials', 'derived', 'a-plain-row', 'record')
     assert ran.argv[-2:] == (note.flag, 'line one\nline two')
+
+
+# --------------------------------------------------------------------------
+# The tools a step starts.
+# --------------------------------------------------------------------------
+
+
+def _whole_step_3(drill: Drill) -> None:
+    _instances(drill)
+    drill.person.answers['Type the names'] = [' '.join(INSTANCES)]
+
+
+#: Each step a case runs whole, from the estate it meets.
+WHOLE_STEPS: dict[str, Callable[[Drill], None]] = {'0': lambda _: None, '3': _whole_step_3, '9': _step_9_estate}
+
+
+@pytest.mark.parametrize('step', list(WHOLE_STEPS))
+def test_every_command_a_whole_step_starts_is_a_pin_a_console_script_or_the_hosts(drill: Drill, step: str) -> None:
+    WHOLE_STEPS[step](drill)
+    pinned = set(tomllib.loads((ROOT / 'mise.toml').read_text())['tools'])
+    scripts = set(tomllib.loads((ROOT / 'pyproject.toml').read_text())['project']['scripts'])
+
+    assert drill.run(step) == cli.DONE
+
+    started = {call.argv[0] for call in drill.stand.calls}
+    assert started - pinned - scripts - tools.HOST_TOOLS == set()

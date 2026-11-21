@@ -1039,8 +1039,9 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     is refused there because the token is asked for with that
     permission. A failed dispatch carries GitHub's refusal: a
     `drift.yml` on `main` that is disabled or has lost its
-    `workflow_dispatch` trigger. Once the cause is gone, fire the trigger by hand,
-    `gh workflow run drift-trigger.yml --repo Aetf/kluster-ops`, and
+    `workflow_dispatch` trigger. Once the cause is gone, fire the trigger by hand
+    from the checkout,
+    `mise x -- gh workflow run drift-trigger.yml --repo Aetf/kluster-ops`, and
     the drift run it dispatches is that week's.
 -   **§3.3 An apply that timed out or was cancelled.** A timed-out
     apply is its `Up` step exceeding its own bound: the annotation, on
