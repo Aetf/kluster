@@ -2,10 +2,12 @@
 
 What a test may assert, and what it may write down in order to assert
 it. [framework/testing.md](../framework/testing.md) answers the other
-question — how a test is *run*: the tiers and what each can know, the
+questions: whether a test is written at all ("Every test earns its
+place"), and how a test is *run* — the tiers and what each can know, the
 doubles and fakes, and the recipe for proving a case fails without the
-change it ships with. A rule about the machinery belongs there; a rule
-about what a case is entitled to claim belongs here.
+change it ships with. A rule about whether a test exists, or about the
+machinery, belongs there; a rule about what a case is entitled to claim
+belongs here.
 
 ## Tests verify behavior
 

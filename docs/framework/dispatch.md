@@ -51,10 +51,11 @@ them:
     means in one sentence.
 2.  **Owned paths**, exhaustively. Everything else is out of scope.
 3.  **The gate**: AGENTS.md's checklist, passed in full. New behavior
-    has a test that fails without it. A change to provider-facing code
-    also ships with a live-drill transcript ([testing.md](testing.md)
-    §5) or an explicit "unproven live" note in the pull request saying
-    what the first live run must confirm.
+    has a test that fails without it wherever a test earns its place
+    ([testing.md](testing.md), "Every test earns its place"). A change
+    to provider-facing code also ships with a live-drill transcript
+    ([testing.md](testing.md) §5) or an explicit "unproven live" note
+    in the pull request saying what the first live run must confirm.
 4.  **Documentation is part of the change, not a follow-up.** Docs
     describe what is, not what was done: no "verified on", no
     narrative of attempts. The same holds for commit messages. Where
@@ -680,9 +681,11 @@ and they may run in parallel. The dispatcher's own contribution to a
 review is the decision to merge:
 
 1.  **Correctness**: does the change do what the issue says, does
-    every new behavior have a test that fails without it, does the
-    diff break an invariant a test elsewhere pins, is anything
-    provider-facing left unproven without saying so.
+    every new behavior have a test that fails without it or a design
+    that holds it instead, does every test the change adds or edits
+    earn its place ([testing.md](testing.md), "Every test earns its
+    place"), does the diff break an invariant a test elsewhere pins, is
+    anything provider-facing left unproven without saying so.
 2.  **Architecture & style**, against [`docs/style/`](../style/):
     config read at the right layer, resources on the right component,
     native providers inherited rather than re-plumbed, a dynamic

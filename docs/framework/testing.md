@@ -23,6 +23,21 @@ The suite has these tiers, and each one is bounded by what it can know:
     of defect the other tiers structurally cannot reach: our assumptions
     about the provider being wrong.
 
+**Every test earns its place.** Before a test is written, or kept, the
+first question is whether the property it would hold can be held without
+a test: by the program's structure, as when an object has one
+construction path; by a type or an API, so that an invalid object cannot
+be made; or by a mechanism the platform already has, such as the
+scheduler placing a pod by its volume's node affinity, or an admission
+policy. If it can, the design changes instead, and the test is not
+written, or is removed. A test that remains must be worth its cost,
+because the suite runs on every gate. A test of another component's
+function, such as the scheduler's, is not written: that behavior is the
+component's to hold, and what this program answers for is the
+declaration it hands the component. What a test that stays may assert is
+[style/testing.md](../style/testing.md), "Tests verify behavior", which
+rules out the change detector.
+
 ## 1. Setup
 
 The project uses `pytest` and `pytest-asyncio` for unit testing.
@@ -991,12 +1006,12 @@ against the live backend.
 
 ## 6. Proving a Test Fails Without the Change
 
-AGENTS.md requires that new behavior ship with a test that fails without
-it. That is a claim about the test, and the only thing that establishes
-it is breaking the behavior and watching the test go red. The broken
-version — the mutation — is throwaway code, and the whole of the
-discipline below is about getting rid of it again without taking the
-real change with it.
+Where new behavior ships with a test (AGENTS.md; "Every test earns its
+place" above), the test must fail without it. That is a claim about the
+test, and the only thing that establishes it is breaking the behavior
+and watching the test go red. The broken version — the mutation — is
+throwaway code, and the whole of the discipline below is about getting
+rid of it again without taking the real change with it.
 
 **Keep a pristine copy and mutate in place.** The throwaway artifact is
 the copy, not the mutation, and it lives in the workspace's own

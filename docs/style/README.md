@@ -22,6 +22,21 @@ together are declared together; an API that must be called a certain
 way accepts only that way; a state machine that has no "half done"
 carries no flag that says so.
 
+## A membership is a definition, not a list
+
+A set the code or a test acts on is stated by what makes something a
+member, not by naming the members. A list misses the member nobody
+added, and it makes every new member an edit to a shared file that the
+next change's owned paths do not hold. A definition takes the new
+member when it appears. So a check that must visit every application
+component derives the components from the program that defines them,
+and a rule that covers a class says what the class is. Where naming the
+members helps a reader, they follow the definition as today's
+instances, which go incomplete rather than false when the set grows. A
+list stays only where membership is a decision nothing can derive, a
+census, and then it is that census, declared once
+([pulumi.md](pulumi.md), "Data: conventions, configuration, censuses").
+
 ## A workaround for an upstream defect is a layer of its own
 
 Code that works around a defect upstream — in a provider, a tool, a
@@ -94,6 +109,18 @@ reviewer reads a diff's names against: a word a `Not:` line refuses, or
 a second word for a concept that has an entry, is a finding, and a diff
 that mints a term adds the entry with its pointer.
 `tests/test_conventions.py` holds the package to it.
+
+**One thing, one name.** An object keeps the name it already has,
+wherever it is written about: the state backend is the state backend,
+and its backup is its backup. No alias is coined for it unless one is
+needed, and a new name, where one is needed, says what it names. Where
+"one term per concept" keeps a word to one meaning, this keeps an
+object to one word: a second name makes the reader ask whether there
+are two objects, and a search for either name misses what was written
+under the other. A name recorded outside the repository — a key name, a
+unit, a URN — stays unless the change that renames it carries the
+migration, and its declaration says so ([testing.md](testing.md), "A
+name that state or the outside world keys on").
 
 **Same shape for same role.** Modules exposing the same kind of entry
 point use the same form and name. A reader should be able to guess a
