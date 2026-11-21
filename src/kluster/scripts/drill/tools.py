@@ -21,16 +21,17 @@ keeps what that mode lets it keep:
     a person -- a `pulumi up`'s confirmation, a kit's master password, a
     webhook's id. Nothing it prints is kept.
 
-**A ^C is the command's to answer**, as in `operator-stack` (`Cli`): `pulumi`
-answers the first SIGINT by cancelling gracefully, so while a command runs
-the drill ignores SIGINT and waits for it, and the command gets SIGINT back at
-its default before it starts.
+**A ^C is the command's to answer**, in every mode, as in `ci-stack`
+(`manual_run.attached`): `pulumi` answers the first SIGINT by cancelling
+gracefully, so while a command runs the drill ignores SIGINT and waits for
+it, and the command gets SIGINT back at its default before it starts.
 
-**The environment is chosen per stack** (`Environments`): `physical`'s
-passphrase where the stack is `physical`, `mise.toml`'s for every other stack,
-through `credentials`'s `BackendEnvironment`, which is the one place that maps
-a stack to its passphrase. CI's Helm environment is laid under every command
-(`manual_run.ci_helm`).
+**The environment is chosen per stack** (`manual_run.Environments`):
+`physical`'s passphrase where the stack is `physical`, `mise.toml`'s for every
+other stack, through `credentials`'s `BackendEnvironment`, which is the one
+place that maps a stack to its passphrase, and a `pulumi` run whose
+environment names no backend is refused. CI's Helm environment is laid under
+every command (`manual_run.ci_helm`).
 """
 
 from __future__ import annotations
@@ -39,14 +40,12 @@ import enum
 import signal
 import subprocess as sp
 import sys
-from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, field
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
-from kluster.lib import stack_environment
 from kluster.scripts import manual_run
-from kluster.scripts.credentials import oci_recovery, pulumi_config
 from kluster.scripts.drill import record
 
 #: The commands a step starts from the host's `PATH`, with no pin of
@@ -107,11 +106,11 @@ def shell(argv: Sequence[str], *, env: Mapping[str, str], cwd: Path, mode: Mode)
                 text=True,
                 timeout=CAPTURED_TIMEOUT,
                 check=False,
-                preexec_fn=_default_sigint,
+                preexec_fn=manual_run.default_sigint,
             )
             return Completed(tuple(argv), done.returncode, done.stdout, done.stderr)
         if mode is Mode.ATTACHED:
-            return Completed(tuple(argv), sp.run(list(argv), cwd=cwd, env=dict(env), check=False).returncode)
+            return Completed(tuple(argv), manual_run.attached(argv, env=env, cwd=cwd))
         lines: list[str] = []
         with sp.Popen(
             list(argv),
@@ -121,7 +120,7 @@ def shell(argv: Sequence[str], *, env: Mapping[str, str], cwd: Path, mode: Mode)
             stdout=sp.PIPE,
             stderr=sp.STDOUT,
             text=True,
-            preexec_fn=_default_sigint,
+            preexec_fn=manual_run.default_sigint,
         ) as child:
             assert child.stdout is not None
             for line in child.stdout:
@@ -137,54 +136,13 @@ def shell(argv: Sequence[str], *, env: Mapping[str, str], cwd: Path, mode: Mode)
         _ = signal.signal(signal.SIGINT, previous)
 
 
-def _default_sigint() -> None:
-    _ = signal.signal(signal.SIGINT, signal.SIG_DFL)
-
-
-#: The variable that names a passphrase file, which `pulumi` refuses beside
-#: `PULUMI_CONFIG_PASSPHRASE`, and which a caller's shell may export.
-PASSPHRASE_FILE_ENV = 'PULUMI_CONFIG_PASSPHRASE_FILE'
-
-
-@dataclass
-class Environments:
-    """The environment of each command a step starts: the drill's own, per stack for `pulumi`, under CI's Helm.
-
-    `base` is the environment `mise x` started the drill with, whose
-    `PULUMI_CONFIG_PASSPHRASE` is the stack passphrase and whose
-    `PULUMI_BACKEND_URL` is the estate's backend. `helm` is the run's own
-    directory for Helm's homes, empty when the drill starts.
-    """
-
-    base: Mapping[str, str] = field(repr=False)
-    helm: Path
-    #: Where `physical`'s passphrase is read: its workstation slot, refused
-    #: with the command that fills it where it holds none.
-    physical: Callable[[], str] = oci_recovery.slot_passphrase
-
-    def backend(self) -> pulumi_config.BackendEnvironment:
-        passphrase = self.base.get(stack_environment.PASSPHRASE_ENV)
-        return pulumi_config.BackendEnvironment(
-            passphrase=(lambda: passphrase) if passphrase else None, physical=self.physical
-        )
-
-    def pulumi(self, stack: str) -> dict[str, str]:
-        """The environment of a `pulumi` run against `stack`."""
-        own = {name: value for name, value in self.base.items() if name != PASSPHRASE_FILE_ENV}
-        return manual_run.ci_helm(own | self.backend().variables(stack), self.helm)
-
-    def tool(self) -> dict[str, str]:
-        """The environment of every other command."""
-        return manual_run.ci_helm(self.base, self.helm)
-
-
 @dataclass
 class Session:
     """The commands one step starts, each written to the step's transcript."""
 
     checkout: Path
     transcript: record.Transcript
-    environments: Environments
+    environments: manual_run.Environments
     exec: Exec = shell
 
     def run(

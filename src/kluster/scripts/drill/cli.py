@@ -14,9 +14,7 @@ from __future__ import annotations
 import argparse
 import logging
 import os
-import shutil
 import sys
-import tempfile
 from collections.abc import Callable, Mapping
 from pathlib import Path
 
@@ -25,7 +23,7 @@ from kluster.scripts import manual_run
 from kluster.scripts.credentials import oci_recovery, pulumi_config
 from kluster.scripts.drill import record, steps
 from kluster.scripts.drill.record import Verdict
-from kluster.scripts.drill.tools import Environments, Exec, Session, shell
+from kluster.scripts.drill.tools import Exec, Session, shell
 
 #: Every step that ran passed.
 DONE = 0
@@ -92,7 +90,7 @@ def rebuild(
         return REFUSED
     directory = checkout / record.DIRECTORY
     kept = record.Record.open(directory)
-    environments = Environments(base=base, helm=helm, physical=physical)
+    environments = manual_run.Environments(base=base, helm=helm, physical=physical)
     if step is not None:
         chosen = [next(each for each in steps.SEQUENCE if each.key == step)]
         started = [each.key for each in steps.SEQUENCE[1:] if kept.times(each.key)[0] is not None]
@@ -149,9 +147,10 @@ def _step(context: steps.Context, step: steps.Step, *, again: bool) -> Verdict |
         context.note(f'-- {part.name}')
         try:
             verdict = part.act(context)
-        except pulumi_config.MachineRefused as exc:
+        except (pulumi_config.MachineRefused, manual_run.NoBackend) as exc:
             # `physical`'s passphrase, or another a `pulumi` run needs, that
-            # this machine cannot give.
+            # this machine cannot give; or a backend the drill's environment
+            # does not name.
             context.note(str(exc))
             verdict = Verdict.FAIL
         except KeyboardInterrupt:
@@ -176,13 +175,9 @@ def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
     args = build_parser().parse_args(argv)
     checkout = workstation.repo_root()
-    helm = Path(tempfile.mkdtemp(prefix='drill-helm-'))
     try:
-        if helm.resolve().is_relative_to(checkout.resolve()):
-            print(
-                f'the temporary directory {helm} is inside {checkout}: set TMPDIR outside the checkout', file=sys.stderr
-            )
-            return REFUSED
-        return rebuild(checkout, args.step, base=dict(os.environ), helm=helm)
-    finally:
-        shutil.rmtree(helm, ignore_errors=True)
+        with manual_run.helm_homes(checkout, prefix='drill-helm-') as helm:
+            return rebuild(checkout, args.step, base=dict(os.environ), helm=helm)
+    except manual_run.HelmInCheckout as exc:
+        print(exc, file=sys.stderr)
+        return REFUSED

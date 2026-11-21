@@ -49,10 +49,11 @@ import pytest
 
 from kluster import conventions
 from kluster.components.monitoring import stores
-from kluster.lib import pulumi_cli, stack_addresses, stack_environment, workstation
+from kluster.lib import pulumi_cli, stack_addresses, stack_environment
 from kluster.lib.monitoring.jobs import ETCD_JOB, NODE_EXPORTER_JOB, SCRAPE_INTERVAL
 from kluster.lib.monitoring.readings import READINGS, Reading
 from kluster.lib.monitoring.selectors import selectors
+from kluster.scripts import manual_run
 from kluster.scripts.perf import cluster, exposition, history, procfs, record
 
 #: How long the store may take to listen and answer `/health`: a stop-loss.
@@ -705,8 +706,11 @@ def test_a_line_cut_off_by_a_killed_recorder_is_skipped_and_dropped_before_the_n
 def test_the_control_planes_are_physicals_addresses_read_under_its_own_passphrase(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """`node_private_ips`, read with the slot `physical`'s passphrase is in and never the stack passphrase."""
+    """`node_private_ips`, read in the environment `ci-stack physical` is given, never the stack passphrase."""
     monkeypatch.setenv('PULUMI_CONFIG_PASSPHRASE', 'the stack passphrase')
+    monkeypatch.setenv('PULUMI_CONFIG_PASSPHRASE_FILE', '/elsewhere/passphrase')
+    monkeypatch.setenv('PULUMI_BACKEND_URL', 'postgres://operator@192.0.2.10:5432/pulumi_state')
+    monkeypatch.setenv('HELM_REPOSITORY_CONFIG', '/caller/repositories.yaml')
     seen: list[tuple[list[str], Mapping[str, str]]] = []
 
     def pulumi(args: Sequence[str], *, cwd: Path, env: Mapping[str, str], stdin: str | None) -> str:
@@ -714,16 +718,42 @@ def test_the_control_planes_are_physicals_addresses_read_under_its_own_passphras
         seen.append((list(args), env))
         return json.dumps({'cp2': '10.0.0.12', 'cp1': '10.0.0.11'})
 
-    assert cluster.control_planes(pulumi) == [cluster.Node('cp1', '10.0.0.11'), cluster.Node('cp2', '10.0.0.12')]
+    assert cluster.control_planes(pulumi, physical=lambda: 'physicals-own-passphrase', require_main=lambda _: None) == [
+        cluster.Node('cp1', '10.0.0.11'),
+        cluster.Node('cp2', '10.0.0.12'),
+    ]
     ((args, env),) = seen
     assert args[:3] == ['stack', 'output', conventions.PHYSICAL_OUTPUTS.node_private_ips]
     assert args[args.index('--stack') + 1] == stack_environment.PHYSICAL_STACK
-    # A whole environment: one laid over this process's would bring the stack passphrase back.
+    # A whole environment: one laid over this process's would bring the passphrase file back.
     assert isinstance(env, pulumi_cli.WholeEnvironment)
-    assert 'PULUMI_CONFIG_PASSPHRASE' not in env
-    assert env['PULUMI_CONFIG_PASSPHRASE_FILE'] == str(
-        workstation.directory() / stack_environment.PHYSICAL_PASSPHRASE_SLOT
-    )
+    assert env['PULUMI_CONFIG_PASSPHRASE'] == 'physicals-own-passphrase'
+    assert 'PULUMI_CONFIG_PASSPHRASE_FILE' not in env
+    assert env['PULUMI_BACKEND_URL'] == 'postgres://operator@192.0.2.10:5432/pulumi_state'
+    assert {name for name in env if name.startswith(manual_run.HELM_STEERING)} == set(manual_run.HELM_HOMES)
+
+
+def test_the_control_planes_are_read_only_from_a_working_copy_that_holds_the_forges_main(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv('PULUMI_BACKEND_URL', 'postgres://operator@192.0.2.10:5432/pulumi_state')
+    read: list[Sequence[str]] = []
+    checked: list[Path] = []
+
+    def pulumi(args: Sequence[str], *, cwd: Path, env: Mapping[str, str], stdin: str | None) -> str:
+        del cwd, env, stdin
+        read.append(args)
+        return json.dumps({'cp1': '10.0.0.11'})
+
+    def behind(checkout: Path) -> None:
+        checked.append(checkout)
+        raise manual_run.CheckRefused("the forge's main moved", why=manual_run.Unready.BEHIND_MAIN)
+
+    with pytest.raises(manual_run.CheckRefused):
+        _ = cluster.control_planes(pulumi, physical=lambda: 'physicals-own-passphrase', require_main=behind)
+
+    assert checked == [pulumi_cli.project_dir()]
+    assert read == []
 
 
 @pytest.mark.parametrize(
@@ -732,14 +762,16 @@ def test_the_control_planes_are_physicals_addresses_read_under_its_own_passphras
     ids=['not-an-address', 'empty'],
 )
 def test_an_output_that_holds_no_control_plane_to_record_is_refused(
-    output: dict[str, str], refused: type[Exception]
+    output: dict[str, str], refused: type[Exception], monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setenv('PULUMI_BACKEND_URL', 'postgres://operator@192.0.2.10:5432/pulumi_state')
+
     def pulumi(args: Sequence[str], *, cwd: Path, env: Mapping[str, str], stdin: str | None) -> str:
         del args, cwd, env, stdin
         return json.dumps(output)
 
     with pytest.raises(refused):
-        _ = cluster.control_planes(pulumi)
+        _ = cluster.control_planes(pulumi, physical=lambda: 'physicals-own-passphrase', require_main=lambda _: None)
 
 
 # -- Importing -------------------------------------------------------------------------

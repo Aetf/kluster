@@ -1,29 +1,52 @@
-"""What a run a person starts with this repository's tools shares with a CI job's (framework/pulumi.md §3.3).
+"""What a run a person starts with this repository's tools shares with a CI job's (framework/pulumi.md §3.3, §3.4).
 
 A CI job starts from a fresh checkout of the forge's `main`, under a runner
-whose home holds no Helm configuration. A run started on a workstation has
-neither for free, and each tool that starts one takes both from here:
+whose home holds no Helm configuration, with the stack's own passphrase and
+the estate's backend set on the step that runs `pulumi`. A run started on a
+workstation has none of these for free, and each tool that starts one takes
+them from here:
 
 -   **`require_main`**: the working copy holds the forge's current `main`.
     A run from an older one plans against older code, and for a stack whose
     state is committed, against an older checkpoint too.
 -   **`ci_helm`**: the environment a child is started with carries none of
     the caller's Helm settings, and Helm's homes are under a directory of
-    the run's own, empty when the run starts. Left to the caller's, a
-    repository that a workstation's `repositories.yaml` names with no cache
-    reaches every chart a preview renders; CI's runner has neither.
+    the run's own (`helm_homes`), empty when the run starts. Left to the
+    caller's, a repository that a workstation's `repositories.yaml` names
+    with no cache reaches every chart a preview renders; CI's runner has
+    neither.
+-   **`Environments`**: the environment of a `pulumi` run against a stack CI
+    deploys, chosen per stack by `credentials`'s `BackendEnvironment`, the
+    one place that maps a stack to its passphrase, under `ci_helm`. A run
+    whose environment names no backend is refused (`NoBackend`).
+-   **`attached`**: a command on the operator's terminal, its standard
+    input, output and error the terminal's, with a ^C left to it.
+-   **`stack_word`**: a word of a passed-through `pulumi` command that names
+    a stack, which a tool that runs one stack refuses; and `elsewhere_word`,
+    one that points `pulumi` at another program or configuration.
 
-`operator-stack` applies both around every run, and `update_crds` the Helm
-half around every `helm` it starts.
+`operator-stack` applies the main check and the Helm half around every run,
+and `update_crds` the Helm half around every `helm` it starts. `ci-stack`
+applies all of them around every run of a stack CI deploys, the drill around
+each command of a rebuild, and `perf record` takes the environment and the
+main check for its read of `physical`.
 """
 
 from __future__ import annotations
 
+import contextlib
 import enum
 import shlex
+import shutil
+import signal
 import subprocess as sp
-from collections.abc import Mapping, Sequence
+import tempfile
+from collections.abc import Callable, Generator, Mapping, Sequence
+from dataclasses import dataclass, field
 from pathlib import Path
+
+from kluster.lib import stack_environment
+from kluster.scripts.credentials import oci_recovery, pulumi_config
 
 #: Where the forge's `main` is read from, as `git ls-remote` names it.
 REMOTE = 'origin'
@@ -179,3 +202,205 @@ def ci_helm(base: Mapping[str, str], directory: Path) -> dict[str, str]:
     """
     kept = {name: value for name, value in base.items() if not name.startswith(HELM_STEERING)}
     return kept | {name: str(directory / under) for name, under in HELM_HOMES.items()}
+
+
+class HelmInCheckout(stack_environment.EnvironmentRefused):
+    """The temporary directory for Helm's homes resolves inside the checkout, where `jj` would snapshot it."""
+
+
+@contextlib.contextmanager
+def helm_homes(checkout: Path, *, prefix: str) -> Generator[Path]:
+    """A directory of the run's own for Helm's homes: empty, outside `checkout`, and removed on the way out.
+
+    One that resolves inside `checkout` is refused (`HelmInCheckout`), since
+    what Helm writes there would enter the next `jj` snapshot. The directory
+    goes on every way out the caller lives through; a caller ended by a signal
+    it does not handle (SIGKILL, SIGTERM, a hang-up) leaves it in the
+    temporary directory.
+    """
+    directory = Path(tempfile.mkdtemp(prefix=prefix))
+    try:
+        if directory.resolve().is_relative_to(checkout.resolve()):
+            raise HelmInCheckout(
+                f'the temporary directory {directory} is inside {checkout}, where `jj` would snapshot what Helm '
+                'writes: set TMPDIR outside the checkout'
+            )
+        yield directory
+    finally:
+        shutil.rmtree(directory, ignore_errors=True)
+
+
+# --------------------------------------------------------------------------
+# The environment of a `pulumi` run, per stack.
+# --------------------------------------------------------------------------
+
+#: The variable that names a passphrase file, which `pulumi` refuses beside
+#: `PULUMI_CONFIG_PASSPHRASE`, and which a caller's shell may export.
+PASSPHRASE_FILE_ENV = 'PULUMI_CONFIG_PASSPHRASE_FILE'
+
+
+class NoBackend(stack_environment.EnvironmentRefused):
+    """A `pulumi` run's environment names no backend, so `pulumi` would fall back to the one its own login names."""
+
+
+@dataclass
+class Environments:
+    """The environment of each command a run starts: the caller's own, per stack for `pulumi`, under CI's Helm.
+
+    `base` is the environment `mise x` started the caller with, whose
+    `PULUMI_CONFIG_PASSPHRASE` is the stack passphrase and whose
+    `PULUMI_BACKEND_URL` is the estate's backend, both from the checkout's
+    slots. `helm` is the run's own directory for Helm's homes, empty when
+    the run starts (`helm_homes`).
+    """
+
+    base: Mapping[str, str] = field(repr=False)
+    helm: Path
+    #: Where `physical`'s passphrase is read: its workstation slot, refused
+    #: with the command that fills it where it holds none.
+    physical: Callable[[], str] = oci_recovery.slot_passphrase
+
+    def backend(self) -> pulumi_config.BackendEnvironment:
+        passphrase = self.base.get(stack_environment.PASSPHRASE_ENV)
+        return pulumi_config.BackendEnvironment(
+            passphrase=(lambda: passphrase) if passphrase else None, physical=self.physical
+        )
+
+    def pulumi(self, stack: str) -> dict[str, str]:
+        """The environment of a `pulumi` run against `stack`; `NoBackend` where it names no backend.
+
+        `physical`'s passphrase where the stack is `physical`, the caller's
+        stack passphrase for every other stack CI deploys, and never a
+        passphrase file of the caller's, which `pulumi` would refuse beside
+        the passphrase. An empty `PULUMI_BACKEND_URL` is none: it is what
+        `mise.toml` renders where the checkout holds no backend slot.
+        """
+        own = {name: value for name, value in self.base.items() if name != PASSPHRASE_FILE_ENV}
+        env = ci_helm(own | self.backend().variables(stack), self.helm)
+        if not env.get(stack_environment.BACKEND_URL_ENV):
+            raise NoBackend(
+                f'the environment of a run against {stack} names no {stack_environment.BACKEND_URL_ENV}, so '
+                "`pulumi` would fall back to the backend its own login names. `mise x` sets it from the checkout's "
+                'state-backend slot: run through `mise x`, from the checkout that holds .credentials/'
+            )
+        return env
+
+    def tool(self) -> dict[str, str]:
+        """The environment of every other command."""
+        return ci_helm(self.base, self.helm)
+
+
+# --------------------------------------------------------------------------
+# A command on the operator's terminal.
+# --------------------------------------------------------------------------
+
+
+def attached(argv: Sequence[str], *, env: Mapping[str, str], cwd: Path) -> int:
+    """Run `argv` on the terminal, its standard streams this process's, and return its exit.
+
+    **A ^C is the command's to answer.** The terminal sends SIGINT to the
+    whole foreground process group, the command included, and `pulumi`
+    answers the first one by cancelling gracefully: it finishes the steps in
+    flight, records them, and releases its lock. So while the command runs,
+    this process ignores SIGINT and waits for it rather than killing it
+    partway through that cancel. The command gets SIGINT back at its default
+    before it starts (`default_sigint`), since an ignored disposition is
+    inherited across `exec`: a program that installs no handler of its own
+    would otherwise never see the ^C.
+
+    A command killed by signal N exits 128+N, as a shell reports it, rather
+    than `subprocess`'s -N, which a caller's own `sys.exit` would turn into
+    256-N (`exit_status`). A command not found raises `FileNotFoundError`, as `subprocess`
+    does.
+    """
+    previous = signal.signal(signal.SIGINT, signal.SIG_IGN)
+    try:
+        with sp.Popen(list(argv), cwd=cwd, env=dict(env), preexec_fn=default_sigint) as child:
+            return exit_status(child.wait())
+    finally:
+        _ = signal.signal(signal.SIGINT, previous)
+
+
+def exit_status(code: int) -> int:
+    """`subprocess`'s return code as the exit status a shell reports: 128+N for a child killed by signal N."""
+    return 128 - code if code < 0 else code
+
+
+def default_sigint() -> None:
+    """In a child about to `exec`: SIGINT back at its default, whatever disposition it inherited."""
+    _ = signal.signal(signal.SIGINT, signal.SIG_DFL)
+
+
+# --------------------------------------------------------------------------
+# A passed-through command that names a stack.
+# --------------------------------------------------------------------------
+
+
+def stack_word(args: Sequence[str]) -> str | None:
+    """The first word of a passed-through `pulumi` command that names a stack, or may; None where none does.
+
+    A tool that runs one stack takes it as its own argument and adds it, so a
+    word that names a stack is refused rather than overridden: a caller who
+    wrote one meant some other stack. Such a word is `--stack` in either
+    spelling, a single-dash cluster holding an `s` -- `-s dev`, `-sdev` and
+    `-ys dev` all reach the `-s` shorthand -- and, in a `config` command, a
+    `--dest` or a cluster holding its `-d` shorthand: `config copy` (alias
+    `cp`) names the stack it copies into with it. Only the words ahead of a
+    `--` are read, past which a word is an argument rather than a flag.
+
+    **The `config` command is found among its words wherever it stands**,
+    since `pulumi` takes a flag anywhere among them, global ones ahead of the
+    command included. A flag's value written as a word of its own
+    (`--color never`) is among the words too, because which flags take a
+    value is `pulumi`'s to know. And the destination is refused under any
+    `config` subcommand rather than under a list of `copy`'s names, so an
+    alias a release adds does not reopen it: no other `config` subcommand
+    takes either flag.
+    """
+    flags = _flags(args)
+    copies = 'config' in (arg for arg in flags if not arg.startswith('-'))
+    for arg in flags:
+        if (
+            _short_cluster(arg, 's')
+            or _long(arg, '--stack')
+            or (copies and (_short_cluster(arg, 'd') or _long(arg, '--dest')))
+        ):
+            return arg
+    return None
+
+
+def elsewhere_word(args: Sequence[str]) -> str | None:
+    """The first word of a passed-through `pulumi` command that points it at another program or configuration.
+
+    `-C`/`--cwd` runs `pulumi` as if started in another directory, so on
+    whatever program and stack files that directory holds, which the main
+    check of this checkout says nothing about; `--config-file` reads a
+    stack's configuration from another file, another stack's among them; and
+    `--client` points the engine at a language host already running, so the
+    program is whatever that host runs. A single-dash cluster holding a `C`
+    reaches the `-C` shorthand. Only the words ahead of a `--` are read.
+    """
+    for arg in _flags(args):
+        if _short_cluster(arg, 'C') or any(_long(arg, name) for name in ('--cwd', '--config-file', '--client')):
+            return arg
+    return None
+
+
+def with_stack(args: Sequence[str], stack: str) -> list[str]:
+    """`args` with `--stack <stack>` ahead of any `--`, past which a word is not a flag."""
+    args = list(args)
+    at = args.index('--') if '--' in args else len(args)
+    return [*args[:at], '--stack', stack, *args[at:]]
+
+
+def _flags(args: Sequence[str]) -> list[str]:
+    """The words of `args` ahead of a `--`."""
+    return list(args[: args.index('--')] if '--' in args else args)
+
+
+def _long(arg: str, name: str) -> bool:
+    return arg == name or arg.startswith(f'{name}=')
+
+
+def _short_cluster(arg: str, letter: str) -> bool:
+    return arg.startswith('-') and not arg.startswith('--') and letter in arg[1:]

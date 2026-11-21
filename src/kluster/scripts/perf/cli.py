@@ -17,6 +17,8 @@ from pathlib import Path
 
 from kluster.lib import pulumi_cli, stack_addresses
 from kluster.lib.monitoring.readings import READINGS
+from kluster.scripts import manual_run
+from kluster.scripts.credentials import pulumi_config
 from kluster.scripts.perf import cluster, exposition, history, record
 
 log = logging.getLogger(__name__)
@@ -92,7 +94,13 @@ def _record(path: Path, talos: cluster.Talos, api: cluster.Api) -> int:
     log.info("reading the control planes from `physical`'s outputs")
     try:
         nodes = cluster.control_planes()
-    except (pulumi_cli.PulumiRefused, stack_addresses.UnusableAddressOutput, ValueError) as exc:
+    except (
+        pulumi_cli.PulumiRefused,
+        pulumi_config.MachineRefused,
+        manual_run.CheckRefused,
+        stack_addresses.UnusableAddressOutput,
+        ValueError,
+    ) as exc:
         log.error('no control planes to record: %s', exc)
         return REFUSED
     recorder = record.Recorder(nodes=nodes, talos=talos, api=api, keep=exposition.etcd_families(READINGS))
