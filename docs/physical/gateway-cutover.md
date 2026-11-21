@@ -2487,11 +2487,11 @@ row.
 just pushed, and applies nothing (`.github/workflows/drift.yml`):
 
 ```sh
-gh workflow run drift.yml --repo Aetf/kluster
-gh run list --workflow drift.yml --repo Aetf/kluster --limit 1 --json databaseId,createdAt,status
-gh run watch <databaseId> --repo Aetf/kluster
-gh run view <databaseId> --repo Aetf/kluster --json jobs --jq '.jobs[] | .name, (.steps[] | "  \(.conclusion)\t\(.name)")'
-gh run view <databaseId> --repo Aetf/kluster --log-failed
+mise x -- gh workflow run drift.yml --repo Aetf/kluster
+mise x -- gh run list --workflow drift.yml --repo Aetf/kluster --limit 1 --json databaseId,createdAt,status
+mise x -- gh run watch <databaseId> --repo Aetf/kluster
+mise x -- gh run view <databaseId> --repo Aetf/kluster --json jobs --jq '.jobs[] | .name, (.steps[] | "  \(.conclusion)\t\(.name)")'
+mise x -- gh run view <databaseId> --repo Aetf/kluster --log-failed
 ```
 
 It passes when the `physical` job succeeds, and the `dns` job either
@@ -2536,8 +2536,8 @@ nothing handles it yet (operations.md §4).
 only then: from here a merge applies.
 
 ```sh
-gh workflow enable deploy.yml --repo Aetf/kluster
-gh api repos/Aetf/kluster/actions/workflows/deploy.yml --jq .state   # active
+mise x -- gh workflow enable deploy.yml --repo Aetf/kluster
+mise x -- gh api repos/Aetf/kluster/actions/workflows/deploy.yml --jq .state   # active
 ```
 
 **The way back** disables the chain again and takes the identities out
@@ -2545,11 +2545,11 @@ of the Environments, so a deploy started by hand also stops at
 `plan-physical`:
 
 ```sh
-gh workflow disable deploy.yml --repo Aetf/kluster
-gh secret delete ZEROTIER_IDENTITY --env dns --repo Aetf/kluster
-gh secret delete ZEROTIER_IDENTITY --env physical --repo Aetf/kluster
-gh secret delete ZEROTIER_IDENTITY --env physical-plan --repo Aetf/kluster
-gh secret list --env dns --repo Aetf/kluster      # and the same for the other two: no ZEROTIER_IDENTITY
+mise x -- gh workflow disable deploy.yml --repo Aetf/kluster
+mise x -- gh secret delete ZEROTIER_IDENTITY --env dns --repo Aetf/kluster
+mise x -- gh secret delete ZEROTIER_IDENTITY --env physical --repo Aetf/kluster
+mise x -- gh secret delete ZEROTIER_IDENTITY --env physical-plan --repo Aetf/kluster
+mise x -- gh secret list --env dns --repo Aetf/kluster      # and the same for the other two: no ZEROTIER_IDENTITY
 ```
 
 The network id stays: it opens nothing without an identity. If the
