@@ -23,20 +23,15 @@ from urllib.parse import urlsplit
 
 import pytest
 import pytest_asyncio
+from apps_blog import CLIENT, EXPOSURE, ZONE_IDS, ZONES, declare
 from mock_monitor import Recorder, declaring, run_with
 from node_selection import NODES, schedulable
 
 from kluster import conventions
-from kluster.components.apps import Fronts
-from kluster.components.apps.blog import blog
 from kluster.components.apps.matrix import SERVER_NAME
-from kluster.components.apps.static_site import StaticSite
-from kluster.components.cilium import InternetPoolMembers
 from kluster.components.cilium.gateways import apex_listener
 from kluster.conventions.routes import PROXIED, Apex, Exposure, Held, Route
-from kluster.conventions.sso import Client, Factor, Grant, Scope, TokenEndpointAuth
 from kluster.lib.k8s import POD_SECURITY_ENFORCE_LABEL, PodSecurity
-from kluster.lib.versions import ImagePin
 
 NAMESPACE = 'kubernetes:core/v1:Namespace'
 DEPLOYMENT = 'kubernetes:apps/v1:Deployment'
@@ -48,58 +43,15 @@ SEALED_SECRET = 'crds:bitnami.com/v1alpha1:SealedSecret'
 HTTP_ROUTE = 'crds:gateway.networking.k8s.io/v1:HTTPRoute'
 RECORD = 'cloudflare:index/dnsRecord:DnsRecord'
 
-#: The blog's zones: the primary, whose apex is the Matrix server name, and
-#: one of the test's own.
-ZONES = (conventions.ZONE_PRIMARY, 'blog-cohost.example')
-
-#: The blog's rows: the apex and `www` of each zone.
-EXPOSURE = Exposure(routes=(Apex(ZONES), Route('www', internet=PROXIED, zones=ZONES)))
 
 #: The same, `www` held by the legacy VPS, as the land declares it.
 HELD = Exposure(routes=(Apex(ZONES), Held(Route('www', internet=PROXIED, zones=ZONES))))
 
-#: A homeserver's client of the test's own, at a host no census row carries.
-CLIENT = Client(
-    'mx-test',
-    'mx-home',
-    ('/callback',),
-    policy=(Grant('mx-test-users', Factor.ONE),),
-    token_endpoint_auth=TokenEndpointAuth.BASIC,
-    scopes=(Scope.OPENID,),
-)
-
-#: The pins the blog is declared with here: references that are no published
-#: image, so a container carrying one carries the pin.
-SERVER = ImagePin('registry.example.invalid/static', 'v9.9.9', f'sha256:{"a" * 64}')
-SYNC = ImagePin('registry.example.invalid/git-sync', 'v9.9.9', f'sha256:{"b" * 64}')
-
-FRONTS = Fronts(
-    internet=InternetPoolMembers(
-        node_private_ips={'cp-1': '10.0.1.11'},
-        node_guas={'cp-1': '2001:db8:1::11'},
-        dedicated_vip='10.0.1.99',
-        balancer_v4='203.0.113.10',
-        balancer_v6='2001:db8::10',
-    ),
-    worker_gua='2001:db8:70::10',
-)
-ZONE_IDS = {zone: f'{zone}-id' for zone in ZONES}
 
 #: The paths a Matrix server and client read the delegation at, under the
 #: server name (the Matrix specification, "Server Discovery").
 SERVER_DOCUMENT = '/.well-known/matrix/server'
 CLIENT_DOCUMENT = '/.well-known/matrix/client'
-
-
-def declare(exposure: Exposure = EXPOSURE) -> StaticSite:
-    return blog(
-        exposure=exposure,
-        matrix=CLIENT,
-        image=SERVER,
-        sync=SYNC,
-        fronts=FRONTS,
-        zone_ids=ZONE_IDS,
-    )
 
 
 async def _declared(exposure: Exposure) -> Recorder:

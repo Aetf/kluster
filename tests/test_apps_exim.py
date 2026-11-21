@@ -37,6 +37,7 @@ from typing import Any, cast
 import process_sessions
 import pytest
 import pytest_asyncio
+from apps_exim import DKIM, IMAGE, SMTP_CIPHERTEXT
 from committed_stack_files import StackFiles
 from mock_monitor import Recorder, declaring, run_with
 from node_selection import ARCHITECTURE_LABEL, NODES, matches, schedulable
@@ -47,7 +48,6 @@ from kluster.components.apps.exim import CONFIGURATION, HOST, NAMESPACE, SMTP, E
 from kluster.components.dns import base as dns_base
 from kluster.components.dns.record import zone_records
 from kluster.lib.k8s import sealed_ciphertext
-from kluster.lib.versions import ImagePin
 
 NAMESPACE_TYPE = 'kubernetes:core/v1:Namespace'
 DEPLOYMENT = 'kubernetes:apps/v1:Deployment'
@@ -71,13 +71,6 @@ NAMESPACE_LABELS_PREFIX = 'io.cilium.k8s.namespace.labels.'
 #: identity a request a Gateway forwards arrives with.
 POD_LESS_ENTITIES = frozenset({'ingress'})
 
-#: The pin the relay is declared with here: a reference that is no published
-#: image, so a container carrying it carries the pin.
-IMAGE = ImagePin('registry.example.invalid/exim-relay', 'v9.9.9', f'sha256:{"e" * 64}')
-
-#: The ciphertexts it is handed, each naming what it stands for.
-SMTP_CIPHERTEXT = {'smtp_user': 'sealed-account', 'smtp_pass': 'sealed-app-password'}
-DKIM = {'tls.key': 'sealed-dkim-key'}
 
 #: The label a container started here carries, and so the census of what a run
 #: has left: `podman ps --all --filter label=kluster-test=test_apps_exim`.

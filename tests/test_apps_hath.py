@@ -30,20 +30,19 @@ from typing import Any
 import process_sessions
 import pytest
 import pytest_asyncio
+from apps_hath import CIPHERTEXT, CLIENT, FINAL, FRONTS, IMAGE, SERVE, ZONE_IDS
 from mock_monitor import Recorder, declaring, run_with
 from pinned_image import COMMAND_TIMEOUT, CONTAINER_TIMEOUT, PULL_TIMEOUT, pinned, pulled, require_podman
 
 from kluster import conventions
-from kluster.components.apps import LB_IPAM_IPS, WORLD_ENTITY, Fronts
+from kluster.components.apps import LB_IPAM_IPS, WORLD_ENTITY
 from kluster.components.apps import hath as hath_app
 from kluster.components.apps.hath import Hath, Stage
-from kluster.components.cilium import InternetPoolMembers
 from kluster.conventions.backup import BACKED_NAMESPACES
 from kluster.conventions.cloud import NodeVolumeEntry
 from kluster.conventions.cluster import Transports
-from kluster.conventions.routes import REWRITE, Balancer, Dedicated, Exposure, Host, Port, Route, SiteForward, Vip
+from kluster.conventions.routes import REWRITE, Balancer, Exposure, Host, Port, Route, SiteForward, Vip
 from kluster.lib.k8s import POD_SECURITY_ENFORCE_LABEL, PodSecurity
-from kluster.lib.versions import ImagePin
 
 SERVICE = 'kubernetes:core/v1:Service'
 DEPLOYMENT = 'kubernetes:apps/v1:Deployment'
@@ -55,29 +54,9 @@ DESTINATION = 'crds:volsync.backube/v1alpha1:ReplicationDestination'
 POLICY = 'crds:cilium.io/v2:CiliumNetworkPolicy'
 SEALED = 'crds:bitnami.com/v1alpha1:SealedSecret'
 
-FRONTS = Fronts(
-    internet=InternetPoolMembers(
-        node_private_ips={'cp-1': '10.0.1.11'},
-        node_guas={'cp-1': '2001:db8:1::11'},
-        dedicated_vip='10.0.1.99',
-        balancer_v4='203.0.113.10',
-        balancer_v6='2001:db8::10',
-    ),
-    worker_gua='2001:db8:70::10',
-)
-ZONE_IDS = {conventions.ZONE_PRIMARY: 'the-primary-zones-id'}
-
-#: The raw port, at the dedicated node's own address.
-SERVE = Port('hh-serve', 60123, Transports.TCP, internet=Dedicated())
-CLIENT = Exposure(ports=(SERVE,))
 
 #: The two stages, each under a tag of the test's own.
 WARM = Stage('a-warm-pass', final=False)
-FINAL = Stage('a-final-pass', final=True)
-
-IMAGE = ImagePin('registry.example.invalid/hath', 'v9.9.9', f'sha256:{"5" * 64}')
-#: Ciphertext of each key of the ported Secret, which names the key.
-CIPHERTEXT = {key: f'sealed-{key}' for key in hath_app.PORTED.keys}
 
 
 def declare(**changed: Any) -> None:

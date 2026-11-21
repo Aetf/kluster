@@ -24,18 +24,16 @@ from typing import Any
 
 import pytest
 import pytest_asyncio
+from apps_emailproxy import CIPHERTEXT, FRONTS, IMAGE, MAIL, PROXY, WRITER_KEY, ZONE_IDS
 from mock_monitor import Recorder, declaring, run_with
 
 from kluster import conventions
-from kluster.components.apps import Fronts
 from kluster.components.apps import emailproxy as emailproxy_app
 from kluster.components.apps.emailproxy import EmailProxy
-from kluster.components.cilium import InternetPoolMembers
 from kluster.conventions.backup import BACKED_NAMESPACES, BackupFamily
 from kluster.conventions.cluster import Transports
 from kluster.conventions.routes import REWRITE, Dedicated, Exposure, Port, Route, Vip
 from kluster.lib.k8s import POD_SECURITY_ENFORCE_LABEL, PodSecurity
-from kluster.lib.versions import ImagePin
 
 SERVICE = 'kubernetes:core/v1:Service'
 DEPLOYMENT = 'kubernetes:apps/v1:Deployment'
@@ -49,26 +47,6 @@ CERTIFICATE = 'crds:cert-manager.io/v1:Certificate'
 
 ROOT = Path(__file__).parent.parent
 
-FRONTS = Fronts(
-    internet=InternetPoolMembers(
-        node_private_ips={'cp-1': '10.0.1.11'},
-        node_guas={'cp-1': '2001:db8:1::11'},
-        dedicated_vip='10.0.1.99',
-        balancer_v4='203.0.113.10',
-        balancer_v6='2001:db8::10',
-    ),
-    worker_gua='2001:db8:70::10',
-)
-ZONE_IDS = {conventions.ZONE_PRIMARY: 'the-primary-zones-id'}
-
-#: The raw port, dialed at one name at the LAN VIP.
-MAIL = Port('ep-mail', 1994, Transports.TCP, lan=Vip('ep-mail'))
-PROXY = Exposure(ports=(MAIL,))
-
-IMAGE = ImagePin('registry.example.invalid/emailproxy', 'v9.9.9', f'sha256:{"4" * 64}')
-WRITER_KEY = {'AWS_ACCESS_KEY_ID': 'emailproxy-id', 'AWS_SECRET_ACCESS_KEY': 'emailproxy-secret'}
-#: Ciphertext of each key of the ported Secret, which names the key.
-CIPHERTEXT = {key: f'sealed-{key}' for key in emailproxy_app.PORTED.keys}
 
 #: The controller's action for a decrypted key, the only one the file uses.
 INDEX = re.compile(r'\{\{\s*index\s+\.\s+"(?P<key>[^"]+)"\s*\}\}')

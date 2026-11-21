@@ -28,37 +28,32 @@ from typing import Any
 import process_sessions
 import pytest
 import pytest_asyncio
+from apps_static_site import (
+    BLOG,
+    BLOG_ZONES,
+    BRANCH,
+    DOCUMENTS,
+    DOORS_APEX,
+    DOORS_ZONE,
+    FRONTS,
+    REPOSITORY,
+    SERVER,
+    SYNC,
+    ZONE_IDS,
+)
 from mock_monitor import Recorder, declaring, run_with
 from node_selection import CLOUD, NODES, schedulable
 from pinned_image import COMMAND_TIMEOUT, CONTAINER_TIMEOUT, pinned, pulled, require_podman
 
-from kluster.components.apps import Fronts
 from kluster.components.apps.static_site import GitSource, NasSource, StaticSite
-from kluster.components.cilium import InternetPoolMembers
 from kluster.conventions.cluster import Transports
 from kluster.conventions.routes import PROXIED, Apex, Balancer, Device, Direct, Exposure, Held, Passthrough, Port, Route
-from kluster.lib.versions import ImagePin
 
 DEPLOYMENT = 'kubernetes:apps/v1:Deployment'
 CONFIG_MAP = 'kubernetes:core/v1:ConfigMap'
 VOLUME = 'kubernetes:core/v1:PersistentVolume'
 HTTP_ROUTE = 'crds:gateway.networking.k8s.io/v1:HTTPRoute'
 
-#: The blog's apex documents: two JSON bodies of the test's own, at paths
-#: without an extension, as a delegation's are.
-DOCUMENTS = {
-    '/.well-known/example/server': json.dumps({'server': 'home.blog.example:443'}),
-    '/.well-known/example/client': json.dumps({'base_url': 'https://home.blog.example'}),
-}
-
-#: The zones of the test's sites: the blog's two, and the doors' apex and the
-#: zone of its two other names.
-BLOG_ZONES = ('blog.example', 'blog-cohost.example')
-DOORS_APEX = 'doors.example'
-DOORS_ZONE = 'games.example'
-
-#: The blog: its apex and `www` in each zone.
-BLOG = Exposure(routes=(Apex(BLOG_ZONES), Route('www', internet=PROXIED, zones=BLOG_ZONES)))
 
 #: The blog as its land declares it, `www` still held by the legacy VPS.
 HELD = Exposure(routes=(Apex(BLOG_ZONES), Held(Route('www', internet=PROXIED, zones=BLOG_ZONES))))
@@ -74,30 +69,8 @@ DOORS = Exposure(
 )
 DIRECTORIES = {DOORS_APEX: 'door-a', f'games.{DOORS_ZONE}': 'door-b', f'game.{DOORS_ZONE}': 'door-c'}
 
-#: The repository and branch the blog syncs: a repository the sync's case lays
-#: into the container's home before git-sync starts, whose default branch is
-#: not the one synced.
-REPOSITORY = 'file:///tmp/upstream'
-BRANCH = 'built'
-
-#: The pins the sites are declared with here: references that are no
-#: published image, so a container carrying one carries the pin.
-SERVER = ImagePin('registry.example.invalid/static', 'v9.9.9', f'sha256:{"a" * 64}')
-SYNC = ImagePin('registry.example.invalid/git-sync', 'v9.9.9', f'sha256:{"b" * 64}')
 
 NAS_PATH = 'Web/doors'
-
-FRONTS = Fronts(
-    internet=InternetPoolMembers(
-        node_private_ips={'cp-1': '10.0.1.11'},
-        node_guas={'cp-1': '2001:db8:1::11'},
-        dedicated_vip='10.0.1.99',
-        balancer_v4='203.0.113.10',
-        balancer_v6='2001:db8::10',
-    ),
-    worker_gua='2001:db8:70::10',
-)
-ZONE_IDS = {zone: f'{zone}-id' for zone in (*BLOG_ZONES, DOORS_APEX, DOORS_ZONE)}
 
 
 def declare_blog(**overrides: Any) -> StaticSite:
