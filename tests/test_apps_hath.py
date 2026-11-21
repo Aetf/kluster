@@ -36,7 +36,7 @@ from pinned_image import COMMAND_TIMEOUT, CONTAINER_TIMEOUT, PULL_TIMEOUT, pinne
 from kluster import conventions
 from kluster.components.apps import LB_IPAM_IPS, WORLD_ENTITY, Fronts
 from kluster.components.apps import hath as hath_app
-from kluster.components.apps.hath import Hath
+from kluster.components.apps.hath import Hath, Stage
 from kluster.components.cilium import InternetPoolMembers
 from kluster.conventions.backup import BACKED_NAMESPACES
 from kluster.conventions.cloud import NodeVolumeEntry
@@ -50,6 +50,7 @@ DEPLOYMENT = 'kubernetes:apps/v1:Deployment'
 NAMESPACE = 'kubernetes:core/v1:Namespace'
 CLAIM = 'kubernetes:core/v1:PersistentVolumeClaim'
 SOURCE = 'crds:volsync.backube/v1alpha1:ReplicationSource'
+VOLUME = 'kubernetes:core/v1:PersistentVolume'
 DESTINATION = 'crds:volsync.backube/v1alpha1:ReplicationDestination'
 POLICY = 'crds:cilium.io/v2:CiliumNetworkPolicy'
 SEALED = 'crds:bitnami.com/v1alpha1:SealedSecret'
@@ -70,6 +71,10 @@ ZONE_IDS = {conventions.ZONE_PRIMARY: 'the-primary-zones-id'}
 SERVE = Port('hh-serve', 60123, Transports.TCP, internet=Dedicated())
 CLIENT = Exposure(ports=(SERVE,))
 
+#: The two stages, each under a tag of the test's own.
+WARM = Stage('a-warm-pass', final=False)
+FINAL = Stage('a-final-pass', final=True)
+
 IMAGE = ImagePin('registry.example.invalid/hath', 'v9.9.9', f'sha256:{"5" * 64}')
 #: Ciphertext of each key of the ported Secret, which names the key.
 CIPHERTEXT = {key: f'sealed-{key}' for key in hath_app.PORTED.keys}
@@ -80,7 +85,7 @@ def declare(**changed: Any) -> None:
         'exposure': CLIENT,
         'image': IMAGE,
         'login': CIPHERTEXT,
-        'started': True,
+        'stage': FINAL,
         'fronts': FRONTS,
         'zone_ids': ZONE_IDS,
     } | changed
@@ -96,7 +101,7 @@ async def declared_with(**changed: Any) -> Recorder:
 
 @pytest_asyncio.fixture(scope='module', loop_scope='module')
 async def declared() -> Recorder:
-    """The client, started, as the `apps` program declares it."""
+    """The client, started behind the final pass, as the `apps` program declares it."""
     return await declared_with()
 
 
@@ -129,7 +134,18 @@ def mounts(monitor: Recorder) -> dict[str, tuple[dict[str, Any], dict[str, Any]]
 
 
 def cache_claim(monitor: Recorder) -> dict[str, Any]:
-    (found,) = in_namespace(monitor, CLAIM)
+    (found,) = [it for it in in_namespace(monitor, CLAIM) if it['spec']['storageClassName'] != conventions.SC_NAS]
+    return found
+
+
+def legacy_claim(monitor: Recorder) -> dict[str, Any]:
+    (found,) = [it for it in in_namespace(monitor, CLAIM) if it['spec']['storageClassName'] == conventions.SC_NAS]
+    return found
+
+
+def seed_source(monitor: Recorder) -> tuple[str, dict[str, Any]]:
+    """The seed's source, by its logical name, with its inputs."""
+    (found,) = [(it.name, it.inputs) for it in monitor.of_type(SOURCE)]
     return found
 
 
@@ -173,11 +189,24 @@ def test_there_is_never_a_second_client_under_the_login(declared: Recorder) -> N
 
 
 @pytest.mark.asyncio
-async def test_a_client_not_started_is_scaled_to_zero() -> None:
-    """While the legacy client serves under the login, the component is wired with its own scaled to zero."""
-    monitor = await declared_with(started=False)
+async def test_before_the_final_pass_the_client_is_at_zero_and_nothing_waits_for_the_pass() -> None:
+    """While the legacy client serves under the login, its own is scaled to zero, and the warm pass runs on unwatched."""
+    monitor = await declared_with(stage=WARM)
+    _, source = seed_source(monitor)
 
     assert deployment_of(monitor)['spec']['replicas'] == 0
+    assert source['spec']['trigger'] == {'manual': WARM.tag}
+    assert 'pulumi.com/waitFor' not in source['metadata'].get('annotations', {})
+
+
+def test_the_final_pass_is_waited_for_and_the_client_starts_behind_it(declared: Recorder) -> None:
+    """The client's update is issued once the source's, whose await is the pass, has finished, so it never starts on a partial cache."""
+    name, source = seed_source(declared)
+
+    assert deployment_of(declared)['spec']['replicas'] == 1
+    assert source['spec']['trigger'] == {'manual': FINAL.tag}
+    assert source['metadata']['annotations']['pulumi.com/waitFor'] == f'jsonpath={{.status.lastManualSync}}={FINAL.tag}'
+    assert [it for it in declared.depends_on(hath_app.NAME, DEPLOYMENT) if it.endswith(f'{SOURCE}::{name}')]
 
 
 # -- the cache -------------------------------------------------------------------
@@ -193,11 +222,34 @@ def test_the_cache_is_claimed_under_its_node_volumes_class_protected(declared: R
 
 
 def test_nothing_backs_the_cache_up_and_the_namespace_is_no_backed_one(declared: Recorder) -> None:
-    """The cache's redundancy is the network's, so the claim takes `off`: no source, no repository, and no writer key to mint."""
-    assert in_namespace(declared, SOURCE) == []
-    assert in_namespace(declared, DESTINATION) == []
+    """The cache's redundancy is the network's, so the claim takes `off`: no restic source, no repository, and no writer key to mint."""
+    assert [it for it in in_namespace(declared, SOURCE) if 'restic' in it['spec']] == []
     assert [it['metadata']['name'] for it in in_namespace(declared, SEALED)] == [hath_app.PORTED.name]
     assert hath_app.NAMESPACE not in BACKED_NAMESPACES
+
+
+def test_the_cache_is_seeded_from_the_legacy_clients_directory_read_only(declared: Recorder) -> None:
+    """The seed's source reads the legacy cache on the NAS, and its destination writes the cache's claim, which the pod mounts."""
+    _, source = seed_source(declared)
+    (destination,) = in_namespace(declared, DESTINATION)
+    (volume,) = [it.inputs for it in declared.of_type(VOLUME)]
+
+    assert source['spec']['sourcePVC'] == legacy_claim(declared)['metadata']['name']
+    assert destination['spec']['rsyncTLS']['destinationPVC'] == cache_claim(declared)['metadata']['name']
+    assert volume['spec']['nfs']['path'] == f'{conventions.NAS_EXPORT}/{hath_app.LEGACY}'
+    assert volume['spec']['nfs']['readOnly'] is True
+
+
+def test_the_pod_mounts_no_nas_claim_so_it_states_no_home_site(declared: Recorder) -> None:
+    """The legacy cache belongs to the seed's source alone; the client stays as free as its claim leaves it."""
+    claims = {
+        it['persistentVolumeClaim']['claimName']
+        for it in pod_of(declared)['spec']['volumes']
+        if 'persistentVolumeClaim' in it
+    }
+
+    assert legacy_claim(declared)['metadata']['name'] not in claims
+    assert 'affinity' not in pod_of(declared)['spec']
 
 
 def test_the_pod_selects_no_node_and_runs_at_the_held_priority(declared: Recorder) -> None:

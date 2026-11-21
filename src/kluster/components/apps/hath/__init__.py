@@ -41,10 +41,19 @@ reads at its start, so Reloader rolls the pod when the Secret changes.
 login, so a rollout stops the old pod before it starts the new one. The start
 script `exec`s the client, so the kubelet's stop reaches its shutdown hook,
 which signs off at the network and lets the requests in flight finish, about
-30 seconds by the client's own account; five minutes bounds it. `started` is the
-migration's layer of this component, deleted at the cut: while the legacy
-client serves, the component is wired with its client scaled to zero
-(rfc-008 §5.4).
+30 seconds by the client's own account; five minutes bounds it.
+
+**The migration's layer is the stage, the legacy cache, and its seed**, all
+deleted at the cut (rfc-008 §5.4). The legacy client's cache is a read-only
+`nas_claim` of `LEGACY`, and the cache's claim is seeded from it
+(`kluster.components.apps.storage.Seeding`) by one pass at a time, the
+stage's tag (`Stage`). A pass that is not final is the warm copy, which runs
+while the legacy client serves and which the apply does not wait for, so the
+client stays at zero. The final pass is taken once the legacy client is gone:
+the apply waits for it, and the client, scaled to one, is ordered after it, so
+it never starts on a cache the pass has not finished writing; the client is
+ordered after the seed's source in every stage. Nothing but the seed's source
+mounts the NAS claim, so the client's pod states no home site.
 
 **It has no probe.** The network tests the port as soon as the client tells it
 the client is up, and an endpoint a readiness probe held back for its period
@@ -61,6 +70,7 @@ claim and which any mover of the claim runs as.
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import dataclass
 
 import pulumi
 import pulumi_crds as crds
@@ -68,7 +78,7 @@ import pulumi_kubernetes as k8s
 
 from kluster import conventions
 from kluster.components.apps import Exposed, Fronts, declared_constraints, expose
-from kluster.components.apps.storage import Claim, claim, off
+from kluster.components.apps.storage import Claim, NasClaim, Seeding, claim, nas_claim, off
 from kluster.conventions.cluster import Transports
 from kluster.conventions.routes import Dedicated, Exposure, Port
 from kluster.lib.k8s import ApplicationNamespace, PortedSecret, application_namespace, sealed_value
@@ -79,6 +89,7 @@ __all__ = (
     'CACHE_VOLUME',
     'DIRECTORIES',
     'LABELS',
+    'LEGACY',
     'LOGIN',
     'NAME',
     'NAMESPACE',
@@ -86,6 +97,7 @@ __all__ = (
     'ROOT',
     'USER',
     'Hath',
+    'Stage',
 )
 
 #: The application's name: its Deployment.
@@ -99,6 +111,11 @@ LABELS: Mapping[str, str] = {'app.kubernetes.io/name': NAME}
 
 #: The row of `conventions.NODE_VOLUMES` whose class the cache is claimed under.
 CACHE_VOLUME = 'hath-cache'
+
+#: The legacy client's directory on the NAS, under the export: its cache and
+#: state, which the seed copies to the root of the cache's claim. The stage's
+#: head reads its root as holding `DIRECTORIES` (rfc-008 §10.3, slice 33).
+LEGACY = 'Hath'
 
 #: The legacy Secret whose ciphertext is ported as it is: the client's ID and
 #: key, as the one line the client reads. The program reads it with
@@ -129,6 +146,21 @@ _CACHE_GIB = 50
 #: otherwise counts it as gone uncleanly, in about 30 seconds by its own
 #: account, and this bounds it.
 _GRACE_SECONDS = 300
+
+
+@dataclass(frozen=True)
+class Stage:
+    """The migration's layer (rfc-008 §5.4), deleted at the cut: the seed's pass, and whether it is the final one.
+
+    `tag` names the pass, a tag the pair has not recorded, set for a final
+    pass only while the pass before it is idle (storage.md §3.1). `final`
+    says the legacy client is gone, so the pass is waited for and the client
+    starts behind it. Waiting and starting are one field: a client started
+    beside a pass nobody waits for would run while its cache is written.
+    """
+
+    tag: str
+    final: bool
 
 
 def _port(exposure: Exposure) -> Port:
@@ -171,13 +203,13 @@ def _ported(login: Mapping[str, pulumi.Input[str]]) -> Mapping[str, pulumi.Input
 
 
 class Hath(Component, pulumi_type='kluster:apps:Hath'):
-    """The client's namespace, its login, its cache's claim, its Deployment, and its raw port.
+    """The client's namespace, its login, its cache's claim seeded from the legacy cache, its Deployment, and its raw port.
 
     `exposure` is its row of the census, one raw port at the `Dedicated`
     front; `image` is the pin it runs; `login` the ciphertext of each key of
     `PORTED`, as the program read it with
-    `kluster.lib.k8s.sealed_ciphertext`; `started` whether the client runs,
-    the migration's layer, false while the legacy client serves; and `fronts`
+    `kluster.lib.k8s.sealed_ciphertext`; `stage` the seed's pass, the
+    migration's layer, and whether the client runs behind it; and `fronts`
     and `zone_ids` what the program read for `expose`. The providers arrive in
     `opts`: the Kubernetes provider for the cluster's objects and the
     Cloudflare one for its records.
@@ -185,6 +217,7 @@ class Hath(Component, pulumi_type='kluster:apps:Hath'):
 
     namespace: ApplicationNamespace
     login: crds.bitnami.v1alpha1.SealedSecret
+    legacy: NasClaim
     cache: Claim
     deployment: k8s.apps.v1.Deployment
     exposed: Exposed
@@ -196,7 +229,7 @@ class Hath(Component, pulumi_type='kluster:apps:Hath'):
         exposure: Exposure,
         image: ImagePin,
         login: Mapping[str, pulumi.Input[str]],
-        started: bool,
+        stage: Stage,
         fronts: Fronts,
         zone_ids: pulumi.Input[Mapping[str, str]],
         opts: pulumi.ResourceOptions | None = None,
@@ -216,6 +249,9 @@ class Hath(Component, pulumi_type='kluster:apps:Hath'):
         in_namespace = self.child_opts(depends_on=[self.namespace.namespace])
 
         self.login = sealed_value(f'{name}-login', PORTED, ciphertext=ciphertext, opts=in_namespace)
+        self.legacy = nas_claim(
+            f'{name}-legacy', 'legacy', LEGACY, namespace=NAMESPACE, read_only=True, opts=in_namespace
+        )
         self.cache = claim(
             f'{name}-cache',
             'cache',
@@ -224,10 +260,13 @@ class Hath(Component, pulumi_type='kluster:apps:Hath'):
             namespace=NAMESPACE,
             uid=USER,
             constraints=self.constraints,
+            seeded_from=Seeding(self.legacy, stage.tag, waited=stage.final),
             storage_class=cache_class,
             protect=True,
             opts=in_namespace,
         )
+        # `claim` returns a seed wherever it is handed `seeded_from`.
+        seed = self.cache.seed
 
         self.deployment = k8s.apps.v1.Deployment(
             name,
@@ -239,7 +278,7 @@ class Hath(Component, pulumi_type='kluster:apps:Hath'):
                 annotations={'reloader.stakater.com/auto': 'true'},
             ),
             spec=k8s.apps.v1.DeploymentSpecArgs(
-                replicas=1 if started else 0,
+                replicas=1 if stage.final else 0,
                 # Two clients online under one login are refused by the network.
                 strategy=k8s.apps.v1.DeploymentStrategyArgs(type='Recreate'),
                 selector=k8s.meta.v1.LabelSelectorArgs(match_labels=dict(LABELS)),
@@ -250,7 +289,11 @@ class Hath(Component, pulumi_type='kluster:apps:Hath'):
                     spec=self._pod(row, image=image),
                 ),
             ),
-            opts=self.child_opts(),
+            # The client is ordered after the seed's source. Under a final pass
+            # the source's update is the wait for that pass, so the client's
+            # update is issued after it, and a pass that fails or times out
+            # leaves the client where it was.
+            opts=self.child_opts(depends_on=[seed.source] if seed is not None else None),
         )
         self.exposed = expose(
             name,

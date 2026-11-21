@@ -83,6 +83,19 @@ no bucket, repository or credential. The finish is a claim of the new
 generation without `moving_to`, whose source, under a class, syncs to the same
 repository on its first reconcile (storage.md §3.1).
 
+**A seed fills a claim from data the cluster does not own.** `seeded_from`
+(`Seeding`) is a second origin of an `rsync-tls` copy into a claim, beside the
+move, sharing the move's rendering of the pair (`_pair`) and nothing else: it
+raises no generation, names no node labels, orders after no workload, and
+leaves the claim's hold as it is. Its source reads a `nas_claim`, and its
+destination writes the claim, each started by the seed's tag, and the apply
+waits for the pass where the seed asks it to. A seed is admitted only into a
+node volume's claim, under `off`, that is not moving: a node volume's class
+places the claim through its allowed topology, so the destination, which is
+the claim's first consumer, binds nothing in the workload's stead and states
+no affinity; a restic source would back the half-filled claim up on its first
+reconcile; and a move is a second copy into the claim (storage.md §3.1).
+
 **A pod writes to the NAS as the export's anonymous user.** The export squashes
 every client (`conventions.NAS_EXPORT`), so every write arrives as one user
 whatever the pod runs as, `restricted` needs nothing of it, and a path a pod
@@ -136,6 +149,8 @@ __all__ = (
     'MoveOffBinder',
     'NasClaim',
     'Off',
+    'Seed',
+    'Seeding',
     'backed',
     'claim',
     'claim_hold',
@@ -225,6 +240,33 @@ class Move:
 
 
 @dataclass(frozen=True)
+class Seeding:
+    """A copy into the claim from data the cluster does not own: the NAS claim it reads, and one pass of it.
+
+    A pass is asked for by its tag, which the source and the destination
+    carry as `trigger.manual`. VolSync records, when a pass ends, the tag the
+    spec holds at that moment, not the one the pass started under, so the tag
+    of a waited pass is set only while the pass before it is idle, and every
+    tag is one the pair has not yet recorded: a recorded tag asks for no pass,
+    and the wait on it would pass on the data already there (storage.md §3.1).
+    """
+
+    source: NasClaim
+    tag: str
+    """The pass's `trigger.manual`."""
+    waited: bool
+    """Whether the apply waits for the pass, through the source's `lastManualSync`."""
+
+
+@dataclass(frozen=True)
+class Seed:
+    """What a seed adds: the source on the NAS claim and the destination into the claim."""
+
+    source: crds.volsync.v1alpha1.ReplicationSource
+    destination: crds.volsync.v1alpha1.ReplicationDestination
+
+
+@dataclass(frozen=True)
 class Claim:
     """What `claim` emitted.
 
@@ -239,7 +281,9 @@ class Claim:
     password: random.RandomPassword | None
     repository: crds.bitnami.v1alpha1.SealedSecret | None
     move: Move | None
+    seed: Seed | None
     movers: crds.cilium.v2.CiliumNetworkPolicy | None
+    """The allow for the movers' traffic, emitted wherever a mover is: a restic source, a move's pair or a seed's."""
     constraints: Constraints
     """What the workload's pod states: the constraints `claim` was handed, with the claim's hold composed in."""
     pod_annotations: Mapping[str, str]
@@ -258,18 +302,20 @@ def claim(
     generation: int = 0,
     moving_to: Mapping[str, str] | None = None,
     stopped: pulumi.Resource | None = None,
+    seeded_from: Seeding | None = None,
     storage_class: str = conventions.SC_LOCAL_PATH,
     protect: bool = False,
     opts: pulumi.ResourceOptions | None = None,
 ) -> Claim:
-    """A claim on a node, backed up by its retention class or `off`, and moved when it is asked to.
+    """A claim on a node, backed up by its retention class or `off`, and moved or seeded when it is asked to.
 
     Under a class it emits, beside the claim, the restic source, the password
     generated in state and the repository Secret; under `off`, the claim alone.
     With `moving_to` it is the copy of a move instead: the claim of the
     generation before, the claim of this one, and the `rsync-tls` pair from the
-    one to the other. Every claim with a mover emits the allow for the movers'
-    traffic.
+    one to the other. With `seeded_from` it adds the `rsync-tls` pair from a
+    NAS claim into this one. Every claim with a mover emits the allow for the
+    movers' traffic.
 
     :param resource_name: The logical name, which carries the declaring
         component's name.
@@ -327,6 +373,15 @@ def claim(
         writing their shutdown inside their grace period while the mover
         reads the claim; the wait that closes it is Aetf/kluster-ops#724,
         ahead of the first move.
+    :param seeded_from: The NAS claim the claim is filled from, and the pass
+        asked for (`Seeding`). Admitted only into a node volume's claim, under
+        `off`, without `moving_to`, and with a tag that is not empty, which
+        VolSync would read as no trigger at all and sync in a loop. The pair is
+        named after the claim's generation (`<name>-seed-g<generation>`), its
+        destination states no affinity, since the claim's class places it, and
+        its source none either, since the NAS volume's node affinity places
+        it. The claim, its hold and the `Claim`'s constraints are what the same
+        call renders without it.
     :param storage_class: `local-path`, or a node volume's class.
     :param protect: Whether a claim is protected: a precious claim, and a node
         volume's, whose class retains its data (storage.md §3.3). A protected
@@ -335,6 +390,7 @@ def claim(
     """
     if size < 1:
         raise ValueError(f'{resource_name}: a claim is at least 1 GiB, and {name!r} asks for {size}')
+    _seed(resource_name, name, generation, storage_class, retention, moving_to, seeded_from)
     copy = _copy(resource_name, name, generation, moving_to, stopped, constraints.binder_requirements)
     backing = retention if isinstance(retention, Backed) else None
 
@@ -385,14 +441,17 @@ def claim(
         as_made = pulumi.ResourceOptions.merge(child, pulumi.ResourceOptions(ignore_changes=['spec']))
         copied = _claim(resource_name, name, generation - 1, size, storage_class, namespace=namespace, opts=as_made)
         source, destination = _pair(
-            resource_name,
+            f'{resource_name}-move-g{generation}',
+            _move_name(name, generation),
             name,
-            generation,
-            size,
+            source_claim=claim_name(name, generation - 1),
+            destination_claim=claim_name(name, generation),
+            tag=f'copy-g{generation}',
+            timeout=copy_timeout(size),
             namespace=namespace,
             uid=uid,
             requirements=requirements,
-            stopped=workload,
+            after=(workload,),
             claims=(copied, target),
             opts=opts,
         )
@@ -427,9 +486,30 @@ def claim(
             )
         )
 
+    seed: Seed | None = None
+    if seeded_from is not None:
+        source, destination = _pair(
+            f'{resource_name}-seed-g{generation}',
+            _seed_name(name, generation),
+            name,
+            source_claim=seeded_from.source.claim.metadata.name,
+            destination_claim=claim_name(name, generation),
+            tag=seeded_from.tag,
+            timeout=copy_timeout(size) if seeded_from.waited else None,
+            namespace=namespace,
+            uid=uid,
+            requirements=(),
+            after=(),
+            claims=(target, seeded_from.source.claim),
+            opts=opts,
+        )
+        seed = Seed(source=source, destination=destination)
+
+    # By definition rather than by list: wherever a mover is rendered, and to
+    # the bucket where a restic one is.
     movers = (
-        _movers(resource_name, name, namespace=namespace, bucket=backed, opts=opts)
-        if backed or move is not None
+        _movers(resource_name, name, namespace=namespace, bucket=bool(sources), opts=opts)
+        if sources or move is not None or seed is not None
         else None
     )
     return Claim(
@@ -439,6 +519,7 @@ def claim(
         password=password,
         repository=repository,
         move=move,
+        seed=seed,
         movers=movers,
         constraints=held,
         pod_annotations=writer_annotations(storage_class),
@@ -522,14 +603,61 @@ def _copy(
             f'{resource_name}: {name!r} is moved to {"; ".join(contrary)}, so no node admits the destination '
             'that binds its new claim'
         )
-    service = _destination_service(_pair_name(name, generation))
-    if len(service) > _NAME_LIMIT:
-        raise ValueError(
-            f'{resource_name}: the copy of {name!r} would be served as {service!r}, past the {_NAME_LIMIT} characters '
-            'a name may have, which VolSync then replaces with a hash the source cannot name'
-        )
+    _refuse_long_service(resource_name, f'the copy of {name!r}', _move_name(name, generation))
     target = tuple(NodeRequirement(key, value) for key, value in sorted(moving_to.items()))
     return tuple(dict.fromkeys((*binder, *target))), stopped
+
+
+def _seed(
+    resource_name: str,
+    name: str,
+    generation: int,
+    storage_class: str,
+    retention: Backed | Off,
+    moving_to: Mapping[str, str] | None,
+    seeding: Seeding | None,
+) -> None:
+    """Refuse a seed where it cannot be made: anywhere but a node volume's claim, under `off`, that is not moving.
+
+    On `local-path` the destination, the claim's first consumer, would bind
+    the claim wherever it landed, in the workload's stead; a node volume's
+    class places the claim through its allowed topology, so being first
+    decides nothing there. A restic source syncs on its first reconcile, so
+    it would keep a snapshot of the half-filled claim for its class's whole
+    retention. A move is a second copy into the claim at the same time. And
+    an empty tag with no schedule is VolSync's `noTrigger`, which syncs again
+    as soon as each sync ends.
+    """
+    if seeding is None:
+        return
+    if storage_class == conventions.SC_LOCAL_PATH:
+        raise ValueError(
+            f"{resource_name}: a seed fills a node volume's claim, and {name!r} is on {storage_class!r}, where the "
+            "seed's destination would bind it wherever it landed"
+        )
+    if isinstance(retention, Backed):
+        raise ValueError(
+            f'{resource_name}: a seed fills a claim nothing backs up, and {name!r} is under {retention.retention.name!r}, '
+            'whose source would back the half-filled claim up on its first reconcile'
+        )
+    if moving_to is not None:
+        raise ValueError(f'{resource_name}: {name!r} is seeded and moved at once, two copies into one claim')
+    if not seeding.tag:
+        raise ValueError(
+            f"{resource_name}: the seed of {name!r} names its pass by a tag, and an empty one is VolSync's "
+            'trigger-less sync, which runs again as soon as it ends'
+        )
+    _refuse_long_service(resource_name, f'the seed of {name!r}', _seed_name(name, generation))
+
+
+def _refuse_long_service(resource_name: str, what: str, pair: str) -> None:
+    """Refuse a pair whose destination's Service would be named past what a name may have."""
+    service = _destination_service(pair)
+    if len(service) > _NAME_LIMIT:
+        raise ValueError(
+            f'{resource_name}: {what} would be served as {service!r}, past the {_NAME_LIMIT} characters '
+            'a name may have, which VolSync then replaces with a hash the source cannot name'
+        )
 
 
 #: The longest name an object VolSync names after its owner may have before
@@ -537,9 +665,14 @@ def _copy(
 _NAME_LIMIT = 63
 
 
-def _pair_name(name: str, generation: int) -> str:
-    """The one name of a copy's source and destination."""
+def _move_name(name: str, generation: int) -> str:
+    """The one name of a move's source and destination."""
     return f'{name}-move-g{generation}'
+
+
+def _seed_name(name: str, generation: int) -> str:
+    """The one name of a seed's source and destination, after the claim's generation, which a seed leaves as it is."""
+    return f'{name}-seed-g{generation}'
 
 
 def _destination_service(pair: str) -> str:
@@ -693,50 +826,58 @@ def copy_timeout(size: int) -> int:
 
 def _pair(
     resource_name: str,
+    pair: str,
     name: str,
-    generation: int,
-    size: int,
     *,
+    source_claim: pulumi.Input[str],
+    destination_claim: str,
+    tag: str,
+    timeout: int | None,
     namespace: str,
     uid: int,
     requirements: tuple[NodeRequirement, ...],
-    stopped: pulumi.Resource,
+    after: tuple[pulumi.Resource, ...],
     claims: tuple[pulumi.Resource, ...],
     opts: pulumi.ResourceOptions | None,
 ) -> tuple[crds.volsync.v1alpha1.ReplicationSource, crds.volsync.v1alpha1.ReplicationDestination]:
-    """The copy's pair: the source on the claim before, the destination into the new one, both started by hand.
+    """An `rsync-tls` pair from `source_claim` into `destination_claim`, both started by hand with `tag`.
 
-    The two take one name, so that the source finds the destination's Service
-    and its generated key by it. The source is applied after the workload's update,
-    and the apply waits for the copy, through the source's `lastManualSync`.
-    The destination's mover is held to `requirements`, as one required term.
+    The two take one name, `pair`, so that the source finds the destination's
+    Service and its generated key by it, and their movers carry the label of
+    the claim's base name, `name`, which its allow selects. The source is
+    applied after `after`, and both after `claims`. With a `timeout`, the
+    apply waits for the pass, through the source's `lastManualSync`, that
+    long; with none, it waits for nothing. The destination's mover is held to
+    `requirements`, as one required term, and to nothing where there are none.
     """
     v = crds.volsync.v1alpha1
-    pair = _pair_name(name, generation)
-    trigger = f'copy-g{generation}'
-    affinity = v.ReplicationDestinationSpecRsyncTLSMoverAffinityArgs(
-        node_affinity=v.ReplicationDestinationSpecRsyncTLSMoverAffinityNodeAffinityArgs(
-            required_during_scheduling_ignored_during_execution=v.ReplicationDestinationSpecRsyncTLSMoverAffinityNodeAffinityRequiredDuringSchedulingIgnoredDuringExecutionArgs(
-                node_selector_terms=[
-                    v.ReplicationDestinationSpecRsyncTLSMoverAffinityNodeAffinityRequiredDuringSchedulingIgnoredDuringExecutionNodeSelectorTermsArgs(
-                        match_expressions=[
-                            v.ReplicationDestinationSpecRsyncTLSMoverAffinityNodeAffinityRequiredDuringSchedulingIgnoredDuringExecutionNodeSelectorTermsMatchExpressionsArgs(
-                                key=it.key, operator='In', values=[it.value]
-                            )
-                            for it in requirements
-                        ]
-                    )
-                ]
+    affinity = (
+        v.ReplicationDestinationSpecRsyncTLSMoverAffinityArgs(
+            node_affinity=v.ReplicationDestinationSpecRsyncTLSMoverAffinityNodeAffinityArgs(
+                required_during_scheduling_ignored_during_execution=v.ReplicationDestinationSpecRsyncTLSMoverAffinityNodeAffinityRequiredDuringSchedulingIgnoredDuringExecutionArgs(
+                    node_selector_terms=[
+                        v.ReplicationDestinationSpecRsyncTLSMoverAffinityNodeAffinityRequiredDuringSchedulingIgnoredDuringExecutionNodeSelectorTermsArgs(
+                            match_expressions=[
+                                v.ReplicationDestinationSpecRsyncTLSMoverAffinityNodeAffinityRequiredDuringSchedulingIgnoredDuringExecutionNodeSelectorTermsMatchExpressionsArgs(
+                                    key=it.key, operator='In', values=[it.value]
+                                )
+                                for it in requirements
+                            ]
+                        )
+                    ]
+                )
             )
         )
+        if requirements
+        else None
     )
     destination = v.ReplicationDestination(
-        f'{resource_name}-move-g{generation}',
+        resource_name,
         metadata=k8s.meta.v1.ObjectMetaArgs(name=pair, namespace=namespace),
         spec=v.ReplicationDestinationSpecArgs(
-            trigger=v.ReplicationDestinationSpecTriggerArgs(manual=trigger),
+            trigger=v.ReplicationDestinationSpecTriggerArgs(manual=tag),
             rsync_tls=v.ReplicationDestinationSpecRsyncTLSArgs(
-                destination_pvc=claim_name(name, generation),
+                destination_pvc=destination_claim,
                 copy_method='Direct',
                 service_type='ClusterIP',
                 mover_affinity=affinity,
@@ -752,18 +893,20 @@ def _pair(
         opts=pulumi.ResourceOptions.merge(opts, pulumi.ResourceOptions(depends_on=list(claims))),
     )
     source = v.ReplicationSource(
-        f'{resource_name}-move-g{generation}',
+        resource_name,
         metadata=k8s.meta.v1.ObjectMetaArgs(
             name=pair,
             namespace=namespace,
-            annotations={
-                'pulumi.com/waitFor': f'jsonpath={{.status.lastManualSync}}={trigger}',
-                'pulumi.com/timeoutSeconds': str(copy_timeout(size)),
+            annotations=None
+            if timeout is None
+            else {
+                'pulumi.com/waitFor': f'jsonpath={{.status.lastManualSync}}={tag}',
+                'pulumi.com/timeoutSeconds': str(timeout),
             },
         ),
         spec=v.ReplicationSourceSpecArgs(
-            source_pvc=claim_name(name, generation - 1),
-            trigger=v.ReplicationSourceSpecTriggerArgs(manual=trigger),
+            source_pvc=source_claim,
+            trigger=v.ReplicationSourceSpecTriggerArgs(manual=tag),
             rsync_tls=v.ReplicationSourceSpecRsyncTLSArgs(
                 address=f'{_destination_service(pair)}.{namespace}.svc',
                 port=RSYNC_TLS_PORT,
@@ -777,7 +920,7 @@ def _pair(
                 mover_pod_labels={MOVER_LABEL: name},
             ),
         ),
-        opts=pulumi.ResourceOptions.merge(opts, pulumi.ResourceOptions(depends_on=[stopped, destination, *claims])),
+        opts=pulumi.ResourceOptions.merge(opts, pulumi.ResourceOptions(depends_on=[*after, destination, *claims])),
     )
     return source, destination
 

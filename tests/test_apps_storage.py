@@ -1,4 +1,4 @@
-"""The application base's storage, declared against mocks: `claim`, `off`, a move, and `nas_claim`.
+"""The application base's storage, declared against mocks: `claim`, `off`, a move, a seed, and `nas_claim`.
 
 Every claim here is the test's own, each in a namespace of its own, so what is
 held is how a claim's arguments decide what is emitted. The retention class is
@@ -37,7 +37,7 @@ from pulumi import runtime
 
 from kluster import conventions
 from kluster.components.apps import storage
-from kluster.components.apps.storage import Backed, Off, backed, claim, nas_claim, off
+from kluster.components.apps.storage import Backed, NasClaim, Off, Seeding, backed, claim, nas_claim, off
 from kluster.components.backup import s3_endpoint
 from kluster.conventions.backup import RetentionClass
 from kluster.lib.k8s import (
@@ -1000,14 +1000,30 @@ def test_every_mover_states_its_security_context_and_resources_and_copies_direct
         assert spec['copyMethod'] == 'Direct', name
 
 
-def test_every_mover_carries_the_label_its_allow_selects(declared: Recorder) -> None:
-    for namespace in ('moved', 'copying', 'cache'):
-        (policy,) = in_namespace(declared, POLICY, namespace)
-        selected = policy['spec']['endpointSelector']['matchLabels']
-        found = list(movers(declared, namespace))
-        assert found
-        for name, spec in found:
-            assert selected.items() <= spec['moverPodLabels'].items(), name
+@pytest.mark.parametrize('run', ['declared', 'seeded'])
+def test_every_mover_is_selected_by_a_movers_allow_in_its_namespace(run: str, request: pytest.FixtureRequest) -> None:
+    """Whatever renders a mover, a restic source, a move's pair or a seed's, the allow for its traffic selects it.
+
+    The allow's first egress rule is what denies a mover the rest, so a mover
+    it does not select reaches whatever the namespace's own policy leaves it.
+    """
+    monitor = cast('Recorder', request.getfixturevalue(run))
+    rendered = [
+        (it.name, it.inputs['metadata']['namespace'], it.inputs['spec'][kind])
+        for typ in (SOURCE, DESTINATION)
+        for it in monitor.of_type(typ)
+        for kind in ('restic', 'rsyncTLS')
+        if kind in it.inputs['spec']
+    ]
+
+    assert rendered
+    for name, namespace, spec in rendered:
+        allows = [
+            it['spec']['endpointSelector']['matchLabels']
+            for it in in_namespace(monitor, POLICY, namespace)
+            if storage.MOVER_LABEL in it['spec']['endpointSelector'].get('matchLabels', {})
+        ]
+        assert any(selected.items() <= spec['moverPodLabels'].items() for selected in allows), name
 
 
 def kind(rule: dict[str, Any]) -> str:
@@ -1057,6 +1073,172 @@ def test_a_restic_mover_reaches_the_bucket_and_a_copy_alone_does_not(declared: R
     assert rule['toFQDNs'] == [{'matchName': bucket}]
     assert rule['toPorts'] == [{'ports': [{'port': '443', 'protocol': 'TCP'}]}]
     assert [rule for rule in egress(declared, 'cache') if 'toFQDNs' in rule] == []
+
+
+# -- a seed -------------------------------------------------------------------
+
+#: The tag of each seeded namespace's pass, and whether the apply waits for it.
+PASSES: dict[str, tuple[str, bool]] = {'warm': ('a-first-pass', False), 'final': ('a-later-pass', True)}
+
+
+def seeded_claim(
+    resource_name: str,
+    seeding: Seeding | None,
+    *,
+    namespace: str,
+    name: str = 'cache',
+    storage_class: str = NODE_VOLUME_CLASS,
+    retention: Backed | Off | None = None,
+    generation: int = 0,
+    moving_to: dict[str, str] | None = None,
+    stopped: pulumi.Resource | None = None,
+) -> storage.Claim:
+    """A node volume's claim under `off` of the test's own, seeded from `seeding`, or anything else a case changes."""
+    return claim(
+        resource_name,
+        name,
+        7,
+        off('its network is its redundancy') if retention is None else retention,
+        namespace=namespace,
+        uid=UID,
+        constraints=UNCONSTRAINED,
+        generation=generation,
+        moving_to=moving_to,
+        stopped=stopped,
+        seeded_from=seeding,
+        storage_class=storage_class,
+        protect=True,
+    )
+
+
+@pytest_asyncio.fixture(scope='module', loop_scope='module')
+async def seeded() -> Recorder:
+    """A node volume's claim seeded from a NAS claim of its namespace, in a namespace for each pass of `PASSES`."""
+    monitor = await run_with(Recorder(), stack='apps')
+    async with declaring():
+        for namespace, (tag, waited) in PASSES.items():
+            legacy = nas_claim(f'{namespace}-legacy', 'legacy', 'Legacy/Cache', namespace=namespace, read_only=True)
+            _ = seeded_claim(namespace, Seeding(legacy, tag, waited=waited), namespace=namespace)
+    return monitor
+
+
+def pair_of(monitor: Recorder, namespace: str) -> tuple[dict[str, Any], dict[str, Any]]:
+    (source,) = in_namespace(monitor, SOURCE, namespace)
+    (destination,) = in_namespace(monitor, DESTINATION, namespace)
+    return source, destination
+
+
+@pytest.mark.parametrize('namespace', list(PASSES))
+def test_a_seeds_pair_reads_the_nas_claim_and_writes_the_claim_under_the_passs_tag(
+    seeded: Recorder, namespace: str
+) -> None:
+    """The source reads the NAS claim by its name and reaches the destination's Service; the destination writes the claim.
+
+    Both carry the pass's tag, and neither is held to a node: the class of
+    the claim places the destination, and the NAS volume's node affinity the
+    source. Each mover runs as the workload does.
+    """
+    source, destination = pair_of(seeded, namespace)
+    (nas,) = [
+        it for it in in_namespace(seeded, CLAIM, namespace) if it['spec']['storageClassName'] == conventions.SC_NAS
+    ]
+    (filled,) = [
+        it for it in in_namespace(seeded, CLAIM, namespace) if it['spec']['storageClassName'] == NODE_VOLUME_CLASS
+    ]
+    tag, _ = PASSES[namespace]
+
+    assert source['spec']['sourcePVC'] == nas['metadata']['name']
+    assert destination['spec']['rsyncTLS']['destinationPVC'] == filled['metadata']['name']
+    assert source['spec']['trigger'] == destination['spec']['trigger'] == {'manual': tag}
+    assert source['metadata']['name'] == destination['metadata']['name']
+    assert source['spec']['rsyncTLS']['address'] == (
+        f'volsync-rsync-tls-dst-{destination["metadata"]["name"]}.{namespace}.svc'
+    )
+    for spec in (source['spec']['rsyncTLS'], destination['spec']['rsyncTLS']):
+        assert 'moverAffinity' not in spec
+        assert spec['moverSecurityContext']['runAsUser'] == UID
+
+
+@pytest.mark.parametrize('namespace', list(PASSES))
+def test_a_seeds_pair_is_made_after_and_removed_before_the_claims_it_reads_and_writes(
+    seeded: Recorder, namespace: str
+) -> None:
+    """Each of the pair depends on the NAS claim and on the claim it fills.
+
+    So the engine creates the pair after both claims, and deletes it before
+    either: the NAS claim never goes while a pair still names it.
+    """
+    for typ in (SOURCE, DESTINATION):
+        dependencies = seeded.depends_on(f'{namespace}-seed-g0', typ)
+        for claim_resource in (f'{namespace}-legacy-nas', f'{namespace}-g0'):
+            assert any(it.endswith(f'{CLAIM}::{claim_resource}') for it in dependencies), (typ, dependencies)
+
+
+def test_a_waited_pass_waits_on_its_own_tag_and_a_pass_not_waited_for_on_nothing(seeded: Recorder) -> None:
+    """The apply reads the pass done once VolSync reports the source's manual sync under the tag the pass was asked by."""
+    waited, _ = pair_of(seeded, 'final')
+    unwaited, _ = pair_of(seeded, 'warm')
+
+    assert waited['metadata']['annotations']['pulumi.com/waitFor'] == (
+        f'jsonpath={{.status.lastManualSync}}={waited["spec"]["trigger"]["manual"]}'
+    )
+    assert int(waited['metadata']['annotations']['pulumi.com/timeoutSeconds']) > 0
+    assert 'pulumi.com/waitFor' not in unwaited['metadata'].get('annotations', {})
+
+
+def test_a_seeds_movers_reach_the_namespace_and_the_clusters_dns_and_no_bucket(seeded: Recorder) -> None:
+    """An `off` claim has no restic mover, and the seed's pair is the one that needs the allow: nothing else denies it the internet."""
+    for namespace in PASSES:
+        assert sorted(kind(rule) for rule in egress(seeded, namespace)) == ['dns', 'namespace']
+
+
+@pytest.mark.asyncio
+async def test_seeding_leaves_the_claim_and_its_constraints_as_the_unseeded_call_renders_them() -> None:
+    """A seed adds its pair and nothing else: the claim's spec, its protection and the hold its pod states are the claim's own."""
+    rendered: list[tuple[dict[str, Any], bool, Constraints]] = []
+    for seeding in (False, True):
+        monitor = await run_with(Recorder(), stack='apps')
+        async with declaring():
+            legacy = nas_claim('alike-legacy', 'legacy', 'Legacy/Cache', namespace='alike', read_only=True)
+            made = seeded_claim('alike', Seeding(legacy, 'a-pass', waited=True) if seeding else None, namespace='alike')
+        (filled,) = [it for it in in_namespace(monitor, CLAIM, 'alike') if it['metadata']['name'] == made.name]
+        rendered.append((filled, monitor.options_of('alike-g0', CLAIM).protect, made.constraints))
+
+    without, with_seed = rendered
+    assert with_seed == without
+    assert {it.keeper for it in without[2].kept} == {Keeper.NODE_VOLUME}
+
+
+#: A NAS claim that a refused seed never reaches.
+UNREACHED = cast('NasClaim', object())
+
+
+@pytest.mark.parametrize(
+    ('changed', 'refusal'),
+    [
+        pytest.param({'storage_class': conventions.SC_LOCAL_PATH}, "a node volume's claim", id='local-path'),
+        pytest.param({'retention': backed(WEEKDAY, writer_key('refused'))}, 'nothing backs up', id='a-retention-class'),
+        pytest.param(
+            {'generation': 1, 'moving_to': TARGET, 'stopped': cast('pulumi.Resource', object())},
+            'seeded and moved at once',
+            id='under-a-move',
+        ),
+        pytest.param({'tag': ''}, 'an empty one', id='an-empty-tag'),
+        pytest.param({'name': 'x' * 40}, '63', id='a-name-too-long-for-the-service'),
+    ],
+)
+def test_a_seed_is_refused_anywhere_but_a_node_volumes_claim_under_off_that_is_not_moving(
+    changed: dict[str, Any], refusal: str
+) -> None:
+    """On `local-path` its destination would bind the claim in the workload's stead; a restic source would back the half-filled claim up; a move is a second copy into the claim.
+
+    An empty tag is VolSync's trigger-less sync, which runs again as soon as
+    it ends, and a Service past 63 characters is named by a hash the source
+    cannot name. Each is refused before the NAS claim is read.
+    """
+    tag = changed.pop('tag', 'a-pass')
+    with pytest.raises(ValueError, match=refusal):
+        _ = seeded_claim('refused', Seeding(UNREACHED, tag, waited=False), namespace='refused', **changed)
 
 
 # -- the NAS ------------------------------------------------------------------
