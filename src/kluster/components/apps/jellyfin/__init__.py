@@ -14,11 +14,12 @@ in its data directory, so its pod carries the issuer's alias
 (`kluster.components.apps.issuer_aliases`).
 
 **It runs at the home site**: the library and the server's previews are on the
-NAS, which the home site alone reaches (`NasClaim.constraints`), and its data
-claim is handed the same, so its mover binds it there. The GPU it transcodes
-on keeps it to the node offering it (`kluster.components.apps.GPU_HOLD`). Its
-rollout is `Recreate`: the server's database is SQLite, one process's, and
-the GPU is one device, which a second pod would wait for.
+NAS, which the home site alone reaches (`NasClaim.constraints`). The GPU it
+transcodes on keeps it to the node offering it
+(`kluster.components.apps.GPU_HOLD`). Its data claim is handed both, so its
+mover binds it on a home node that offers the GPU. Its rollout is
+`Recreate`: the server's database is SQLite, one process's, and the GPU is
+one device, which a second pod would wait for.
 
 **What it keeps, and where** (rfc-008 §4.2):
 
@@ -385,7 +386,7 @@ class Jellyfin(Component, pulumi_type='kluster:apps:Jellyfin'):
             namespace=NAME,
             uid=USER,
             writer_key=writer_key,
-            constraints=self.constraints & self.derived.constraints & self.media.constraints,
+            constraints=self.constraints & self.derived.constraints & self.media.constraints & GPU_HOLD,
             opts=in_namespace,
         )
         # Autonamed, so a change to either file is a new ConfigMap, and the
@@ -448,7 +449,7 @@ class Jellyfin(Component, pulumi_type='kluster:apps:Jellyfin'):
             # `JELLYFIN_*` variables, the prefix the server reads its
             # configuration from.
             enable_service_links=False,
-            **(self.data.constraints & GPU_HOLD).pod_fields(),
+            **self.data.constraints.pod_fields(),
             host_aliases=issuer_aliases(issuer),
             security_context=k8s.core.v1.PodSecurityContextArgs(
                 run_as_non_root=True,

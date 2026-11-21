@@ -31,7 +31,7 @@ import pulumi_kubernetes as k8s
 import pytest
 import pytest_asyncio
 from mock_monitor import Recorder, declaring, run_with
-from node_selection import CLOUD, NODES, schedulable, selected
+from node_selection import CLOUD, NODES, schedulable, schedulable_among, selected
 from pulumi import runtime
 
 from kluster import conventions
@@ -42,9 +42,13 @@ from kluster.conventions.backup import RetentionClass
 from kluster.lib.k8s import (
     UNCONSTRAINED,
     BackedVolumeBesideNodeVolume,
+    BackedVolumeOffBinder,
     Constraints,
+    Keeper,
+    NodeRequirement,
     TwoBackedVolumes,
     at_home,
+    kept,
     on_architecture,
 )
 
@@ -439,6 +443,75 @@ async def test_a_backed_claim_beside_a_claim_its_mover_could_bind_it_away_from_i
                 writer_key=writer_key('pair'),
                 constraints=first.constraints,
             )
+
+
+#: A device of the test's own, which the nodes that offer it carry a label of
+#: the test's own for.
+DEVICE_LABEL = NodeRequirement('example.com/device', 'present')
+DEVICE = kept(Keeper.DEVICE, 'requests a device of the test', offered_on=DEVICE_LABEL)
+
+#: Each of the cluster's nodes twice, by its name and whether it offers the
+#: device: without its label and with it.
+WITH_AND_WITHOUT_DEVICE: dict[tuple[str, bool], dict[str, str]] = {
+    (node, offers): {**labels, **({DEVICE_LABEL.key: DEVICE_LABEL.value} if offers else {})}
+    for node, labels in NODES.items()
+    for offers in (False, True)
+}
+
+
+async def _backed(
+    constraints: Constraints, retention: RetentionClass | Off = WEEKDAY
+) -> tuple[storage.Claim, Recorder]:
+    monitor = await run_with(Recorder(), stack='apps')
+    async with declaring():
+        made = claim(
+            'device',
+            'data',
+            1,
+            retention,
+            namespace='device',
+            uid=UID,
+            writer_key=writer_key('device'),
+            constraints=constraints,
+        )
+    return made, monitor
+
+
+@pytest.mark.asyncio
+async def test_the_mover_of_a_claim_handed_a_device_is_held_to_the_nodes_that_offer_it() -> None:
+    """The mover requests no device, so the affinity it states is what keeps it off a node the workload could not run on.
+
+    Read on every node with the device and without it, the mover admits the
+    nodes the workload's other constraints do, each where it offers the device.
+    """
+    made, monitor = await _backed(HOME & DEVICE)
+    (source,) = [it.inputs for it in monitor.of_type(SOURCE) if 'restic' in it.inputs['spec']]
+    mover = {'affinity': source['spec']['restic'].get('moverAffinity')}
+
+    assert schedulable_among(mover, WITH_AND_WITHOUT_DEVICE) == {
+        (node, True) for node in schedulable(HOME.pod_fields_json())
+    }
+    assert DEVICE.kept[0] in made.constraints.kept
+
+
+@pytest.mark.asyncio
+async def test_a_device_composed_onto_a_backed_claims_constraints_after_it_was_made_is_refused() -> None:
+    """Its mover was not held to the nodes that offer the device, so it may bind the claim on a node without it."""
+    made, _ = await _backed(HOME)
+
+    with pytest.raises(BackedVolumeOffBinder) as refused:
+        _ = made.constraints & DEVICE
+
+    assert 'requests a device of the test' in str(refused.value)
+    assert "its claim 'data-g0'" in str(refused.value)
+
+
+@pytest.mark.asyncio
+async def test_a_claim_nothing_backs_up_takes_a_device_after_it_was_made() -> None:
+    """It has no mover, so it binds where its pod is placed, which is a node that offers the device."""
+    made, _ = await _backed(HOME, off('a cache, fetched again'))
+
+    assert DEVICE.kept[0] in (made.constraints & DEVICE).kept
 
 
 # -- a move -------------------------------------------------------------------

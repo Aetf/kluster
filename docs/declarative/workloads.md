@@ -128,16 +128,21 @@ annotation its pod takes (`pod_annotations`); a mover carries none.
     as the program read it, which a stack that does not hold it stops at
     (§3, `kluster.lib.k8s.sealed_ciphertext`). `constraints` are the
     workload's (`kluster.lib.k8s.Constraints`), the home site a NAS claim
-    beside it forces included (`NasClaim.constraints`); the returned
+    beside it forces included (`NasClaim.constraints`), and so is the
+    hold of a GPU the pod requests (`GPU_HOLD`); the returned
     `Claim` records them with the claim's own hold composed in, which
     keeps the pod to the claim's node at the held priority, the pod
     states them from there, and every restic mover of the claim carries
-    their node affinity, so that a mover that reaches the claim before
-    the pod binds it only on a node the workload may run on (storage.md
-    §3.1). A workload mounts at most one backed claim, and none beside a
-    node volume's claim, since a mover could bind its claim on another
-    node than the pod's other claim; a backed claim handed such a claim's
-    constraints is refused. The
+    their node affinity and the label of the nodes that offer each
+    device they hold the pod to (`Constraints.binder_requirements`), so
+    that a mover that reaches the claim before the pod binds it only on
+    a node the workload may run on (storage.md §3.1). A workload mounts
+    at most one backed claim, and none beside a node volume's claim,
+    since a mover could bind its claim on another node than the pod's
+    other claim; a backed claim handed such a claim's constraints is
+    refused, and so is any constraint composed onto a backed claim's
+    constraints that its mover was not given, a site, an architecture or
+    a device. The
     generation, `moving_to` and `stopped`, the workload the copy's
     source is applied after, are how the claim moves (storage.md §3.1).
     `protect` protects the claim, for precious data and for a node

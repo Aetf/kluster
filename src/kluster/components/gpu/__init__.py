@@ -44,11 +44,12 @@ import pulumi
 import pulumi_kubernetes as k8s
 
 from kluster import conventions
-from kluster.lib.k8s import LooserLevel, PodSecurity, helm_chart, namespace
+from kluster.lib.k8s import LooserLevel, NodeRequirement, PodSecurity, helm_chart, namespace
 from kluster.lib.versions import ChartPin
 from putils import Component
 
 __all__ = (
+    'GPU_NODE',
     'GPU_NODE_LABEL',
     'GPU_PLUGIN',
     'GPU_RESOURCE',
@@ -66,6 +67,11 @@ __all__ = (
 #: The label the plugin chart's `NodeFeatureRule` sets on a node with an Intel
 #: GPU, and that the plugin selects its nodes by.
 GPU_NODE_LABEL = 'intel.feature.node.kubernetes.io/gpu'
+
+#: The label and the value the plugin chart's `NodeFeatureRule` sets on a node
+#: with an Intel GPU (`templates/gpu.yaml` of the pinned chart): the nodes the
+#: plugin selects, and so the nodes that may offer `GPU_RESOURCE`.
+GPU_NODE = NodeRequirement(GPU_NODE_LABEL, 'true')
 
 #: The resource the plugin offers a GPU bound to `i915` as, which a pod
 #: requests to be given the worker's GPU. `i915` is the driver the worker's
@@ -107,7 +113,7 @@ def gpu_values() -> dict[str, object]:
     return {
         'name': GPU_PLUGIN,
         'nodeFeatureRule': True,
-        'nodeSelector': {GPU_NODE_LABEL: 'true'},
+        'nodeSelector': {GPU_NODE.key: GPU_NODE.value},
     }
 
 

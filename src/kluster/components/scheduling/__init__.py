@@ -1,8 +1,8 @@
 """Scheduling: the `PriorityClass` a pod held by its constraints runs at (declarative/workloads.md §1).
 
-A pod is held by its constraints where a site or an architecture leaves it
-only some nodes to run on, or a volume bound on a node or a device one node
-offers keeps it to one (`kluster.lib.k8s.Constraints`). The scheduler
+A pod is held by its constraints where a site, an architecture or a
+device leaves it only the nodes that match or offer it, or a volume bound
+on a node keeps it to that one (`kluster.lib.k8s.Constraints`). The scheduler
 fills a node by requests, so without a priority a free pod that reaches the
 node first can leave a held pod pending, since the held pod can run nowhere
 else. At this class the scheduler preempts the free pod instead, and the

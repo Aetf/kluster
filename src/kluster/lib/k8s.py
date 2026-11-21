@@ -79,6 +79,7 @@ __all__ = (
     'ApplicationNamespace',
     'Architecture',
     'BackedVolumeBesideNodeVolume',
+    'BackedVolumeOffBinder',
     'Backend',
     'Constraint',
     'Constraints',
@@ -1317,12 +1318,14 @@ class Keeper(StrEnum):
     """A volume that binds on the node the pod, or another pod that mounts it, is first placed on.
 
     Which of the two is placed first decides the node, so a pod that
-    mounts two such volumes could find them bound on two nodes.
+    mounts two such volumes could find them bound on two nodes. The other
+    pod, the volume's binder, is held to the nodes its hold names
+    (`Kept.binder_held_to`).
     """
     NODE_VOLUME = 'node volume'
     """A volume that is on one node before any pod is placed, which the volume's own class decides."""
     DEVICE = 'device'
-    """A device that one node offers, which the pod requests."""
+    """A device that a node offers, which the pod requests: the nodes that offer it carry a label (`Kept.offered_on`)."""
 
 
 class TwoBackedVolumes(ValueError):
@@ -1331,6 +1334,10 @@ class TwoBackedVolumes(ValueError):
 
 class BackedVolumeBesideNodeVolume(ValueError):
     """A backed volume beside a node volume on one pod: another pod may bind the first off the node the second is on, and the pod run on neither."""
+
+
+class BackedVolumeOffBinder(ValueError):
+    """A backed volume beside a constraint its binder was not given: the binder may bind it on a node the constraint refuses, and the pod run nowhere."""
 
 
 @dataclass(frozen=True)
@@ -1348,10 +1355,20 @@ class Kept:
     keeper: Keeper
     declaration: str
     """What keeps the pod there, in a sentence: the volume or the device."""
+    offered_on: NodeRequirement | None = None
+    """For a device, and for a device alone, the label of the nodes that offer it."""
+    binder_held_to: tuple[NodeRequirement, ...] = ()
+    """For a backed volume, and for a backed volume alone, the node requirements of the pod that may bind it in the pod's stead."""
 
     def __post_init__(self) -> None:
         if not self.declaration.strip():
             raise ValueError(f'a pod kept by a {self.keeper} says what keeps it: it takes a declaration')
+        if (self.keeper is Keeper.DEVICE) != (self.offered_on is not None):
+            raise ValueError(
+                f'{self.declaration}: a device, and nothing else, names the label of the nodes that offer it'
+            )
+        if self.binder_held_to and self.keeper is not Keeper.BACKED_VOLUME:
+            raise ValueError(f'{self.declaration}: a backed volume alone has a binder, which its hold names')
 
 
 #: The one site a pod is held to: home. A pod that a fact about nodes or its
@@ -1378,12 +1395,18 @@ class Constraints:
     scheduler's. Three kinds are written here: the home site (`at_home`,
     against `conventions.SITE_LABEL`); an architecture, where an image
     lacks one (`on_architecture`); and a pod **kept** to one node by what it
-    mounts or requests (`kept`): a volume bound on a node, a device one node
+    mounts or requests (`kept`): a volume bound on a node, a device a node
     offers. The scheduler reads that from the pod itself, the
     volume's node affinity or the device request, so it renders no affinity,
     but it holds the pod all the same: without the held priority, free pods
     that reach the node first can leave it pending, since it can run nowhere
     else.
+
+    **A pod that binds a volume on this pod's behalf** — a backed volume's
+    restic mover — requests no device the pod requests, so the scheduler
+    reads nothing of it off the binder. `binder_requirements` is what the
+    binder states instead: the pod's own `requirements`, and the label of
+    the nodes that offer each device the pod requests (`Kept.offered_on`).
 
     **It renders what a pod carries** (`pod_fields`, typed, and
     `pod_fields_json`, for a spec handed over as JSON): its required node
@@ -1403,11 +1426,15 @@ class Constraints:
     (`TwoBackedVolumes`) or beside a node volume
     (`BackedVolumeBesideNodeVolume`): another pod may bind the backed one
     first, off the node the other is or will be bound on, and the pod, which
-    needs both, would run on neither. A backed volume beside a device
-    (`Keeper.DEVICE`) is not refused, though the same can befall it: the
-    other pod may bind the volume on a node that does not offer the device.
-    It holds only where the pod's other constraints leave one node, and that
-    node offers the device. A contradiction across kinds, such as
+    needs both, would run on neither. A backed volume's hold records the
+    requirements its binder was given (`Kept.binder_held_to`), and a backed
+    volume beside any constraint whose requirement they leave out, of
+    `binder_requirements` — a site, an architecture, or the nodes that
+    offer a device (`Keeper.DEVICE`) — is refused (`BackedVolumeOffBinder`):
+    the binder could bind the volume on a node that constraint refuses. So
+    every constraint is composed into those the binder is derived from,
+    before the volume's hold, and not onto the pod's after it. A
+    contradiction across kinds, such as
     the home site and an architecture no home node runs, is not refused,
     since which architectures a site's nodes run is a fact about the nodes
     rather than about the constraints.
@@ -1421,6 +1448,14 @@ class Constraints:
     def __post_init__(self) -> None:
         backed = [it.declaration for it in self.kept if it.keeper is Keeper.BACKED_VOLUME]
         on_a_node = [it.declaration for it in self.kept if it.keeper is Keeper.NODE_VOLUME]
+        for volume in (it for it in self.kept if it.keeper is Keeper.BACKED_VOLUME):
+            off = [it for it in self.binder_requirements if it not in volume.binder_held_to]
+            if off:
+                missing = ', '.join(f'{it.key}={it.value}' for it in off)
+                raise BackedVolumeOffBinder(
+                    f'{volume.declaration}; {"; ".join(self._implying(off))}: one pod mounts a backed volume beside '
+                    f'constraints its binder was not given ({missing}), so the binder may bind it on a node they refuse'
+                )
         if len(backed) > 1:
             raise TwoBackedVolumes(
                 f'{"; ".join(backed)}: one pod mounts more than one backed volume, which another pod may bind first, '
@@ -1452,6 +1487,27 @@ class Constraints:
             for key, constraint in ((SITE_LABEL, self.site), (_ARCHITECTURE_LABEL, self.architecture))
             if constraint is not None
         )
+
+    def _implying(self, requirements: list[NodeRequirement]) -> list[str]:
+        """The declarations behind `requirements`, each once: the site's or the architecture's, or the device's hold."""
+        found: list[str] = []
+        for key, constraint in ((SITE_LABEL, self.site), (_ARCHITECTURE_LABEL, self.architecture)):
+            if constraint is not None and any(it.key == key for it in requirements):
+                found.extend(constraint.declarations)
+        found.extend(it.declaration for it in self.kept if it.offered_on is not None and it.offered_on in requirements)
+        return list(dict.fromkeys(found))
+
+    @property
+    def binder_requirements(self) -> tuple[NodeRequirement, ...]:
+        """The node label each constraint requires of a pod that binds a volume in this pod's stead, with the one value it admits.
+
+        `requirements`, and the label of the nodes that offer each device the
+        pod requests (`Kept.offered_on`): the binder requests none of them,
+        so its own requests leave the scheduler free to place it on a node
+        without the device.
+        """
+        offered = (it.offered_on for it in self.kept if it.offered_on is not None)
+        return tuple(dict.fromkeys((*self.requirements, *offered)))
 
     @property
     def affinity(self) -> k8s.core.v1.AffinityArgs | None:
@@ -1542,9 +1598,23 @@ def at_home(declaration: str) -> Constraints:
     return Constraints(site=Constraint(home, (declaration,)))
 
 
-def kept(keeper: Keeper, declaration: str) -> Constraints:
-    """The pod kept to one node by `keeper`, for `declaration`: held, at the held priority, with no affinity of its own."""
-    return Constraints(kept=(Kept(keeper, declaration),))
+def kept(
+    keeper: Keeper,
+    declaration: str,
+    *,
+    offered_on: NodeRequirement | None = None,
+    binder_held_to: tuple[NodeRequirement, ...] = (),
+) -> Constraints:
+    """The pod kept to one node by `keeper`, for `declaration`: held, at the held priority, with no affinity of its own.
+
+    :param offered_on: For a device, the label of the nodes that offer it,
+        which a pod that binds a volume in this pod's stead is held to
+        (`Constraints.binder_requirements`).
+    :param binder_held_to: For a backed volume, the node requirements its
+        binder was given; a constraint whose requirement they leave out is
+        refused beside it (`BackedVolumeOffBinder`).
+    """
+    return Constraints(kept=(Kept(keeper, declaration, offered_on=offered_on, binder_held_to=binder_held_to),))
 
 
 def writer_annotations(storage_class: str) -> Mapping[str, str]:

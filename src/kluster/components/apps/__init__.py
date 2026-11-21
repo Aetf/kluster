@@ -52,10 +52,14 @@ them.
 
 An exposure's home side derives nothing: while the uplink is up, a `lan`
 VIP's connection reaches a backend on any node. Beside these, a pod that
-requests the GPU is kept to the node offering it (`GPU_HOLD`), and a claim
+requests the GPU is kept to a node offering it (`GPU_HOLD`), and a claim
 keeps its pod to the claim's node (`components.apps.storage`); neither states
 an affinity, since the scheduler reads both from the pod, and both hold the
-pod at the held priority.
+pod at the held priority. A restic mover requests no GPU, so a workload that
+does hands its backed claim `GPU_HOLD`, which names the label of the nodes
+the GPU plugin serves (`kluster.components.gpu.GPU_NODE`), and the mover is
+held to them. Those nodes offer `GPU_RESOURCE` while their GPU is bound to
+`i915`.
 
 A `Passthrough` row is refused, naming its host: Cilium drops a TLS
 passthrough listener together with the zone's wildcard listener on the same
@@ -110,7 +114,7 @@ from kluster import conventions
 from kluster.components.cilium import InternetPoolMembers
 from kluster.components.cilium.gateways import apex_listener, sharing_annotations
 from kluster.components.dns.record import cname
-from kluster.components.gpu import GPU_RESOURCE
+from kluster.components.gpu import GPU_NODE, GPU_RESOURCE
 from kluster.conventions.cluster import POOL_WORKER
 from kluster.conventions.routes import (
     Apex,
@@ -181,10 +185,17 @@ WORLD_ENTITY = 'world'
 #: declares it in turn.
 UPLINK_DOWN = 'keeps working while the uplink is down, which its component declares (cluster/architecture.md §1.1)'
 
-#: What a pod that requests the GPU states: kept to the one node that offers
-#: it, which the scheduler reads from the request, so no affinity, and the
-#: held priority.
-GPU_HOLD = kept(Keeper.DEVICE, f'requests the GPU ({GPU_RESOURCE}), which one node offers')
+#: What a pod that requests the GPU states: kept to a node that offers it,
+#: which the scheduler reads from the request, so no affinity, and the held
+#: priority. The nodes that offer it carry the label the GPU plugin's node
+#: rule sets (`kluster.components.gpu.GPU_NODE`), which a pod that binds a
+#: claim in the workload's stead is held to, so the workload hands its backed
+#: claim this hold too.
+GPU_HOLD = kept(
+    Keeper.DEVICE,
+    f'requests the GPU ({GPU_RESOURCE}), which the nodes the GPU plugin serves offer',
+    offered_on=GPU_NODE,
+)
 
 
 def issuer_aliases(issuer: conventions.sso.Issuer) -> list[k8s.core.v1.HostAliasArgs] | None:
