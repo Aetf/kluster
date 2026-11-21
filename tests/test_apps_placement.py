@@ -51,6 +51,7 @@ from kluster.components.apps import UPLINK_DOWN, Fronts, storage
 from kluster.components.apps import authelia as authelia_app
 from kluster.components.apps import emailproxy as emailproxy_app
 from kluster.components.apps import exim as exim_app
+from kluster.components.apps import hath as hath_app
 from kluster.components.apps import immich as immich_app
 from kluster.components.apps import matrix as matrix_app
 from kluster.components.apps import splitpro as splitpro_app
@@ -59,6 +60,7 @@ from kluster.components.apps.echo import Echo
 from kluster.components.apps.emailproxy import EmailProxy
 from kluster.components.apps.exim import Exim
 from kluster.components.apps.golinks import Golinks
+from kluster.components.apps.hath import Hath
 from kluster.components.apps.immich import Immich
 from kluster.components.apps.jellyfin import Jellyfin
 from kluster.components.apps.matrix import Matrix
@@ -78,6 +80,7 @@ from kluster.conventions.routes import (
     REWRITE,
     Apex,
     Balancer,
+    Dedicated,
     Direct,
     Exposure,
     Gate,
@@ -245,6 +248,21 @@ def _components() -> dict[str, Declared]:
             zone_ids=ZONE_IDS,
         ),
         'golinks',
+    )
+    keep(
+        'hath',
+        Hath(
+            'hath',
+            exposure=Exposure(ports=(Port('hh-serve', 60123, Transports.TCP, internet=Dedicated()),)),
+            image=pin('hath'),
+            login=sealed(hath_app.PORTED.keys),
+            # What `claim` takes whatever the retention; no mover of an `off` claim reads it.
+            writer_key=writer_key(hath_app.NAMESPACE),
+            started=True,
+            fronts=FRONTS,
+            zone_ids=ZONE_IDS,
+        ),
+        hath_app.NAMESPACE,
     )
     photos = client('immich')
     keep(
