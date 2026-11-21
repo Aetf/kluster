@@ -161,6 +161,12 @@ The operator's objects -- the receiver, the rules and the scrape objects --
 are declared through `operator_objects`, a layer of its own while the SDK
 generated for them cannot be imported.
 
+Each VM resource -- the chart's (`operator_updates.CHART_RESOURCES`) and
+the history store -- carries the digest of what it is rendered from in its
+`managedMetadata`
+(`operator_updates`), a layer of its own while the operator leaves a field
+a resource stops setting on the workload.
+
 The namespace is `privileged`, for the node exporter (rfc-007 §8).
 """
 
@@ -181,6 +187,7 @@ from kluster import conventions
 from kluster.components.backup import s3_endpoint
 from kluster.components.monitoring import dashboard, memory, oci_metrics, rules, state_backend, stores
 from kluster.components.monitoring.operator_objects import operator_object
+from kluster.components.monitoring.operator_updates import marked_spec, marked_values
 from kluster.components.monitoring.stores import Store, stack_fullname
 from kluster.conventions import CONTROL_PLANE_LABEL, backup, schedule
 from kluster.conventions.alert import Tier
@@ -485,14 +492,16 @@ def stack_values(release: str, chart: ChartPin, *, restore: Sequence[Mapping[str
     container's resources from `memory.CONTAINERS`, Grafana trimmed to fit
     it, the recent store's retention and keys, and the history store written
     to and read. `restore` holds the recent store's restore containers. The
-    last value is the digest of
+    next value is the digest of
     everything else and the chart, on Grafana's container, since the
-    datasources it reads at start are rendered from them.
+    datasources it reads at start are rendered from them. Last, each VM
+    resource is marked with the digest of what it is rendered from
+    (`operator_updates`).
     """
     values = memory.merged(_stack_values(release, chart, restore), memory.chart_values(memory.STACK_CHART))
     rendered_from = json.dumps({'chart': [chart.reference, chart.version], 'values': values}, sort_keys=True)
     digest = hashlib.sha256(rendered_from.encode()).hexdigest()
-    return memory.merged(values, {'grafana': {'env': {DATASOURCES_DIGEST_ENV: digest}}})
+    return marked_values(chart, memory.merged(values, {'grafana': {'env': {DATASOURCES_DIGEST_ENV: digest}}}))
 
 
 def _stack_values(release: str, chart: ChartPin, restore: Sequence[Mapping[str, Any]]) -> dict[str, object]:
@@ -905,7 +914,7 @@ class Monitoring(Component, pulumi_type='kluster:monitoring:Monitoring'):
             # Named, since vmagent's remote write and Grafana's datasource
             # address the Service the operator names after it.
             metadata=k8s.meta.v1.ObjectMetaArgs(name=history.vmsingle, namespace=self.namespace.metadata.name),
-            spec=history_store_spec(image=history_image, restore=backups.restore(history)),
+            spec=marked_spec(stack_chart, history_store_spec(image=history_image, restore=backups.restore(history))),
             opts=self.child_opts(depends_on=[self.chart, self.auth_keys, *restored]),
         )
         self.backups = [

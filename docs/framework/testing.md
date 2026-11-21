@@ -55,6 +55,23 @@ cloud session, because the `/bin/busybox` each script runs under is read
 out of its pinned image with podman (`tests/image_busybox.py`); on CI's
 runner, which has podman, they fail instead.
 
+`tests/test_operator_updates.py` holds the tripwire of the layer in
+`components.monitoring.operator_updates`. It runs the VictoriaMetrics
+operator image the cluster runs against the control plane's API server in
+containers (`tests/control_plane.py`), with the Talos release's
+`kube-controller-manager` running the workload controllers beside it, and
+skips and fails as the cases above do. It pulls the server's images, the
+controller manager's and the operator's, each by its digest (§7, item 4),
+the operator's pinned in the module beside the cases that run it. A case
+judges by no elapsed time: it waits until the operator reports the
+resource's generation reconciled, `status.observedGeneration` at the
+generation with `status.updateStatus` at `operational`, which the operator
+writes once the workload is ready, and the harness's `READY_TIMEOUT` is a
+stop-loss on that wait. Its case of the defect is a workaround's tripwire in
+the sense of §8, "What one release does and the next stops doing is not
+held": it holds the operator leaving a removed field on the workload, and it
+turns red on the release that stops doing so, which is when the layer goes.
+
 A coroutine that never resolves its futures hangs forever instead of failing,
 and the run is bounded twice against that, at two scales:
 

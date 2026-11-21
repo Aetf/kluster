@@ -5,9 +5,13 @@ the image, so a move of the pin moves what the suite runs with it. An image
 nothing deploys is pinned in the module whose cases run it, or in the helper
 module the suites that run it share, beside what keeps the pin on the fleet's:
 today the control plane's, in `tests/control_plane.py`, held to the Talos
-release's listing. The image is pulled from Google's mirror where its
-repository is Docker Hub's, by digest (`source`, `pulled`), and only where it
-is not already local.
+release's listing. An image the deployment pulls through a chart's
+default, with no pin of its own in `Pulumi.yaml`, is pinned in the module
+whose cases run it: today the VictoriaMetrics operator's, in
+`tests/test_operator_updates.py`, which nothing yet holds to the chart's
+release (Aetf/kluster-ops#909). The image is pulled from Google's mirror
+where its repository is Docker Hub's, by digest (`source`, `pulled`), and
+only where it is not already local.
 
 **The cases run where podman is on `PATH`.** Anywhere else such a case is
 skipped, naming why, except on CI's runner, which has podman and where the

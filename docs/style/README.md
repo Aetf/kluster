@@ -63,7 +63,12 @@ The layers built this way today include the Renovate rule that looks
 pin's channel on; the section of `src/kluster/components/talos/__init__.py`
 that hands what `Secrets` generated on as each consumer's input type,
 which goes once an output type handed to an invoke reaches the provider
-under the provider's names (pulumi/pulumi#15883); and, in the test suite, `mocked_runs_release_their_tasks`
+under the provider's names (pulumi/pulumi#15883); the mark
+`src/kluster/components/monitoring/operator_updates.py` puts on each
+VictoriaMetrics resource, a digest of what it is rendered from, which goes
+once the operator takes a field a resource stops setting off its workload
+by itself, the day the case of the defect in `tests/test_operator_updates.py`
+turns red; and, in the test suite, `mocked_runs_release_their_tasks`
 in `tests/conftest.py` and `_ReadFailures` in `tests/mock_monitor.py`,
 which go once the Pulumi SDK stops leaving a closed loop's outputs in its
 tracked set, and once its output awaits every future it was given; and the

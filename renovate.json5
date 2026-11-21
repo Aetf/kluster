@@ -758,7 +758,7 @@
       dependencyDashboardApproval: true,
       prBodyNotes: [
         'A Talos release may move the cluster\'s etcd to another minor (`DefaultEtcdVersion` in Talos\' constants). If it does, approve the `registry.k8s.io/etcd` bump of `docker/etcd-age.conf` on the dependency dashboard with it, so the restore-verify restores with the minor the cluster runs.',
-        'A Talos release may default to another `kube-apiserver` or `etcd` tag. If it does, move `CONTROL_PLANE_PINS` in `tests/control_plane.py` in this pull request to the tags `talosctl images default` names and the digests the registry serves for them; `test_the_control_plane_pins_are_the_images_the_pinned_talos_release_runs` is red until then.',
+        'A Talos release may default to another `kube-apiserver` or `etcd` tag. If it does, move each entry of `CONTROL_PLANE_PINS` in `tests/control_plane.py` -- `kube-apiserver`, `etcd` and `kube-controller-manager`, whose tag follows the server's -- in this pull request to the tag `talosctl images default` names and the digest the registry serves for it; `test_the_control_plane_pins_are_the_images_the_pinned_talos_release_runs` is red until then.',
       ],
     },
     {
