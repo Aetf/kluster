@@ -20,7 +20,9 @@ Pulumi Kubernetes provider's await annotations, and Cilium's policy fields.
 from __future__ import annotations
 
 import datetime as dt
+import json
 from collections.abc import Iterator
+from dataclasses import dataclass
 from typing import Any, cast
 from urllib.parse import urlsplit
 
@@ -33,6 +35,7 @@ from node_selection import CLOUD, NODES, schedulable, selected
 from pulumi import runtime
 
 from kluster import conventions
+from kluster.components.apps import storage
 from kluster.components.apps.storage import Off, claim, nas_claim, off
 from kluster.components.backup import s3_endpoint
 from kluster.conventions.backup import RetentionClass
@@ -693,10 +696,97 @@ def test_a_nas_claim_is_its_volume_under_the_export_bound_to_it_alone(declared: 
         'path': f'{conventions.NAS_EXPORT}/Photos/Library',
         'readOnly': False,
     }
-    assert volume['spec']['claimRef'] == {'namespace': 'photos', 'name': 'library'}
+    assert volume['spec']['claimRef'] == {'namespace': 'photos', 'name': bound['metadata']['name']}
     assert bound['spec']['volumeName'] == volume['metadata']['name']
     assert volume['spec']['persistentVolumeReclaimPolicy'] == 'Retain'
     assert bound['spec']['storageClassName'] == volume['spec']['storageClassName']
+
+
+@dataclass(frozen=True)
+class Rendered:
+    """One NAS claim's volume and claim, as one run declared them."""
+
+    volume: dict[str, Any]
+    claim: dict[str, Any]
+
+    @property
+    def fixed(self) -> tuple[str, str]:
+        """What the Kubernetes API refuses to change on each object once it exists.
+
+        A volume's source, node affinity and volume mode
+        (`ValidatePersistentVolumeUpdate`), and a claim's spec, whose request
+        may only grow and which no class here grows
+        (`ValidatePersistentVolumeClaimUpdate`; both in
+        `pkg/apis/core/validation/validation.go`, Kubernetes v1.36.3). The
+        claim's `volumeName` is left out: it is the volume's name.
+        """
+        volume = {key: self.volume['spec'].get(key) for key in ('nfs', 'nodeAffinity', 'volumeMode')}
+        claim = {key: value for key, value in self.claim['spec'].items() if key != 'volumeName'}
+        return json.dumps(volume, sort_keys=True), json.dumps(claim, sort_keys=True)
+
+
+async def rendered(path: str = 'Photos/Library', *, read_only: bool = False) -> Rendered:
+    """`nas_claim('library', ...)` declared alone in a run of its own."""
+    monitor = await run_with(Recorder(), stack='apps')
+    async with declaring():
+        _ = nas_claim('library', 'library', path, namespace='photos', read_only=read_only)
+    (volume,) = [it.inputs for it in monitor.of_type(VOLUME)]
+    (bound,) = in_namespace(monitor, CLAIM, 'photos')
+    return Rendered(volume=volume, claim=bound)
+
+
+#: The home site's selector replaced by another site's, typed and as JSON from one requirement.
+_ELSEWHERE_KEY, _ELSEWHERE = 'example.com/site', 'elsewhere'
+ELSEWHERE_NODE_SELECTOR = k8s.core.v1.NodeSelectorArgs(
+    node_selector_terms=[
+        k8s.core.v1.NodeSelectorTermArgs(
+            match_expressions=[
+                k8s.core.v1.NodeSelectorRequirementArgs(key=_ELSEWHERE_KEY, operator='In', values=[_ELSEWHERE])
+            ]
+        )
+    ]
+)
+ELSEWHERE_NODE_SELECTOR_JSON = {
+    'nodeSelectorTerms': [{'matchExpressions': [{'key': _ELSEWHERE_KEY, 'operator': 'In', 'values': [_ELSEWHERE]}]}]
+}
+
+
+@pytest.mark.asyncio
+async def test_a_nas_claim_and_its_volume_are_named_by_what_neither_can_change(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A change to any field the API server holds fixed is a volume and claim of new names; no other change is.
+
+    So the change is a pair created beside the old one rather than an update
+    the server refuses, and the same declaration rendered again keeps its
+    names. Each variant changes one declared value: the path, the access, the
+    home site's selector, the class, the size.
+    """
+    renders = [await rendered(), await rendered('Photos/Other'), await rendered(read_only=True), await rendered()]
+    with monkeypatch.context() as patched:
+        patched.setattr(storage, 'HOME_NODE_SELECTOR', ELSEWHERE_NODE_SELECTOR)
+        patched.setattr(storage, 'HOME_NODE_SELECTOR_JSON', ELSEWHERE_NODE_SELECTOR_JSON)
+        renders.append(await rendered())
+    with monkeypatch.context() as patched:
+        patched.setattr(conventions, 'SC_NAS', 'nas-elsewhere')
+        renders.append(await rendered())
+    with monkeypatch.context() as patched:
+        patched.setattr(storage, '_NAS_NOMINAL_SIZE', '2Gi')
+        renders.append(await rendered())
+
+    assert len({it.fixed for it in renders}) == len(renders) - 1
+    for one in renders:
+        for other in renders:
+            same = one.fixed == other.fixed
+            assert (one.volume['metadata']['name'] == other.volume['metadata']['name']) == same
+            assert (one.claim['metadata']['name'] == other.claim['metadata']['name']) == same
+
+
+@pytest.mark.asyncio
+async def test_a_nas_claim_binds_the_volume_named_for_it_and_carries_its_base_name() -> None:
+    it = await rendered()
+
+    assert it.claim['metadata']['name'].startswith('library-')
+    assert it.claim['spec']['volumeName'] == it.volume['metadata']['name']
+    assert it.volume['spec']['claimRef'] == {'namespace': 'photos', 'name': it.claim['metadata']['name']}
 
 
 @pytest.mark.parametrize('path', ['/Photos', 'Photos/../Downloads', '..'])

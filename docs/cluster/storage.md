@@ -328,7 +328,13 @@ Three related lessons, folded into policy:
     why a move's copy is confirmed before its finish removes the old
     claim (§3.1). Two kinds of volume reclaim `Retain` instead, each
     for its own reason. A NAS claim's static PV points at a path of the
-    export, and deleting it never touches the data. A node volume's
+    export, and deleting it never touches the data, which is what lets
+    a change to the PV's source or node affinity, or to its claim's
+    spec, all fixed once they exist, make a new pair: both are named
+    with a digest of those fields, so the new PV and claim are created,
+    the workload rolls onto the new claim, and the old claim and PV are
+    deleted after it. A moved claim takes a new name the same way, by its
+    generation (§3.1). A node volume's
     class (§6) holds a dataset preserved rather than backed up, and
     its directory is named by its claim's namespace and name, so a
     claim made again under the same name, generation included, finds

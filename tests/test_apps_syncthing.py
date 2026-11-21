@@ -416,7 +416,7 @@ def test_the_instance_reads_its_configuration_where_the_merge_writes_it(declared
     (state,) = [
         it['metadata']['name']
         for it in in_namespace(declared, CLAIM, syncthing_app.NAME)
-        if it['metadata']['name'] != 'sync'
+        if it['spec']['storageClassName'] != conventions.SC_NAS
     ]
     home = flag(serving['args'], 'home')
 
