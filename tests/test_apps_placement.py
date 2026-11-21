@@ -62,6 +62,8 @@ from kluster.components.apps.golinks import Golinks
 from kluster.components.apps.immich import Immich
 from kluster.components.apps.jellyfin import Jellyfin
 from kluster.components.apps.matrix import Matrix
+from kluster.components.apps.qbittorrent import Qbittorrent
+from kluster.components.apps.qbittorrent.seedwatch import Policy
 from kluster.components.apps.shoko import Shoko
 from kluster.components.apps.splitpro import SplitPro
 from kluster.components.apps.spoolman import Spoolman
@@ -88,6 +90,7 @@ from kluster.conventions.routes import (
     PortRedirect,
     Proxied,
     Route,
+    SiteForward,
     Vip,
 )
 from kluster.conventions.sso import Client
@@ -426,6 +429,22 @@ def _components() -> dict[str, Declared]:
         ),
         'webdav',
     )
+    torrents = Qbittorrent(
+        'qbittorrent',
+        exposure=Exposure(
+            routes=(Route('qb-ui', internet=Proxied(Gate.SESSION), lan=REWRITE),),
+            ports=(Port('qb-peer', 41234, Transports.TCP_AND_UDP, internet=SiteForward()),),
+        ),
+        seedwatch_exposure=Exposure(routes=(Route('qb-watch', lan=REWRITE),)),
+        policy=Policy(managed_categories=('a',), grace_hours=24, interval_minutes=60, dry_run=True, default_ratio=4),
+        image=pin('qbittorrent'),
+        seedwatch_image=pin('seedwatch'),
+        writer_key=writer_key('qbittorrent'),
+        fronts=FRONTS,
+        zone_ids=ZONE_IDS,
+    )
+    keep('qbittorrent', torrents, 'qbittorrent')
+    keep('seedwatch', torrents.seedwatch, 'qbittorrent')
     return found
 
 
