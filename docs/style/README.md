@@ -308,6 +308,19 @@ against later, so a baseline taken from a failed read agrees with a
 later reading that failed the same way; printing it where it is taken
 is what shows it whole before anything is compared with it.
 
+**Where a script runs a runbook, the runbook holds the meaning and
+the script the commands.** The runbook states what each step changes
+and why, what it reads and how each reading is judged, and what a
+failure leaves. The script holds the commands, and says no more about a
+step than its code needs, citing the runbook by step for the rest.
+Neither restates the other, so a command changes in one place and a
+judgment in the other. A seam test holds the two to one list of steps:
+the runbook's step headings, read out of the document, are the script's
+steps in order, and each heading names the command that runs its step.
+A step added to either side alone fails it, and a step's prose reworded
+does not. [operations.md](../operations.md) §3.5 is the instance, which
+`drill rebuild` runs and `tests/test_drill.py` holds.
+
 **Docs layer like the code.** `docs/framework/` documents mechanisms
 (how this repo does Pulumi, CI, testing, and how work is dispatched)
 and names no kluster design decision; `docs/declarative/`, `docs/physical/` and `docs/cluster/` own

@@ -1,8 +1,9 @@
 """How `perf` reaches the cluster: Talos for a node's files, the API server for etcd and the history store, `physical` for the nodes.
 
-Each through the pinned client the operator uses by hand (operations.md
-§3.5's setup): `talosctl` under the operator's talosconfig, whose one
-endpoint is the balancer and which names a control plane by its VCN address;
+Each through the pinned client the operator uses by hand
+(physical/gateway-cutover.md §8.1): `talosctl` under the operator's
+talosconfig, whose one endpoint is the balancer and which names a control
+plane by its VCN address;
 `kubectl` under the cluster-admin kubeconfig, through the API server's node
 proxy to etcd's metrics listener and its service proxy to the history store;
 and the `pulumi` CLI for `physical`'s `node_private_ips`, under `physical`'s
