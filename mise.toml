@@ -161,7 +161,7 @@ talosctl = "1.13.9"
 # rather than a reimplementation that could disagree with the controller. The
 # suite opens what it seals with `--recovery-unseal` and a key pair of its own.
 # This version is the controller's release (rfc-007 §6.1).
-kubeseal = "0.39.1"
+kubeseal = "0.41.2"
 # doggo is the DNS client the runbooks ask a public resolver with, so that a
 # reading of what the world resolves is taken by the same client on every
 # workstation rather than by whichever `dig` a host has, or lacks: the anchor
