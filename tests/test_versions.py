@@ -590,9 +590,9 @@ SCHEMES = {
     # The images built in `docker/`, tagged `<TAG>-<fingerprint>` (framework/ci.md
     # §4). Their registry holds a version once `main` has built it, so a step to
     # a version it does not hold yet is the upstream's own step, under
-    # fingerprints the registry does not hold. Each repository also serves the
-    # plain tags the legacy repository published and a per-architecture tag
-    # beside every build.
+    # fingerprints the registry does not hold. Each repository also serves a
+    # per-architecture tag beside every build, and the plain tags the legacy
+    # repository published where it published the image.
     'ghcr.io/aetf/emailproxy': Scheme(
         ('2025.6.24-0123456789ab', '2025.6.25-ba9876543210'), ('2026.7.3', '2026.7.3-84bf8a9443e6-amd64')
     ),
@@ -615,6 +615,12 @@ SCHEMES = {
     'ghcr.io/aetf/golinks': Scheme(
         ('20261018-1c6080a-0123456789ab', '20261026-7d51de8-ba9876543210'),
         ('20260821-df12751', '20260821-df12751-e28925ffa30c-arm64'),
+    ),
+    # seedwatch is tagged as golinks is; the legacy repository never published
+    # it.
+    'ghcr.io/aetf/seedwatch': Scheme(
+        ('20260828-c274a39-0123456789ab', '20261026-7d51de8-ba9876543210'),
+        ('20260828-c274a39-6e487678e078-arm64',),
     ),
     'ghcr.io/aetf/pgcron-cnpg': Scheme(
         ('17.10-standard-trixie-8850f6aa8e37', '17.11-standard-trixie-0123456789ab'),
