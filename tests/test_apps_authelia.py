@@ -95,7 +95,7 @@ VMRULE = type_token('VMRule')
 PASSWORD = 'random:index/randomPassword:RandomPassword'
 
 #: The route row the portal is declared with, held as the land declares it.
-EXPOSURE = Exposure(routes=(Held(Route('auth', internet=PROXIED)),))
+EXPOSURE = Exposure(routes=(Held(Route('auth', internet=PROXIED, lan=REWRITE)),))
 PORTAL_HOST = f'auth.{conventions.ZONE_PRIMARY}'
 
 #: The pins it is declared with here: references that are no published
@@ -697,18 +697,32 @@ def test_the_canarys_run_is_the_script_the_cronjob_mounts(portal: Recorder) -> N
 # -- the exposure ----------------------------------------------------------------
 
 
-def test_the_portals_route_forwards_to_its_service_ungated(portal: Recorder) -> None:
-    (found,) = [it.inputs for it in portal.of_type(HTTP_ROUTE) if it.inputs['metadata']['namespace'] == NAMESPACE]
-    (rule,) = found['spec']['rules']
+def test_the_portals_routes_forward_to_its_service_ungated_on_internet_and_at_home(portal: Recorder) -> None:
+    found = [it.inputs for it in portal.of_type(HTTP_ROUTE) if it.inputs['metadata']['namespace'] == NAMESPACE]
 
-    assert found['spec']['hostnames'] == [PORTAL_HOST]
-    assert [it['type'] for it in rule['filters']] == ['RequestHeaderModifier']
-    assert rule['backendRefs'] == [{'name': PORTAL.service, 'port': PORTAL.port}]
+    assert {parent['name'] for it in found for parent in it['spec']['parentRefs']} == {
+        conventions.GATEWAY_INTERNET,
+        conventions.GATEWAY_LAN,
+    }
+    for each in found:
+        (rule,) = each['spec']['rules']
+        assert each['spec']['hostnames'] == [PORTAL_HOST]
+        assert [it['type'] for it in rule['filters']] == ['RequestHeaderModifier']
+        assert rule['backendRefs'] == [{'name': PORTAL.service, 'port': PORTAL.port}]
 
 
 def test_a_gated_portal_is_refused() -> None:
     with pytest.raises(ValueError, match='gated by itself'):
-        _ = declare(exposure=Exposure(routes=(Route('auth', internet=Proxied(gate=Gate.SESSION)),)))
+        _ = declare(exposure=Exposure(routes=(Route('auth', internet=Proxied(gate=Gate.SESSION), lan=REWRITE),)))
+
+
+@pytest.mark.parametrize(
+    'row', [Route('auth', internet=PROXIED), Route('auth', internet=PROXIED, media=REWRITE)], ids=['internet', 'media']
+)
+def test_a_portal_with_no_home_side_on_lan_is_refused(row: Route) -> None:
+    """It declares that it keeps working while the uplink is down, which a portal reached through the uplink alone does not."""
+    with pytest.raises(ValueError, match='no home side on `lan`'):
+        _ = declare(exposure=Exposure(routes=(row,)))
 
 
 def test_an_exposure_with_no_route_on_internet_is_refused() -> None:

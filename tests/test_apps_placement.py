@@ -17,7 +17,9 @@ whichever component it is:
 -   a restic mover admits exactly the nodes its workload does;
 -   a pod that mounts a `local-path` claim writes in the blockio class
     `conventions.ETCD_DISK_WRITER`, and a mover in none;
--   a pod a volume or a device keeps to one node runs at the held priority.
+-   a pod a volume or a device keeps to one node runs at the held priority;
+-   a pod that serves a client of the portal reaches the issuer's name at the
+    issuer's addresses.
 
 Literals written here are the upstream projects' contracts: the key the GPU's
 device plugin offers, Kubernetes' and CloudNativePG's field names, VolSync's.
@@ -27,7 +29,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterator, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Literal, cast
 
 import image_busybox
@@ -91,6 +93,8 @@ CRONJOB = 'kubernetes:batch/v1:CronJob'
 CONFIG_MAP = 'kubernetes:core/v1:ConfigMap'
 VOLUME = 'kubernetes:core/v1:PersistentVolume'
 CLUSTER = 'crds:postgresql.cnpg.io/v1:Cluster'
+SERVICE = 'kubernetes:core/v1:Service'
+HTTP_ROUTE = 'crds:gateway.networking.k8s.io/v1:HTTPRoute'
 SOURCE = 'crds:volsync.backube/v1alpha1:ReplicationSource'
 VM_SINGLE = type_token('VMSingle')
 
@@ -137,7 +141,10 @@ def client(name: str) -> Client:
     return found
 
 
-ISSUER = 'https://portal.example.invalid'
+#: The portal's row as its cut leaves it, on `internet` and at home, and the
+#: issuer the program derives from it for each client.
+PORTAL = Exposure(routes=(Route('auth', internet=PROXIED, lan=REWRITE),))
+ISSUER = conventions.sso.issuer(PORTAL)
 
 
 @dataclass(frozen=True)
@@ -160,7 +167,7 @@ def _components() -> dict[str, Declared]:
         'authelia',
         Authelia(
             'authelia',
-            exposure=Exposure(routes=(Held(Route('auth', internet=PROXIED)),)),
+            exposure=PORTAL,
             image=pin('authelia'),
             redis_image=pin('redis'),
             canary_image=pin('curl'),
@@ -251,6 +258,7 @@ def _components() -> dict[str, Declared]:
                 ports=(Port('jf-find', 7359, Transports.UDP, media=Heard()),),
             ),
             client=tube,
+            issuer=ISSUER,
             image=pin('jellyfin'),
             writer_key=writer_key('jellyfin'),
             fronts=FRONTS,
@@ -434,17 +442,21 @@ class Pod:
     """The names of the claims it mounts; an instance's own, on `local-path`, as `<name>-instance`."""
     kind: Literal['pod', 'instance', 'recovered'] = 'pod'
     """A workload's or a CronJob's pod, a database's instance, or a restore drill's recovered instance."""
+    labels: Mapping[str, str] = field(default_factory=dict[str, str])
+    """A workload's or a CronJob's pod's labels, which a Service selects it by."""
 
 
 def _template_pod(name: str, namespace: str, template: Mapping[str, Any]) -> Pod:
     spec = cast('Mapping[str, Any]', template['spec'])
     volumes = cast('list[dict[str, Any]]', spec.get('volumes', []))
+    metadata = cast('Mapping[str, Any]', template.get('metadata', {}))
     return Pod(
         name,
         namespace,
         spec,
-        cast('Mapping[str, str]', template.get('metadata', {}).get('annotations') or {}),
+        cast('Mapping[str, str]', metadata.get('annotations') or {}),
         tuple(it['persistentVolumeClaim']['claimName'] for it in volumes if 'persistentVolumeClaim' in it),
+        labels=cast('Mapping[str, str]', metadata.get('labels') or {}),
     )
 
 
@@ -660,6 +672,50 @@ def test_no_pod_mounts_a_backed_claim_beside_a_claim_another_pod_could_bind_it_a
         mounted = {(pod.namespace, it) for it in pod.claims}
         assert len(mounted & backed) <= 1, (pod.namespace, pod.name)
         assert not (mounted & backed and mounted & on_a_node), (pod.namespace, pod.name)
+
+
+def serving(monitor: Recorder, client: Client) -> list[Pod]:
+    """Every pod the run declares that serves `client`'s name: the pods a Service selects that a route on the name forwards to."""
+    name = f'{client.host}.{client.zone}'
+    backends = {
+        (it.inputs['metadata']['namespace'], ref['name'])
+        for it in monitor.of_type(HTTP_ROUTE)
+        if name in it.inputs['spec'].get('hostnames', [])
+        for rule in it.inputs['spec']['rules']
+        for ref in rule.get('backendRefs', [])
+    }
+    selectors = [
+        (it.inputs['metadata']['namespace'], cast('Mapping[str, str]', it.inputs['spec']['selector']))
+        for it in monitor.of_type(SERVICE)
+        if (it.inputs['metadata']['namespace'], it.inputs['metadata']['name']) in backends
+    ]
+    return [
+        pod
+        for pod in pods(monitor)
+        if any(
+            pod.namespace == namespace and selector.items() <= pod.labels.items() for namespace, selector in selectors
+        )
+    ]
+
+
+def test_every_pod_that_serves_a_client_of_the_portal_reaches_the_issuers_name_at_the_issuers_addresses(
+    program: Program,
+) -> None:
+    """The server a sign-in returns to calls the issuer by its public name, which no resolver a pod asks answers inside the cluster.
+
+    Read over every client of the census whose name a route of the run
+    serves, so a component that serves a client and forgets the alias fails
+    here whichever component it is.
+    """
+    served = {client.name: found for client in conventions.sso.CLIENTS if (found := serving(program.monitor, client))}
+    aliased = {(str(address), (ISSUER.host,)) for address in ISSUER.addresses}
+
+    assert ISSUER.addresses
+    assert {it.client.name for it in program.components.values() if it.client is not None} <= served.keys()
+    for name, found in served.items():
+        for pod in found:
+            aliases = {(it['ip'], tuple(it['hostnames'])) for it in pod.spec.get('hostAliases', [])}
+            assert aliases == aliased, (name, pod.namespace, pod.name)
 
 
 def test_the_run_declares_every_application_component_the_installation_defines(program: Program) -> None:

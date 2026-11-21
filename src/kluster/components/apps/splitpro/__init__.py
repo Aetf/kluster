@@ -48,7 +48,7 @@ import pulumi_crds as crds
 import pulumi_kubernetes as k8s
 
 from kluster import conventions
-from kluster.components.apps import Backend, Exposed, Fronts, declared_constraints, expose
+from kluster.components.apps import Backend, Exposed, Fronts, declared_constraints, expose, issuer_aliases
 from kluster.components.apps.database import API_CLIENTS, Database, Drill, Recovery, Resources, database
 from kluster.components.apps.storage import Claim, claim
 from kluster.conventions.backup import PRECIOUS
@@ -323,12 +323,12 @@ def _server(
     image: ImagePin,
     client: conventions.sso.Client,
     *,
-    issuer: str,
+    issuer: conventions.sso.Issuer,
     auth_secret: pulumi.Input[str],
     database_secret: str,
     receipts: Claim,
 ) -> k8s.core.v1.PodSpecArgs:
-    """The server's pod: SplitPro, reading the ported Secret and the database owner's, on its receipts and empty directories."""
+    """The server's pod: SplitPro, reading the ported Secret and the database owner's, on its receipts and empty directories, reaching the issuer at its alias."""
     plain = {
         # The runtime sets `HOSTNAME` to the pod's name, which Next.js binds
         # otherwise, and a port-forward reaches the pod on its loopback.
@@ -336,7 +336,7 @@ def _server(
         'PORT': str(PORT),
         'NEXTAUTH_URL': _server_url(client),
         'OIDC_NAME': OIDC_NAME,
-        'OIDC_WELL_KNOWN_URL': f'{issuer.rstrip("/")}/.well-known/openid-configuration',
+        'OIDC_WELL_KNOWN_URL': f'{issuer.url.rstrip("/")}/.well-known/openid-configuration',
         # Read as `!!value`, so any value turns it on and only its absence
         # turns it off.
         'OIDC_ALLOW_DANGEROUS_EMAIL_LINKING': 'true',
@@ -401,6 +401,7 @@ def _server(
         # The claim binds where its first consumer is placed, so the pod
         # states the constraints the claim and its movers were given.
         **receipts.constraints.pod_fields(),
+        host_aliases=issuer_aliases(issuer),
         security_context=k8s.core.v1.PodSecurityContextArgs(
             run_as_non_root=True,
             run_as_user=SPLITPRO_USER,
@@ -470,8 +471,9 @@ class SplitPro(Component, pulumi_type='kluster:apps:SplitPro'):
     """SplitPro's namespace, its ported Secret, its database, its Deployment and Service, and what its exposure derives.
 
     `exposure` is its row of the route census and `client` its row of the
-    single sign-on census; `issuer` is the portal's issuer URL, which the
-    server discovers the portal's endpoints from. `image` is the pin the
+    single sign-on census; `issuer` is the portal's issuer, whose URL the
+    server discovers the portal's endpoints from and whose name its pod
+    reaches at the issuer's addresses (`issuer_aliases`). `image` is the pin the
     server runs, `database_image` the `pg_cron` operand its database runs and
     `drill_image` the restore drill's. `auth` is the ciphertext
     `kluster.lib.k8s.sealed_ciphertext` reads for the ported Secret, `AUTH`;
@@ -500,7 +502,7 @@ class SplitPro(Component, pulumi_type='kluster:apps:SplitPro'):
         *,
         exposure: Exposure,
         client: conventions.sso.Client,
-        issuer: str,
+        issuer: conventions.sso.Issuer,
         image: ImagePin,
         database_image: ImagePin,
         drill_image: ImagePin,

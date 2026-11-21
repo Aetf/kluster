@@ -66,7 +66,7 @@ from kluster.conventions.routes import (
     RouteRow,
     Vip,
 )
-from kluster.conventions.sso import Client, Factor, Grant, Scope, TokenEndpointAuth
+from kluster.conventions.sso import Client, Factor, Grant, Issuer, Scope, TokenEndpointAuth
 from kluster.lib.k8s import POD_SECURITY_ENFORCE_LABEL, PodSecurity
 from kluster.lib.versions import ImagePin
 
@@ -112,7 +112,7 @@ CLIENT = Client(
     scopes=(Scope.OPENID, Scope.PROFILE),
     native=(MOBILE,),
 )
-ISSUER = 'https://portal.example.invalid'
+ISSUER = Issuer('https://portal.example.invalid')
 
 SERVER_IMAGE = ImagePin('registry.example.invalid/server', 'v9.9.9', f'sha256:{"1" * 64}')
 ML_IMAGE = ImagePin('registry.example.invalid/ml', 'v9.9.9-openvino', f'sha256:{"2" * 64}')
@@ -533,7 +533,7 @@ def test_sign_in_is_the_portals_alone_as_the_client_asks_for_it(declared: Record
     oauth = configuration(declared)['oauth']
 
     assert oauth['enabled'] is True
-    assert oauth['issuerUrl'] == ISSUER
+    assert oauth['issuerUrl'] == ISSUER.url
     assert oauth['scope'].split() == [scope.value for scope in CLIENT.scopes]
     assert oauth['tokenEndpointAuthMethod'] == CLIENT.token_endpoint_auth.value
     assert configuration(declared)['passwordLogin']['enabled'] is False

@@ -9,6 +9,7 @@ behavior when any of those moves is `test_dns_adguard.py`.
 
 import importlib
 
+import pytest
 import pytest_asyncio
 from mock_monitor import Recorder, declaring, run_with
 
@@ -248,3 +249,21 @@ def test_both_families_are_rewritten() -> None:
     entries = rewrites([ROUTE])
 
     assert {entry.answer.version for entry in entries} == {4, 6}
+
+
+@pytest.mark.parametrize('held', [False, True], ids=['cut', 'held'])
+def test_the_portals_name_is_answered_at_home_where_a_client_pod_dials_the_issuer(held: bool) -> None:
+    """A browser at home and a client's pod reach the portal at one address, and both through its cut alike.
+
+    The rewrite answers the portal's name for a browser at home, and the
+    issuer's addresses answer it for a client's pod (`conventions.sso.issuer`),
+    so the two derivations agree on every row the portal can be declared
+    with: while the legacy VPS holds the name, neither answers it.
+    """
+    row = Route('auth', internet=PROXIED, lan=REWRITE)
+    portal = Exposure(routes=(Held(row) if held else row,))
+    issuer = conventions.sso.issuer(portal)
+    answered = _answered([portal])
+
+    assert answered.get(issuer.host, ()) == tuple(str(address) for address in issuer.addresses)
+    assert bool(issuer.addresses) is not held

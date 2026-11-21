@@ -528,6 +528,21 @@ answers an overlay client differently from a home one. The AdGuard pair
     it. One edit, two stack diffs, both previewable — rather than
     one edit and a second stack to remember. LAN ULA AAAAs are
     emitted alongside (RFC 6724 caveat noted, architecture.md §1.3).
+-   **A pod reaches the portal's name where a home client does.** An
+    OpenID Connect client's server calls the portal by its public name
+    to finish a sign-in, since the issuer it validates is that name. The
+    cluster's DNS holds no rewrite: it answers a pod's lookup of a
+    Service by its name in the cluster, and passes a public name on to
+    the public resolvers, Talos' defaults on the worker, which a pod at
+    home reaches only through the uplink, as it does the proxy's edge
+    their answer names, since the portal's row is proxied. So the portal's
+    row has a home side on `lan`, without which its component refuses
+    it (`conventions.sso.portal_row`), and every pod that serves a client
+    carries a host alias of the issuer's name at the answer this stack's
+    rewrite gives the name, the `lan` VIP in both families
+    (`conventions.sso.issuer`, `kluster.components.apps.issuer_aliases`).
+    The alias follows the rewrite through the cut: while the legacy VPS
+    holds the portal's name, neither answers it.
 -   **Where each instance is reached is derived, not configured.** A
     rewrite is written over plain HTTP to the instance's address on the
     container VLAN, at the port `conventions.gateway.ADGUARD_API_PORT`

@@ -8,7 +8,10 @@ each broadcast to the media VIP. Both are rows of the exposure the component
 receives, and `expose` declares them. It signs a browser in through the portal
 with the client its census row is (`conventions.sso`), whose redirect
 addresses are under the route's name, so a row and a client that name two
-hosts are refused.
+hosts are refused. The server finishes a sign-in itself, calling the portal's
+issuer by its public name from its single sign-on plugin, whose settings are
+in its data directory, so its pod carries the issuer's alias
+(`kluster.components.apps.issuer_aliases`).
 
 **It runs at the home site**: the library and the server's previews are on the
 NAS, which the home site alone reaches (`NasClaim.constraints`), and its data
@@ -127,13 +130,13 @@ import pulumi
 import pulumi_kubernetes as k8s
 
 from kluster import conventions
-from kluster.components.apps import GPU_HOLD, Backend, Exposed, Fronts, declared_constraints, expose
+from kluster.components.apps import GPU_HOLD, Backend, Exposed, Fronts, declared_constraints, expose, issuer_aliases
 from kluster.components.apps.storage import Claim, NasClaim, claim, nas_claim
 from kluster.components.gpu import GPU_RESOURCE
 from kluster.conventions.backup import STANDARD
 from kluster.conventions.cluster import Transports
 from kluster.conventions.routes import Exposure, Held, Port, Route
-from kluster.conventions.sso import Client
+from kluster.conventions.sso import Client, Issuer
 from kluster.lib import templates
 from kluster.lib.k8s import ApplicationNamespace, application_namespace
 from kluster.lib.versions import ImagePin
@@ -318,11 +321,13 @@ class Jellyfin(Component, pulumi_type='kluster:apps:Jellyfin'):
     """The media server: its namespace, its claims, its network configuration, its Deployment, and its exposure.
 
     `exposure` is its row of the census, its interface's route and its
-    discovery port; `client` its row of the single sign-on census. `image` is
-    the server's pin, `writer_key` the namespace's sealed writer key as the
-    program read it, and `fronts` and `zone_ids` what the program read for
-    `expose`. The providers arrive in `opts`: the Kubernetes provider for the
-    cluster's objects and the Cloudflare one for its records.
+    discovery port; `client` its row of the single sign-on census, and
+    `issuer` the portal's issuer, whose name its pod reaches at the issuer's
+    addresses. `image` is the server's pin, `writer_key` the namespace's
+    sealed writer key as the program read it, and `fronts` and `zone_ids`
+    what the program read for `expose`. The providers arrive in `opts`: the
+    Kubernetes provider for the cluster's objects and the Cloudflare one for
+    its records.
     """
 
     namespace: ApplicationNamespace
@@ -340,6 +345,7 @@ class Jellyfin(Component, pulumi_type='kluster:apps:Jellyfin'):
         *,
         exposure: Exposure,
         client: Client,
+        issuer: Issuer,
         image: ImagePin,
         writer_key: Mapping[str, pulumi.Input[str]],
         fronts: Fronts,
@@ -402,7 +408,9 @@ class Jellyfin(Component, pulumi_type='kluster:apps:Jellyfin'):
                     metadata=k8s.meta.v1.ObjectMetaArgs(
                         labels=dict(LABELS), annotations=dict(self.data.pod_annotations)
                     ),
-                    spec=self._pod(image=image, published_url=_published_url(route), discovery=discovery),
+                    spec=self._pod(
+                        image=image, published_url=_published_url(route), discovery=discovery, issuer=issuer
+                    ),
                 ),
             ),
             opts=self.child_opts(),
@@ -429,7 +437,7 @@ class Jellyfin(Component, pulumi_type='kluster:apps:Jellyfin'):
 
         self.register_outputs({})
 
-    def _pod(self, *, image: ImagePin, published_url: str, discovery: Port) -> k8s.core.v1.PodSpecArgs:
+    def _pod(self, *, image: ImagePin, published_url: str, discovery: Port, issuer: Issuer) -> k8s.core.v1.PodSpecArgs:
         data = k8s.core.v1.VolumeMountArgs(name='data', mount_path=DATA_DIR)
         health = k8s.core.v1.HTTPGetActionArgs(path='/health', port='http')
         return k8s.core.v1.PodSpecArgs(
@@ -441,6 +449,7 @@ class Jellyfin(Component, pulumi_type='kluster:apps:Jellyfin'):
             # configuration from.
             enable_service_links=False,
             **(self.data.constraints & GPU_HOLD).pod_fields(),
+            host_aliases=issuer_aliases(issuer),
             security_context=k8s.core.v1.PodSecurityContextArgs(
                 run_as_non_root=True,
                 run_as_user=USER,

@@ -37,6 +37,18 @@ a client's groups, a subject with no groups included, is refused: the portal
 renders every policy with `default_policy: deny`, because Authelia's own
 default is `two_factor`, and no grant names everyone.
 
+**A client reaches the issuer inside the cluster at its home address**
+(`Issuer`, `issuer`). The issuer a client validates is the portal's public
+name, so its server calls the portal by that name. The cluster's DNS passes a
+public name on to the public resolvers, Talos' defaults on the worker, which a
+pod at home reaches only through the uplink, as it does the proxy's edge their
+answer names, since the portal's row is proxied. The portal's row therefore carries a home side on `lan`, which the
+`dns` stack rewrites the name to at home (declarative/dns.md §3), and the
+issuer carries the same address for the client's pod to dial the name at: a
+host alias every client's serving pod carries
+(`kluster.components.apps.issuer_aliases`). Every other call inside the
+cluster goes to a Service by its name in the cluster.
+
 Authelia's access-control rules for the applications behind the gate are its
 own configuration and stay in its component: they are keyed by route, not by
 client.
@@ -51,13 +63,28 @@ from __future__ import annotations
 from collections.abc import Iterable
 from dataclasses import dataclass
 from enum import StrEnum
+from ipaddress import IPv4Address, IPv6Address, ip_address
 from typing import final
 from urllib.parse import urlsplit
 
 from kluster.conventions.dns import ZONE_PRIMARY
 from kluster.conventions.gateway import LEGACY_VHOSTS, LegacyVhost
+from kluster.conventions.routes import Exposure, Held, Proxied, Route
+from kluster.conventions.site import LAN_POOL
 
-__all__ = ('CLIENTS', 'Claim', 'Client', 'Factor', 'Grant', 'Scope', 'TokenEndpointAuth', 'redirect_uris')
+__all__ = (
+    'CLIENTS',
+    'Claim',
+    'Client',
+    'Factor',
+    'Grant',
+    'Issuer',
+    'Scope',
+    'TokenEndpointAuth',
+    'issuer',
+    'portal_row',
+    'redirect_uris',
+)
 
 
 @final
@@ -196,6 +223,85 @@ def redirect_uris(client: Client, vhosts: Iterable[LegacyVhost] | None = None) -
     legacy = LEGACY_VHOSTS if vhosts is None else vhosts
     hosts = [f'{client.host}.{client.zone}', *(vhost.host for vhost in legacy if vhost.label == client.host)]
     return (*(f'https://{host}{path}' for host in hosts for path in client.paths), *client.native)
+
+
+@dataclass(frozen=True)
+class Issuer:
+    """The portal as a client's server reaches it: the issuer it validates, and the addresses its pod dials the issuer's name at."""
+
+    url: str
+    """The issuer's identifier, which the client discovers the portal's
+    endpoints under."""
+    addresses: tuple[IPv4Address | IPv6Address, ...] = ()
+    """Where a pod in the cluster reaches the issuer's name, at most one
+    address per family; none where the name resolves for a pod as it does
+    anywhere else."""
+
+    def __post_init__(self) -> None:
+        if not self.host:
+            raise ValueError(f'the issuer {self.url!r} names no host')
+        if self.addresses and _is_address(self.host):
+            raise ValueError(f'the issuer {self.url!r} is an address, so there is no name for a pod to dial elsewhere')
+        families = [address.version for address in self.addresses]
+        if len(families) != len(set(families)):
+            raise ValueError(
+                f'the issuer {self.url!r} is at two addresses of one family, and a pod dials one of them: '
+                f'{[str(address) for address in self.addresses]}'
+            )
+
+    @property
+    def host(self) -> str:
+        """The name the issuer is at, which a client's pod resolves."""
+        return urlsplit(self.url).hostname or ''
+
+
+def _is_address(host: str) -> bool:
+    try:
+        _ = ip_address(host)
+    except ValueError:
+        return False
+    return True
+
+
+def portal_row(exposure: Exposure) -> Route:
+    """The portal's own row of its exposure: the one route on `internet`, in the primary zone, ungated, with a home side on `lan`.
+
+    The primary zone is where the portal sets its session cookie. A gate on
+    the row would send a browser to the portal to reach the portal. The home
+    side is what answers the name at home, for a browser through the `dns`
+    stack's rewrite and for a client's pod through `issuer`, which a client
+    of a portal on `internet` alone reaches only through the uplink.
+    """
+    rows = [held.row if isinstance(held, Held) else held for held in exposure.routes]
+    served = [row for row in rows if isinstance(row, Route) and row.internet is not None]
+    if len(served) != 1 or ZONE_PRIMARY not in served[0].zones:
+        raise ValueError(
+            'the portal is reached at one route on `internet`, in the primary zone, where its session cookie is set'
+        )
+    (row,) = served
+    if isinstance(row.internet, Proxied) and row.internet.gate is not None:
+        raise ValueError(f'the portal at {row.host!r} is gated by itself, so nobody could reach it to sign in')
+    if row.lan is None:
+        raise ValueError(
+            f'the portal at {row.host!r} has no home side on `lan`, so neither a browser at home nor a client in the '
+            'cluster reaches it while the uplink is down'
+        )
+    return row
+
+
+def issuer(exposure: Exposure) -> Issuer:
+    """The issuer of the portal at `exposure`: its row's name in the primary zone, over HTTPS, at the `lan` VIP.
+
+    The addresses are the `lan` VIP in both families, the answer the `dns`
+    stack's rewrite gives the name at home. While the legacy VPS holds the
+    row (`Held`) there are none, as there is no rewrite: the name resolves
+    where the legacy side publishes it, for a pod as for a browser, until
+    the cut.
+    """
+    row = portal_row(exposure)
+    held = any(isinstance(it, Held) and it.row == row for it in exposure.routes)
+    vip = LAN_POOL.default_vip
+    return Issuer(f'https://{row.host}.{ZONE_PRIMARY}', () if held else (vip.v4, vip.v6))
 
 
 #: The two groups every client admits, each beside a group of its own.

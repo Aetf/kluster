@@ -79,7 +79,7 @@ DATABASE_IMAGE = ImagePin('registry.example.invalid/pgcron', '17.9', f'sha256:{"
 DRILL_IMAGE = ImagePin('registry.example.invalid/drill', '1.0', f'sha256:{"c" * 64}')
 
 #: The portal's issuer, as the program would hand it.
-ISSUER = 'https://auth.example.invalid'
+ISSUER = conventions.sso.Issuer('https://auth.example.invalid')
 
 #: The ciphertexts it is handed, each naming what it stands for.
 CIPHERTEXT = {
@@ -386,7 +386,7 @@ def test_the_server_returns_a_browser_to_an_address_the_portal_registers(declare
 
 
 def test_the_server_discovers_the_portal_at_the_issuer_it_is_handed(declared: Recorder) -> None:
-    assert value(declared, 'OIDC_WELL_KNOWN_URL') == f'{ISSUER}/.well-known/openid-configuration'
+    assert value(declared, 'OIDC_WELL_KNOWN_URL') == f'{ISSUER.url}/.well-known/openid-configuration'
 
 
 def test_a_client_that_does_not_register_the_servers_address_is_refused() -> None:

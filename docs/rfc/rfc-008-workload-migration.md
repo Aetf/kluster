@@ -623,7 +623,7 @@ in rfc.md §2.
 
 | Application | What the code declares | Reach |
 | --- | --- | --- |
-| authelia | the portal at `auth` | internet |
+| authelia | the portal at `auth` | internet and LAN, as ruled (Aetf/kluster-ops#78) |
 | splitpro | `split`, signing in through Authelia itself | internet |
 | matrix | `matrix`, delegated on 443 by the blog's `.well-known` | internet |
 | the WebDAV server | `dav`, with `enableBasicAuth` | internet, Basic gate |
@@ -936,7 +936,7 @@ it.
 
 | Application | By proxy | Raw |
 | --- | --- | --- |
-| authelia | `Route('auth', internet=PROXIED)` | |
+| authelia | `Route('auth', internet=PROXIED, lan=REWRITE)` | |
 | splitpro | `Route('split', internet=PROXIED)` | |
 | matrix | `Route('matrix', internet=PROXIED)` | |
 | the WebDAV server | `Route('dav', internet=Proxied(BASIC))` | |
