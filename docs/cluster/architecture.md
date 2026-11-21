@@ -110,13 +110,16 @@ The cluster will operate in Dual-Stack mode, prioritizing IPv4.
 -   **Talos Configuration Rule**: You must define the IPv4 CIDRs first in the
     `cluster.network` arrays (`podSubnets`, `serviceSubnets`) to establish
     IPv4 as the primary family, preventing subtle ecosystem bugs.
--   **LAN IPv6 uses ULA**: the home GUA prefix is not stable, so the LAN LB
-    pool's v6 addresses come from a dedicated ULA range (exact range chosen
-    at implementation; avoid the UDM `::` anycast trap — always `::1`-style
-    host addresses). Known consequence: RFC 6724 source/destination
-    selection makes clients prefer IPv4 when the AAAA is ULA — v6 on the LAN
-    is architecture-complete but rarely chosen by clients until a stable GUA
-    prefix exists.
+-   **LAN IPv6 uses ULA**: the home GUA prefix is not stable, so the `lan`
+    LB pool's v6 addresses come from the site's ULA prefix, in a /64
+    numbered after the pool's IPv4 subnet (`kluster.conventions.site`;
+    avoid the UDM `::` anycast trap — always `::1`-style host addresses).
+    **The ULA address has to answer**, because some clients dial it before
+    the IPv4 one: which family comes first is the client's resolver
+    library's choice, and the GNU C library orders a ULA ahead of an IPv4
+    address on a host that holds a ULA source address, as a pod does. A
+    client whose first address meets silence stalls before it tries the
+    next, or fails if it never does.
 
 ## 2. Core Infrastructure Components
 
