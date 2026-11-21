@@ -510,6 +510,7 @@ def as_declared(monitor: Recorder, entry: Mapping[str, Any], name: str, *, laid:
         '--rm',
         f'--timeout={CONTAINER_TIMEOUT}',
         f'--label={LABEL}',
+        process_sessions.LOG_TO_FILE,
         f'--name={name}',
         '--network=none',
         '--read-only',

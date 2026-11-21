@@ -758,7 +758,7 @@ class DrillContainer:
         }
         setup = ' && '.join(f'printf %s "$WRITTEN_{at}" > {path}' for at, path in enumerate(written))
         self.argv = [
-            'podman', 'run', '--name', self.name, '--label', LABEL, '--timeout', str(CONTAINER_TIMEOUT),
+            'podman', 'run', '--name', self.name, '--label', LABEL, process_sessions.LOG_TO_FILE, '--timeout', str(CONTAINER_TIMEOUT),
             '--pull', 'never', '--network', 'none', '--read-only',
             '--user', f'{int(user["runAsUser"])}:{int(user["runAsGroup"])}',
             *(arg for path in {mounts['scratch'], mounts['drill'], '/fake'} for arg in ('--tmpfs', f'{path}:rw,exec,mode=1777')),

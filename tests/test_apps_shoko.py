@@ -302,6 +302,7 @@ def test_the_server_answers_its_probe_and_keeps_its_settings_in_the_claim(declar
                 '--rm',
                 f'--timeout={CONTAINER_TIMEOUT}',
                 f'--label={LABEL}',
+                process_sessions.LOG_TO_FILE,
                 f'--name={name}',
                 '--network=none',
                 '--read-only',

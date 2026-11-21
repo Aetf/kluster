@@ -582,6 +582,7 @@ def run_options(monitor: Recorder, name: str, mounted: Sequence[str], *, network
         '--rm',
         f'--timeout={CONTAINER_TIMEOUT}',
         f'--label={LABEL}',
+        process_sessions.LOG_TO_FILE,
         f'--name={name}',
         f'--network={network}',
         '--cap-drop=all',
@@ -765,10 +766,7 @@ def test_the_server_answers_the_probe_and_every_route_through_the_filter_the_fil
     The network settings the server logs are read from that same file. The
     server logs them while it builds its services, ahead of its start
     complete, and writes the file in the order it logs, so they are there
-    by the time the callers ask. The container's own output is no such
-    record: podman hands it to its log driver, and a journald driver keeps
-    what the journal's per-unit rate limit lets through, which every
-    container of the user shares.
+    by the time the callers ask.
     """
     require_podman(WHY)
     reference = pulled(pinned('jellyfin'), timeout=LARGE_PULL_TIMEOUT)
@@ -810,7 +808,7 @@ def test_the_server_answers_the_probe_and_every_route_through_the_filter_the_fil
         _ = process_sessions.run(
             [
                 'podman', 'run', '--detach', '--rm', f'--timeout={CONTAINER_TIMEOUT}', f'--label={LABEL}',
-                f'--name={prober}', '--network=none', '--user=0:0', '--cap-drop=all', '--cap-add=NET_ADMIN',
+                process_sessions.LOG_TO_FILE, f'--name={prober}', '--network=none', '--user=0:0', '--cap-drop=all', '--cap-add=NET_ADMIN',
                 '--entrypoint=sleep', prober_reference, str(CONTAINER_TIMEOUT),
             ],
             timeout=COMMAND_TIMEOUT,

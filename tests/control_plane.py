@@ -163,7 +163,7 @@ def running(label: str, files: Path, client: Client) -> Generator[ApiServer]:
     _ = (files / 'tokens.csv').write_text(f'{token},{ADMIN},{ADMIN},"system:masters"\n')
     suffix = uuid.uuid4().hex[:12]
     etcd, server, beside = (f'kluster-test-{role}-{suffix}' for role in ('etcd', 'apiserver', 'client'))
-    common = ['--rm', '--label', label, '--timeout', str(pinned_image.CONTAINER_TIMEOUT)]
+    common = ['--rm', '--label', label, '--timeout', str(pinned_image.CONTAINER_TIMEOUT), process_sessions.LOG_TO_FILE]
     shared = ['--network', f'container:{etcd}']
     # The two beside etcd go first: podman refuses to remove a container whose network another shares.
     with process_sessions.removing(beside, server, etcd, timeout=COMMAND_TIMEOUT):

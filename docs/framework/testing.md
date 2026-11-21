@@ -347,18 +347,38 @@ attempts the removal of each name, whatever the removal of an earlier one
 raised. **A container is created only under such a block**: `started`, and
 `run` through it, refuse before anything starts a `podman run` or
 `podman create` that names no container, or names one no `removing` block is
-armed to remove (`_refuse_unarmed`). They also refuse an option between
+armed to remove (`_refuse_container`). They also refuse an option between
 `podman` and its verb, whatever the verb, since past one the verb's place is
 not read: a global option goes after the verb, and `podman version` stands
 in for `--version`. A command is read from its first word named `podman`,
 behind a wrapper such as `timeout` or `env` as well as bare; a podman inside
-a shell's command string, `sh -c '…'`, is not read. The refusal sits in the
-helper rather than in a module's fixture, so it holds every module that
-creates a container through the helper, in a fixture of any scope as in a
-case, and the census below holds every start outside the helper to a reason
-at the call. Nothing in the suite removes a `Created`
+a shell's command string, `sh -c '…'`, is not read; and an option is read
+wherever it sits in the command, so one written after the image, which
+podman hands to the container, passes for one podman obeys. The refusal
+sits in the helper rather than in a module's fixture, so it holds every
+module that creates a container through the helper, in a fixture of any
+scope as in a case, and the census below holds every start outside the
+helper to a reason at the call. Nothing in the suite removes a `Created`
 container once the test process can no longer run a `finally`; the label
 census lists each one, in the `Created` state.
+
+**A container a case creates keeps its output in a file of its own**: it
+carries `--log-driver=k8s-file`, `LOG_TO_FILE` in
+`tests/process_sessions.py`, whatever the host's default driver is.
+`podman logs` reads back what the log driver kept, and the `journald`
+driver keeps only what the journal did not drop. The journal rate-limits
+per unit, and every rootless container's `conmon` sits in the user's
+`user@<uid>.service`, so all of a run's containers share one budget, and a
+full parallel run spends it: a suppressed line never reaches
+`podman logs`, and a wait for it ends only at its bound. The same check
+that refuses an unarmed container refuses a `podman run` or
+`podman create` that does not carry that driver, or names another beside
+it, so a case cannot leave the option out. It refuses any `--log-opt` as
+well: a `path=` moves the file out of the container's storage, where the
+container's removal does not reach it, and a size cap truncates it. A
+case may read an application's own log file inside the container instead
+of `podman logs`, as `tests/test_apps_jellyfin.py` reads its server's; the
+container carries the driver all the same.
 
 **A container a case starts mounts no named volume.** A named volume outlives every container
 that mounts it and holds one of the host's podman locks until something

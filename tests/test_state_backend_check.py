@@ -859,6 +859,7 @@ def _in_image(leaf: pki.Credential, *, margin: dt.timedelta) -> sp.CompletedProc
                 str(CONTAINER_TIMEOUT),
                 '--label',
                 LABEL,
+                process_sessions.LOG_TO_FILE,
                 '--name',
                 name,
                 '--network',

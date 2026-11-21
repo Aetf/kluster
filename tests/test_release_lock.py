@@ -143,6 +143,7 @@ def box() -> Iterator[Box]:
                 str(CONTAINER_TIMEOUT),
                 '--label',
                 LABEL,
+                process_sessions.LOG_TO_FILE,
                 '--name',
                 name,
                 '--tmpfs=/var/lib/postgresql/data',
