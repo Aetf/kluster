@@ -418,6 +418,26 @@ class DynamicDns(pulumi.CustomResource):
         __props__.__dict__["site"] = site
         return DynamicDns(resource_name, opts=opts, __props__=__props__)
 
+    @staticmethod
+    def exists(id: pulumi.Input[str],
+            opts: Optional[pulumi.ResourceOptions] = None,
+            host_name: pulumi.Input[Optional[_builtins.str]] = None,
+            interface: pulumi.Input[Optional[_builtins.str]] = None,
+            login: pulumi.Input[Optional[_builtins.str]] = None,
+            password: pulumi.Input[Optional[_builtins.str]] = None,
+            server: pulumi.Input[Optional[_builtins.str]] = None,
+            service: pulumi.Input[Optional[_builtins.str]] = None,
+            site: pulumi.Input[Optional[_builtins.str]] = None) -> pulumi.Output[bool]:
+        __props__: dict = {}
+        __props__["hostName"] = host_name
+        __props__["interface"] = interface
+        __props__["login"] = login
+        __props__["password"] = password
+        __props__["server"] = server
+        __props__["service"] = service
+        __props__["site"] = site
+        return pulumi.runtime.exists_resource(None, 'unifi:index/dynamicDns:DynamicDns', id, __props__, opts or pulumi.ResourceOptions(), package_ref=_utilities.get_package())
+
     @_builtins.property
     @pulumi.getter(name="hostName")
     def host_name(self) -> pulumi.Output[_builtins.str]:

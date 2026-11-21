@@ -646,6 +646,32 @@ class Device(pulumi.CustomResource):
         __props__.__dict__["switch_vlan_enabled"] = switch_vlan_enabled
         return Device(resource_name, opts=opts, __props__=__props__)
 
+    @staticmethod
+    def exists(id: pulumi.Input[str],
+            opts: Optional[pulumi.ResourceOptions] = None,
+            allow_adoption: pulumi.Input[Optional[_builtins.bool]] = None,
+            disabled: pulumi.Input[Optional[_builtins.bool]] = None,
+            ether_lighting: pulumi.Input[Optional[Union['DeviceEtherLightingArgs', 'DeviceEtherLightingArgsDict', 'outputs.DeviceEtherLighting']]] = None,
+            forget_on_destroy: pulumi.Input[Optional[_builtins.bool]] = None,
+            mac: pulumi.Input[Optional[_builtins.str]] = None,
+            name: pulumi.Input[Optional[_builtins.str]] = None,
+            port_overrides: pulumi.Input[Optional[Sequence[pulumi.Input[Union['DevicePortOverrideArgs', 'DevicePortOverrideArgsDict', 'outputs.DevicePortOverride']]]]] = None,
+            radios: pulumi.Input[Optional[Sequence[pulumi.Input[Union['DeviceRadioArgs', 'DeviceRadioArgsDict', 'outputs.DeviceRadio']]]]] = None,
+            site: pulumi.Input[Optional[_builtins.str]] = None,
+            switch_vlan_enabled: pulumi.Input[Optional[_builtins.bool]] = None) -> pulumi.Output[bool]:
+        __props__: dict = {}
+        __props__["allowAdoption"] = allow_adoption
+        __props__["disabled"] = disabled
+        __props__["etherLighting"] = ether_lighting
+        __props__["forgetOnDestroy"] = forget_on_destroy
+        __props__["mac"] = mac
+        __props__["name"] = name
+        __props__["portOverrides"] = port_overrides
+        __props__["radios"] = radios
+        __props__["site"] = site
+        __props__["switchVlanEnabled"] = switch_vlan_enabled
+        return pulumi.runtime.exists_resource(None, 'unifi:index/device:Device', id, __props__, opts or pulumi.ResourceOptions(), package_ref=_utilities.get_package())
+
     @_builtins.property
     @pulumi.getter(name="allowAdoption")
     def allow_adoption(self) -> pulumi.Output[Optional[_builtins.bool]]:

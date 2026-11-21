@@ -572,6 +572,34 @@ class SettingIps(pulumi.CustomResource):
         __props__.__dict__["suppression"] = suppression
         return SettingIps(resource_name, opts=opts, __props__=__props__)
 
+    @staticmethod
+    def exists(id: pulumi.Input[str],
+            opts: Optional[pulumi.ResourceOptions] = None,
+            ad_blocked_networks: pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]] = None,
+            advanced_filtering_preference: pulumi.Input[Optional[_builtins.str]] = None,
+            dns_filters: pulumi.Input[Optional[Sequence[pulumi.Input[Union['SettingIpsDnsFilterArgs', 'SettingIpsDnsFilterArgsDict', 'outputs.SettingIpsDnsFilter']]]]] = None,
+            enabled_categories: pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]] = None,
+            enabled_networks: pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]] = None,
+            honeypots: pulumi.Input[Optional[Sequence[pulumi.Input[Union['SettingIpsHoneypotArgs', 'SettingIpsHoneypotArgsDict', 'outputs.SettingIpsHoneypot']]]]] = None,
+            ips_mode: pulumi.Input[Optional[_builtins.str]] = None,
+            memory_optimized: pulumi.Input[Optional[_builtins.bool]] = None,
+            restrict_torrents: pulumi.Input[Optional[_builtins.bool]] = None,
+            site: pulumi.Input[Optional[_builtins.str]] = None,
+            suppression: pulumi.Input[Optional[Union['SettingIpsSuppressionArgs', 'SettingIpsSuppressionArgsDict', 'outputs.SettingIpsSuppression']]] = None) -> pulumi.Output[bool]:
+        __props__: dict = {}
+        __props__["adBlockedNetworks"] = ad_blocked_networks
+        __props__["advancedFilteringPreference"] = advanced_filtering_preference
+        __props__["dnsFilters"] = dns_filters
+        __props__["enabledCategories"] = enabled_categories
+        __props__["enabledNetworks"] = enabled_networks
+        __props__["honeypots"] = honeypots
+        __props__["ipsMode"] = ips_mode
+        __props__["memoryOptimized"] = memory_optimized
+        __props__["restrictTorrents"] = restrict_torrents
+        __props__["site"] = site
+        __props__["suppression"] = suppression
+        return pulumi.runtime.exists_resource(None, 'unifi:index/settingIps:SettingIps', id, __props__, opts or pulumi.ResourceOptions(), package_ref=_utilities.get_package())
+
     @_builtins.property
     @pulumi.getter(name="adBlockedNetworks")
     def ad_blocked_networks(self) -> pulumi.Output[Sequence[_builtins.str]]:

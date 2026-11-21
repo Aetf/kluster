@@ -1281,6 +1281,68 @@ class Wlan(pulumi.CustomResource):
         __props__.__dict__["wpa3_transition"] = wpa3_transition
         return Wlan(resource_name, opts=opts, __props__=__props__)
 
+    @staticmethod
+    def exists(id: pulumi.Input[str],
+            opts: Optional[pulumi.ResourceOptions] = None,
+            ap_group_ids: pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]] = None,
+            bss_transition: pulumi.Input[Optional[_builtins.bool]] = None,
+            fast_roaming_enabled: pulumi.Input[Optional[_builtins.bool]] = None,
+            hide_ssid: pulumi.Input[Optional[_builtins.bool]] = None,
+            is_guest: pulumi.Input[Optional[_builtins.bool]] = None,
+            l2_isolation: pulumi.Input[Optional[_builtins.bool]] = None,
+            mac_filter_enabled: pulumi.Input[Optional[_builtins.bool]] = None,
+            mac_filter_lists: pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]] = None,
+            mac_filter_policy: pulumi.Input[Optional[_builtins.str]] = None,
+            minimum_data_rate2g_kbps: pulumi.Input[Optional[_builtins.float]] = None,
+            minimum_data_rate5g_kbps: pulumi.Input[Optional[_builtins.float]] = None,
+            multicast_enhance: pulumi.Input[Optional[_builtins.bool]] = None,
+            name: pulumi.Input[Optional[_builtins.str]] = None,
+            network_id: pulumi.Input[Optional[_builtins.str]] = None,
+            no2ghz_oui: pulumi.Input[Optional[_builtins.bool]] = None,
+            passphrase: pulumi.Input[Optional[_builtins.str]] = None,
+            pmf_mode: pulumi.Input[Optional[_builtins.str]] = None,
+            proxy_arp: pulumi.Input[Optional[_builtins.bool]] = None,
+            radius_profile_id: pulumi.Input[Optional[_builtins.str]] = None,
+            schedules: pulumi.Input[Optional[Sequence[pulumi.Input[Union['WlanScheduleArgs', 'WlanScheduleArgsDict', 'outputs.WlanSchedule']]]]] = None,
+            security: pulumi.Input[Optional[_builtins.str]] = None,
+            site: pulumi.Input[Optional[_builtins.str]] = None,
+            uapsd: pulumi.Input[Optional[_builtins.bool]] = None,
+            user_group_id: pulumi.Input[Optional[_builtins.str]] = None,
+            wlan_band: pulumi.Input[Optional[_builtins.str]] = None,
+            wlan_bands: pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]] = None,
+            wpa3_support: pulumi.Input[Optional[_builtins.bool]] = None,
+            wpa3_transition: pulumi.Input[Optional[_builtins.bool]] = None) -> pulumi.Output[bool]:
+        __props__: dict = {}
+        __props__["apGroupIds"] = ap_group_ids
+        __props__["bssTransition"] = bss_transition
+        __props__["fastRoamingEnabled"] = fast_roaming_enabled
+        __props__["hideSsid"] = hide_ssid
+        __props__["isGuest"] = is_guest
+        __props__["l2Isolation"] = l2_isolation
+        __props__["macFilterEnabled"] = mac_filter_enabled
+        __props__["macFilterLists"] = mac_filter_lists
+        __props__["macFilterPolicy"] = mac_filter_policy
+        __props__["minimumDataRate2gKbps"] = minimum_data_rate2g_kbps
+        __props__["minimumDataRate5gKbps"] = minimum_data_rate5g_kbps
+        __props__["multicastEnhance"] = multicast_enhance
+        __props__["name"] = name
+        __props__["networkId"] = network_id
+        __props__["no2ghzOui"] = no2ghz_oui
+        __props__["passphrase"] = passphrase
+        __props__["pmfMode"] = pmf_mode
+        __props__["proxyArp"] = proxy_arp
+        __props__["radiusProfileId"] = radius_profile_id
+        __props__["schedules"] = schedules
+        __props__["security"] = security
+        __props__["site"] = site
+        __props__["uapsd"] = uapsd
+        __props__["userGroupId"] = user_group_id
+        __props__["wlanBand"] = wlan_band
+        __props__["wlanBands"] = wlan_bands
+        __props__["wpa3Support"] = wpa3_support
+        __props__["wpa3Transition"] = wpa3_transition
+        return pulumi.runtime.exists_resource(None, 'unifi:index/wlan:Wlan', id, __props__, opts or pulumi.ResourceOptions(), package_ref=_utilities.get_package())
+
     @_builtins.property
     @pulumi.getter(name="apGroupIds")
     def ap_group_ids(self) -> pulumi.Output[Optional[Sequence[_builtins.str]]]:

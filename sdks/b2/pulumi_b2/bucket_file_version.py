@@ -493,6 +493,38 @@ class BucketFileVersion(pulumi.CustomResource):
         __props__.__dict__["upload_timestamp"] = upload_timestamp
         return BucketFileVersion(resource_name, opts=opts, __props__=__props__)
 
+    @staticmethod
+    def exists(id: pulumi.Input[str],
+            opts: Optional[pulumi.ResourceOptions] = None,
+            action: pulumi.Input[Optional[_builtins.str]] = None,
+            bucket_file_version_id: pulumi.Input[Optional[_builtins.str]] = None,
+            bucket_id: pulumi.Input[Optional[_builtins.str]] = None,
+            content_md5: pulumi.Input[Optional[_builtins.str]] = None,
+            content_sha1: pulumi.Input[Optional[_builtins.str]] = None,
+            content_type: pulumi.Input[Optional[_builtins.str]] = None,
+            file_id: pulumi.Input[Optional[_builtins.str]] = None,
+            file_info: pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]] = None,
+            file_name: pulumi.Input[Optional[_builtins.str]] = None,
+            server_side_encryption: pulumi.Input[Optional[Union['BucketFileVersionServerSideEncryptionArgs', 'BucketFileVersionServerSideEncryptionArgsDict', 'outputs.BucketFileVersionServerSideEncryption']]] = None,
+            size: pulumi.Input[Optional[_builtins.float]] = None,
+            source: pulumi.Input[Optional[_builtins.str]] = None,
+            upload_timestamp: pulumi.Input[Optional[_builtins.float]] = None) -> pulumi.Output[bool]:
+        __props__: dict = {}
+        __props__["action"] = action
+        __props__["bucketFileVersionId"] = bucket_file_version_id
+        __props__["bucketId"] = bucket_id
+        __props__["contentMd5"] = content_md5
+        __props__["contentSha1"] = content_sha1
+        __props__["contentType"] = content_type
+        __props__["fileId"] = file_id
+        __props__["fileInfo"] = file_info
+        __props__["fileName"] = file_name
+        __props__["serverSideEncryption"] = server_side_encryption
+        __props__["size"] = size
+        __props__["source"] = source
+        __props__["uploadTimestamp"] = upload_timestamp
+        return pulumi.runtime.exists_resource(None, 'b2:index/bucketFileVersion:BucketFileVersion', id, __props__, opts or pulumi.ResourceOptions(), package_ref=_utilities.get_package())
+
     @_builtins.property
     @pulumi.getter
     def action(self) -> pulumi.Output[_builtins.str]:

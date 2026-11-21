@@ -811,6 +811,48 @@ class SettingMgmt(pulumi.CustomResource):
         __props__.__dict__["wifiman_enabled"] = wifiman_enabled
         return SettingMgmt(resource_name, opts=opts, __props__=__props__)
 
+    @staticmethod
+    def exists(id: pulumi.Input[str],
+            opts: Optional[pulumi.ResourceOptions] = None,
+            advanced_feature_enabled: pulumi.Input[Optional[_builtins.bool]] = None,
+            alert_enabled: pulumi.Input[Optional[_builtins.bool]] = None,
+            auto_upgrade: pulumi.Input[Optional[_builtins.bool]] = None,
+            auto_upgrade_hour: pulumi.Input[Optional[_builtins.float]] = None,
+            boot_sound: pulumi.Input[Optional[_builtins.bool]] = None,
+            debug_tools_enabled: pulumi.Input[Optional[_builtins.bool]] = None,
+            direct_connect_enabled: pulumi.Input[Optional[_builtins.bool]] = None,
+            led_enabled: pulumi.Input[Optional[_builtins.bool]] = None,
+            outdoor_mode_enabled: pulumi.Input[Optional[_builtins.bool]] = None,
+            site: pulumi.Input[Optional[_builtins.str]] = None,
+            ssh_auth_password_enabled: pulumi.Input[Optional[_builtins.bool]] = None,
+            ssh_bind_wildcard: pulumi.Input[Optional[_builtins.bool]] = None,
+            ssh_enabled: pulumi.Input[Optional[_builtins.bool]] = None,
+            ssh_keys: pulumi.Input[Optional[Sequence[pulumi.Input[Union['SettingMgmtSshKeyArgs', 'SettingMgmtSshKeyArgsDict', 'outputs.SettingMgmtSshKey']]]]] = None,
+            ssh_password: pulumi.Input[Optional[_builtins.str]] = None,
+            ssh_username: pulumi.Input[Optional[_builtins.str]] = None,
+            unifi_idp_enabled: pulumi.Input[Optional[_builtins.bool]] = None,
+            wifiman_enabled: pulumi.Input[Optional[_builtins.bool]] = None) -> pulumi.Output[bool]:
+        __props__: dict = {}
+        __props__["advancedFeatureEnabled"] = advanced_feature_enabled
+        __props__["alertEnabled"] = alert_enabled
+        __props__["autoUpgrade"] = auto_upgrade
+        __props__["autoUpgradeHour"] = auto_upgrade_hour
+        __props__["bootSound"] = boot_sound
+        __props__["debugToolsEnabled"] = debug_tools_enabled
+        __props__["directConnectEnabled"] = direct_connect_enabled
+        __props__["ledEnabled"] = led_enabled
+        __props__["outdoorModeEnabled"] = outdoor_mode_enabled
+        __props__["site"] = site
+        __props__["sshAuthPasswordEnabled"] = ssh_auth_password_enabled
+        __props__["sshBindWildcard"] = ssh_bind_wildcard
+        __props__["sshEnabled"] = ssh_enabled
+        __props__["sshKeys"] = ssh_keys
+        __props__["sshPassword"] = ssh_password
+        __props__["sshUsername"] = ssh_username
+        __props__["unifiIdpEnabled"] = unifi_idp_enabled
+        __props__["wifimanEnabled"] = wifiman_enabled
+        return pulumi.runtime.exists_resource(None, 'unifi:index/settingMgmt:SettingMgmt', id, __props__, opts or pulumi.ResourceOptions(), package_ref=_utilities.get_package())
+
     @_builtins.property
     @pulumi.getter(name="advancedFeatureEnabled")
     def advanced_feature_enabled(self) -> pulumi.Output[_builtins.bool]:

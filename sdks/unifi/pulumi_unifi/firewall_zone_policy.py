@@ -754,6 +754,46 @@ class FirewallZonePolicy(pulumi.CustomResource):
         __props__.__dict__["source"] = source
         return FirewallZonePolicy(resource_name, opts=opts, __props__=__props__)
 
+    @staticmethod
+    def exists(id: pulumi.Input[str],
+            opts: Optional[pulumi.ResourceOptions] = None,
+            action: pulumi.Input[Optional[_builtins.str]] = None,
+            auto_allow_return_traffic: pulumi.Input[Optional[_builtins.bool]] = None,
+            connection_state_type: pulumi.Input[Optional[_builtins.str]] = None,
+            connection_states: pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]] = None,
+            description: pulumi.Input[Optional[_builtins.str]] = None,
+            destination: pulumi.Input[Optional[Union['FirewallZonePolicyDestinationArgs', 'FirewallZonePolicyDestinationArgsDict', 'outputs.FirewallZonePolicyDestination']]] = None,
+            enabled: pulumi.Input[Optional[_builtins.bool]] = None,
+            index: pulumi.Input[Optional[_builtins.float]] = None,
+            ip_version: pulumi.Input[Optional[_builtins.str]] = None,
+            logging: pulumi.Input[Optional[_builtins.bool]] = None,
+            match_ip_sec_type: pulumi.Input[Optional[_builtins.str]] = None,
+            match_opposite_protocol: pulumi.Input[Optional[_builtins.bool]] = None,
+            name: pulumi.Input[Optional[_builtins.str]] = None,
+            protocol: pulumi.Input[Optional[_builtins.str]] = None,
+            schedule: pulumi.Input[Optional[Union['FirewallZonePolicyScheduleArgs', 'FirewallZonePolicyScheduleArgsDict', 'outputs.FirewallZonePolicySchedule']]] = None,
+            site: pulumi.Input[Optional[_builtins.str]] = None,
+            source: pulumi.Input[Optional[Union['FirewallZonePolicySourceArgs', 'FirewallZonePolicySourceArgsDict', 'outputs.FirewallZonePolicySource']]] = None) -> pulumi.Output[bool]:
+        __props__: dict = {}
+        __props__["action"] = action
+        __props__["autoAllowReturnTraffic"] = auto_allow_return_traffic
+        __props__["connectionStateType"] = connection_state_type
+        __props__["connectionStates"] = connection_states
+        __props__["description"] = description
+        __props__["destination"] = destination
+        __props__["enabled"] = enabled
+        __props__["index"] = index
+        __props__["ipVersion"] = ip_version
+        __props__["logging"] = logging
+        __props__["matchIpSecType"] = match_ip_sec_type
+        __props__["matchOppositeProtocol"] = match_opposite_protocol
+        __props__["name"] = name
+        __props__["protocol"] = protocol
+        __props__["schedule"] = schedule
+        __props__["site"] = site
+        __props__["source"] = source
+        return pulumi.runtime.exists_resource(None, 'unifi:index/firewallZonePolicy:FirewallZonePolicy', id, __props__, opts or pulumi.ResourceOptions(), package_ref=_utilities.get_package())
+
     @_builtins.property
     @pulumi.getter
     def action(self) -> pulumi.Output[_builtins.str]:

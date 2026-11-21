@@ -223,6 +223,18 @@ class SettingTeleport(pulumi.CustomResource):
         __props__.__dict__["subnet"] = subnet
         return SettingTeleport(resource_name, opts=opts, __props__=__props__)
 
+    @staticmethod
+    def exists(id: pulumi.Input[str],
+            opts: Optional[pulumi.ResourceOptions] = None,
+            enabled: pulumi.Input[Optional[_builtins.bool]] = None,
+            site: pulumi.Input[Optional[_builtins.str]] = None,
+            subnet: pulumi.Input[Optional[_builtins.str]] = None) -> pulumi.Output[bool]:
+        __props__: dict = {}
+        __props__["enabled"] = enabled
+        __props__["site"] = site
+        __props__["subnet"] = subnet
+        return pulumi.runtime.exists_resource(None, 'unifi:index/settingTeleport:SettingTeleport', id, __props__, opts or pulumi.ResourceOptions(), package_ref=_utilities.get_package())
+
     @_builtins.property
     @pulumi.getter
     def enabled(self) -> pulumi.Output[_builtins.bool]:

@@ -2175,6 +2175,84 @@ class PortProfile(pulumi.CustomResource):
         __props__.__dict__["voice_networkconf_id"] = voice_networkconf_id
         return PortProfile(resource_name, opts=opts, __props__=__props__)
 
+    @staticmethod
+    def exists(id: pulumi.Input[str],
+            opts: Optional[pulumi.ResourceOptions] = None,
+            autoneg: pulumi.Input[Optional[_builtins.bool]] = None,
+            dot1x_ctrl: pulumi.Input[Optional[_builtins.str]] = None,
+            dot1x_idle_timeout: pulumi.Input[Optional[_builtins.float]] = None,
+            egress_rate_limit_kbps: pulumi.Input[Optional[_builtins.float]] = None,
+            egress_rate_limit_kbps_enabled: pulumi.Input[Optional[_builtins.bool]] = None,
+            excluded_network_ids: pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]] = None,
+            forward: pulumi.Input[Optional[_builtins.str]] = None,
+            full_duplex: pulumi.Input[Optional[_builtins.bool]] = None,
+            isolation: pulumi.Input[Optional[_builtins.bool]] = None,
+            lldpmed_enabled: pulumi.Input[Optional[_builtins.bool]] = None,
+            lldpmed_notify_enabled: pulumi.Input[Optional[_builtins.bool]] = None,
+            name: pulumi.Input[Optional[_builtins.str]] = None,
+            native_networkconf_id: pulumi.Input[Optional[_builtins.str]] = None,
+            op_mode: pulumi.Input[Optional[_builtins.str]] = None,
+            poe_mode: pulumi.Input[Optional[_builtins.str]] = None,
+            port_security_enabled: pulumi.Input[Optional[_builtins.bool]] = None,
+            port_security_mac_addresses: pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]] = None,
+            priority_queue1_level: pulumi.Input[Optional[_builtins.float]] = None,
+            priority_queue2_level: pulumi.Input[Optional[_builtins.float]] = None,
+            priority_queue3_level: pulumi.Input[Optional[_builtins.float]] = None,
+            priority_queue4_level: pulumi.Input[Optional[_builtins.float]] = None,
+            site: pulumi.Input[Optional[_builtins.str]] = None,
+            speed: pulumi.Input[Optional[_builtins.float]] = None,
+            stormctrl_bcast_enabled: pulumi.Input[Optional[_builtins.bool]] = None,
+            stormctrl_bcast_level: pulumi.Input[Optional[_builtins.float]] = None,
+            stormctrl_bcast_rate: pulumi.Input[Optional[_builtins.float]] = None,
+            stormctrl_mcast_enabled: pulumi.Input[Optional[_builtins.bool]] = None,
+            stormctrl_mcast_level: pulumi.Input[Optional[_builtins.float]] = None,
+            stormctrl_mcast_rate: pulumi.Input[Optional[_builtins.float]] = None,
+            stormctrl_type: pulumi.Input[Optional[_builtins.str]] = None,
+            stormctrl_ucast_enabled: pulumi.Input[Optional[_builtins.bool]] = None,
+            stormctrl_ucast_level: pulumi.Input[Optional[_builtins.float]] = None,
+            stormctrl_ucast_rate: pulumi.Input[Optional[_builtins.float]] = None,
+            stp_port_mode: pulumi.Input[Optional[_builtins.bool]] = None,
+            tagged_vlan_mgmt: pulumi.Input[Optional[_builtins.str]] = None,
+            voice_networkconf_id: pulumi.Input[Optional[_builtins.str]] = None) -> pulumi.Output[bool]:
+        __props__: dict = {}
+        __props__["autoneg"] = autoneg
+        __props__["dot1xCtrl"] = dot1x_ctrl
+        __props__["dot1xIdleTimeout"] = dot1x_idle_timeout
+        __props__["egressRateLimitKbps"] = egress_rate_limit_kbps
+        __props__["egressRateLimitKbpsEnabled"] = egress_rate_limit_kbps_enabled
+        __props__["excludedNetworkIds"] = excluded_network_ids
+        __props__["forward"] = forward
+        __props__["fullDuplex"] = full_duplex
+        __props__["isolation"] = isolation
+        __props__["lldpmedEnabled"] = lldpmed_enabled
+        __props__["lldpmedNotifyEnabled"] = lldpmed_notify_enabled
+        __props__["name"] = name
+        __props__["nativeNetworkconfId"] = native_networkconf_id
+        __props__["opMode"] = op_mode
+        __props__["poeMode"] = poe_mode
+        __props__["portSecurityEnabled"] = port_security_enabled
+        __props__["portSecurityMacAddresses"] = port_security_mac_addresses
+        __props__["priorityQueue1Level"] = priority_queue1_level
+        __props__["priorityQueue2Level"] = priority_queue2_level
+        __props__["priorityQueue3Level"] = priority_queue3_level
+        __props__["priorityQueue4Level"] = priority_queue4_level
+        __props__["site"] = site
+        __props__["speed"] = speed
+        __props__["stormctrlBcastEnabled"] = stormctrl_bcast_enabled
+        __props__["stormctrlBcastLevel"] = stormctrl_bcast_level
+        __props__["stormctrlBcastRate"] = stormctrl_bcast_rate
+        __props__["stormctrlMcastEnabled"] = stormctrl_mcast_enabled
+        __props__["stormctrlMcastLevel"] = stormctrl_mcast_level
+        __props__["stormctrlMcastRate"] = stormctrl_mcast_rate
+        __props__["stormctrlType"] = stormctrl_type
+        __props__["stormctrlUcastEnabled"] = stormctrl_ucast_enabled
+        __props__["stormctrlUcastLevel"] = stormctrl_ucast_level
+        __props__["stormctrlUcastRate"] = stormctrl_ucast_rate
+        __props__["stpPortMode"] = stp_port_mode
+        __props__["taggedVlanMgmt"] = tagged_vlan_mgmt
+        __props__["voiceNetworkconfId"] = voice_networkconf_id
+        return pulumi.runtime.exists_resource(None, 'unifi:index/portProfile:PortProfile', id, __props__, opts or pulumi.ResourceOptions(), package_ref=_utilities.get_package())
+
     @_builtins.property
     @pulumi.getter
     def autoneg(self) -> pulumi.Output[Optional[_builtins.bool]]:

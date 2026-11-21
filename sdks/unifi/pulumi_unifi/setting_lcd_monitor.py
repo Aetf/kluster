@@ -340,6 +340,24 @@ class SettingLcdMonitor(pulumi.CustomResource):
         __props__.__dict__["touch_event"] = touch_event
         return SettingLcdMonitor(resource_name, opts=opts, __props__=__props__)
 
+    @staticmethod
+    def exists(id: pulumi.Input[str],
+            opts: Optional[pulumi.ResourceOptions] = None,
+            brightness: pulumi.Input[Optional[_builtins.float]] = None,
+            enabled: pulumi.Input[Optional[_builtins.bool]] = None,
+            idle_timeout: pulumi.Input[Optional[_builtins.float]] = None,
+            site: pulumi.Input[Optional[_builtins.str]] = None,
+            sync: pulumi.Input[Optional[_builtins.bool]] = None,
+            touch_event: pulumi.Input[Optional[_builtins.bool]] = None) -> pulumi.Output[bool]:
+        __props__: dict = {}
+        __props__["brightness"] = brightness
+        __props__["enabled"] = enabled
+        __props__["idleTimeout"] = idle_timeout
+        __props__["site"] = site
+        __props__["sync"] = sync
+        __props__["touchEvent"] = touch_event
+        return pulumi.runtime.exists_resource(None, 'unifi:index/settingLcdMonitor:SettingLcdMonitor', id, __props__, opts or pulumi.ResourceOptions(), package_ref=_utilities.get_package())
+
     @_builtins.property
     @pulumi.getter
     def brightness(self) -> pulumi.Output[Optional[_builtins.float]]:
