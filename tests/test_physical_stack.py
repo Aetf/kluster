@@ -39,6 +39,7 @@ import pytest_asyncio
 import yaml
 from committed_stack_files import StackFiles
 from device_places import DEVICE_FILE, DEVICE_TYPE_PREFIX, PLACES, stated_type
+from engine_urns import ROOT, engine_urns
 from google.protobuf import json_format
 from mock_monitor import Recorder, declaring, run_under_backstop
 from oci_conventions import with_compartment
@@ -415,9 +416,6 @@ def test_the_overlay_network_is_adopted_by_the_conventions_id_and_is_the_runs_on
 
 #: The cutover runbook, whose window applies this stack under `--target`.
 RUNBOOK = Path(__file__).parent.parent / 'docs' / 'physical' / 'gateway-cutover.md'
-#: The project every URN of a real run carries.
-PROJECT = cast('dict[str, Any]', yaml.safe_load((Path(__file__).parent.parent / 'Pulumi.yaml').read_text()))['name']
-_ROOT = 'pulumi:pulumi:Stack'
 
 
 def _runbook_targets() -> dict[str, list[str]]:
@@ -480,17 +478,7 @@ def test_the_windows_targets_take_the_gateway_and_what_the_runs_adoption_depends
     targets = commands['up']
 
     registrations = ran.recorded.registrations
-
-    def qualified(urn: str) -> str:
-        request = registrations[urn]
-        above = registrations.get(request.parent)
-        if above is None or above.type == _ROOT:
-            return request.type
-        return f'{qualified(request.parent)}${request.type}'
-
-    engine = {
-        urn: f'urn:pulumi:physical::{PROJECT}::{qualified(urn)}::{registrations[urn].name}' for urn in registrations
-    }
+    engine = engine_urns(registrations)
 
     def edges(urn: str) -> set[str]:
         request = registrations[urn]
@@ -502,7 +490,7 @@ def test_the_windows_targets_take_the_gateway_and_what_the_runs_adoption_depends
     implicit = {
         urn
         for urn in registrations
-        if registrations[urn].type == _ROOT or registrations[urn].type.startswith('pulumi:providers:')
+        if registrations[urn].type == ROOT or registrations[urn].type.startswith('pulumi:providers:')
     }
     selected = {urn for urn in registrations if any(_selects(target, engine[urn]) for target in targets)}
     (gateway,) = [urn for urn in registrations if registrations[urn].type == Gateway.__pulumi_type__]
@@ -1243,26 +1231,6 @@ def test_no_talos_call_is_registered_without_the_forward_it_is_dialed_through(ra
     assert calls, 'the run made no Talos call'
     for name in sorted(calls):
         assert listener | backends <= set(recorded.depends_on(name)), name
-
-
-def engine_urns(registrations: dict[str, Any]) -> dict[str, str]:
-    """Each registration's URN as the engine spells it, which qualifies a type by the whole chain of parents' types.
-
-    The mock's qualifies by the immediate parent's type alone
-    (framework/testing.md §3.1), so a pattern the runbook matches against
-    `physical stack --show-urns` is matched against these.
-    """
-
-    def qualified(urn: str) -> str:
-        request = registrations[urn]
-        above = registrations.get(request.parent)
-        if above is None or above.type == _ROOT:
-            return request.type
-        return f'{qualified(request.parent)}${request.type}'
-
-    return {
-        urn: f'urn:pulumi:physical::{PROJECT}::{qualified(urn)}::{registrations[urn].name}' for urn in registrations
-    }
 
 
 #: What stands in for `physical` when a case runs a runbook block over the

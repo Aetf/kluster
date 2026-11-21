@@ -800,12 +800,16 @@ preview with `denydefaultprovider not registered`.
     once on the empty cluster (physical/bring-up.md §2, stage 5a).
     Gist: the three instances are gone, by the loss or by a termination
     outside the program; a targeted refresh records that in `physical`'s
-    state; one `physical up` creates the fleet, the worker and the
-    day-1 chain again; then the states of `k8s-base` and `apps` are
-    refreshed and the deploy chain applies both stacks from empty. The
-    steps below are written for the deliberate run. After an actual
-    loss, step 3 has already happened, step 0 records what still reads,
-    and steps 1 and 2 run next.
+    state; one `physical up` creates the fleet, the worker and the day-1
+    chain again; then the states of `k8s-base` and `apps` are refreshed
+    and the deploy chain applies both stacks from empty. The steps below
+    are written for the deliberate run, which is the run the drill
+    takes. After an actual loss, step 3 has already happened, and the
+    drill's step 0 stops at its previews, which plan the lost instances
+    anew and cannot reach the cluster; a step named after it runs
+    only once step 0 has passed. The run after a loss waits on a mode of
+    its own
+    ([Aetf/kluster-ops#903](https://github.com/Aetf/kluster-ops/issues/903)).
 
     **What is kept.** The balancer with its listeners and backend sets;
     the network, from the VCN to the subnet; the dedicated VIP's
@@ -879,284 +883,288 @@ preview with `denydefaultprovider not registered`.
     windows of declarative/physical.md §6, and the same `up` again
     creates the refused one.
 
-    **Setup.** Every command runs from the root of the checkout that
-    holds `.credentials/`, with `physical` the function of
-    declarative/physical.md §6, `urns` the helper of §3.1, and `tal`,
-    `CP`, `CPS`, `WORKER` and `ip_of` the setup of
-    physical/gateway-cutover.md §8.1, whose node volume item also gives
-    `ids`, with `V=hath-cache` and `N` the address of `cp1`. Scratch
-    goes under the checkout's `.claude/drill/`, which is deleted when
-    the run closes, and a transcript of each step goes on the issue
-    that records the run. Steps 1 to 5 run in one sitting.
+    **The drill runs it.** `drill rebuild` runs the steps below, from
+    the root of the checkout that holds `.credentials/`, as `mise x --
+    uv run drill rebuild`. The commands are the drill's own
+    (`src/kluster/scripts/drill/`), and each step here says what it
+    changes, why, what it reads, how a reading is judged and what a
+    failure leaves. With no step named, the drill resumes at the first
+    step its record does not hold as a pass, inside that step at the
+    first part that did not pass, and runs on until a step does not
+    pass; `drill rebuild <n>` runs step `n` again from its start, step 0
+    excepted once a later step has started, since that step stood on
+    step 0's freeze and baselines. Before any command of a step, the
+    working copy is checked against the forge's `main`
+    (framework/pulumi.md §3.3), because a run spans an hour and merges
+    move `main` during it, and a working copy behind it is refused; the
+    termination of step 3 and the sitting of step 9 check it again as
+    they start, since a prompt or a wait stands between them and their
+    step's start. A step named after step 0 runs only once step 0 has
+    passed. Every command runs under CI's Helm environment, and every
+    `pulumi` run under its own stack's passphrase, `physical`'s for
+    `physical`. Steps 1 to 5 run in one sitting.
 
-        D=.claude/drill; mkdir -p "$D"
-        SCOPE='::kluster:cloud:CloudNodes(\$|::)|::kluster:cloud:NodeVolume(::|\$oci:Core/volumeAttachment:)|::kluster:talos:TalosDay1(\$|::)|::kluster:homelab:HomelabHost(::|\$libvirt:index/(domain|volume):)|FactoryImage::kluster-worker-nocloud$|pulumi:pulumi:Stack::'
-        protected() { physical stack export | mise x -- jq -r '.deployment.resources[] | select(.protect) | .urn' | sort; }
-        outside() { local e d; e=$(physical stack export --show-secrets) && d=$(mise x -- jq -c --arg s "$SCOPE" '[.deployment.resources[] | select((.urn | test($s)) or (.urn | endswith("::pulumi:providers:pulumi-python::default")) | not) | {urn, inputs, outputs, protect}] | sort_by(.urn)' <<<"$e") && sha256sum <<<"$d"; }
-        anchors() { for n in kluster.hosts vip1.hosts; do for t in A AAAA; do if a=$(mise x -- doggo --short "$n.unlimited-code.works" "$t" @1.1.1.1); then echo "$n $t $(printf '%s' "$a" | sort | tr '\n' ' ')"; else echo "$n $t no reading"; fi; done; done; }
-        sealing() { mise x -- kubeseal --kubeconfig ~/.kube/kluster --fetch-cert \
-            $(mise x uv -- uv run python -c 'from kluster import conventions as c; print("--controller-namespace", c.SEALING_NAMESPACE, "--controller-name", c.SEALING_CONTROLLER)'); }
-        history() { mise x -- kubectl --kubeconfig ~/.kube/kluster get --raw "/api/v1/namespaces/monitoring/services/vmsingle-history:http/proxy/$1"; }
-        metrics() { local m; m=$(history metrics) && awk '/^vm_rows\{type="storage\// { n += $2 } END { printf "rows %.0f\n", n }' <<<"$m"
-            history 'api/v1/query?query=min(tfirst_over_time(node_load1%5B100y%5D))' | mise x -- jq -r '"earliest \(.data.result[0].value[1])"'; }
+    **Its record is `.claude/drill/`** in that checkout: `run.json`,
+    which holds each step's verdict and times, the baselines and what a
+    later step reads back, and `step-<n>.log`, the transcript of each
+    step, every line stamped in UTC and every command with its exit and
+    what it printed. Nothing a command prints under `--show-secrets`
+    reaches either. The record is deleted when the run closes, once the
+    summary the drill prints at the end and the transcripts are on the
+    issue that records the run. Each act that is the operator's is a
+    prompt: the capacity reading, the go, the termination, the peak
+    recorder, the carry of the legacy key and the pull request. A
+    `gateway-health` that cannot run from the workstation in the form of
+    physical/gateway.md §1.6 is asked for.
 
-    `SCOPE` matches every resource the run changes, and nothing else:
-    the cloud nodes with what hangs off them, the attachment, the
-    day-1 chain, the worker's domain and volumes with its image, and the
-    stack's outputs. It matches the components `CloudNodes`,
-    `NodeVolume`, `TalosDay1` and `HomelabHost` themselves as well,
-    because a component's registered outputs change with what it holds.
-    Each component sits at the top of the stack, so the pattern anchors
-    on `::` before its type (§3.1).
+    **The scope** is every resource the run changes, and nothing else:
+    the cloud nodes with what hangs off them, the attachment, the day-1
+    chain, the worker's domain and volumes with its image, and the
+    stack's outputs. It holds the components `CloudNodes`, `NodeVolume`,
+    `TalosDay1` and `HomelabHost` themselves as well, because a
+    component's registered outputs change with what it holds. Each
+    component sits at the top of the stack, so the scope anchors on `::`
+    before its type (§3.1). The resources a step targets are selected
+    from the same types, and the step acts only where its list holds the
+    count it states.
 
-    `metrics` reads the history store through the API server's service
-    proxy: the rows it holds, the count its backup job compares, and the
-    time of its earliest sample, of `node_load1`, a name the history
-    holds from its first day: this cluster's nodes have reported it since
-    the store began, and the range Wave C's head imports carries the
-    legacy VPS node's (cluster/migration.md §2.1).
+    **The baselines** are taken at step 0, and every comparison after it
+    is with them:
 
-    `outside` prints a digest of every other resource's entry, secrets
-    included, so that only the digest is printed. It digests only what
-    an export and a `jq` that both succeeded returned, so a failed read
-    prints no digest rather than the digest of nothing. It leaves out the
-    stack's default `pulumi-python` provider too, the provider of every
-    dynamic resource: its entry records the stack's whole configuration,
-    and any `physical up` rewrites it to the configuration of the commit
-    it runs, so a configuration merged since the last `up` changes the
-    entry with nothing outside the scope changed, and no preview shows
-    the difference. Taking the baseline after an `up` instead would make
-    step 0 a write; the configuration is the commit's, and a review of
-    the commit is where it is read.
+    -   `protected`, the resources `physical`'s state protects;
+    -   `outside`, a digest of every other resource's entry in
+        `physical`'s state, secrets included, so that only the digest
+        leaves the export. It leaves out the stack's default
+        `pulumi-python` provider, the provider of every dynamic
+        resource: its entry records the stack's whole configuration, and
+        any `physical up` rewrites it to the configuration of the commit
+        it runs, so a configuration merged since the last `up` changes
+        the entry with nothing outside the scope changed, and no preview
+        shows the difference. Taking the baseline after an `up` instead
+        would make step 0 a write; the configuration is the commit's,
+        and a review of the commit is where it is read;
+    -   `anchors`, what a resolver outside the estate answers for
+        `kluster.hosts` and `vip1.hosts`, each for A and AAAA;
+    -   `ids`, the node volume's partition as Talos discovers it on
+        `cp1` (physical/gateway-cutover.md §8.1);
+    -   `sealing`, the certificate the sealing controller serves;
+    -   `metrics`, the history store read through the API server's
+        service proxy: the rows it holds, the count its backup job
+        compares, and the time of its earliest sample, of `node_load1`,
+        a name the history holds from its first day: this cluster's
+        nodes have reported it since the store began, and the range Wave
+        C's head imports carries the legacy VPS node's
+        (cluster/migration.md §2.1);
+    -   the outputs `cluster_endpoint`, `cluster_endpoint_v6`, `vip1`
+        and `worker_gua`.
 
-    **An empty `protected` or `outside` is no reading.** Each prints
-    nothing where its read of the export fails, and neither prints
-    nothing for the stack as it stands, which protects resources of its
-    own. An empty one, in a baseline or in a reading taken against one,
-    is taken again. `anchors` prints `no reading` in place of the
-    addresses of a query `doggo` got no answer to, and on any other answer
-    what `doggo` printed, which for a name with no record of the type is
-    nothing; so its reading is judged by which of its lines name an
-    address, as step 0 does below.
+    **A reading that is not whole is no reading**, and no comparison
+    takes one as a pass, on either side. A read that failed is one, and
+    so is an empty `protected` or `outside`, since neither is empty for
+    the stack as it stands, which protects resources of its own; an
+    anchor query that got no answer; an `ids` that counted nothing
+    because its read failed; and a `metrics` with no rows, which a
+    failed read gives rather than a count of zero. An anchor that got an
+    answer with no record of the type holds no address, which is a
+    reading, judged as step 0 does below.
 
-    **Step 0: the baseline, and the go.**
+    **Step 0: the baseline, and the go.** `drill rebuild 0` disables
+    `deploy.yml`, previews `physical` refreshed with its program run and
+    `dns`, `k8s-base` and `apps` refreshed, each expecting no change,
+    takes the baselines and shows each one, backs the history up once
+    more, reads `gateway-health`, takes the capacity reading and asks
+    for the go.
 
-        gh workflow disable deploy.yml --repo Aetf/kluster
-        physical preview --refresh --run-program --expect-no-changes
-        for s in dns k8s-base apps; do mise x -- pulumi preview --refresh --expect-no-changes --stack "$s"; done
-        physical stack export > "$D/export.json"
-        protected > "$D/protected"; outside > "$D/outside"; anchors > "$D/anchors"; ids > "$D/ids"; sealing > "$D/sealing.pem"
-        metrics > "$D/metrics"
-        k() { mise x -- kubectl --kubeconfig ~/.kube/kluster -n monitoring "$@"; }
-        k patch cronjob vmbackup-recent vmbackup-history -p '{"spec":{"suspend":true}}'
-        until active=$(k get jobs -o jsonpath='{.items[?(@.status.active)].metadata.name}') && [ -z "$active" ]; do sleep 10; done
-        k create job drill-history --from=cronjob/vmbackup-history
-        until k get job drill-history -o jsonpath='{.status.succeeded}{.status.failed}' | grep -q .; do sleep 10; done
-        k get job drill-history -o jsonpath='{.status.succeeded}'
-        for o in cluster_endpoint cluster_endpoint_v6 vip1 worker_gua; do echo "$o $(physical stack output "$o")"; done > "$D/outputs"
-        wc -l < "$D/protected"; cat "$D/outside" "$D/anchors" "$D/ids" "$D/metrics" "$D/outputs"; grep -c 'BEGIN CERTIFICATE' "$D/sealing.pem"
+    The history is backed up once more after its baseline is read, so
+    the backup a rebuild restores holds at least the baseline's rows.
+    Both backup schedules are suspended first, and the drill's own job
+    is created only once no backup job is running: a job created from a
+    CronJob runs beside the CronJob's own, which `Forbid` does not stop,
+    and two runs copying one store from two snapshots each delete what
+    the other uploads, so the last to finish marks complete a set
+    neither snapshot held. Suspended, neither runs again before step 3,
+    so the loss cuts no run off. A wait ends when the job completes, or,
+    for a job that fails, once its bound has elapsed, and the step goes
+    on only after the drill's own job completes. Both schedules go with
+    etcd at step 3, and the rebuilt cluster declares them anew, running;
+    a run that does not go resumes them, beside enabling `deploy.yml`
+    again, which the drill does where the capacity reading does not
+    pass, or where the go is not given. **A step 0 that stops after the
+    freeze, at any part, says what is still frozen**, and stands it down
+    on the operator's word or leaves it for the step to go on from; a
+    command of the stand-down that did not take is named, to be run by
+    hand.
 
-    The history is backed up once more after its baseline is read, so the backup a rebuild restores holds at least the
-    baseline's rows. Both backup schedules are suspended first, and the
-    drill's own job is created only once no backup job is running: a
-    job created from a CronJob runs beside the CronJob's own, which
-    `Forbid` does not stop, and two runs copying one store from two
-    snapshots each delete what the other uploads, so the last to finish
-    marks complete a set neither snapshot held. Suspended, neither runs
-    again before step 3, so the loss cuts no run off. The wait ends when
-    the job succeeds or fails, and the last line prints `1` for a
-    success. Both schedules go with etcd at step 3, and the rebuilt
-    cluster declares them anew, running; a run that does not go resumes
-    them, beside enabling `deploy.yml` again, with the same `patch`
-    and `"suspend":false`.
-
-    **The last line shows every baseline, and the go needs each one
-    whole.** The `protected` count is not zero, and `outside` is a
-    digest. Three of the four `anchors` lines name an address, every one
-    but `vip1.hosts AAAA`, a name that is IPv4 only, and none says `no
-    reading`. `ids` prints `1 found` and the partition's line, whose
-    `uuid` may print `null` on the boot that provisioned the volume
-    (physical/gateway-cutover.md §8.1). `metrics` prints a `rows` line
-    and an `earliest` line. Each
-    of the four outputs has a value, and the certificate count is `1`.
-    A baseline that is not whole is taken again before the go, because
-    every later comparison against it reads as a pass where the reading
-    it is compared with failed the same way.
+    **Every baseline is shown where it is taken, and the go needs each
+    one whole.** The `protected` count is not zero, and `outside` is a
+    digest. Three of the four `anchors` name an address, every one but
+    `vip1.hosts AAAA`, a name that is IPv4 only, and none is no reading.
+    `ids` finds one partition with its partition UUID, whose filesystem
+    `uuid` may read `null` on the boot that provisioned the volume
+    (physical/gateway-cutover.md §8.1). `metrics` holds a count of rows
+    and the time of its earliest sample. Each of the four outputs has a
+    value, and the certificate count is `1`. A baseline that is not
+    whole is taken again before the go, by the step run again, and the
+    go is refused until it is, because every later comparison against it
+    reads as a pass where the reading it is compared with failed the
+    same way.
 
     Disabling `deploy.yml` is bring-up stage 4's way back used as a
     freeze: a merge, a Renovate automerge among them, would otherwise
     run the chain against a half-built cluster. Every preview exits 0,
     and a diff stops the run: it starts converged, so that every later
     diff is its own. `gateway-health` is clean (physical/gateway.md
-    §1.6). A deliberate run then takes §3.4's capacity reading, and goes
-    only if every AD passes; otherwise it waits for another day, with
-    nothing changed but the workflow and the two backup schedules, which
-    are enabled and resumed again.
+    §1.6). A deliberate run then takes §3.4's capacity reading, which
+    the operator pastes at the drill's prompt, and goes only if every AD
+    passes and the reading holds a line for the AD of every instance in
+    state; otherwise it waits for another day, with nothing changed but
+    the workflow and the two backup schedules, which are enabled and
+    resumed again.
 
-    **On the go, the peak recorder starts** (§8.5), in a terminal of
-    its own at the root of the checkout, which outlives the sitting, and
-    runs until step 9 imports what it recorded:
+    **On the go, the peak recorder starts** (§8.5), in a terminal of its
+    own at the root of the checkout, which outlives the sitting, and
+    runs until step 9 imports what it recorded. The drill prints the
+    command, a `perf record` into `.claude/drill/peaks`. It reads the
+    control planes' addresses once, when it starts, and the rebuilt
+    nodes have new ones, so step 6 starts it again.
 
-        mise x uv -- uv run perf record .claude/drill/peaks
-
-    It reads the control planes' addresses once, when it starts, and
-    the rebuilt nodes have new ones, so step 6 starts it again.
-
-    **Step 1: the day-1 chain leaves state.**
-
-        T=($(urns '::kluster:talos:TalosDay1\$talos:')); printf '%s\n' "${T[@]}"
-        [ ${#T[@]} -eq 6 ] && physical destroy --run-program "${T[@]/#/--target=}"
-
-    The list and the destroy's preview hold six resources, one
-    `ConfigurationApply` per node, the `Bootstrap` and the
-    `Kubeconfig`, and nothing else. Their delete resets nothing, because
+    **Step 1: the day-1 chain leaves state.** `drill rebuild 1` lists
+    the resources of the day-1 chain and destroys them, running the
+    program, once the list holds six: one `ConfigurationApply` per node,
+    the `Bootstrap` and the `Kubeconfig`. The destroy's preview holds
+    the same six and nothing else, and the destroy is confirmed at
+    `pulumi`'s own prompt. Their delete resets nothing, because
     `on_destroy` keeps `reset` off (`components/talos`): every node
-    still answers `tal -n <node> version`.
+    still answers `talosctl version`.
 
-    The destroy takes `--run-program`, although the worker's disk is
-    not among its targets. The disk's `before_delete` hook (§3.2) is
+    The destroy runs the program, although the worker's disk is not
+    among its targets. The disk's `before_delete` hook (§3.2) is
     recorded in state with it, and the engine runs no delete hook
     without the program (declarative/physical.md §3), so a `destroy`
     without `--run-program` refuses while any resource in the stack's
     state records a delete hook, whichever resources it targets.
 
-    **Step 2:** `physical state unprotect '<worker disk URN>'`, the
-    disk of §3.2.
+    **Step 2: the worker's disk loses its protection.** `drill rebuild
+    2` takes the protection off the disk of §3.2 in `physical`'s state,
+    since step 5 replaces it.
 
-    **Step 3: the loss.** For a deliberate run, terminate `kluster-cp1`,
+    **Step 3: the loss.** `drill rebuild 3` terminates `kluster-cp1`,
     `kluster-cp2` and `kluster-cp3`, each with its boot volume deleted,
-    with `ocid` the helper of §3.1:
-
-        I=($(for n in cp1 cp2 cp3; do ocid oci:Core/instance:Instance "kluster-$n"; done)); printf '%s\n' "${I[@]}"
-        [ ${#I[@]} -eq 3 ] && credentials derived oci-physical terminate "${I[@]}"
-        credentials derived oci-physical read "$(ocid oci:Core/publicIp:PublicIp kluster-vip1)" "$(ocid oci:Core/volume:Volume kluster-hath-cache)"
-
-    The list prints three identifiers, and `terminate` runs only at that
-    count, as in §3.1. It takes them in turn: it deletes each instance
-    with its boot volume, waits for the work request OCI answers with, a
-    few minutes each, and prints the instance and its boot volume once
-    both read `TERMINATED`. A work request that ends anywhere but
-    `SUCCEEDED` stops it, naming its errors, before the next instance is
-    touched; run again, it leaves an instance already `TERMINATED` as it
-    is. The loss is taken outside the program rather than by a
-    `destroy`, because a destroy of `cp1` reaches the reserved IP
-    (§3.1). Readings: the three instances and their boot volumes print
-    `TERMINATED`; `kluster-vip1` prints `lifetime=RESERVED assigned=-`;
-    `kluster-hath-cache` prints `AVAILABLE attached-to=-`;
+    with `credentials derived oci-physical terminate`. It does so only
+    over a capacity reading taken within the hour, in which every AD
+    passed and the AD of each instance has its line, judged as the
+    termination starts, once the operator has typed the three names; a
+    recorded reading that does not pass is taken again first, and one
+    that does not pass then terminates nothing. `terminate` takes the
+    instances in turn: it deletes each with its boot volume, waits for
+    the work request OCI answers with, a few minutes each, and prints
+    the instance and its boot volume once both read `TERMINATED`. A work
+    request that ends anywhere but `SUCCEEDED` stops it, naming its
+    errors, before the next instance is touched; run again, it leaves an
+    instance already `TERMINATED` as it is. The loss is taken outside
+    the program rather than by a `destroy`, because a destroy of `cp1`
+    reaches the reserved IP (§3.1). Readings: the three instances and
+    their boot volumes print `TERMINATED`; `credentials derived
+    oci-physical read` reads `kluster-vip1` as `lifetime=RESERVED
+    assigned=-` and `kluster-hath-cache` as `AVAILABLE attached-to=-`;
     `gateway-health` is still clean. From here the way is forward only.
 
-    **Step 4: the state records the loss.**
+    **Step 4: the state records the loss.** `drill rebuild 4` refreshes,
+    running the program, the three instances, the secondary private IP,
+    the reserved IP, the attachment, and each node's backend in each of
+    the backend sets (§3.1), once its list holds that count. Readings:
+    the instances, the secondary private IP and the attachment leave
+    state; the reserved IP stays, its `private_ip_id` empty; the
+    backends stay, because OCI keeps the backends of a terminated
+    instance, and step 5 replaces them; an attachment that stays takes
+    the fallback of declarative/physical.md §6. The refresh runs the
+    program to its end with no control plane in existence.
 
-        S=$(urns '\$oci:NetworkLoadBalancer/backendSet:BackendSet::' | wc -l); echo "$S"
-        T=($(urns '::kluster:cloud:CloudNodes\$oci:(Core/instance:Instance|Core/privateIp:PrivateIp|Core/publicIp:PublicIp|NetworkLoadBalancer/backend:Backend)::|::kluster:cloud:NodeVolume\$oci:Core/volumeAttachment:VolumeAttachment::'))
-        printf '%s\n' "${T[@]}"
-        [ "$S" -gt 0 ] && [ ${#T[@]} -eq $((6 + 3 * S)) ] && physical refresh --run-program "${T[@]/#/--target=}"
+    **Step 5: the rebuild.** `drill rebuild 5` previews `physical` with
+    the worker's `FactoryImage` and its disk replaced, showing the diff,
+    checks the same plan against the scope, and applies it with the same
+    replacements once the check finds no planned step outside the scope.
+    The check reads only what a preview that succeeded returned, so a
+    failed preview is no reading. The plan holds eleven creates: the
+    three instances, the secondary private IP, the attachment and the
+    six resources of the day-1 chain; one update, the reserved IP's
+    `private_ip_id`; replacements of every backend and of the worker's
+    image, disk, seed and domain; and the stack's outputs. Anything
+    else, the node volume above all, is a diff nobody expected, and
+    nothing is applied until it has been read: a plan with a step
+    outside the scope is applied by nothing. The `up` ends on the Talos
+    health gate, every node named, with no reboot of the worker: the new
+    disk is created at the capacity `HOMELAB_DISK_GIB` declares
+    (physical/homelab-host.md §1), and the worker's `EPHEMERAL`, which
+    the drill shows and the operator confirms, reads that capacity less
+    the image's partitions and STATE.
 
-    The list holds the three instances, the secondary private IP, the
-    reserved IP, the attachment, and each node's backend in each of the
-    `S` backend sets (§3.1). Readings: the instances, the secondary
-    private IP and the attachment leave state; the reserved IP stays,
-    its `private_ip_id` reading empty; the backends stay, because OCI
-    keeps the backends of a terminated instance, and step 5 replaces
-    them; an attachment that stays takes the fallback of
-    declarative/physical.md §6. The refresh runs the program to its end
-    with no control plane in existence.
-
-    **Step 5: the rebuild.**
-
-        W=($(urns '::kluster-worker-nocloud$|::kluster-worker-disk$')); printf '%s\n' "${W[@]}"
-        [ ${#W[@]} -eq 2 ] && physical preview --diff "${W[@]/#/--replace=}"
-        p=$(physical preview --json "${W[@]/#/--replace=}") && mise x -- jq -r --arg s "$SCOPE" '[.steps[] | select(.op != "same") | .urn | select(test($s) | not)] | length, .[]' <<<"$p"
-        physical up "${W[@]/#/--replace=}"
-
-    `W` holds the worker's `FactoryImage` and its disk. The scope check,
-    the second preview, prints `0`, the count of planned steps outside
-    `SCOPE`, and then the URN of each; it reads only what a preview that
-    succeeded returned, so a failed preview prints no count and is no
-    reading. The plan holds
-    eleven creates: the three instances, the secondary private IP, the
-    attachment and the six resources of the day-1 chain; one update,
-    the reserved IP's `private_ip_id`; replacements of every backend
-    and of the worker's image, disk, seed and domain; and the stack's
-    outputs. Anything else, the node volume above all, is a diff nobody
-    expected, and nothing is applied until it has been read. The `up`
-    ends on the Talos health gate, every node named, with no reboot of
-    the worker: the new disk is created at the capacity
-    `HOMELAB_DISK_GIB` declares (physical/homelab-host.md §1), and
-    `tal -n "$WORKER" get volumestatus EPHEMERAL` reads that capacity
-    less the image's partitions and STATE.
-
-    **Step 6: `physical` converges.** The peak recorder is stopped with
-    Ctrl-C and started again with the same command, which appends to
-    `.claude/drill/peaks` and reads the new nodes' addresses: until then
-    it read their etcd, through the API server, and none of their files.
-    A further `physical up` reports
-    no changes, and `physical preview --refresh --run-program
-    --expect-no-changes` exits 0 over the whole stack, the gateway and
-    the overlay included. `protected` prints what `$D/protected` holds,
-    and `outside` what `$D/outside` holds.
+    **Step 6: `physical` converges.** `drill rebuild 6` asks for the
+    peak recorder to be stopped with Ctrl-C and started again with the
+    same command, which appends to `.claude/drill/peaks` and reads the
+    new nodes' addresses: until then it read their etcd, through the API
+    server, and none of their files. A further `physical up` reports no
+    changes, and a refreshed preview of `physical` with its program run
+    plans none over the whole stack, the gateway and the overlay
+    included. `protected` reads what its baseline holds, and `outside`
+    what its baseline holds.
 
     **Step 7: the readings that need no network plugin,**
-    physical/gateway-cutover.md §8.1 on the rebuilt cluster, its setup
-    taken again from the new outputs, with `~/.kube/kluster` written
-    again and the talosconfig written again from the `talosconfig`
-    output: `version` answers from every node at the pin; the worker's
-    link-local is the convention's, and the worker holds `worker_gua`;
-    the etcd fsync item passes, both halves, every boot volume being new
-    (declarative/physical.md §6); the fronts item of the same section
-    passes, an anonymous `GET /version` on 6443 reading `401` at each of
-    the balancer's addresses, from a host that is no cluster member and
-    reaches the internet in each family, taken directly and never
-    through an HTTP proxy, the IPv4 address under the cluster's CA and
-    the IPv6 address with verification off; the node volume's first
-    item passes, its `ids` compared with `$D/ids` by the block below;
-    `u-storage` is ready on every node; and the node label sits on
-    `cp1`. The volume's other items ran at bring-up and are not
-    repeated.
+    physical/gateway-cutover.md §8.1 on the rebuilt cluster. `drill
+    rebuild 7` writes `~/.kube/kluster` again from `physical`'s
+    `kubeconfig` output, and the talosconfig at `~/.talos/kluster` from
+    its `talosconfig` output, and reads: `version` answers from every
+    node at the pin; the worker's link-local is the convention's, and
+    the worker holds `worker_gua`; the etcd fsync item passes, both
+    halves, every boot volume being new (declarative/physical.md §6);
+    the fronts item of the same section passes, an anonymous `GET
+    /version` on 6443 reading `401` at each of the balancer's addresses,
+    from a host that is no cluster member and reaches the internet in
+    each family, taken directly and never through an HTTP proxy, the
+    IPv4 address under the cluster's CA and the IPv6 address with
+    verification off, so the drill runs from such a host; the node
+    volume's first item passes, its `ids` compared with the baseline by
+    the rule below; `u-storage` is ready on every node; and the node
+    label sits on `cp1`. The volume's other items ran at bring-up and
+    are not repeated.
 
-        ids > "$D/ids.rebuilt"; cat "$D/ids.rebuilt"
-        awk 'function f(k, l) { if (!match(l, " " k "=[^ ]*")) return ""; l = substr(l, RSTART + length(k) + 2, RLENGTH - length(k) - 2); return l == "null" ? "" : l }
-            FNR == 1 { c[++i] = $0 }; FNR == 2 { u[i] = f("uuid", $0); p[i] = f("partition_uuid", $0) }
-            END { ok = i == 2 && c[1] == "1 found" && c[2] == "1 found" && p[1] != "" && p[2] == p[1] && u[2] != "" && (u[1] == "" || u[2] == u[1]); print "ids " (ok ? "pass" : "fail") }' "$D/ids" "$D/ids.rebuilt"
-
-    It prints `ids pass` where both readings print `1 found` and the
-    same partition UUID, and the rebuilt node holds a filesystem UUID,
-    the same one as the baseline wherever the baseline holds one;
-    anything else prints `ids fail`. The partition UUID is the
-    partition's GPT GUID, which a partition provisioned anew would draw
-    afresh, so with the count it tells the volume's own partition from
-    another. A baseline with no filesystem UUID was read on the boot
-    that provisioned the volume, before discovery probed the partition
-    again, while the rebuilt node finds a partition it did not provision
-    and reads one. A rebuilt node that reads none has a partition its
-    discovery found empty, and Talos formats a partition it finds empty
-    in place, keeping the partition and its GUID; the count and the
-    partition alone would pass a volume formatted afresh. Where the
-    baseline holds no filesystem UUID, the comparison holds the rebuilt
-    node to the partition, the count and a filesystem UUID of its own; a
-    format that discovery has since probed again reads as a UUID like
-    any other, and such a baseline cannot tell it from the original.
+    The comparison passes where both readings find one partition with
+    the same partition UUID, and the rebuilt node holds a filesystem
+    UUID, the same one as the baseline wherever the baseline holds one;
+    anything else fails. The partition UUID is the partition's GPT GUID,
+    which a partition provisioned anew would draw afresh, so with the
+    count it tells the volume's own partition from another. A baseline
+    with no filesystem UUID was read on the boot that provisioned the
+    volume, before discovery probed the partition again, while the
+    rebuilt node finds a partition it did not provision and reads one. A
+    rebuilt node that reads none has a partition its discovery found
+    empty, and Talos formats a partition it finds empty in place,
+    keeping the partition and its GUID; the count and the partition
+    alone would pass a volume formatted afresh. Where the baseline holds
+    no filesystem UUID, the comparison holds the rebuilt node to the
+    partition, the count and a filesystem UUID of its own; a format that
+    discovery has since probed again reads as a UUID like any other, and
+    such a baseline cannot tell it from the original.
     physical/gateway-cutover.md §8.1 meets the same empty reading by
     taking item 4's reading as item 5's baseline; the rebuild has no
-    later reading of the old node to take. A read that failed prints no
-    count, and compares as a failure.
+    later reading of the old node to take. A read that failed counts
+    nothing, and compares as a failure.
 
-    **Step 8: `k8s-base` and `apps` from empty, by a dispatched
-    chain.**
-
-        mise x -- pulumi refresh --stack k8s-base
-        mise x -- pulumi refresh --stack apps
-        date -u +%FT%TZ > "$D/dispatched"
-        gh workflow enable deploy.yml --repo Aetf/kluster
-        gh workflow run deploy.yml --repo Aetf/kluster --ref main
+    **Step 8: `k8s-base` and `apps` from empty, by a dispatched chain.**
+    `drill rebuild 8` refreshes the states of `k8s-base` and `apps`,
+    each refresh confirmed at `pulumi`'s prompt, then enables
+    `deploy.yml` and dispatches it on `main`. It lists the dispatched
+    runs of `deploy.yml` before the dispatch, so that step 9 names the
+    run the dispatch created as the one listed after it and not before,
+    comparing no clock.
 
     Each refresh runs under the committed kubeconfig copy, which
     authenticates, the PKI and the endpoint being kept, and drops every
     object the rebuilt cluster does not hold, a custom resource whose
-    definition went with etcd among them, with no error. **Without those two
-    refreshes a plain `up` of either stack creates nothing**: a plain
-    `up` diffs the program against the state, which still holds every
-    object the old cluster held, and the chain's `up` takes no
+    definition went with etcd among them, with no error. **Without those
+    two refreshes a plain `up` of either stack creates nothing**: a
+    plain `up` diffs the program against the state, which still holds
+    every object the old cluster held, and the chain's `up` takes no
     `--refresh` (framework/ci.md §3.2).
 
     The chain starts by a dispatch, since `deploy.yml` takes
@@ -1166,39 +1174,32 @@ preview with `denydefaultprovider not registered`.
     as they open it for the refreshes: step 5 issued the `Kubeconfig`
     again under the kept PKI and for the kept endpoint, and §2.5 names
     what ends a stale copy, its certificate's expiry and its authority's
-    distrust, neither of which a rebuild brings. So
-    the sync of the new copy is housekeeping, and it rides in step 9's
-    pull request. The chain runs: `plan-physical` finds no diff, and
-    `up-k8s-base` and `up-apps` are both stacks' first `up` on an empty
-    cluster, over ciphertexts the new controller cannot open, so
-    whatever reads one waits for step 9's sitting.
+    distrust, neither of which a rebuild brings. So the sync of the new
+    copy is housekeeping, and it rides in step 9's pull request. The
+    chain runs: `plan-physical` finds no diff, and `up-k8s-base` and
+    `up-apps` are both stacks' first `up` on an empty cluster, over
+    ciphertexts the new controller cannot open, so whatever reads one
+    waits for step 9's sitting.
 
     **Step 9: the new controller answers, and one pull request seals.**
-    The sitting waits for the controller, read by three conditions in
-    order, each a condition and none a time: the dispatched run exists;
-    the controller's Deployment is created and then `Available`; and
-    the controller answers with exactly one certificate, not the
-    baseline's.
+    `drill rebuild 9` waits for the controller, read by three conditions
+    in order, each a condition and none a time: the dispatched run
+    exists, the one listed after step 8's dispatch and not before; the
+    controller's Deployment is created and then `Available`; and the
+    controller answers with exactly one certificate, not the baseline's.
 
-        c=$(mise x uv -- uv run python -c 'from kluster import conventions as c; print(c.SEALING_NAMESPACE, c.SEALING_CONTROLLER)') && read -r ns ctl <<<"$c"
-        gh run list --repo Aetf/kluster --workflow deploy.yml --event workflow_dispatch --json url,createdAt | mise x -- jq -r --arg t "$(cat "$D/dispatched")" '.[] | select(.createdAt >= $t) | .url'
-        w() { mise x -- kubectl --kubeconfig ~/.kube/kluster -n "$ns" wait "deployment/$ctl" "$@"; }
-        w --for=create --timeout=1h && w --for=condition=Available --timeout=15m
-        sealing > "$D/sealing.rebuilt"; n=$(grep -c 'BEGIN CERTIFICATE' "$D/sealing.rebuilt"); echo "$n"
-        [ "$n" = 1 ] && ! cmp -s "$D/sealing.pem" "$D/sealing.rebuilt" && echo 'sealing pass' || echo 'sealing fail'
-
-    The `gh run list` line prints the URL of the run the dispatch
-    created; a line that prints nothing is read again before the wait,
-    which would otherwise wait on a chain that is not running. The
-    Deployment is the one `components/sealing` installs under
-    `conventions.SEALING_CONTROLLER` in `conventions.SEALING_NAMESPACE`,
-    where `sealing` fetches the certificate from, and both waits are
-    watches with a bound. A bound that elapses is read on the run the
-    first line printed, for where the chain stands. The last two lines
-    print the count of certificates and `sealing pass` where that count
-    is `1` and the certificate is not the one `$D/sealing.pem` holds. A
-    fetch that fails after `Available` is reported with its error, and
-    the block runs again; nothing retries it on a timer.
+    A dispatched run that is not listed yet is read again, by the step
+    run again, before the wait, which would otherwise wait on a chain
+    that is not running. The Deployment is the one `components/sealing`
+    installs under `conventions.SEALING_CONTROLLER` in
+    `conventions.SEALING_NAMESPACE`, where the certificate is fetched
+    from, and both waits are watches with a bound, an hour for the
+    creation and fifteen minutes for `Available`. A bound that elapses
+    is read on the dispatched run, which the drill names, for where the
+    chain stands. The certificate passes where the fetch returns exactly
+    one, and it is not the one the baseline holds. A fetch that fails
+    after `Available` is reported with its error, and the step runs
+    again; nothing retries it on a timer.
 
     Sealing too early costs nothing but the run again. Every command of
     the sitting fetches the certificate before it writes, and refuses
@@ -1208,54 +1209,77 @@ preview with `denydefaultprovider not registered`.
     Nothing but the new controller answers on the rebuilt cluster, the
     old one having gone with etcd, and the comparison with the baseline
     refuses the one such certificate this run has read, the old
-    controller's, which a misdirected kubeconfig would serve. No command of
-    the sitting needs anything the chain applies after the controller,
-    and a sitting during `up-k8s-base` writes the workstation's stack
-    files while the chain reads `main`'s.
+    controller's, which a misdirected kubeconfig would serve. No command
+    of the sitting needs anything the chain applies after the
+    controller, and a sitting during `up-k8s-base` writes the
+    workstation's stack files while the chain reads `main`'s.
 
     **Until the legacy cluster's decommission, bring-up stage 9's carry
     of the legacy sealing key comes next**, before anything is sealed.
     Every ciphertext ported from the legacy cluster opens only under
     that key (the legacy sealing key's row in credentials.md §3, and
     declarative/workloads.md §5), and the rebuild took the carried copy
-    with etcd. The carry is physical/bring-up.md stage 9's, and so is
-    its confirmation, that the certificate the controller serves is the
-    cluster's own. Here that is read once the restart's rollout has
-    finished, which
-    `mise x -- kubectl --kubeconfig ~/.kube/kluster -n "$ns" rollout status "deployment/$ctl" --timeout=15m`
-    waits for: until then the pod that read no legacy key still serves
-    beside the new one, and `Available` holds throughout. A fetch then
-    prints the certificate the third condition read,
-    `cmp "$D/sealing.rebuilt" <(sealing)` exiting 0.
+    with etcd. The carry is physical/bring-up.md stage 9's, by hand, and
+    the drill asks for it, or for word that the legacy cluster is gone.
+    So is its confirmation, that the certificate the controller serves
+    is the cluster's own. Here that is read once the restart's rollout
+    has finished, which the drill waits for, with a bound of fifteen
+    minutes: until then the pod that read no legacy key still serves
+    beside the new one, and `Available` holds throughout. The
+    certificate then served is the one the third condition read.
+
+    **A confirmation that fails stops the step before anything is
+    sealed**: the controller serves another certificate, so it would
+    seal under a key that is not the rebuilt cluster's own. A carried
+    key that went wrong is deleted, the controller restarted, and the
+    carry repeated, with nothing already opened lost
+    (physical/bring-up.md §3), and the step runs again from the carry.
 
     Then, from a working copy at `main` (credentials.md §1 rule 6), the
-    sealing sitting of the paragraph on stage 6 above; then
-    `credentials derived sync --only kubeconfig` (§2.5); and one pull
-    request committing what they wrote: `Pulumi.k8s-base.yaml`,
-    `Pulumi.apps.yaml`, and
+    sealing sitting of the paragraph on stage 6 above: every command
+    that seals a row of `conventions.sealed.VALUES`, each once, in the
+    census's order, with the operator's terminal attached, so a command
+    that asks for a value, or for the kit's master password, asks there.
+    A command whose record takes a value piped in, as `dkim-exim record`
+    takes its PEM key from the legacy cluster, cannot take it from that
+    terminal: the drill prints the pipe the record gives and asks for a
+    file holding the value, which it names to the command, or for the
+    operator's word that the pipe ran in a terminal of their own and
+    exited 0. A row added to the census joins the next rebuild's sitting
+    by that addition alone. Then `credentials derived sync --only
+    kubeconfig` (§2.5); and one pull request committing what they wrote:
+    `Pulumi.k8s-base.yaml`, `Pulumi.apps.yaml`, and
     `src/kluster/conventions/etcd-drill-recipient.txt`, which
-    `credentials derived etcd-drill-age-identity generate` writes
-    beside its ciphertext (credentials.md §4). It merges once its checks
-    pass. Its chain queues behind the dispatched one in `deploy.yml`'s
-    `deploy` concurrency group, which never cancels a chain in
-    progress, and applies the SealedSecrets. Rule 6 orders a new value
-    as declaration, ciphertext, reader. Here every row is declared, and
-    every reader is on `main` already, over ciphertexts the new
-    controller cannot open: the order of a re-seal, which lets the
-    ciphertexts and the copies land in the one pull request.
+    `credentials derived etcd-drill-age-identity generate` writes beside
+    its ciphertext (credentials.md §4). It merges once its checks pass,
+    and its number is given to the drill. Its chain queues behind the
+    dispatched one in `deploy.yml`'s `deploy` concurrency group, which
+    never cancels a chain in progress, and applies the SealedSecrets.
+    Rule 6 orders a new value as declaration, ciphertext, reader. Here
+    every row is declared, and every reader is on `main` already, over
+    ciphertexts the new controller cannot open: the order of a re-seal,
+    which lets the ciphertexts and the copies land in the one pull
+    request.
+
+    **Both chains are read to their end**: the dispatched run, and the
+    run that applied the merge, each watched until it ends. The run that
+    applied the merge is not always the merge's own. The `deploy`
+    concurrency group keeps one run pending behind the one in progress,
+    and a later push to `main`, a Renovate automerge among them,
+    replaces the pending one, which then ends cancelled. Every later
+    push run on `main` checks out a commit that holds the merge, so the
+    run read is the first push run from the merge's own on that did not
+    end cancelled.
 
     Once its merge has applied `k8s-base`, bring-up stage 5's gate is
     read on the rebuilt cluster, both stores leave `Init`, and `metrics`
-    prints the baseline's earliest sample and at least the baseline's
-    rows. Then the peak recorder is stopped with Ctrl-C, and the import
-    writes its file into the history store, printing the lines written for each
-    control plane (§8.5). It refuses while vmagent still holds what it
-    queued for the stores while they waited in `Init`, and is run again
-    once that has drained:
-
-        mise x uv -- uv run perf import "$D/peaks"
-
-    Then the pass readings.
+    reads the baseline's earliest sample and at least the baseline's
+    rows. Then the peak recorder is stopped with Ctrl-C, and the drill
+    imports what it recorded into the history store, which prints the
+    lines written for each control plane (§8.5). The import refuses
+    while vmagent still holds what it queued for the stores while they
+    waited in `Init`, and the step runs it again once that has drained.
+    Then the pass readings, which the drill takes after step 9.
 
     **It passes when each of these holds:**
 
@@ -1263,11 +1287,11 @@ preview with `denydefaultprovider not registered`.
         the worker, the worker's EPHEMERAL reads as step 5 says, and
         step 6's readings hold.
     2.  Step 7's readings hold, its comparison of the volume's `ids`
-        with the baseline printing `ids pass`.
-    3.  Bring-up stage 5's gate holds on the rebuilt cluster; in each
-        of the two chains, the one step 8 dispatched and the one step
-        9's merge starts, `up-k8s-base` and `up-apps` converged in one
-        run each; and no node reports `DiskPressure` through any of
+        with the baseline passing.
+    3.  Bring-up stage 5's gate holds on the rebuilt cluster; in each of
+        the two chains, the one step 8 dispatched and the one that
+        applied step 9's merge, `up-k8s-base` and `up-apps` converged in
+        one run each; and no node reports `DiskPressure` through any of
         them.
     4.  **Nothing outside changed:**
         -   `gateway-health` is clean at step 0, after step 3 and after
@@ -1275,17 +1299,21 @@ preview with `denydefaultprovider not registered`.
         -   `physical`'s refreshed preview is clean, the gateway, the
             overlay's members, routes, rules and DNS, and the backup
             bucket included, and `outside` equals the baseline;
-        -   `mise x -- pulumi preview --refresh --expect-no-changes
-            --stack dns` exits 0, the four outputs equal `$D/outputs`,
-            and `anchors` prints what `$D/anchors` holds;
+        -   `dns`'s refreshed preview plans no change, the four outputs
+            equal their baseline, and `anchors` reads what its baseline
+            holds;
         -   every plan read during the run passed the scope check.
-    5.  **The metrics history came back**: `metrics` prints the earliest sample `$D/metrics` holds,
-        and no fewer rows, and the history's backup job succeeds on its
-        next run (§6.2). `metrics` counts the rows only over a read that
-        succeeded, so a failed read prints no `rows` line rather than
-        `rows 0`, and a `metrics`, at step 0 or here, that prints none
-        is no reading.
+    5.  **The metrics history came back**: `metrics` reads the earliest
+        sample its baseline holds, and no fewer rows, and the history's
+        backup job succeeds on its next run (§6.2). `metrics` counts the
+        rows only over a read that succeeded, so a failed read gives no
+        reading at all rather than a count of zero, at step 0 as here.
     6.  `deploy.yml` is enabled again, and `.claude/drill/` is deleted.
+
+    The drill reads `DiskPressure` at stage 5's gate and once more among
+    the pass readings, and before it deletes its record it says what is
+    still owed: the history's backup job on its next run, and the nodes
+    until then.
 
     **What a failure leaves running.** Through step 2, the old cluster,
     whole: steps 1 and 2 changed state alone, and they run in the same
@@ -1294,31 +1322,29 @@ preview with `denydefaultprovider not registered`.
     deletes it, and the balancer answers nothing; the reserved IP is
     unassigned and the volume detached; the gateway, the overlay and the
     zones run as before, since nothing in them reads the cluster.
-    Recovery is forward, steps 4 and 5 again. A create refused at step
-    5 leaves that instance missing, and its dependents, the day-1 chain
+    Recovery is forward, steps 4 and 5 again. A create refused at step 5
+    leaves that instance missing, and its dependents, the day-1 chain
     among them, are not created, so nothing is bootstrapped; the
     launched nodes reboot on Talos's 70-minute timer. A preview of a
     plain `physical up` is read and the `up` run, at intervals, until
-    the instance launches. The `--replace` flags are not repeated for a
-    resource the failed run already replaced, and §3.2 covers a worker
-    left half-built.
+    the instance launches, by hand rather than by `drill rebuild 5`,
+    which replaces the worker's image and disk again where the failed
+    run already replaced them; §3.2 covers a worker left half-built.
 
     From step 8 on, `deploy.yml` is enabled. A dispatched chain that
-    fails leaves what its jobs applied, which the stacks' states
-    record, and nothing sealed. It is fixed forward in a pull request,
-    whose merge runs the chain, or, where the cause lay outside the
-    repository, dispatched again with step 8's `date` and
-    `gh workflow run` lines, so that step 9's `gh run list` line prints
-    the new run alone. A
-    chain that fails before `up-k8s-base` has installed the controller
-    leaves step 9's wait to run to its bound. The wait is taken again
-    behind the next chain's run, without its `gh run list` line where
-    that run is a merge's, since the line reads dispatched runs alone.
-    A sitting that stops partway has written the workstation's stack
-    files and nothing the cluster reads: the command it stopped at, and
-    those after it, are run again, each writing a fresh ciphertext, as
-    bring-up stage 6 re-runs the one command. Any other failure is
-    fixed forward in a pull request (physical/bring-up.md §3).
+    fails leaves what its jobs applied, which the stacks' states record,
+    and nothing sealed. It is fixed forward in a pull request, whose
+    merge runs the chain, or, where the cause lay outside the
+    repository, dispatched again by `drill rebuild 8`, so that step 9
+    names the new run alone. A chain that fails before `up-k8s-base` has
+    installed the controller leaves step 9's wait to run to its bound,
+    and the step runs again behind the next chain's run. A sitting that
+    stops partway has written the workstation's stack files and nothing
+    the cluster reads: the step resumes at the command it stopped at,
+    which runs again with those after it, each writing a fresh
+    ciphertext, as bring-up stage 6 re-runs the one command. Any other
+    failure is fixed forward in a pull request (physical/bring-up.md
+    §3).
 
     **Not established, and read by the first run that meets it:**
 
