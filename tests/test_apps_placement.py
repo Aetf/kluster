@@ -17,6 +17,10 @@ whichever component it is:
 -   a restic mover admits exactly the nodes its workload does, the GPU its
     workload requests included, and the mover of a workload that requests
     the GPU admits only nodes that offer it;
+-   a pod held to the binder requirements of what a `local-path` claim
+    records admits only nodes the claim's pod can run on, the GPU it
+    requests included, so whatever binds the claim in the pod's stead, a
+    restic mover or a move's destination, binds it where the pod runs;
 -   a pod that mounts a `local-path` claim writes in the blockio class
     `conventions.ETCD_DISK_WRITER`, and a mover in none;
 -   a pod a volume or a device keeps to one node runs at the held priority;
@@ -43,7 +47,7 @@ from mock_monitor import Recorder, declaring, run_with
 from node_selection import CLOUD, NODES, schedulable, schedulable_among, selected
 
 from kluster import conventions
-from kluster.components.apps import UPLINK_DOWN, Fronts
+from kluster.components.apps import UPLINK_DOWN, Fronts, storage
 from kluster.components.apps import authelia as authelia_app
 from kluster.components.apps import emailproxy as emailproxy_app
 from kluster.components.apps import exim as exim_app
@@ -162,11 +166,13 @@ ISSUER = conventions.sso.issuer(PORTAL)
 
 @dataclass(frozen=True)
 class Declared:
-    """One component the run declared: what its declarations derive, its namespaces, and its client of the portal."""
+    """One component the run declared: what its declarations derive, its namespaces, its client of the portal, and its claims."""
 
     constraints: Constraints
     namespaces: frozenset[str]
     client: Client | None = None
+    claims: tuple[storage.Claim, ...] = ()
+    """Every claim the component keeps, as an attribute, with the constraints it records."""
 
 
 def _components() -> dict[str, Declared]:
@@ -174,7 +180,10 @@ def _components() -> dict[str, Declared]:
     found: dict[str, Declared] = {}
 
     def keep(name: str, component: Any, *namespaces: str, sso: Client | None = None) -> None:
-        found[name] = Declared(cast('Constraints', component.constraints), frozenset(namespaces), sso)
+        claims = tuple(
+            it for it in cast('dict[str, object]', vars(component)).values() if isinstance(it, storage.Claim)
+        )
+        found[name] = Declared(cast('Constraints', component.constraints), frozenset(namespaces), sso, claims)
 
     keep(
         'authelia',
@@ -691,6 +700,49 @@ def test_the_mover_of_a_claim_whose_workload_requests_the_gpu_admits_only_nodes_
         admitted = admitting(mover, gpu=False)
         assert admitted, source['metadata']
         assert all(gpu for _, gpu in admitted), (source['metadata'], sorted(admitted))
+
+
+def binder_spec(constraints: Constraints) -> dict[str, Any]:
+    """A pod held to the requirements of a binder of a claim recorded with `constraints`, as one required term."""
+    requirements = constraints.binder_requirements
+    if not requirements:
+        return {}
+    term = {'matchExpressions': [{'key': it.key, 'operator': 'In', 'values': [it.value]} for it in requirements]}
+    return {
+        'affinity': {'nodeAffinity': {'requiredDuringSchedulingIgnoredDuringExecution': {'nodeSelectorTerms': [term]}}}
+    }
+
+
+def test_a_binder_held_to_what_a_local_path_claim_was_handed_binds_it_only_where_its_pod_can_run(
+    program: Program,
+) -> None:
+    """A restic mover, or a move's destination, binds the claim in its pod's stead, held to the constraints the claim records.
+
+    It requests no GPU, so a constraint the pod composes onto the claim's
+    after `claim`, a device's hold most of all, never reaches it. Read on
+    every node with the GPU and without it: a pod held to the claim's binder
+    requirements admits some node, and only nodes the pod that mounts the
+    claim, with the GPU it requests, can run on. Every `local-path` claim
+    the run declares is read, whether or not anything binds it today, since
+    any of them may be moved, and so each is one a component keeps as an
+    attribute, which is where the claim's constraints are read from.
+    """
+    on_local_path = local_path_claims(program.monitor)
+    mounted = {(pod.namespace, it): pod for pod in pods(program.monitor) for it in pod.claims}
+    read = [
+        (name, namespace, claim, mounted[namespace, claim.name])
+        for name, component in program.components.items()
+        for claim in component.claims
+        for namespace in component.namespaces
+        if (namespace, claim.name) in on_local_path
+    ]
+
+    assert {(namespace, claim.name) for _, namespace, claim, _ in read} == on_local_path
+    assert any(requests_a_device(pod) for _, _, _, pod in read)
+    for name, _, claim, pod in read:
+        binder = admitting(binder_spec(claim.constraints), gpu=False)
+        assert binder, (name, claim.name)
+        assert binder <= admitting(pod.spec, gpu=requests_a_device(pod)), (name, claim.name, sorted(binder))
 
 
 def test_a_pod_that_mounts_a_local_path_claim_writes_in_the_class_and_its_mover_in_none(program: Program) -> None:

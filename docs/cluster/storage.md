@@ -206,7 +206,11 @@ generation is made on, under any retention. A move is three merges:
     gives one of those labels another value, another site or a value
     of the device's label its nodes do not carry, admits no node, and
     `claim` refuses it (`MoveOffBinder`) rather than render a destination
-    that is never scheduled. The apply waits
+    that is never scheduled. The new claim's hold, whatever its class and
+    retention, is a moving volume's (`kluster.lib.k8s.Keeper.MOVING_VOLUME`), which
+    records what the destination was given, so a constraint composed onto
+    the `Claim`'s constraints after `claim` that the destination was not
+    given is refused (`VolumeOffBinder`, below). The apply waits
     for the source's `lastManualSync` through `pulumi.com/waitFor`, with
     a timeout sized to the claim, and a red run means no second merge,
     because reclaim `Delete` has no undo on an `off` claim (§3.3).
@@ -261,37 +265,53 @@ on one node while the pod's other claim is on another, and the pod,
 which needs both, then runs on neither. A claim nothing backs up has no
 restic mover, and binds where its pod is placed. The render holds the rule too,
 whatever a component handed its claims (`tests/test_apps_placement.py`).
-A copy's destination is a mover of any claim being moved, and it too is
-placed apart from the pod's other claims; no rule covers yet a move of
-one claim of a pod that mounts a second `local-path` claim
-([Aetf/kluster-ops#905](https://github.com/Aetf/kluster-ops/issues/905)).
 
-**New rule:** a workload that requests the GPU hands its backed claim
-the GPU's hold (`kluster.components.apps.GPU_HOLD`). The mover requests no
-GPU, so the scheduler would place it on a node without one, and the
-claim it binds there would leave the workload, which needs the claim and
-the GPU, no node to run on. The hold names the label and value the GPU
+**New rule:** a claim is moved only while it is the one claim on a node
+its pod mounts, and two claims of one pod are not moved together. That
+holds whatever class the claim is moved into, a node volume's included. A
+copy's destination binds the new claim on the target, placed apart from
+the pod's other claims: a second claim stays bound where it is, and a
+second claim moved in the same copy is bound by a destination of its
+own, which may land on another node the target admits. After the finish
+the pod, which needs both, could then run on neither. A second claim
+made fresh in the same merge would bind wherever the pod lands, but a
+hold does not say whether its claim is bound yet, so `claim` refuses a
+claim moved beside any second claim on a node — unbacked, backed, a node
+volume's, or moved too — whichever of the two is made first, and the
+composition of their constraints is refused the same way
+(`MovingVolumeBesideVolume`). A NAS claim keeps its pod to the home
+site rather than to one node, so it stays beside a claim being moved.
+The finish removes `moving_to`, and with it the rule.
+
+**New rule:** a workload that requests the GPU hands each of its
+`local-path` claims the GPU's hold (`kluster.components.apps.GPU_HOLD`).
+A restic mover of a backed claim, and the destination of a move of any
+claim, bind the claim in the workload's stead and request no GPU, so the
+scheduler would place either on a node without one, and the claim bound
+there would leave the workload, which needs the claim and the GPU, no
+node to run on. The hold names the label and value the GPU
 plugin's node rule sets on a node with the GPU
 (`kluster.components.gpu.GPU_NODE`), which the plugin selects its nodes
-by, and the mover carries it in its affinity beside the workload's
-requirements (`kluster.lib.k8s.Constraints.binder_requirements`), so it
-binds the claim only on a node the GPU plugin serves. Such a node offers
+by, and each such binder carries it in its affinity beside the
+workload's requirements
+(`kluster.lib.k8s.Constraints.binder_requirements`), so it binds the
+claim only on a node the GPU plugin serves. Such a node offers
 `GPU_RESOURCE` while its GPU is bound to `i915`, the one driver the
 worker's image carries; the rule labels a GPU bound to `xe` as well, which
 the plugin offers as another resource. The workload's pod states no such
 requirement, since the scheduler reads its request.
 
-A backed claim's hold records what its mover was given, and a constraint
-composed onto a backed claim's constraints that its mover was not given
-is refused (`BackedVolumeOffBinder`): a site, an architecture or a device
-the claim was not handed. So no constraint can reach the pod and miss
-the mover. A claim nothing backs up has no restic mover, so its pod may
-compose the GPU's hold onto the `Claim`'s constraints after it. A copy's
-destination carries the constraints `claim` was handed and nothing
-composed after it, so a claim that is moved is handed the GPU's hold;
-a device composed onto an unbacked claim after it was made is not
-refused yet
-([Aetf/kluster-ops#905](https://github.com/Aetf/kluster-ops/issues/905)). No node
+The hold of a backed claim, and of a claim being moved, records what its
+binder was given, and a constraint composed onto that claim's
+constraints that its binder was not given is refused (`VolumeOffBinder`):
+a site, an architecture or a device the claim was not handed. So no
+constraint can reach the pod and miss the binder. An unbacked claim
+outside a move has no binder, so the hold refuses nothing composed after
+it; the render holds every `local-path` claim to the rule all the same,
+since any of them may be moved: whatever is held to the binder
+requirements of the constraints a claim records admits only nodes its
+pod, with the GPU it requests, can run on
+(`tests/test_apps_placement.py`). No node
 carries the label until the worker's GPU is bound to the device plugin
 (declarative/cluster-infra.md §1, item 7), and until then the mover of a
 claim beside a GPU request stays pending, as the workload does.

@@ -20,10 +20,12 @@ the server and the machine-learning service request the GPU, one
 `kluster.components.gpu.GPU_RESOURCE` each, the server for ffmpeg's QSV
 transcodes and the service for OpenVINO, which keeps each to the node offering
 it (`kluster.components.apps.GPU_HOLD`); the service's cache claim keeps it there
-too. The component declares nothing else that holds it to a site
-(`kluster.lib.k8s.UNCONSTRAINED`), so the scheduler places the database, its
-Redis and the watchdog. Each rollout is `Recreate`, since the GPU is one
-device a second pod would wait for.
+too, and is handed the GPU's hold, so that the destination of a move of the
+claim, which binds it in the service's stead, binds it on a node offering the
+GPU (cluster/storage.md §3.1). The component declares nothing else that holds
+it to a site (`kluster.lib.k8s.UNCONSTRAINED`), so the scheduler places the
+database, its Redis and the watchdog. Each rollout is `Recreate`, since the
+GPU is one device a second pod would wait for.
 
 **What it keeps, and where** (rfc-008 §4.2):
 
@@ -650,7 +652,7 @@ def _machine_learning(image: ImagePin, cache: Claim) -> k8s.core.v1.PodSpecArgs:
     return k8s.core.v1.PodSpecArgs(
         automount_service_account_token=False,
         enable_service_links=False,
-        **(cache.constraints & GPU_HOLD).pod_fields(),
+        **cache.constraints.pod_fields(),
         security_context=_pod_security(USER),
         containers=[container],
         volumes=[_claim_volume('cache', cache.claim.metadata.name)],
@@ -845,7 +847,7 @@ class Immich(Component, pulumi_type='kluster:apps:Immich'):
             # Read by no mover under `off`; the namespace's one writer key is
             # the barman family's.
             writer_key=writer_key,
-            constraints=self.constraints,
+            constraints=self.constraints & GPU_HOLD,
             opts=behind,
         )
         self.database = database(

@@ -145,6 +145,12 @@ annotation its pod takes (`pod_annotations`); a mover carries none.
     a device. The
     generation, `moving_to` and `stopped`, the workload the copy's
     source is applied after, are how the claim moves (storage.md §3.1).
+    During a copy its destination binds the new claim, so the
+    same refusal holds against what the destination was given, whatever
+    the claim's class and retention, and a claim is moved only while it
+    is the one claim on a node its pod mounts: `claim` refuses a claim
+    being moved, into any class, beside a second claim on a node, of any
+    kind, a second claim being moved included.
     `protect` protects the claim, for precious data and for a node
     volume's (storage.md §3.3). The caller's `opts` carries the
     dependency on the namespace, which `namespace` names as a plain
