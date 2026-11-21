@@ -82,7 +82,7 @@ from kluster.conventions.routes import (
     Route,
     RouteRow,
 )
-from kluster.conventions.sso import Client, Factor, Grant, Scope, TokenEndpointAuth
+from kluster.conventions.sso import Client, Factor, Grant, Issuer, Scope, TokenEndpointAuth
 from kluster.lib.k8s import POD_SECURITY_ENFORCE_LABEL, PodSecurity
 from kluster.lib.versions import ImagePin
 
@@ -120,6 +120,8 @@ CLIENT = Client(
     token_endpoint_auth=TokenEndpointAuth.POST,
     scopes=(Scope.OPENID, Scope.PROFILE),
 )
+#: The portal's issuer, as the program would hand it.
+ISSUER = Issuer('https://auth.example.invalid')
 
 IMAGE = ImagePin('registry.example.invalid/jellyfin', 'v9.9.9', f'sha256:{"1" * 64}')
 
@@ -171,6 +173,7 @@ async def declared() -> Recorder:
             'jellyfin',
             exposure=TUBE,
             client=CLIENT,
+            issuer=ISSUER,
             image=IMAGE,
             writer_key=writer_key(jellyfin_app.NAME),
             fronts=FRONTS,
@@ -942,6 +945,7 @@ def declare_jellyfin(**changed: Any) -> None:
     arguments: dict[str, Any] = {
         'exposure': TUBE,
         'client': CLIENT,
+        'issuer': ISSUER,
         'image': IMAGE,
         'writer_key': writer_key(jellyfin_app.NAME),
         'fronts': FRONTS,

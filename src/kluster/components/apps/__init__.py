@@ -66,6 +66,13 @@ the discovery server is (Aetf/kluster-ops#723,
 without a gate removes the portal's identity headers from it, since nothing
 but the client writes them there (`kluster.lib.k8s.Portal`).
 
+**A client of the portal reaches the issuer at its home address.** The
+pod that serves an OpenID Connect client calls the issuer by its public name
+to finish a sign-in, and carries a host alias of that name at the address the
+`dns` stack's rewrite answers it with at home (`issuer_aliases`,
+`conventions.sso.issuer`), so the call goes to the `lan` Gateway rather than
+out to the public front.
+
 It writes no rewrite, which is the `dns` stack's from the same rows. A row
 the legacy VPS holds (`Held`) attaches all the same, which is how an
 application is verified at the front door before its cut, and publishes no
@@ -152,6 +159,7 @@ __all__ = (
     'declared_constraints',
     'dialed_names',
     'expose',
+    'issuer_aliases',
     'port',
     'public_records',
     'published_once',
@@ -177,6 +185,24 @@ UPLINK_DOWN = 'keeps working while the uplink is down, which its component decla
 #: it, which the scheduler reads from the request, so no affinity, and the
 #: held priority.
 GPU_HOLD = kept(Keeper.DEVICE, f'requests the GPU ({GPU_RESOURCE}), which one node offers')
+
+
+def issuer_aliases(issuer: conventions.sso.Issuer) -> list[k8s.core.v1.HostAliasArgs] | None:
+    """The host aliases of a pod that signs in at the portal: the issuer's name at each of its addresses, or none where it has none.
+
+    A client's server calls the issuer by its public name, which no resolver
+    the pod asks answers with an address inside the cluster: the cluster's DNS
+    passes a public name on to the public resolvers, Talos' defaults on the
+    worker, which a pod at home reaches only through the uplink, as it does
+    the proxy's edge their answer names, since the portal's row is proxied.
+    The alias answers the name
+    with the issuer's addresses in the pod's own `/etc/hosts`
+    (`conventions.sso.issuer`). Every pod that serves a client of the portal
+    carries it, through this function.
+    """
+    if not issuer.addresses:
+        return None
+    return [k8s.core.v1.HostAliasArgs(ip=str(address), hostnames=[issuer.host]) for address in issuer.addresses]
 
 
 @dataclass(frozen=True)

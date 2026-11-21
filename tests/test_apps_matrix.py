@@ -109,7 +109,7 @@ def declare(
         'matrix',
         exposure=exposure,
         client=client,
-        issuer=ISSUER,
+        issuer=conventions.sso.Issuer(ISSUER),
         image=IMAGE,
         oidc=CIPHERTEXT,
         writer_key=WRITER_KEY,

@@ -68,7 +68,11 @@ fails, and a canary that stops running goes stale.
 outage of the home uplink, so every pod here runs at the home site, the
 canary's included, at the held priority and through its node's
 unreachability. The canary reads the gate on whatever node it runs on, since
-every node's Envoy carries the same `internet-gw` configuration. Each pod
+every node's Envoy carries the same `internet-gw` configuration. Its route
+has a home side on `lan`, which the component refuses an exposure without
+(`conventions.sso.portal_row`): the `dns` stack rewrites the portal's name to
+the `lan` VIP for a browser at home, and an OpenID Connect client's pod dials
+the name at the same address (`conventions.sso.issuer`). Each pod
 carries CPU and memory limits. The server's and the receiver's state the
 claim's constraints, which compose its hold in, and run in its blockio
 class; the claim's movers bind it at home, where the pod runs.
@@ -100,7 +104,7 @@ from kluster.components.monitoring.operator_objects import operator_object
 from kluster.components.monitoring.rules import RuleGroup, rule_group_spec, scheduled_job_rules
 from kluster.conventions.alert import Playbook
 from kluster.conventions.backup import PRECIOUS
-from kluster.conventions.routes import Exposure, Gate, Held, Proxied, Route
+from kluster.conventions.routes import Exposure, Gate
 from kluster.conventions.schedule import ScheduledJob
 from kluster.conventions.sso import Factor
 from kluster.lib import templates
@@ -514,27 +518,13 @@ def _rule(rule: AccessRule) -> _Rule:
     )
 
 
-def _portal_row(exposure: Exposure) -> Route:
-    """The portal's own row: the one route with an `internet` side, in the primary zone, which no gate guards."""
-    rows = [held.row if isinstance(held, Held) else held for held in exposure.routes]
-    served = [row for row in rows if isinstance(row, Route) and row.internet is not None]
-    if len(served) != 1 or conventions.ZONE_PRIMARY not in served[0].zones:
-        raise ValueError(
-            'the portal is reached at one route on `internet`, in the primary zone, where its session cookie is set'
-        )
-    (row,) = served
-    if isinstance(row.internet, Proxied) and row.internet.gate is not None:
-        raise ValueError(f'the portal at {row.host!r} is gated by itself, so nobody could reach it to sign in')
-    return row
-
-
 def _portal_host(exposure: Exposure) -> str:
-    return f'{_portal_row(exposure).host}.{conventions.ZONE_PRIMARY}'
+    return conventions.sso.issuer(exposure).host
 
 
 def portal_url(exposure: Exposure) -> str:
-    """Where the portal is, as a browser is sent to it: what its configuration names it and the canary's redirect is held to."""
-    return f'https://{_portal_host(exposure)}'
+    """Where the portal is, as a browser is sent to it: the issuer its clients validate, what its configuration names it and the canary's redirect is held to."""
+    return conventions.sso.issuer(exposure).url
 
 
 def _canary_rule(host: str) -> AccessRule:
@@ -544,7 +534,7 @@ def _canary_rule(host: str) -> AccessRule:
 def portal_configuration(exposure: Exposure) -> str:
     """Authelia's configuration, rendered for the portal at `exposure`'s row, ahead of Authelia's own `template` filter."""
     portal = portal_url(exposure)
-    canary = _canary_rule(_portal_row(exposure).host)
+    canary = _canary_rule(conventions.sso.portal_row(exposure).host)
     clients = tuple(_client(client) for client in conventions.sso.CLIENTS)
     return templates.render(
         'kluster.components.apps.authelia',
@@ -830,8 +820,9 @@ class Authelia(Component, pulumi_type='kluster:apps:Authelia'):
     """The portal's namespace, its Secrets, configuration and claim, its server, its sessions, what the gate names, the canary, and what its exposure derives.
 
     `exposure` is its row of the route census, which holds the portal's own
-    route. `image`, `redis_image`, `canary_image` and `target_image` are the
-    pins of the server, its Redis, the canary's curl and its target. `secrets`
+    route, on `internet` and on `lan` (`conventions.sso.portal_row`).
+    `image`, `redis_image`, `canary_image` and `target_image` are the pins of
+    the server, its Redis, the canary's curl and its target. `secrets`
     and `config_secrets` are the ciphertexts `kluster.lib.k8s.sealed_ciphertext`
     reads for the ported `SECRETS` and `CONFIG_SECRETS`, `storage_key` the one
     it reads for `conventions.sealed.AUTHELIA_STORAGE_KEY`, and `writer_key` the

@@ -112,14 +112,23 @@ import pulumi_crds as crds
 import pulumi_kubernetes as k8s
 
 from kluster import conventions
-from kluster.components.apps import GPU_HOLD, Backend, Exposed, Fronts, declared_constraints, exim, expose
+from kluster.components.apps import (
+    GPU_HOLD,
+    Backend,
+    Exposed,
+    Fronts,
+    declared_constraints,
+    exim,
+    expose,
+    issuer_aliases,
+)
 from kluster.components.apps.database import Database, Drill, Recovery, Resources, database
 from kluster.components.apps.immich import watchdog
 from kluster.components.apps.storage import Claim, NasClaim, claim, nas_claim, off
 from kluster.components.gpu import GPU_RESOURCE
 from kluster.conventions.backup import PRECIOUS
 from kluster.conventions.routes import Exposure, Held, Proxied, Route
-from kluster.conventions.sso import Client, redirect_uris
+from kluster.conventions.sso import Client, Issuer, redirect_uris
 from kluster.lib.k8s import (
     ApiClients,
     ApplicationNamespace,
@@ -554,9 +563,9 @@ def _secret_env(name: str, selector: k8s.core.v1.SecretKeySelectorArgs) -> k8s.c
 
 
 def _server(
-    image: ImagePin, *, library: NasClaim, config: pulumi.Input[str], constraints: Constraints
+    image: ImagePin, *, library: NasClaim, config: pulumi.Input[str], constraints: Constraints, issuer: Issuer
 ) -> k8s.core.v1.PodSpecArgs:
-    """The server's pod: the library at `MEDIA`, the configuration at `CONFIG_FILE`, the database, Redis and the service by name."""
+    """The server's pod: the library at `MEDIA`, the configuration at `CONFIG_FILE`, the database, Redis and the service by name, the issuer at its alias."""
     # The operator's Secret of the owner's credential (CloudNativePG's
     # `<cluster>-app`).
     owner = f'{DATABASE}-app'
@@ -596,6 +605,7 @@ def _server(
         automount_service_account_token=False,
         enable_service_links=False,
         **(constraints & library.constraints & GPU_HOLD).pod_fields(),
+        host_aliases=issuer_aliases(issuer),
         security_context=_pod_security(USER),
         containers=[container],
         volumes=[
@@ -742,7 +752,9 @@ class Immich(Component, pulumi_type='kluster:apps:Immich'):
     """The photo library: its namespace, database, configuration and storage, its Deployments, its watchdog and its exposure.
 
     `exposure` is its row of the route census and `client` its row of the
-    single sign-on census; `issuer` is the portal's issuer URL. `server_image`,
+    single sign-on census; `issuer` is the portal's issuer, whose URL the
+    configuration names and whose name the server's pod reaches at the
+    issuer's addresses (`issuer_aliases`). `server_image`,
     `ml_image`, `redis_image`, `exporter_image`, `database_image` and
     `drill_image` are the pins it runs. `redis` and `config` are the
     ciphertexts `kluster.lib.k8s.sealed_ciphertext` reads for the ported
@@ -776,7 +788,7 @@ class Immich(Component, pulumi_type='kluster:apps:Immich'):
         *,
         exposure: Exposure,
         client: Client,
-        issuer: str,
+        issuer: Issuer,
         server_image: ImagePin,
         ml_image: ImagePin,
         redis_image: ImagePin,
@@ -797,7 +809,7 @@ class Immich(Component, pulumi_type='kluster:apps:Immich'):
         _refuse_ported(REDIS, redis)
         _refuse_ported(CONFIG, config)
         _refuse_ported(RECOVERY, recovery)
-        template = _configuration_template(served.url, client, issuer=issuer)
+        template = _configuration_template(served.url, client, issuer=issuer.url)
         super().__init__(name, opts=opts)
 
         self.namespace = application_namespace(
@@ -878,7 +890,13 @@ class Immich(Component, pulumi_type='kluster:apps:Immich'):
             SERVER_SERVICE,
             # The relay admits a sender by this label.
             {**SERVER_LABELS, **conventions.MAIL_SENDER_LABEL},
-            _server(server_image, library=self.library, config=self.config.metadata.name, constraints=self.constraints),
+            _server(
+                server_image,
+                library=self.library,
+                config=self.config.metadata.name,
+                constraints=self.constraints,
+                issuer=issuer,
+            ),
             namespace=namespace,
             selector=SERVER_LABELS,
             reload=True,

@@ -53,7 +53,7 @@ import pulumi_crds as crds
 import pulumi_kubernetes as k8s
 
 from kluster import conventions
-from kluster.components.apps import Backend, Exposed, Fronts, declared_constraints, expose
+from kluster.components.apps import Backend, Exposed, Fronts, declared_constraints, expose, issuer_aliases
 from kluster.components.apps.storage import Claim, claim
 from kluster.conventions.backup import PRECIOUS
 from kluster.conventions.routes import Exposure, Held, Proxied, Route
@@ -296,8 +296,10 @@ def _data_volume(claim_name: pulumi.Input[str]) -> k8s.core.v1.VolumeArgs:
     )
 
 
-def _server(image: ImagePin, oidc_secret: pulumi.Input[str], data: Claim) -> k8s.core.v1.PodSpecArgs:
-    """The server's pod: continuwuity, reading its configuration, the client's secret and its claim, placed as the claim records."""
+def _server(
+    image: ImagePin, oidc_secret: pulumi.Input[str], data: Claim, issuer: conventions.sso.Issuer
+) -> k8s.core.v1.PodSpecArgs:
+    """The server's pod: continuwuity, reading its configuration, the client's secret and its claim, placed as the claim records, reaching the issuer at its alias."""
     probe = k8s.core.v1.HTTPGetActionArgs(path='/_matrix/federation/v1/version', port='http')
     container = k8s.core.v1.ContainerArgs(
         name=NAME,
@@ -338,6 +340,7 @@ def _server(image: ImagePin, oidc_secret: pulumi.Input[str], data: Claim) -> k8s
         automount_service_account_token=False,
         enable_service_links=False,
         **data.constraints.pod_fields(),
+        host_aliases=issuer_aliases(issuer),
         security_context=_POD_SECURITY,
         containers=[container],
         volumes=[
@@ -423,8 +426,9 @@ class Matrix(Component, pulumi_type='kluster:apps:Matrix'):
     """The homeserver's namespace, its client Secret, its configuration and claim, its Deployment and Service, and what its exposure derives.
 
     `exposure` is its row of the route census and `client` its row of the
-    single sign-on census; `issuer` is the portal's issuer URL, which the
-    server discovers the portal's endpoints from. `image` is the pin it runs.
+    single sign-on census; `issuer` is the portal's issuer, whose URL the
+    server discovers the portal's endpoints from and whose name its pod
+    reaches at the issuer's addresses (`issuer_aliases`). `image` is the pin it runs.
     `oidc` is the ciphertext `kluster.lib.k8s.sealed_ciphertext` reads for the
     ported client Secret, `OIDC`, and `writer_key` the ciphertext of the
     namespace's sealed writer key, which the claim's backups carry. `fronts`
@@ -449,7 +453,7 @@ class Matrix(Component, pulumi_type='kluster:apps:Matrix'):
         *,
         exposure: Exposure,
         client: conventions.sso.Client,
-        issuer: str,
+        issuer: conventions.sso.Issuer,
         image: ImagePin,
         oidc: Mapping[str, pulumi.Input[str]],
         writer_key: Mapping[str, pulumi.Input[str]],
@@ -459,7 +463,7 @@ class Matrix(Component, pulumi_type='kluster:apps:Matrix'):
         opts: pulumi.ResourceOptions | None = None,
     ) -> None:
         _refuse_exposure(exposure, client)
-        configuration = server_configuration(client, issuer=issuer)
+        configuration = server_configuration(client, issuer=issuer.url)
         super().__init__(name, opts=opts)
 
         self.namespace = application_namespace(f'{name}-namespace', name=NAMESPACE, opts=self.child_opts())
@@ -508,7 +512,7 @@ class Matrix(Component, pulumi_type='kluster:apps:Matrix'):
                     metadata=k8s.meta.v1.ObjectMetaArgs(
                         labels=dict(LABELS), annotations=dict(self.data.pod_annotations)
                     ),
-                    spec=_server(image, self.oidc.metadata.name, self.data)
+                    spec=_server(image, self.oidc.metadata.name, self.data, issuer)
                     if receiver is None
                     else _receiver(receiver, self.data),
                 ),
