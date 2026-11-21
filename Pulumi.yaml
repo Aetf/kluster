@@ -75,9 +75,9 @@ config:
   # publishes its images before the chart takes the release, so that group's
   # pull request is red until a chart release records it, and holds back its
   # own pins alone. Each digest is the image index's.
-  versions:image-metrics-history: docker.io/victoriametrics/victoria-metrics:v1.150.0@sha256:54467c7764a3e6579199af1914bb779f01ce32265cd552eb5ae0d4f8a2b80a97
-  versions:image-metrics-backup: docker.io/victoriametrics/vmbackup:v1.150.0@sha256:43dc2cb6e36e265ac5f5197c831cf29eed3078f1610f3b04961361a1bc4159db
-  versions:image-metrics-restore: docker.io/victoriametrics/vmrestore:v1.150.0@sha256:7d684cfce7c6ab904611582ce6a4ae3929efee5a268bef495771b71f31aac8e0
+  versions:image-metrics-history: docker.io/victoriametrics/victoria-metrics:v1.156.0@sha256:da8a90ac0912f16589be2b96a6441a2fca4bca415c83783d972d92e3b5b66970
+  versions:image-metrics-backup: docker.io/victoriametrics/vmbackup:v1.156.0@sha256:f2b1c03f4ca75392e9e8a67dc88d51f7eb7e950dbe0fa14e8c78b5f34f3c40ea
+  versions:image-metrics-restore: docker.io/victoriametrics/vmrestore:v1.156.0@sha256:e9b4db2fecb3077cd657022caafa17c2c6bca91b6af841497c3825a3d7842bff
   # The client the stores' backups and restores reach B2's native API with,
   # which reads the headers carrying the writer key from a file.
   versions:image-metrics-bucket: docker.io/curlimages/curl:8.23.0@sha256:3fb7e13e5d179a845c97d78204f3f1064d1907037f26a3ebf91710571151fd93
@@ -247,8 +247,8 @@ config:
   versions:chart-victoria-metrics-k8s-stack:
     value:
       repository: oci://ghcr.io/victoriametrics/helm-charts
-      version: 0.91.2
-      digest: sha256:9783c9b651fdece12a03ba4c62b84689b6df6c6e7c92d4f4949b3bc4114020a5
+      version: 0.98.1
+      digest: sha256:686f866acd3e4edcb45721c904ab112bd410fd94fef697849928a1b8f254d07c
       definitions: true
   versions:chart-node-feature-discovery:
     value:

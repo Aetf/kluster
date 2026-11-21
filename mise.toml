@@ -235,7 +235,7 @@ helm = "3.20.2"
 # `mise install --force github:VictoriaMetrics/VictoriaMetrics`. The key is
 # the repository, which is how mise's GitHub backend names a tool. Its
 # releases are static binaries.
-"github:VictoriaMetrics/VictoriaMetrics" = { version = "1.150.0", matching_regex = '^vmutils-[a-z0-9]+-[a-z0-9]+-v[0-9.]+\.(tar\.gz|zip)$', rename_exe = { "vmctl-prod" = "vmctl", "vmalert-tool-prod" = "vmalert-tool" }, filter_bins = "vmctl,vmalert-tool" }
+"github:VictoriaMetrics/VictoriaMetrics" = { version = "v1.156.0", matching_regex = '^vmutils-[a-z0-9]+-[a-z0-9]+-v[0-9.]+\.(tar\.gz|zip)$', rename_exe = { "vmctl-prod" = "vmctl", "vmalert-tool-prod" = "vmalert-tool" }, filter_bins = "vmctl,vmalert-tool" }
 # node runs ZeroTier's own rule compiler, which the suite asks whether Central
 # would accept the overlay's rendered flow rules. The compiler is JavaScript
 # with no dependencies, vendored at the release the CI member runs
