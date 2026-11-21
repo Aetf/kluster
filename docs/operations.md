@@ -320,10 +320,12 @@ preview with `denydefaultprovider not registered`.
     commits, and a file left out of it shows at `apps`'s first apply
     after the old expiry, as a failed chain run. Replacing the cluster's
     PKI breaks both copies at once, which no expiry rule sees, so a PKI
-    replacement runs the sync as a step of its own, as step 8 of the
-    whole-cluster rebuild (§3.5) does for the `Kubeconfig` it issues
-    again. In a bring-up the first copy waits for stage 4 of
-    physical/bring-up.md §2 rather than following `physical`'s first
+    replacement runs the sync as a step of its own. The whole-cluster
+    rebuild (§3.5) keeps the PKI and issues the `Kubeconfig` again, so
+    it runs the sync at step 9, and the new copies ride in the pull
+    request that carries the sealing sitting's ciphertexts. In a
+    bring-up the first copy waits for stage 4 of physical/bring-up.md
+    §2 rather than following `physical`'s first
     `up`: the commit of both stack files is an `up` of `k8s-base` and
     `apps`, and the bring-up's checks that need no network plugin run
     before Cilium exists (physical/gateway-cutover.md §8.1).
@@ -1139,11 +1141,14 @@ preview with `denydefaultprovider not registered`.
     later reading of the old node to take. A read that failed prints no
     count, and compares as a failure.
 
-    **Step 8: `k8s-base` and `apps` from empty.**
+    **Step 8: `k8s-base` and `apps` from empty, by a dispatched
+    chain.**
 
         mise x -- pulumi refresh --stack k8s-base
         mise x -- pulumi refresh --stack apps
-        credentials derived sync --only kubeconfig
+        date -u +%FT%TZ > "$D/dispatched"
+        gh workflow enable deploy.yml --repo Aetf/kluster
+        gh workflow run deploy.yml --repo Aetf/kluster --ref main
 
     Each refresh runs under the committed kubeconfig copy, which
     authenticates, the PKI and the endpoint being kept, and drops every
@@ -1152,22 +1157,98 @@ preview with `denydefaultprovider not registered`.
     refreshes a plain `up` of either stack creates nothing**: a plain
     `up` diffs the program against the state, which still holds every
     object the old cluster held, and the chain's `up` takes no
-    `--refresh` (framework/ci.md §3.2). The `Kubeconfig` was issued
-    again, so the sync of §2.5 follows. Then: a pull request committing
-    the two stack files alone;
-    `gh workflow enable deploy.yml --repo Aetf/kluster`; and the merge.
-    The chain runs: `plan-physical` finds no diff, and `up-k8s-base` and
-    `up-apps` are both stacks' first `up` on an empty cluster.
+    `--refresh` (framework/ci.md §3.2).
 
-    **Step 9:** bring-up stage 5's gate on the rebuilt cluster, the
-    sealing certificate differing from `$D/sealing.pem`. The sealing
-    sitting of the paragraph on stage 6 above follows, and its pull request commits
-    `Pulumi.k8s-base.yaml`, and after stage 9 `Pulumi.apps.yaml` with
-    it. Once its merge has
-    applied `k8s-base`, both stores leave `Init`, and `metrics` prints
-    the baseline's earliest sample and at least the baseline's rows.
-    Then the peak recorder is stopped with Ctrl-C, and the import writes
-    its file into the history store, printing the lines written for each
+    The chain starts by a dispatch, since `deploy.yml` takes
+    `workflow_dispatch`, and no pull request precedes it. A dispatched
+    run checks out `main`, so `up-k8s-base` and `up-apps` read the
+    kubeconfig copies `main` holds, and those open the rebuilt cluster
+    as they open it for the refreshes: step 5 issued the `Kubeconfig`
+    again under the kept PKI and for the kept endpoint, and §2.5 names
+    what ends a stale copy, its certificate's expiry and its authority's
+    distrust, neither of which a rebuild brings. So
+    the sync of the new copy is housekeeping, and it rides in step 9's
+    pull request. The chain runs: `plan-physical` finds no diff, and
+    `up-k8s-base` and `up-apps` are both stacks' first `up` on an empty
+    cluster, over ciphertexts the new controller cannot open, so
+    whatever reads one waits for step 9's sitting.
+
+    **Step 9: the new controller answers, and one pull request seals.**
+    The sitting waits for the controller, read by three conditions in
+    order, each a condition and none a time: the dispatched run exists;
+    the controller's Deployment is created and then `Available`; and
+    the controller answers with exactly one certificate, not the
+    baseline's.
+
+        c=$(mise x uv -- uv run python -c 'from kluster import conventions as c; print(c.SEALING_NAMESPACE, c.SEALING_CONTROLLER)') && read -r ns ctl <<<"$c"
+        gh run list --repo Aetf/kluster --workflow deploy.yml --event workflow_dispatch --json url,createdAt | mise x -- jq -r --arg t "$(cat "$D/dispatched")" '.[] | select(.createdAt >= $t) | .url'
+        w() { mise x -- kubectl --kubeconfig ~/.kube/kluster -n "$ns" wait "deployment/$ctl" "$@"; }
+        w --for=create --timeout=1h && w --for=condition=Available --timeout=15m
+        sealing > "$D/sealing.rebuilt"; n=$(grep -c 'BEGIN CERTIFICATE' "$D/sealing.rebuilt"); echo "$n"
+        [ "$n" = 1 ] && ! cmp -s "$D/sealing.pem" "$D/sealing.rebuilt" && echo 'sealing pass' || echo 'sealing fail'
+
+    The `gh run list` line prints the URL of the run the dispatch
+    created; a line that prints nothing is read again before the wait,
+    which would otherwise wait on a chain that is not running. The
+    Deployment is the one `components/sealing` installs under
+    `conventions.SEALING_CONTROLLER` in `conventions.SEALING_NAMESPACE`,
+    where `sealing` fetches the certificate from, and both waits are
+    watches with a bound. A bound that elapses is read on the run the
+    first line printed, for where the chain stands. The last two lines
+    print the count of certificates and `sealing pass` where that count
+    is `1` and the certificate is not the one `$D/sealing.pem` holds. A
+    fetch that fails after `Available` is reported with its error, and
+    the block runs again; nothing retries it on a timer.
+
+    Sealing too early costs nothing but the run again. Every command of
+    the sitting fetches the certificate before it writes, and refuses
+    without one (credentials.md §4). What would cost something is a
+    certificate that is not the rebuilt cluster's own: every ciphertext
+    sealed to it would be unreadable, and the merge would apply them.
+    Nothing but the new controller answers on the rebuilt cluster, the
+    old one having gone with etcd, and the comparison with the baseline
+    refuses the one such certificate this run has read, the old
+    controller's, which a misdirected kubeconfig would serve. No command of
+    the sitting needs anything the chain applies after the controller,
+    and a sitting during `up-k8s-base` writes the workstation's stack
+    files while the chain reads `main`'s.
+
+    **Until the legacy cluster's decommission, bring-up stage 9's carry
+    of the legacy sealing key comes next**, before anything is sealed.
+    Every ciphertext ported from the legacy cluster opens only under
+    that key (the legacy sealing key's row in credentials.md §3, and
+    declarative/workloads.md §5), and the rebuild took the carried copy
+    with etcd. The carry is physical/bring-up.md stage 9's, and so is
+    its confirmation, that the certificate the controller serves is the
+    cluster's own. Here that is read once the restart's rollout has
+    finished, which
+    `mise x -- kubectl --kubeconfig ~/.kube/kluster -n "$ns" rollout status "deployment/$ctl" --timeout=15m`
+    waits for: until then the pod that read no legacy key still serves
+    beside the new one, and `Available` holds throughout. A fetch then
+    prints the certificate the third condition read,
+    `cmp "$D/sealing.rebuilt" <(sealing)` exiting 0.
+
+    Then, from a working copy at `main` (credentials.md §1 rule 6), the
+    sealing sitting of the paragraph on stage 6 above; then
+    `credentials derived sync --only kubeconfig` (§2.5); and one pull
+    request committing what they wrote: `Pulumi.k8s-base.yaml`,
+    `Pulumi.apps.yaml`, and
+    `src/kluster/conventions/etcd-drill-recipient.txt`, which
+    `credentials derived etcd-drill-age-identity generate` writes
+    beside its ciphertext (credentials.md §4). It merges once its checks
+    pass. Its chain queues behind the dispatched one in `deploy.yml`'s
+    `deploy` concurrency group, which never cancels a chain in
+    progress, and applies the SealedSecrets. Rule 6 orders a new value
+    as declaration, ciphertext, reader. Here every row is declared, and
+    every reader is on `main` already, over ciphertexts the new
+    controller cannot open: the order of a re-seal, which lets the
+    ciphertexts and the copies land in the one pull request.
+
+    Once its merge has applied `k8s-base`, bring-up stage 5's gate is
+    read on the rebuilt cluster, both stores leave `Init`, and `metrics`
+    prints the baseline's earliest sample and at least the baseline's
+    rows. Then the peak recorder is stopped with Ctrl-C, and the import
+    writes its file into the history store, printing the lines written for each
     control plane (§8.5). It refuses while vmagent still holds what it
     queued for the stores while they waited in `Init`, and is run again
     once that has drained:
@@ -1183,9 +1264,11 @@ preview with `denydefaultprovider not registered`.
         step 6's readings hold.
     2.  Step 7's readings hold, its comparison of the volume's `ids`
         with the baseline printing `ids pass`.
-    3.  Bring-up stage 5's gate holds on the rebuilt cluster, each
-        of `up-k8s-base` and `up-apps` converged in its one run, and no
-        node reports `DiskPressure` through either of them.
+    3.  Bring-up stage 5's gate holds on the rebuilt cluster; in each
+        of the two chains, the one step 8 dispatched and the one step
+        9's merge starts, `up-k8s-base` and `up-apps` converged in one
+        run each; and no node reports `DiskPressure` through any of
+        them.
     4.  **Nothing outside changed:**
         -   `gateway-health` is clean at step 0, after step 3 and after
             step 9;
@@ -1218,8 +1301,24 @@ preview with `denydefaultprovider not registered`.
     plain `physical up` is read and the `up` run, at intervals, until
     the instance launches. The `--replace` flags are not repeated for a
     resource the failed run already replaced, and §3.2 covers a worker
-    left half-built. Any other failure is fixed forward in a pull
-    request (physical/bring-up.md §3).
+    left half-built.
+
+    From step 8 on, `deploy.yml` is enabled. A dispatched chain that
+    fails leaves what its jobs applied, which the stacks' states
+    record, and nothing sealed. It is fixed forward in a pull request,
+    whose merge runs the chain, or, where the cause lay outside the
+    repository, dispatched again with step 8's `date` and
+    `gh workflow run` lines, so that step 9's `gh run list` line prints
+    the new run alone. A
+    chain that fails before `up-k8s-base` has installed the controller
+    leaves step 9's wait to run to its bound. The wait is taken again
+    behind the next chain's run, without its `gh run list` line where
+    that run is a merge's, since the line reads dispatched runs alone.
+    A sitting that stops partway has written the workstation's stack
+    files and nothing the cluster reads: the command it stopped at, and
+    those after it, are run again, each writing a fresh ciphertext, as
+    bring-up stage 6 re-runs the one command. Any other failure is
+    fixed forward in a pull request (physical/bring-up.md §3).
 
     **Not established, and read by the first run that meets it:**
 
