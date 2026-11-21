@@ -49,7 +49,7 @@ from k8s_base_installation import (
 )
 from k8s_quantity import quantity
 from mock_monitor import Recorder, declaring, run_under_backstop
-from node_selection import schedulable
+from node_selection import NODES, schedulable
 from renovate_text import effective, package_rules, scalar
 from section_numbers import sections
 
@@ -261,28 +261,35 @@ def _talos_nodes() -> dict[str, dict[str, str]]:
     }
 
 
-@pytest.mark.parametrize('workload', ['alertmanager', 'vmagent'])
-def test_the_workload_admits_no_cloud_node_and_stays_through_an_outage_of_the_uplink(
-    applied: Run, workload: str
-) -> None:
-    """Each holds a condition that no cloud node meets, so the home site holds it, at the held priority.
+def test_alertmanager_admits_no_cloud_node_and_stays_through_an_outage_of_the_uplink(applied: Run) -> None:
+    """It posts to Home Assistant at its home address, which no cloud node has a route to (rfc-008 §4.1).
 
-    Alertmanager posts to Home Assistant at its home address, which no cloud
-    node has a route to (rfc-008 §4.1). vmagent reads etcd's metrics listener
-    on every control plane, which the node firewall admits from KubeSpan
-    alone; from a control plane, its call to its own node's listener would
-    arrive from a pod address, which no opening admits
-    (`components.talos.HOST_OPENINGS`). Held at home, each tolerates its
-    node's unreachable taint with no time limit, so an outage of the uplink
-    evicts neither.
+    So the home site holds it, at the held priority. Held at home, it
+    tolerates its node's unreachable taint with no time limit, so an outage
+    of the uplink does not evict it.
     """
-    spec = _values(applied)[workload]['spec']
+    spec = _values(applied)['alertmanager']['spec']
 
     assert schedulable(spec) == {conventions.HOMELAB_NODE}
     assert spec['priorityClassName'] == conventions.HELD_PRIORITY_CLASS
     (toleration,) = [it for it in spec['tolerations'] if it['key'] == 'node.kubernetes.io/unreachable']
     assert (toleration['operator'], toleration['effect']) == ('Exists', 'NoExecute')
     assert 'tolerationSeconds' not in toleration
+
+
+def test_vmagent_is_a_free_pod_the_scheduler_may_place_on_any_node(applied: Run) -> None:
+    """Every target it scrapes answers it from any node, a control plane's own etcd listener among them.
+
+    A control plane's firewall admits the pod ranges to that listener
+    (`components.talos.CONTROL_PLANE_OPENINGS`), so no node fact holds vmagent
+    anywhere: it states no constraint, and so neither the held priority nor a
+    toleration a held pod takes.
+    """
+    spec = _values(applied)['vmagent']['spec']
+
+    assert schedulable(spec) == set(NODES)
+    assert 'priorityClassName' not in spec
+    assert 'tolerations' not in spec
 
 
 def test_each_store_writes_in_the_class_that_caps_what_it_writes_to_the_disk_etcd_shares(applied: Run) -> None:
@@ -606,6 +613,76 @@ def test_etcd_is_scraped_on_every_control_plane_and_nowhere_else(applied: Run) -
     assert renamed is not None
     assert renamed[1] is not None
     assert jobs == {renamed[1]['job']}, "the job follows the object's name"
+
+
+def _pod_scraped(
+    endpoint: Mapping[str, Any], scrape_name: str, node: str, sample: Mapping[str, str]
+) -> tuple[dict[str, str], dict[str, str] | None] | None:
+    """What a pod scrape's endpoint makes of a pod on `node` serving that port: its target, and one sample's series.
+
+    The operator keeps the target whose container port is the endpoint's,
+    labels it with its namespace, container and pod, gives it a `job` from
+    the object's namespace and name and an `endpoint` from the port, and runs
+    the endpoint's own relabeling after all of them (`podscrape.go` L87-94,
+    L119-133, L144-177 at operator v0.74.0). A label of the target's that
+    starts with `__` is gone once relabeling ends.
+    """
+    target = {
+        '__address__': f'{node}.internal:9962',
+        '__meta_kubernetes_namespace': conventions.CILIUM_NAMESPACE,
+        '__meta_kubernetes_pod_name': f'cilium-{node}',
+        '__meta_kubernetes_pod_container_name': 'cilium-agent',
+        '__meta_kubernetes_pod_container_port_name': endpoint['port'],
+        '__meta_kubernetes_pod_node_name': node,
+    }
+    operator: list[Mapping[str, Any]] = [
+        {'action': 'keep', 'sourceLabels': ['__meta_kubernetes_pod_container_port_name'], 'regex': endpoint['port']},
+        {'sourceLabels': ['__meta_kubernetes_namespace'], 'targetLabel': 'namespace'},
+        {'sourceLabels': ['__meta_kubernetes_pod_container_name'], 'targetLabel': 'container'},
+        {'sourceLabels': ['__meta_kubernetes_pod_name'], 'targetLabel': 'pod'},
+        {'targetLabel': 'job', 'replacement': f'{conventions.MONITORING_NAMESPACE}/{scrape_name}'},
+        {'targetLabel': 'endpoint', 'replacement': endpoint['port']},
+    ]
+    relabeled = _relabel(target, [*operator, *endpoint.get('relabelConfigs', [])])
+    if relabeled is None:
+        return None
+    relabeled.setdefault('instance', relabeled['__address__'])
+    kept = {name: value for name, value in relabeled.items() if not name.startswith('__')}
+    return relabeled, _relabel({**sample, **kept}, endpoint.get('metricRelabelConfigs', []))
+
+
+def test_the_cilium_agents_series_reach_the_readings_that_select_them_labeled_with_their_node(
+    applied: Run,
+) -> None:
+    """Each reading of the agent's series selects them by a job and groups them by node, whatever name the object is given.
+
+    The probe counts and the agent's `up` are written with its target's
+    labels, so the target is what carries both.
+    """
+    (scrape,) = [
+        it
+        for it in applied.monitor.of_type(VM_POD_SCRAPE)
+        if it.inputs['spec']['selector']['matchLabels'] == {'k8s-app': 'cilium'}
+    ]
+    read = {
+        job
+        for reading in readings.READINGS
+        for selector in selectors(reading.expr)
+        if selector.metric.startswith('cilium_')
+        for job in selector.jobs or {''}
+    }
+    sample = {'__name__': readings.NODE_HEALTH, 'type': 'node', 'status': 'unreachable'}
+
+    assert read
+    for name in (scrape.name, 'another-name'):
+        written: list[dict[str, str]] = []
+        for endpoint in scrape.inputs['spec']['podMetricsEndpoints']:
+            scraped = _pod_scraped(endpoint, name, 'cp2', sample)
+            if scraped is not None and scraped[1] is not None:
+                written.append(scraped[1])
+        selected = [series for series in written if series['job'] in read]
+        assert {series['job'] for series in selected} == read, name
+        assert {series['node'] for series in selected} == {'cp2'}, name
 
 
 @pytest.mark.parametrize(

@@ -288,20 +288,19 @@ BGP_PORT = 179
 #: node is exposed to whether or not it is written down.
 ANYWHERE: tuple[str, ...] = ('0.0.0.0/0', '::/0')
 
+#: The cluster's pod ranges, both families. A pod's call to its own node's
+#: host network arrives on the pod's device from the pod's address.
+POD_RANGES: tuple[str, ...] = (str(conventions.POD_CIDR_V4), str(conventions.POD_CIDR_V6))
+
 #: The cluster's own ranges: the cloud nodes' network, the homelab worker's
 #: VLAN, and both pod ranges. A pod's call to a node's host network carries a
 #: pod-range source; a node's call over a path that is not tunnelled carries a
 #: node-network source. Traffic that rides KubeSpan needs none of them, since
 #: it enters on the `kubespan` interface, which the ingress chain accepts ahead
 #: of every rule.
-CLUSTER_RANGES: tuple[str, ...] = tuple(
-    str(network)
-    for network in (
-        conventions.VCN_CIDR,
-        conventions.CLUSTER_VLAN.v4,
-        conventions.POD_CIDR_V4,
-        conventions.POD_CIDR_V6,
-    )
+CLUSTER_RANGES: tuple[str, ...] = (
+    *(str(network) for network in (conventions.VCN_CIDR, conventions.CLUSTER_VLAN.v4)),
+    *POD_RANGES,
 )
 
 #: The cluster's service subnets, IPv4 first: the cluster is dual-stack with
@@ -375,24 +374,9 @@ POD_REACHED_PORTS: tuple[int, ...] = (9962, 9963, 9964, 9965, 9100)
 #: node arrives on the pod's device from the pod's address, while one to
 #: another node is masqueraded to a node address and enters on `kubespan`.
 #: The DHCPv6 client is open to the link alone. etcd and trustd have no opening: their
-#: peers reach them over KubeSpan, which enters on `kubespan`. Nor has etcd's
-#: metrics listener (`conventions.ETCD_METRICS_PORT`). Its readers arrive over KubeSpan or
-#: on `lo`, both accepted ahead of every rule: the API server's node proxy
-#: calls another control plane over KubeSpan and its own node on `lo`, and
-#: vmagent, which runs on the worker alone (`components.monitoring`, its
-#: placement held by a test), calls each control plane over KubeSpan,
-#: masqueraded to the worker's address. Nothing outside the cluster reaches the
-#: port. Inside it, more than the readers do: every KubeSpan peer, the
-#: homelab worker's host among them; once Cilium runs, a pod on another node,
-#: masqueraded to its node's address over KubeSpan; and a pod calling a host
-#: address inside the pod range on its own node, which the chain's pod-range
-#: accept admits on any port. That reach is accepted under threat-model.md §4,
-#: failing its second clause: the listener serves counters, histograms and
-#: health, never a key or a value, the class of host metrics rfc-007 §4.3
-#: already lets a pod read. A scraper on a control plane, reading its own
-#: node's listener from a pod address, would need an opening from the
-#: cluster's ranges; keeping vmagent off the control planes is what keeps the
-#: port without one.
+#: peers reach them over KubeSpan, which enters on `kubespan`. etcd's metrics
+#: listener (`conventions.ETCD_METRICS_PORT`) is a control plane's alone, so its
+#: opening is among `CONTROL_PLANE_OPENINGS` rather than here.
 #:
 #: A raw port's (`conventions.routes.Port`) is absent: Cilium's BPF datapath
 #: answers its LoadBalancer Service at tc ingress, ahead of nftables, so it
@@ -409,6 +393,27 @@ HOST_OPENINGS: tuple[Opening, ...] = (
 #: The ports `HOST_OPENINGS` opens, whatever the protocol or the sources.
 HOST_PORTS: tuple[int, ...] = tuple(opening.port for opening in HOST_OPENINGS)
 
+#: What a control plane opens beside `HOST_OPENINGS`: etcd's metrics listener
+#: (`conventions.ETCD_METRICS_PORT`), to the pod ranges alone. Its readers are
+#: the API server's node proxy and vmagent's node scrape
+#: (`components.monitoring.etcd_scrape_spec`), each dialing the node's internal
+#: address. A call from another node arrives over KubeSpan, the proxy's or a
+#: pod's masqueraded to its node's address, and a call from the node itself on
+#: `lo`, both accepted ahead of every rule. What the opening admits is a pod's
+#: call to its own node: vmagent is a free pod, which the scheduler may place
+#: on a control plane, and there its scrape of its own node's listener arrives
+#: on the pod's device from its pod address. No other source is named: nothing
+#: outside the cluster reaches the port, and the node networks reach it over
+#: KubeSpan. Inside the cluster more than the readers reach it: every KubeSpan
+#: peer, the homelab worker's host among them, and every pod: on another node
+#: masqueraded over KubeSpan, and on its own through this opening or by calling
+#: a host address inside the pod range, which the chain's pod-range accept
+#: admits on any port. That reach is accepted under threat-model.md §4,
+#: failing its second clause: the listener serves counters, histograms and
+#: health, never a key or a value, the class of host metrics rfc-007 §4.3
+#: already lets a pod read. A worker runs no etcd, and opens none of it.
+CONTROL_PLANE_OPENINGS: tuple[Opening, ...] = (Opening(conventions.ETCD_METRICS_PORT, 'tcp', POD_RANGES),)
+
 
 def etcd_metrics_url() -> str:
     """Where a control plane's etcd serves its metrics: every address of the node, both families.
@@ -418,10 +423,10 @@ def etcd_metrics_url() -> str:
     IPv6 address alike. The host is unspecified rather than a node address
     because the patch is shared by every control plane, and each of its
     readers (`conventions.ETCD_METRICS_PORT`) — the API server's node proxy, and
-    vmagent's node scrape from the worker over KubeSpan — dials the node's
-    internal address, where a loopback listener would not answer. The
-    firewall admits nothing to the port, so nothing outside the cluster
-    reaches it.
+    vmagent's node scrape — dials the node's internal address, where a
+    loopback listener would not answer. The firewall admits the pod ranges
+    alone to the port (`CONTROL_PLANE_OPENINGS`), so nothing outside the
+    cluster reaches it.
     """
     return f'http://{IPv4Address(0)}:{conventions.ETCD_METRICS_PORT}'
 
@@ -1110,7 +1115,10 @@ def patches(
         documents += secondary_address_documents(secondary_address, role=role)
     if volume is not None:
         documents.append(node_volume_document(volume))
-    extra = [Opening(BGP_PORT, 'tcp', (bgp_peer,))] if bgp_peer is not None else []
+    extra = [
+        *(CONTROL_PLANE_OPENINGS if role == 'controlplane' else ()),
+        *((Opening(BGP_PORT, 'tcp', (bgp_peer,)),) if bgp_peer is not None else ()),
+    ]
     documents += ingress_firewall_documents(extra)
     return [json.dumps(document) for document in documents]
 

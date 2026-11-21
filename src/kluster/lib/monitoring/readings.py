@@ -32,8 +32,10 @@ otherwise add to this cluster's.
 
 **A reading of a node groups by `node`**, which every source here labels its
 series with: the operator's node scrapes, the kubelet's and etcd's, and the
-node exporter's scrape (`components.monitoring.NODE_EXPORTER_ENDPOINT`). An
-etcd member is its node. A reading is recorded for every node its series come from; a budget
+node exporter's and the Cilium agent's scrapes
+(`components.monitoring.NODE_EXPORTER_ENDPOINT`, `CILIUM_AGENT_ENDPOINT`). An
+etcd member is its node, and a Cilium agent the node it runs on. A reading is
+recorded for every node its series come from; a budget
 binds the control planes alone (`CONTROL_PLANE`), and the dashboard shows
 them.
 
@@ -57,17 +59,17 @@ the difference. The same sources bound the boot volume's writes other than
 etcd's from above (nodes.md §1.2 rule 2), which is the side a budget can be
 held on: every WAL fsync and backend commit is at least one write of etcd's.
 
-**KubeSpan's paths are read through what crosses them**, since nothing
-exports a peer's state: between control planes, each etcd member's
-connected peers; between the worker and each control plane, vmagent's
-scrapes of etcd and the node exporter there. A member or a target that is
-down reads as its path down, which is the side a gate errs on.
+**KubeSpan's paths are read through what crosses them**, since KubeSpan
+exports no peer's state as a series: between control planes, each etcd member's connected peers;
+from each node to every other, its Cilium agent's health probes of every
+node's host. A member that is down, or an agent whose scrape fails or that
+publishes no count, reads as its paths down, which is the side a gate errs on.
 
 **Two readings' inputs the history does not keep** (`inputs_kept`): the API
 server's latency, whose duration histogram is the largest family the store
-holds, and the worker's scrapes of the control planes, which read `up`. The
-history keeps their recorded results alone, so a change to either's
-definition applies from the change on.
+holds, and each node's paths to every other, which read the Cilium agent's
+probe counts and its `up`. The history keeps their recorded results alone, so
+a change to either's definition applies from the change on.
 """
 
 from __future__ import annotations
@@ -84,6 +86,7 @@ from kluster.conventions.providers import OCI_BLOCKSTORE_METRICS
 from kluster.conventions.schedule import OCI_METRICS_PULL
 from kluster.lib.monitoring.jobs import (
     APISERVER_JOB,
+    CILIUM_AGENT_JOB,
     ETCD_JOB,
     KUBE_STATE_METRICS_JOB,
     KUBELET_JOB,
@@ -100,6 +103,7 @@ __all__ = (
     'ENVOY_PODS',
     'ETHERNET',
     'KUBESPAN',
+    'NODE_HEALTH',
     'OCI_WINDOW',
     'PLATFORM_NAMESPACES',
     'POD_CGROUP',
@@ -270,7 +274,7 @@ def _changes(metric: str, window: dt.timedelta, *, job: str) -> str:
     `increase` reads a counter's first sample in a window that holds no
     sample before it as growth from 0, so a counter that sits above 0 and is
     read again after a scrape gap would count its whole value: every member's
-    leader changes after the worker's vmagent comes back, say. Holding the
+    leader changes after vmagent comes back, say. Holding the
     window to a counter read at its start drops that window rather than
     counting it. What that gives up is a change inside a gap longer than the
     window: every window after such a gap starts either inside it, which is
@@ -675,6 +679,10 @@ ETHERNET = 'en.+|eth[0-9]+'
 #: KubeSpan's WireGuard link, which Talos names `kubespan`.
 KUBESPAN = 'kubespan'
 
+#: The Cilium agent's count of health-probe paths by kind and by state, which
+#: `kubespan_paths_reachable` reads.
+NODE_HEALTH = 'cilium_node_health_connectivity_status'
+
 
 def _both_ways(kind: str, link: str, by: str, function: str) -> str:
     """Received and transmitted together, over the links `link` matches, per `by`."""
@@ -688,6 +696,8 @@ def _both_ways(kind: str, link: str, by: str, function: str) -> str:
 
 def _network() -> tuple[Reading, ...]:
     link = ('node', 'device')
+    # The lowest `up` of each node's Cilium agent over the window.
+    scraped = f'min by (node) (min_over_time({series("up", job=CILIUM_AGENT_JOB)}[{duration(_FIVE)}]))'
     return (
         Reading(
             # The uplink alone: KubeSpan's traffic crosses it encrypted,
@@ -723,7 +733,7 @@ def _network() -> tuple[Reading, ...]:
             # `rafthttp` at etcd v3.6.12), so a peer counts only while its own
             # listener reports its ID: a replaced member drops out with its
             # instance, and a member that is down drops out five minutes
-            # later, when `control_plane_scrapes_up` reads its path down.
+            # later, once its own `etcd_server_id` leaves the window.
             name='etcd_active_peers',
             window=_FIVE,
             expr=(
@@ -739,23 +749,48 @@ def _network() -> tuple[Reading, ...]:
             note='Stands for KubeSpan between control planes: a member down reads as its path down.',
         ),
         Reading(
-            # vmagent on the worker scrapes etcd and the node exporter on each
-            # control plane over KubeSpan, so the lowest `up` of the two is the
-            # worker's path to the node. The history keeps no `up`, so this
-            # reading's record is all it keeps of it.
-            name='control_plane_scrapes_up',
+            # Each node's Cilium agent probes the host of every node of the
+            # cluster, its own among them, at the node's address of each family
+            # (`healthNode.PrimaryIP` and `SecondaryIPs`,
+            # `pkg/health/server/node.go` L38-63 at Cilium v1.20.4); a node with
+            # no health endpoint is left out of the count
+            # (`pkg/health/server/server.go` L176-178). A path is unreachable where its ICMP or its HTTP
+            # probe failed for a stated reason, and unknown where neither has
+            # a result yet, a node joining rather than a path lost
+            # (`GetConnectivityStatusType` and `GetPathConnectivityStatusType`,
+            # `pkg/health/client/client.go` L127-167). The agent publishes the
+            # count of host paths in each state under `type="node"`, summed
+            # over every node it has a result for (`collectNodeConnectivityMetrics`,
+            # `pkg/health/server/server.go` L168-278). Every path to another
+            # node rides KubeSpan, which carries every packet addressed to a
+            # node's address in both families (`components.talos.kubespan_document`),
+            # so a node that keeps every path reachable has KubeSpan to every
+            # other. The count names no peer: a cut between the worker and the
+            # control planes reads on both sides of it. An agent its own scrape
+            # missed reads as its paths down, since its count is then absent,
+            # not zero; so does one that answers its scrape and publishes no
+            # count, as an agent does until its first probe report
+            # (`server.go` L169-171). The history keeps neither series, so
+            # this reading's record is all it keeps of it.
+            name='kubespan_paths_reachable',
             window=_FIVE,
             expr=(
-                f'min by (node) (min_over_time('
-                f'{series("up", f'job=~"{ETCD_JOB}|{NODE_EXPORTER_JOB}"', CONTROL_PLANE, job=None)}'
-                f'[{duration(_FIVE)}]))'
+                f'({scraped} == 0)'
+                f' or (max by (node) (max_over_time('
+                f'{series(NODE_HEALTH, 'type="node"', 'status="unreachable"', job=CILIUM_AGENT_JOB)}'
+                f'[{duration(_FIVE)}])) == bool 0)'
+                f' or ({scraped} * 0)'
             ),
             unit='short',
-            title="The worker's scrapes of each control plane",
+            title="Every node's host reachable from the node",
             resource=Resource.NETWORK,
             per=('node',),
             inputs_kept=False,
-            note='Stands for KubeSpan between the worker and the control plane: a target down reads as its path down.',
+            note=(
+                'Stands for KubeSpan from the node to every other: 0 where a path to any node missed a probe of its '
+                'Cilium agent, or the agent went unscraped or published no count. It names no peer, so a cut reads '
+                'on both of its sides.'
+            ),
         ),
         Reading(
             name='node_link_drops',

@@ -11,7 +11,7 @@ import re
 import string
 import tomllib
 from collections.abc import Sequence
-from ipaddress import IPv4Interface, IPv4Network, IPv6Network, ip_address, ip_network
+from ipaddress import IPv4Address, IPv4Interface, IPv4Network, IPv6Address, IPv6Network, ip_address, ip_network
 from typing import Any, cast
 from urllib.parse import urlsplit
 
@@ -540,9 +540,9 @@ def test_a_control_plane_serves_etcds_metrics_where_the_node_proxy_reaches_them(
     """Every control plane's etcd answers plain HTTP on every address of the node.
 
     Its readers are the API server's node proxy (declarative/physical.md
-    §6) and vmagent's node scrape from the worker over KubeSpan
-    (`components.monitoring`). Both speak the `http:` scheme and dial the
-    node's internal address, so a loopback listener would answer neither. Either
+    §6) and vmagent's node scrape (`components.monitoring`). Both speak the
+    `http:` scheme and dial the node's internal address, so a loopback
+    listener would answer neither. Either
     family's unspecified address does: etcd listens on `tcp`, where an
     unspecified host is one dual-stack socket. A worker runs no etcd and
     carries none of it (the case below).
@@ -599,7 +599,7 @@ def test_a_worker_carries_no_control_plane_configuration() -> None:
 
 def test_ingress_enumerates_host_ports_only() -> None:
     opened = {port for port, _, _ in openings()}
-    assert opened == {opening.port for opening in talos.HOST_OPENINGS}
+    assert opened == {opening.port for opening in (*talos.HOST_OPENINGS, *talos.CONTROL_PLANE_OPENINGS)}
     # Among them the two the balancer forwards, from the same structure: an
     # opening the firewall lost would leave a listener forwarding to a port
     # the nodes drop.
@@ -744,6 +744,55 @@ def test_every_port_a_pod_calls_answers_whom_the_kubelet_answers(shape: str) -> 
         assert [(protocol, sources) for port, protocol, sources in opened if port == reached] == [('tcp', kubelet)], (
             reached
         )
+
+
+def admitted(port: int, protocol: str, address: IPv4Address | IPv6Address, **kwargs: Any) -> bool:
+    """Whether a node's rendered firewall admits a connection from `address` to `port`: some opening's source holds it."""
+    return any(
+        address in ip_network(source)
+        for opened, opened_protocol, sources in openings(**kwargs)
+        if (opened, opened_protocol) == (port, protocol)
+        for source in sources
+        if ip_network(source).version == address.version
+    )
+
+
+#: A pod's address in each family, from the pod ranges' own declaration.
+POD_ADDRESSES = (conventions.POD_CIDR_V4[10], conventions.POD_CIDR_V6[10])
+
+#: Addresses of the cluster outside both pod ranges: a cloud node's, the
+#: homelab worker's, and an internet host's of each family.
+NOT_POD_ADDRESSES = (
+    conventions.VCN_CIDR[10],
+    conventions.CLUSTER_VLAN.v4[10],
+    ip_address('203.0.113.7'),
+    ip_address('2001:db8::7'),
+)
+
+
+@pytest.mark.parametrize('shape', [shape for shape, arguments in SHAPES.items() if arguments.get('role') != 'worker'])
+def test_a_pod_on_a_control_plane_reaches_its_nodes_etcd_metrics_and_nothing_else_does_through_the_rules(
+    shape: str,
+) -> None:
+    """A scraper running on a control plane calls its own node's listener from its pod address (physical.md §2).
+
+    That call arrives on the pod's device, not on `kubespan`, so only an
+    opening admits it. The opening names the pod ranges and no other source:
+    a node's own network reaches the listener over KubeSpan, which the chain
+    accepts ahead of every rule, and nothing outside the cluster reaches it.
+    """
+    port = conventions.ETCD_METRICS_PORT
+
+    for address in POD_ADDRESSES:
+        assert admitted(port, 'tcp', address, **SHAPES[shape]), address
+    for address in NOT_POD_ADDRESSES:
+        assert not admitted(port, 'tcp', address, **SHAPES[shape]), address
+
+
+def test_a_worker_runs_no_etcd_and_opens_nothing_to_its_metrics_port() -> None:
+    port = conventions.ETCD_METRICS_PORT
+
+    assert not [opened for opened, _, _ in openings(**SHAPES['homelab-worker']) if opened == port]
 
 
 @pytest.mark.parametrize('shape', list(SHAPES))

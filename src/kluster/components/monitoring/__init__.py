@@ -5,18 +5,18 @@ Item 6 of declarative/cluster-infra.md §1, with metrics-server from item 8
 database (vmsingle), the scraper (vmagent), the rule evaluator (vmalert),
 alertmanager, Grafana, kube-state-metrics and the node exporter.
 
-**The scheduler places it** (declarative/workloads.md §1), within two
-constraints, each the home site for a fact about nodes the scheduler cannot
-see (`kluster.lib.k8s.Constraints`). Alertmanager posts to Home Assistant at
-Home Assistant's own address, which no cloud node has a route to (rfc-008
-§4.1, operations.md §4; `ALERTMANAGER_CONSTRAINTS`). vmagent scrapes etcd's
-metrics listener on every control plane, which the node firewall admits over
-KubeSpan alone, so from a control plane it could not read its own node's
-(`VMAGENT_CONSTRAINTS`). Every other pod is free (`UNCONSTRAINED`) but the
-stores, which their claims keep to their nodes (`stores`), and the node
-exporter, which runs on every node it reports on, at the system's class for a
-per-node agent (`NODE_AGENT_PRIORITY_CLASS`), so no free pod placed on its
-node first can leave it pending. Grafana is reached by a
+**The scheduler places it** (declarative/workloads.md §1), within one
+constraint, the home site for a fact about nodes the scheduler cannot see
+(`kluster.lib.k8s.Constraints`): alertmanager posts to Home Assistant at Home
+Assistant's own address, which no cloud node has a route to (rfc-008 §4.1,
+operations.md §4; `ALERTMANAGER_CONSTRAINTS`). Every other pod is free
+(`UNCONSTRAINED`) but the stores, which their claims keep to their nodes
+(`stores`), and the node exporter, which runs on every node it reports on, at
+the system's class for a per-node agent (`NODE_AGENT_PRIORITY_CLASS`), so no
+free pod placed on its node first can leave it pending. vmagent is free
+because every target it scrapes answers it from any node, a control plane's
+own etcd listener included (`components.talos.CONTROL_PLANE_OPENINGS`).
+Grafana is reached by a
 port-forward until its name moves (rfc-007 §7.4).
 
 **Two stores keep what is scraped** (`stores`): the chart's vmsingle, the
@@ -81,8 +81,8 @@ accepts, and the store ignores the whole row. The API server's scrape drops
 the buckets of the histogram families no reading needs
 (`APISERVER_DROPPED_HISTOGRAMS`). etcd is scraped on its metrics listener on
 each control plane by a node scrape of the component's own
-(`etcd_scrape_spec`), from the worker, over KubeSpan. A row a store
-ignores for any reason raises `MetricsDropped` (`rules`).
+(`etcd_scrape_spec`). A row a store ignores for any reason raises
+`MetricsDropped` (`rules`).
 
 **The control planes are read by `kluster.lib.monitoring.readings`**, each
 reading defined once: its recording rule and the SLO alerts over it are rule
@@ -90,9 +90,9 @@ groups of their own (`rules.READING_GROUPS`), and the `Control planes`
 dashboard draws every reading from the history store beside any earlier
 period (`dashboard`), a `ConfigMap` the stack's dashboard sidecar hands to
 Grafana. The node
-exporter's scrape labels each series with its node (`NODE_EXPORTER_ENDPOINT`),
-as the operator's node scrapes do the kubelet's and etcd's, since a reading of
-a node groups by it.
+exporter's scrape and the Cilium agent's label each series with its node
+(`NODE_EXPORTER_ENDPOINT`, `CILIUM_AGENT_ENDPOINT`), as the operator's node
+scrapes do the kubelet's and etcd's, since a reading of a node groups by it.
 
 **Each store's mutating endpoints take keys** (`AUTH_KEYS`): deleting series,
 taking snapshots and forcing merges are otherwise open to any pod that
@@ -198,7 +198,7 @@ from kluster.lib.k8s import (
     sealed_value,
     writer_annotations,
 )
-from kluster.lib.monitoring.jobs import ETCD_JOB, KUBE_STATE_METRICS_JOB, KUBELET_JOB, SCRAPE_INTERVAL
+from kluster.lib.monitoring.jobs import CILIUM_AGENT_JOB, ETCD_JOB, KUBE_STATE_METRICS_JOB, KUBELET_JOB, SCRAPE_INTERVAL
 from kluster.lib.versions import ChartPin, ImagePin
 from putils import Component
 
@@ -206,6 +206,7 @@ __all__ = (
     'APISERVER_DROPPED_HISTOGRAMS',
     'AUTH_KEYS',
     'AUTH_KEYS_SECRET',
+    'CILIUM_AGENT_ENDPOINT',
     'CILIUM_SCRAPES',
     'DATASOURCES_DIGEST_ENV',
     'ETCD_DROPPED',
@@ -423,18 +424,6 @@ ALERTMANAGER_CONSTRAINTS = at_home(
     'posts to Home Assistant at its home address (`conventions.HOME_ASSISTANT`), which no cloud node reaches',
 )
 
-#: vmagent's constraints: the home site, since it scrapes etcd's metrics
-#: listener on every control plane (`etcd_scrape_spec`), which the node
-#: firewall admits over KubeSpan and on loopback alone, so a scraper on a
-#: control plane could not read its own node's
-#: (`components.talos.HOST_OPENINGS`). The fact is about a node's role, not
-#: being a control plane, and it coincides with the home site only while
-#: every control plane is in the cloud and every node at home is a worker.
-VMAGENT_CONSTRAINTS = at_home(
-    "scrapes each control plane's etcd metrics listener, which a pod on a control plane cannot reach on its own "
-    'node (`components.talos.HOST_OPENINGS`)',
-)
-
 
 #: A store's constraints: no site, and its claim's hold, since a `local-path`
 #: claim keeps its store to the node it is bound on, so the store runs at the
@@ -579,7 +568,7 @@ def _stack_values(release: str, chart: ChartPin, restore: Sequence[Mapping[str, 
             },
         },
         'vmagent': {
-            'spec': {**VMAGENT_CONSTRAINTS.pod_fields_json(), 'scrapeInterval': backup.duration(SCRAPE_INTERVAL)},
+            'spec': {**UNCONSTRAINED.pod_fields_json(), 'scrapeInterval': backup.duration(SCRAPE_INTERVAL)},
             'additionalRemoteWrites': [stores.history_remote_write(history)],
         },
         # The recording rules reach the stores through vmagent, so the history
@@ -661,23 +650,41 @@ def metrics_server_values() -> dict[str, object]:
 
 @dataclass(frozen=True)
 class CiliumScrape:
-    """One of Cilium's workloads, as vmagent finds its pods, and the container ports its metrics are served on."""
+    """One of Cilium's workloads, as vmagent finds its pods, and the endpoints its metrics are served on."""
 
     name: str
     selector: Mapping[str, str]
-    ports: tuple[str, ...]
+    endpoints: tuple[Mapping[str, Any], ...]
 
+
+#: The Cilium agent's own metrics endpoint, with the name of the node the agent
+#: runs on written onto each series as `node`, and a stated `job`
+#: (`CILIUM_AGENT_JOB`). A reading of a node groups by `node`, and the
+#: operator labels a pod's target with its pod and none of its node; and the
+#: operator's default job is the scrape object's namespace and name
+#: (`podscrape.go` L144-153 at operator v0.74.0), which is autonamed. The
+#: endpoint's own relabeling runs after both (L175-177), so it overrides the
+#: job. The reading of each node's paths to the others
+#: (`kluster.lib.monitoring.readings`) reads the agent's health probes here.
+CILIUM_AGENT_ENDPOINT: Mapping[str, Any] = {
+    'port': 'prometheus',
+    'relabelConfigs': [
+        {'sourceLabels': ['__meta_kubernetes_pod_node_name'], 'targetLabel': 'node'},
+        {'targetLabel': 'job', 'replacement': CILIUM_AGENT_JOB},
+    ],
+}
 
 #: Cilium's four metrics endpoints, in the pod labels and port names of the
 #: pinned chart (Cilium v1.20.4, the agent's and Envoy's DaemonSets and the
 #: operator's Deployment, with the metrics the cilium component enables): the
-#: agent's own and Hubble's on the agent, Envoy's, and the operator's. Each is
-#: on the host network, at a port the node firewall opens to the cluster's own
-#: ranges (`components.talos.POD_REACHED_PORTS`).
+#: agent's own (`CILIUM_AGENT_ENDPOINT`) and Hubble's on the agent, Envoy's,
+#: and the operator's. Each is on the host network, at a port the node
+#: firewall opens to the cluster's own ranges
+#: (`components.talos.POD_REACHED_PORTS`).
 CILIUM_SCRAPES: tuple[CiliumScrape, ...] = (
-    CiliumScrape('cilium-agent', {'k8s-app': 'cilium'}, ('prometheus', 'hubble-metrics')),
-    CiliumScrape('cilium-envoy', {'k8s-app': 'cilium-envoy'}, ('envoy-metrics',)),
-    CiliumScrape('cilium-operator', {'io.cilium/app': 'operator'}, ('prometheus',)),
+    CiliumScrape('cilium-agent', {'k8s-app': 'cilium'}, (CILIUM_AGENT_ENDPOINT, {'port': 'hubble-metrics'})),
+    CiliumScrape('cilium-envoy', {'k8s-app': 'cilium-envoy'}, ({'port': 'envoy-metrics'},)),
+    CiliumScrape('cilium-operator', {'io.cilium/app': 'operator'}, ({'port': 'prometheus'},)),
 )
 
 
@@ -874,7 +881,7 @@ class Monitoring(Component, pulumi_type='kluster:monitoring:Monitoring'):
                 spec={
                     'selector': {'matchLabels': dict(scrape.selector)},
                     'namespaceSelector': {'matchNames': [conventions.CILIUM_NAMESPACE]},
-                    'podMetricsEndpoints': [{'port': port} for port in scrape.ports],
+                    'podMetricsEndpoints': [dict(endpoint) for endpoint in scrape.endpoints],
                 },
                 opts=after_the_chart,
             )
@@ -1066,9 +1073,10 @@ def etcd_scrape_spec() -> dict[str, object]:
     by its presence: Talos gives it an empty value, and the operator turns a
     `matchLabels` entry into a relabeling that keeps a target whose label
     matches the value, which an absent label, read as empty, does too.
-    vmagent is held at home (`VMAGENT_CONSTRAINTS`), so its request
-    reaches a control plane over KubeSpan, which the node firewall accepts
-    ahead of every rule: the port takes no opening (`components.talos.HOST_OPENINGS`).
+    vmagent is a free pod, so its request reaches another node's listener
+    over KubeSpan, which the node firewall accepts ahead of every rule, and
+    its own node's from its pod address, which the control plane's opening
+    of the port admits (`components.talos.CONTROL_PLANE_OPENINGS`).
     """
     return {
         'selector': {'matchExpressions': [{'key': CONTROL_PLANE_LABEL, 'operator': 'Exists'}]},

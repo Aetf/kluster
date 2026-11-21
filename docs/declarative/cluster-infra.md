@@ -134,13 +134,13 @@ classes its objects fall into (§1.2):
     prometheus-operator stack at ~1/5 the RAM (nodes.md §4.4), from the
     VictoriaMetrics stack chart, with metrics-server beside it, both in
     the one monitoring component (`components/monitoring`). **The
-    scheduler places it** within two constraints, each the home site
-    for a fact about nodes (declarative/workloads.md §1): alertmanager
-    posts to Home Assistant at Home Assistant's own address, which no
-    cloud node reaches ([rfc-008](../rfc/rfc-008-workload-migration.md)
-    §4.1), and vmagent scrapes etcd on every control plane, which a pod
-    on a control plane cannot do on its own node (below). Every other
-    pod is free, and the node exporter runs on every node, at
+    scheduler places it** within one constraint, the home site for a
+    fact about nodes (declarative/workloads.md §1): alertmanager posts
+    to Home Assistant at Home Assistant's own address, which no cloud
+    node reaches ([rfc-008](../rfc/rfc-008-workload-migration.md)
+    §4.1). Every other pod is free, vmagent among them, since a control
+    plane opens etcd's metrics listener to the pod ranges (below), and
+    the node exporter runs on every node, at
     `system-node-critical`, so no free pod placed first leaves it
     pending. **Its memory is budgeted at 0.7 GiB** (nodes.md §4.4),
     planned at the home site, which rfc-008 §6.1 reserves as a request.
@@ -286,8 +286,9 @@ classes its objects fall into (§1.2):
     same query as of an earlier time the dashboard's variable sets. The
     two readings whose inputs the history does not keep are drawn from
     their records: the API server's request latency, whose histogram is
-    the largest family the store holds, and the worker's scrapes of the
-    control planes, which read `up`. The load classes are nodes.md
+    the largest family the store holds, and each node's paths to every
+    other, which read the Cilium agent's health probes of every node's
+    host and the agent's `up`. The load classes are nodes.md
     §1.1's, read where its table reads them, and carry no budget: the
     control-plane slice is etcd's own series and the API server's, the
     controller manager's and the scheduler's pods; the pods class is
@@ -300,10 +301,11 @@ classes its objects fall into (§1.2):
     sources bound the boot volume's writes other than etcd's from above,
     which nodes.md §1.2 rule 2 budgets. KubeSpan exports no peer's
     state, so its paths are read through what crosses them: each etcd
-    member's connected peers between control planes, and the worker's
-    scrapes of each control plane. The node exporter's series carry
-    `node` from this change's apply on, so the per-node readings start
-    there.
+    member's connected peers between control planes, and from each node
+    to every other, its Cilium agent's health probes of every node's
+    host, which name no peer, so a cut reads on both of its sides. The
+    node exporter's series carry `node` from this change's apply on, so
+    the per-node readings start there.
     **The stack relies on VictoriaMetrics' open-source release
     alone**: the single-node store, vmagent, vmalert, `vmbackup`,
     `vmrestore` and `vmctl`, and the operator and its chart. A need
@@ -338,18 +340,18 @@ classes its objects fall into (§1.2):
     a node carries tens of labels, node-feature-discovery's most of
     them, and vmsingle ignores the whole row of a series past 40
     labels, so a series carrying them all is never stored. The node
-    exporter's scrape labels each series with its node's name too,
-    which the operator gives a pod's target no other way, since a
-    reading of a node groups by it. The API server's scrape drops
+    exporter's scrape and the Cilium agent's label each series with its
+    node's name too, which the operator gives a pod's target no other
+    way, since a reading of a node groups by it. The API server's scrape drops
     the buckets of its largest histogram families, which no reading
     uses, and keeps their `_count` and `_sum`. **etcd is scraped** on
     its metrics listener (`ETCD_METRICS_PORT`) on every control plane,
     by a node scrape the component declares, which drops etcd's
-    gRPC-server and debugging families. vmagent is held at the home
-    site, so its request reaches a control plane over KubeSpan, which
-    the node firewall accepts ahead of every rule, and the port takes no
-    opening; that holds while vmagent never runs on a control plane,
-    which its constraint holds and a test reads beside alertmanager's. **A row the
+    gRPC-server and debugging families. vmagent's request reaches
+    another node's listener over KubeSpan, which the node firewall
+    accepts ahead of every rule, and its own node's from its pod
+    address, which a control plane's firewall admits to that port
+    alone ([physical.md](physical.md) §2). **A row the
     store ignores raises an alert**, `MetricsDropped`
     ([operations.md](../operations.md) §6.1). **Each store's mutating
     endpoints take keys**: deleting series, taking snapshots and
