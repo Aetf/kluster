@@ -543,6 +543,7 @@ def as_the_pod(monitor: Recorder, name: str, reference: str, *, network: str) ->
         '--rm',
         f'--timeout={CONTAINER_TIMEOUT}',
         f'--label={LABEL}',
+        process_sessions.LOG_TO_FILE,
         f'--name={name}',
         f'--network={network}',
         '--read-only',
@@ -587,8 +588,8 @@ def test_the_pinned_server_starts_and_signs_in_through_the_issuer_as_the_census_
 
     with process_sessions.removing(server, stub, timeout=COMMAND_TIMEOUT):
         _ = podman(
-            'create', '--rm', f'--timeout={CONTAINER_TIMEOUT}', f'--label={LABEL}', f'--name={stub}', '--network=none',
-            stub_image,
+            'create', '--rm', f'--timeout={CONTAINER_TIMEOUT}', f'--label={LABEL}', process_sessions.LOG_TO_FILE,
+            f'--name={stub}', '--network=none', stub_image,
         )  # fmt: skip
         _ = podman('cp', '--archive=false', '-', f'{stub}:/', input=archive(issuer_files()))
         _ = podman('start', stub)

@@ -313,11 +313,9 @@ def _bounded(verb: str, *args: str, image: str = IMAGE) -> list[str]:
     anonymous volume, which holds one of the host's podman locks and
     outlives a container `podman rm` removes without `--volumes`.
 
-    The log is a file of the container's own (`k8s-file`), because the
-    readiness waits read it (`_await_log`) and a host whose podman logs to
-    journald drops lines from a burst of containers starting at once: its
-    rate limit suppresses them, and a wait for a line that was dropped
-    ends only at its bound.
+    The log is a file of the container's own, `LOG_TO_FILE`, as for every
+    container a case creates (`process_sessions`): the readiness waits read
+    it (`_await_log`).
     """
     tmpfs = [f'--tmpfs={volume}' for volume in IMAGE_VOLUMES[image]]
     return [
@@ -327,8 +325,7 @@ def _bounded(verb: str, *args: str, image: str = IMAGE) -> list[str]:
         str(CONTAINER_TIMEOUT),
         '--label',
         LABEL,
-        '--log-driver',
-        'k8s-file',
+        process_sessions.LOG_TO_FILE,
         *tmpfs,
         *args,
     ]

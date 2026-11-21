@@ -677,6 +677,7 @@ def as_the_pod(monitor: Recorder, name: str, reference: str, *, network: str) ->
         '--rm',
         f'--timeout={CONTAINER_TIMEOUT}',
         f'--label={LABEL}',
+        process_sessions.LOG_TO_FILE,
         f'--name={name}',
         f'--network={network}',
         *(['--read-only', '--read-only-tmpfs=false'] if security.get('readOnlyRootFilesystem') else []),
@@ -733,8 +734,8 @@ def running(declared: Recorder) -> Generator[Running]:
 
     with process_sessions.removing(server, stand_in, timeout=COMMAND_TIMEOUT):
         _ = podman(
-            'create', '--rm', f'--timeout={CONTAINER_TIMEOUT}', f'--label={LABEL}', f'--name={stand_in}',
-            database_image, 'bash', '-c', stand_in_database(declared),
+            'create', '--rm', f'--timeout={CONTAINER_TIMEOUT}', f'--label={LABEL}', process_sessions.LOG_TO_FILE,
+            f'--name={stand_in}', database_image, 'bash', '-c', stand_in_database(declared),
         )  # fmt: skip
         _ = podman('start', stand_in)
         # Waits on the stand-in's listener, which opens once it is made.

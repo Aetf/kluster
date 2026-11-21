@@ -435,6 +435,7 @@ def as_the_pod(
                 '--rm',
                 f'--timeout={CONTAINER_TIMEOUT}',
                 f'--label={LABEL}',
+                process_sessions.LOG_TO_FILE,
                 f'--name={name}',
                 '--network=none',
                 '--read-only',

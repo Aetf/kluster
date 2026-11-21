@@ -880,7 +880,7 @@ LABEL = f'kluster-test={Path(__file__).stem}'
 
 #: A `podman create` of `ABSENT_IMAGE` with no name, which creates nothing
 #: wherever it reaches podman.
-CREATE = ['podman', 'create', '--pull=never', '--rm', '--label', LABEL, ABSENT_IMAGE]
+CREATE = ['podman', 'create', '--pull=never', '--rm', '--label', LABEL, process_sessions.LOG_TO_FILE, ABSENT_IMAGE]
 
 #: The words a podman can come behind in a command a case starts: none, and
 #: the wrappers that run it, as a log follower runs behind `timeout`.
@@ -937,6 +937,58 @@ def test_a_container_named_for_an_armed_teardown_reaches_podman(entry: str, wrap
     name = f'kluster-test-armed-{uuid.uuid4().hex[:12]}'
     with process_sessions.removing(name, timeout=PODMAN_TIMEOUT):
         status = _issue(entry, _named([*wrapper, *CREATE], name))
+
+    assert status != 0
+
+
+#: What a create can carry in place of `LOG_TO_FILE` and fall short of it:
+#: no log driver at all, which leaves the host's default; another driver, in
+#: either spelling; another beside it, the last of which podman obeys; and a
+#: log option beside it, a path that moves the file out of the container's
+#: storage or a size cap that truncates it, in either spelling.
+UNLOGGED = {
+    'absent': [],
+    'journald': ['--log-driver=journald'],
+    'journald-spaced': ['--log-driver', 'journald'],
+    'another-beside': [process_sessions.LOG_TO_FILE, '--log-driver=journald'],
+    'log-opt-path': [process_sessions.LOG_TO_FILE, '--log-opt', 'path=/var/tmp/kluster-test-moved.log'],
+    'log-opt-size': [process_sessions.LOG_TO_FILE, '--log-opt=max-size=1k'],
+}
+
+
+def _logged(argv: list[str], words: Sequence[str]) -> list[str]:
+    """`argv` with `words` in place of its `LOG_TO_FILE`."""
+    at = argv.index(process_sessions.LOG_TO_FILE)
+    return [*argv[:at], *words, *argv[at + 1 :]]
+
+
+@pytest.mark.parametrize('entry', ['run', 'started'])
+@pytest.mark.parametrize('wrapper', WRAPPERS.values(), ids=WRAPPERS)
+@pytest.mark.parametrize('words', UNLOGGED.values(), ids=UNLOGGED)
+def test_a_container_whose_output_is_not_kept_in_a_file_of_its_own_is_refused_before_podman_runs(
+    entry: str, wrapper: list[str], words: list[str]
+) -> None:
+    """A `podman create` armed for its teardown, but without `LOG_TO_FILE` as its one log driver and no log option, fails before podman runs.
+
+    Through either entry point, and with a podman behind a wrapper as with a
+    bare one. A create that reached podman would fail on the absent image,
+    naming no refusal, and create nothing.
+    """
+    name = f'kluster-test-unlogged-{uuid.uuid4().hex[:12]}'
+    with (
+        process_sessions.removing(name, timeout=PODMAN_TIMEOUT),
+        pytest.raises(AssertionError, match='a file of its own'),
+    ):
+        _ = _issue(entry, _logged(_named([*wrapper, *CREATE], name), words))
+
+
+@pytest.mark.usefixtures('podman')
+@pytest.mark.parametrize('entry', ['run', 'started'])
+def test_a_container_given_the_log_file_as_an_option_and_its_value_reaches_podman(entry: str) -> None:
+    """`LOG_TO_FILE` in two words, which podman reads as it reads one, is no refusal; podman fails the create on the absent image."""
+    name = f'kluster-test-spaced-{uuid.uuid4().hex[:12]}'
+    with process_sessions.removing(name, timeout=PODMAN_TIMEOUT):
+        status = _issue(entry, _logged(_named(CREATE, name), process_sessions.LOG_TO_FILE.split('=', 1)))
 
     assert status != 0
 

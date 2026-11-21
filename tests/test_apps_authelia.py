@@ -793,6 +793,7 @@ def _create(
             *(() if kept else ('--rm',)),
             f'--timeout={CONTAINER_TIMEOUT}',
             f'--label={LABEL}',
+            process_sessions.LOG_TO_FILE,
             f'--name={name}',
             f'--network={network}',
             '--read-only',

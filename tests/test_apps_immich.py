@@ -635,7 +635,8 @@ def test_the_pinned_server_still_ships_the_postgres_js_that_leaks_slots() -> Non
     with process_sessions.removing(container, timeout=COMMAND_TIMEOUT):
         done = process_sessions.run(
             [
-                'podman', 'run', '--rm', f'--label={LABEL}', f'--name={container}', '--entrypoint', 'cat',
+                'podman', 'run', '--rm', f'--label={LABEL}', process_sessions.LOG_TO_FILE, f'--name={container}',
+                '--entrypoint', 'cat',
                 reference, watchdog_layer.POSTGRES_PACKAGE,
             ],
             timeout=COMMAND_TIMEOUT,
@@ -777,8 +778,8 @@ def run_on_the_operand(script: str) -> tuple[int, str]:
     with process_sessions.removing(container, timeout=COMMAND_TIMEOUT):
         done = process_sessions.run(
             [
-                'podman', 'run', '--rm', f'--timeout={CONTAINER_TIMEOUT}', f'--label={LABEL}', f'--name={container}',
-                image, 'bash', '-c', script,
+                'podman', 'run', '--rm', f'--timeout={CONTAINER_TIMEOUT}', f'--label={LABEL}', process_sessions.LOG_TO_FILE,
+                f'--name={container}', image, 'bash', '-c', script,
             ],
             timeout=2 * COMMAND_TIMEOUT,
         )  # fmt: skip

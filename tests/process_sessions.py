@@ -37,6 +37,21 @@ names no container, or names one no `removing` block is armed to remove.
 Being here rather than in a module's fixture, the refusal holds every
 module that starts a container, a command a fixture of any scope starts
 included.
+
+**A container is created here only with its output in a file of its own.**
+`podman logs` reads what the container's log driver kept, and where podman
+logs to journald it keeps what journald did not drop. journald rate-limits
+per unit, and every rootless container's `conmon` sits in the user's
+`user@<uid>.service`, so all of a run's containers share one budget, and a
+full parallel run spends it: a line suppressed there never reaches
+`podman logs`, and a wait for it ends only at its bound. The `k8s-file`
+driver writes the container's output to a file of the container's own,
+which no other container's output can crowd out. So `started` refuses as
+well a `podman run` or `podman create` that does not name that driver,
+`LOG_TO_FILE`, or names another, whatever the host's default is, and one
+that carries any `--log-opt`: a `path=` moves the file out of the
+container's storage, where its removal does not reach, and a size cap
+truncates it.
 """
 
 from __future__ import annotations
@@ -65,6 +80,12 @@ DEVNULL = subprocess.DEVNULL
 
 #: What a stream argument may be: a file, or one of `PIPE`, `STDOUT` and `DEVNULL`.
 Stream = int | IO[Any]
+
+#: The option every `podman run` and `podman create` a case starts carries: the
+#: container's output kept in a file of its own, which `podman logs` reads
+#: whole, rather than in journald, whose rate limit all of a run's containers
+#: share (the module's docstring).
+LOG_TO_FILE = '--log-driver=k8s-file'
 
 
 class SessionSurvived(RuntimeError):
@@ -231,10 +252,11 @@ def started(
     bound fires once per case, so if it lands inside the first the second
     runs to the end, and after an uninterrupted first it does nothing at all.
 
-    A container `argv` would create that no armed teardown removes by name
-    is refused before anything starts (`_refuse_unarmed`).
+    A container `argv` would create that no armed teardown removes by name,
+    or whose output would not be kept in a file of its own, is refused before
+    anything starts (`_refuse_container`).
     """
-    _refuse_unarmed(argv)
+    _refuse_container(argv)
     popen = subprocess.Popen(
         argv,
         cwd=cwd,
@@ -363,7 +385,7 @@ def removing(*names: str, timeout: float) -> Generator[None]:
     """Arm the removal of the containers `names` for a block that creates them, and remove each on every way out.
 
     Arming is what lets a command that creates one of `names` through here
-    start at all (`_refuse_unarmed`). `timeout` bounds each removal.
+    start at all (`_refuse_container`). `timeout` bounds each removal.
     """
     _ARMED.update(names)
     try:
@@ -375,11 +397,12 @@ def removing(*names: str, timeout: float) -> Generator[None]:
             _ARMED.subtract(names)
 
 
-def _refuse_unarmed(argv: Sequence[str]) -> None:
-    """Refuse a `podman run` or `podman create` whose container no armed teardown removes by name.
+def _refuse_container(argv: Sequence[str]) -> None:
+    """Refuse a `podman run` or `podman create` that breaks either rule the module holds every container to.
 
     The command names its container, and the `removing` block that removes
-    that name is entered before the command runs. A refusal is an
+    that name is entered before the command runs. The command carries
+    `LOG_TO_FILE`, names no other log driver, and carries no `--log-opt`. A refusal is an
     `AssertionError` raised before anything starts, so the refused command
     creates nothing.
 
@@ -399,11 +422,23 @@ def _refuse_unarmed(argv: Sequence[str]) -> None:
         raise AssertionError(f'podman {words[0]} comes ahead of the verb, and options there are not read: {list(argv)}')
     if words[:1] not in (['run'], ['create']):
         return
-    names = [
-        *(words[at + 1] for at, word in enumerate(words[:-1]) if word == '--name'),
-        *(word.removeprefix('--name=') for word in words if word.startswith('--name=')),
-    ]
+    names = _values(words, '--name')
     if not names:
         raise AssertionError(f'podman {words[0]} names no container, so no teardown can remove it: {list(argv)}')
     if not all(_ARMED[name] > 0 for name in names):
         raise AssertionError(f'podman {words[0]} of {names} runs before the teardown that removes it is armed')
+    if _values(words, '--log-driver') != _values([LOG_TO_FILE], '--log-driver') or _values(words, '--log-opt'):
+        raise AssertionError(
+            f'podman {words[0]} of {names} must carry {LOG_TO_FILE} as its one log driver, and no --log-opt, '
+            f'so that its output is kept whole in a file of its own, where no rate limit other containers share '
+            f"can drop a line; a path= would move the file out of the container's storage, past its removal, "
+            f'and a size cap would truncate it: {list(argv)}'
+        )
+
+
+def _values(words: Sequence[str], option: str) -> list[str]:
+    """Each value `words` gives `option`, as `option value` or `option=value`."""
+    return [
+        *(words[at + 1] for at, word in enumerate(words[:-1]) if word == option),
+        *(word.removeprefix(f'{option}=') for word in words if word.startswith(f'{option}=')),
+    ]

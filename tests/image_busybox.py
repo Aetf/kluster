@@ -118,6 +118,7 @@ def in_image(image: ImagePin, *argv: str) -> bytes:
             str(CONTAINER_TIMEOUT),
             '--label',
             LABEL,
+            process_sessions.LOG_TO_FILE,
             '--name',
             name,
             '--network',
@@ -186,7 +187,7 @@ def copied(image: ImagePin, path: str, cache: Path) -> Path:
     def fill(into: Path) -> None:
         name = f'kluster-test-copied-{uuid.uuid4().hex[:12]}'
         with process_sessions.removing(name, timeout=COMMAND_TIMEOUT):
-            _ = _podman('create', '--rm', '--label', LABEL, '--name', name, pulled(image))
+            _ = _podman('create', '--rm', '--label', LABEL, process_sessions.LOG_TO_FILE, '--name', name, pulled(image))
             _ = _podman('cp', f'{name}:{path}', str(into))
 
     return cached(cache, key, fill) / PurePosixPath(path).name
