@@ -63,7 +63,11 @@ are keyed by the base name and survive every move. Raising the generation with
 `moving_to` set is the copy: the claim of the generation before stays where it
 is, the claim of the new one is added, and an `rsync-tls` source and
 destination copy the one into the other over a Service in the namespace,
-started by hand and waited for by the apply. Restic has no retention of zero,
+started by hand and waited for by the apply. The destination's mover is the
+new claim's first consumer, so it binds the claim in the workload's stead,
+and it carries `moving_to` beside the claim's binder requirements; a
+`moving_to` that gives one of their labels another value is refused, since
+no node admits both (`MoveOffBinder`). Restic has no retention of zero,
 so a copy through the bucket would leave a snapshot behind; `rsync-tls` needs
 no bucket, repository or credential. The finish is a claim of the new
 generation without `moving_to`, whose source, under a class, syncs to the same
@@ -117,6 +121,7 @@ __all__ = (
     'RSYNC_TLS_PORT',
     'Claim',
     'Move',
+    'MoveOffBinder',
     'NasClaim',
     'Off',
     'claim',
@@ -172,6 +177,10 @@ def off(reason: str) -> Off:
 def claim_name(name: str, generation: int) -> str:
     """The name of a claim of one generation, which its restic source shares."""
     return f'{name}-g{generation}'
+
+
+class MoveOffBinder(ValueError):
+    """A move to a label value the workload's binder requirements refuse: the destination, which binds the new claim, would admit no node."""
 
 
 @dataclass(frozen=True)
@@ -260,10 +269,14 @@ def claim(
         backed claim, or of a node volume's claim, is refused: its mover
         could bind it on another node than the other claim's. During a copy
         they are the workload's on the claim being copied: the workload moves
-        to the target in the finish.
+        to the target in the finish. The copy's destination, under any
+        retention, binds the new claim, and carries the same requirements
+        beside `moving_to`.
     :param generation: The claim's generation, raised by one for each move.
     :param moving_to: The node labels the new generation's claim is made on,
-        which the destination's mover selects; set for the copy alone.
+        which the destination's mover selects beside the binder requirements
+        of `constraints`; set for the copy alone. A label those requirements
+        fix to another value is refused (`MoveOffBinder`).
     :param stopped: The workload, whose update the copy's source depends on;
         required with `moving_to`. What that orders is the apply that sets
         its replicas to zero, not the end of its pods, which can still be
@@ -278,7 +291,7 @@ def claim(
     """
     if size < 1:
         raise ValueError(f'{resource_name}: a claim is at least 1 GiB, and {name!r} asks for {size}')
-    copy = _copy(resource_name, name, generation, moving_to, stopped)
+    copy = _copy(resource_name, name, generation, moving_to, stopped, constraints.binder_requirements)
     if frozenset(writer_key) != WRITER_KEY_FIELDS:
         raise ValueError(
             f'{resource_name}: the writer key of {namespace!r} holds {sorted(writer_key)}, '
@@ -319,7 +332,7 @@ def claim(
         )
 
     if copy is not None:
-        labels, workload = copy
+        requirements, workload = copy
         # The claim that holds the data, as it was made: this call's size and
         # class are the new claim's, and a class changed here would otherwise
         # replace this one, which empties it.
@@ -332,7 +345,7 @@ def claim(
             size,
             namespace=namespace,
             uid=uid,
-            moving_to=labels,
+            requirements=requirements,
             stopped=workload,
             claims=(copied, target),
             opts=opts,
@@ -410,8 +423,19 @@ def _copy(
     generation: int,
     moving_to: Mapping[str, str] | None,
     stopped: pulumi.Resource | None,
-) -> tuple[Mapping[str, str], pulumi.Resource] | None:
-    """The labels a copy moves the claim to and the workload it is ordered after, refused where a copy cannot be made."""
+    binder: tuple[NodeRequirement, ...],
+) -> tuple[tuple[NodeRequirement, ...], pulumi.Resource] | None:
+    """What a copy's destination requires of its node and the workload the copy is ordered after, refused where a copy cannot be made.
+
+    The destination binds the new claim, so it is held as every binder of
+    the claim is, to `binder`, the workload's binder requirements, and to
+    `moving_to` beside them. Taken together, `moving_to` narrows the nodes
+    the workload admits, which is the move: a disk label, a node by name.
+    A `moving_to` that sets a label of `binder` to another value narrows
+    them to none, and a destination no node admits is never scheduled,
+    which the apply would wait out to the copy's timeout; so that one case
+    is refused here.
+    """
     if moving_to is None:
         return None
     if generation < 1:
@@ -422,13 +446,24 @@ def _copy(
         raise ValueError(
             f"{resource_name}: a move is ordered after the scale-down of {name!r}'s workload, which it is not handed"
         )
+    contrary = [
+        f'{it.key}={moving_to[it.key]} where its workload requires {it.value}'
+        for it in binder
+        if it.key in moving_to and moving_to[it.key] != it.value
+    ]
+    if contrary:
+        raise MoveOffBinder(
+            f'{resource_name}: {name!r} is moved to {"; ".join(contrary)}, so no node admits the destination '
+            'that binds its new claim'
+        )
     service = _destination_service(_pair_name(name, generation))
     if len(service) > _NAME_LIMIT:
         raise ValueError(
             f'{resource_name}: the copy of {name!r} would be served as {service!r}, past the {_NAME_LIMIT} characters '
             'a name may have, which VolSync then replaces with a hash the source cannot name'
         )
-    return moving_to, stopped
+    target = tuple(NodeRequirement(key, value) for key, value in sorted(moving_to.items()))
+    return tuple(dict.fromkeys((*binder, *target))), stopped
 
 
 #: The longest name an object VolSync names after its owner may have before
@@ -598,7 +633,7 @@ def _pair(
     *,
     namespace: str,
     uid: int,
-    moving_to: Mapping[str, str],
+    requirements: tuple[NodeRequirement, ...],
     stopped: pulumi.Resource,
     claims: tuple[pulumi.Resource, ...],
     opts: pulumi.ResourceOptions | None,
@@ -608,6 +643,7 @@ def _pair(
     The two take one name, so that the source finds the destination's Service
     and its generated key by it. The source is applied after the workload's update,
     and the apply waits for the copy, through the source's `lastManualSync`.
+    The destination's mover is held to `requirements`, as one required term.
     """
     v = crds.volsync.v1alpha1
     pair = _pair_name(name, generation)
@@ -619,9 +655,9 @@ def _pair(
                     v.ReplicationDestinationSpecRsyncTLSMoverAffinityNodeAffinityRequiredDuringSchedulingIgnoredDuringExecutionNodeSelectorTermsArgs(
                         match_expressions=[
                             v.ReplicationDestinationSpecRsyncTLSMoverAffinityNodeAffinityRequiredDuringSchedulingIgnoredDuringExecutionNodeSelectorTermsMatchExpressionsArgs(
-                                key=key, operator='In', values=[value]
+                                key=it.key, operator='In', values=[it.value]
                             )
-                            for key, value in sorted(moving_to.items())
+                            for it in requirements
                         ]
                     )
                 ]
