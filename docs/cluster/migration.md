@@ -249,14 +249,16 @@ runbook, from the gateway window to a verified, empty cluster.
     `physical` has applied `conventions.backup.BACKED_NAMESPACES`, which
     lists every namespace the waves back up, so every writer key
     exists:
-    -   **The legacy sealing key is carried by hand once**, from the
+    -   **The legacy sealing key is carried by hand**, from the
         legacy cluster's controller to the new one's, by a pipe between
         the two clusters' API servers that writes it to no file, and the
         controller is restarted to read it. The certificate the
         controller serves is then confirmed to be the cluster's own,
-        since a restored key can become the one that seals. The key has
-        no channel of its own: its last use is the decommission's
-        re-sealing, which deletes it (§4).
+        since a restored key can become the one that seals. A rebuild of
+        the cluster before the decommission takes the key with etcd, and
+        carries and confirms it again the same way (operations.md §3.5,
+        step 9). The key has no channel of its own: its last use is the
+        decommission's re-sealing, which deletes it (§4).
     -   **The writer keys are sealed**, once the certificate is
         confirmed: `credentials` reads each namespace's key from
         `physical`'s state under that stack's passphrase and seals it
