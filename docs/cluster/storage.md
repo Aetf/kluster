@@ -196,8 +196,17 @@ generation is made on, under any retention. A move is three merges:
     not the end of the pods, which can still be writing inside their
     grace period, and the wait that closes the gap is
     [Aetf/kluster-ops#724](https://github.com/Aetf/kluster-ops/issues/724),
-    ahead of the first move. The destination's mover selects `moving_to`, which is what places the
-    new claim, since it waits for its first consumer. The apply waits
+    ahead of the first move. The destination's mover is the new claim's
+    first consumer, since the claim waits for one, so it binds the claim
+    in the workload's stead and the node it lands on is the workload's
+    after the finish. It is held as a restic mover is, to the binder
+    requirements of the constraints the claim is handed (below), and to
+    `moving_to` beside them, which narrows the nodes the workload admits
+    to the target: a disk label, or one node by name. A `moving_to` that
+    gives one of those labels another value, another site or a value
+    of the device's label its nodes do not carry, admits no node, and
+    `claim` refuses it (`MoveOffBinder`) rather than render a destination
+    that is never scheduled. The apply waits
     for the source's `lastManualSync` through `pulumi.com/waitFor`, with
     a timeout sized to the claim, and a red run means no second merge,
     because reclaim `Delete` has no undo on an `off` claim (§3.3).
@@ -250,8 +259,12 @@ claim's mover binds its own claim and is scheduled apart from the
 others, and the constraints state no node, so a mover can bind its claim
 on one node while the pod's other claim is on another, and the pod,
 which needs both, then runs on neither. A claim nothing backs up has no
-mover, and binds where its pod is placed. The render holds the rule too,
+restic mover, and binds where its pod is placed. The render holds the rule too,
 whatever a component handed its claims (`tests/test_apps_placement.py`).
+A copy's destination is a mover of any claim being moved, and it too is
+placed apart from the pod's other claims; no rule covers yet a move of
+one claim of a pod that mounts a second `local-path` claim
+([Aetf/kluster-ops#905](https://github.com/Aetf/kluster-ops/issues/905)).
 
 **New rule:** a workload that requests the GPU hands its backed claim
 the GPU's hold (`kluster.components.apps.GPU_HOLD`). The mover requests no
@@ -272,8 +285,13 @@ A backed claim's hold records what its mover was given, and a constraint
 composed onto a backed claim's constraints that its mover was not given
 is refused (`BackedVolumeOffBinder`): a site, an architecture or a device
 the claim was not handed. So no constraint can reach the pod and miss
-the mover. A claim nothing backs up has no mover, so its pod may compose
-the GPU's hold onto the `Claim`'s constraints after it. No node
+the mover. A claim nothing backs up has no restic mover, so its pod may
+compose the GPU's hold onto the `Claim`'s constraints after it. A copy's
+destination carries the constraints `claim` was handed and nothing
+composed after it, so a claim that is moved is handed the GPU's hold;
+a device composed onto an unbacked claim after it was made is not
+refused yet
+([Aetf/kluster-ops#905](https://github.com/Aetf/kluster-ops/issues/905)). No node
 carries the label until the worker's GPU is bound to the device plugin
 (declarative/cluster-infra.md §1, item 7), and until then the mover of a
 claim beside a GPU request stays pending, as the workload does.
@@ -283,7 +301,8 @@ which reaches the claim's namespace, the cluster's DNS and, for a restic
 mover, the bucket's endpoint, and nothing else. **Unproven live**: the
 destination's mover placing a claim that is not yet bound, a restic
 mover's affinity holding such a claim to its workload's constraints and
-to the nodes the GPU plugin's rule labels, the
+to the nodes the GPU plugin's rule labels, the destination's affinity
+doing the same beside `moving_to`, the
 destination's Service resolving by its DNS name in the source's
 `address`, the copy's timeout per GiB, the movers' resource figures,
 restic's calls on the bucket itself under a key scoped to one prefix,

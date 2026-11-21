@@ -80,6 +80,20 @@ HOME = at_home('mounts something only the home site reaches')
 #: The constraints of a workload held to the cloud's nodes by their architecture.
 ARM64 = on_architecture('arm64', 'runs an image built for arm64 alone')
 
+#: A device of the test's own, which the nodes that offer it carry a label of
+#: the test's own for.
+DEVICE_LABEL = NodeRequirement('example.com/device', 'present')
+DEVICE = kept(Keeper.DEVICE, 'requests a device of the test', offered_on=DEVICE_LABEL)
+
+#: Each of the cluster's nodes twice, by its name and whether it offers the
+#: device: without its label and with it.
+WITH_AND_WITHOUT_DEVICE: dict[tuple[str, bool], dict[str, str]] = {
+    (node, offers): {**labels, **({DEVICE_LABEL.key: DEVICE_LABEL.value} if offers else {})}
+    for node, labels in NODES.items()
+    for offers in (False, True)
+}
+
+
 #: The constraints each namespace's workload states, before its claims' holds.
 CONSTRAINTS: dict[str, Constraints] = {
     'notes': ARM64,
@@ -87,6 +101,7 @@ CONSTRAINTS: dict[str, Constraints] = {
     'copying': HOME,
     'moved': ARM64,
     'cache': HOME,
+    'transcode': HOME & DEVICE,
     'anywhere': UNCONSTRAINED,
 }
 
@@ -182,6 +197,21 @@ async def declared() -> Recorder:
             moving_to=TARGET,
             stopped=workload,
         )
+        # The copy of a claim that nothing backs up, of a workload that
+        # requests the device.
+        transcode = claim(
+            'transcode',
+            'scratch',
+            5,
+            off('re-derived on start'),
+            namespace='transcode',
+            uid=UID,
+            writer_key=writer_key('transcode'),
+            constraints=CONSTRAINTS['transcode'],
+            generation=1,
+            moving_to=TARGET,
+            stopped=workload,
+        )
         # A backed claim whose workload states no constraint.
         anywhere = claim(
             'anywhere',
@@ -200,6 +230,7 @@ async def declared() -> Recorder:
             'copying': (copying,),
             'moved': (moved,),
             'cache': (cache,),
+            'transcode': (transcode,),
             'anywhere': (anywhere,),
         }
         for namespace, claims in mounted.items():
@@ -374,7 +405,7 @@ def test_an_unconstrained_workloads_mover_states_no_affinity(declared: Recorder)
     assert 'moverAffinity' not in source['spec']['restic']
 
 
-@pytest.mark.parametrize('namespace', ['notes', 'models', 'copying', 'moved', 'cache', 'anywhere'])
+@pytest.mark.parametrize('namespace', ['notes', 'models', 'copying', 'moved', 'cache', 'transcode', 'anywhere'])
 def test_a_claims_pod_is_held_where_its_claim_keeps_it_with_no_affinity_of_its_own(
     declared: Recorder, namespace: str
 ) -> None:
@@ -389,7 +420,7 @@ def test_a_claims_pod_is_held_where_its_claim_keeps_it_with_no_affinity_of_its_o
     assert schedulable(spec) == schedulable(CONSTRAINTS[namespace].pod_fields_json())
 
 
-@pytest.mark.parametrize('namespace', ['notes', 'copying', 'moved', 'cache', 'anywhere'])
+@pytest.mark.parametrize('namespace', ['notes', 'copying', 'moved', 'cache', 'transcode', 'anywhere'])
 def test_a_local_path_claims_pod_writes_in_the_class_that_caps_the_disk_etcd_shares_and_its_movers_in_none(
     declared: Recorder, namespace: str
 ) -> None:
@@ -443,20 +474,6 @@ async def test_a_backed_claim_beside_a_claim_its_mover_could_bind_it_away_from_i
                 writer_key=writer_key('pair'),
                 constraints=first.constraints,
             )
-
-
-#: A device of the test's own, which the nodes that offer it carry a label of
-#: the test's own for.
-DEVICE_LABEL = NodeRequirement('example.com/device', 'present')
-DEVICE = kept(Keeper.DEVICE, 'requests a device of the test', offered_on=DEVICE_LABEL)
-
-#: Each of the cluster's nodes twice, by its name and whether it offers the
-#: device: without its label and with it.
-WITH_AND_WITHOUT_DEVICE: dict[tuple[str, bool], dict[str, str]] = {
-    (node, offers): {**labels, **({DEVICE_LABEL.key: DEVICE_LABEL.value} if offers else {})}
-    for node, labels in NODES.items()
-    for offers in (False, True)
-}
 
 
 async def _backed(
@@ -533,14 +550,113 @@ def test_a_copy_adds_the_target_claim_and_an_rsync_tls_pair_started_by_hand(decl
         f'jsonpath={{.status.lastManualSync}}={trigger["manual"]}'
     )
     assert int(source['metadata']['annotations']['pulumi.com/timeoutSeconds']) > 0
-    (term,) = destination['spec']['rsyncTLS']['moverAffinity']['nodeAffinity'][
-        'requiredDuringSchedulingIgnoredDuringExecution'
-    ]['nodeSelectorTerms']
-    assert term['matchExpressions'] == [
-        {'key': key, 'operator': 'In', 'values': [value]} for key, value in TARGET.items()
-    ]
     assert source['metadata']['name'] == destination['metadata']['name']
     assert source['spec']['rsyncTLS']['address'].startswith(f'volsync-rsync-tls-dst-{destination["metadata"]["name"]}.')
+
+
+#: Each of the cluster's nodes four times, by its name, whether it carries the
+#: label a move targets, and whether it offers the device: which nodes carry
+#: either is not the cluster's to say, so a mover is read on every reading.
+WITH_AND_WITHOUT_TARGET_AND_DEVICE: dict[tuple[str, bool, bool], dict[str, str]] = {
+    (node, targeted, offers): {
+        **labels,
+        **(TARGET if targeted else {}),
+        **({DEVICE_LABEL.key: DEVICE_LABEL.value} if offers else {}),
+    }
+    for node, labels in NODES.items()
+    for targeted in (False, True)
+    for offers in (False, True)
+}
+
+
+def test_a_copys_destination_binds_the_new_claim_only_where_its_workload_can_run_and_on_the_target(
+    declared: Recorder,
+) -> None:
+    """The destination's mover is the new claim's first consumer, so the node it lands on is the workload's after the finish.
+
+    It requests no device, so the nodes its workload admits are read with the
+    device the workload requests, on every node with the target label and
+    without it, with the device and without it. The destination admits some
+    node, every node it admits is one the workload can run on, and each
+    carries the target.
+    """
+    workloads = pods(declared)
+    destinations = declared.of_type(DESTINATION)
+
+    assert {it.inputs['metadata']['namespace'] for it in destinations} == {'copying', 'cache', 'transcode'}
+    for it in destinations:
+        namespace = it.inputs['metadata']['namespace']
+        mover = {'affinity': it.inputs['spec']['rsyncTLS'].get('moverAffinity')}
+        requests_the_device = any(held.offered_on is not None for held in CONSTRAINTS[namespace].kept)
+        workload = {
+            node
+            for node in schedulable_among(workloads[namespace]['spec'], WITH_AND_WITHOUT_TARGET_AND_DEVICE)
+            if node[2] or not requests_the_device
+        }
+        admitted = schedulable_among(mover, WITH_AND_WITHOUT_TARGET_AND_DEVICE)
+
+        assert admitted, it.name
+        assert admitted <= workload, (it.name, sorted(admitted - workload))
+        assert all(targeted for _, targeted, _ in admitted), it.name
+
+
+@pytest.mark.parametrize(
+    ('constraints', 'moving_to'),
+    [
+        (HOME, {conventions.SITE_LABEL: str(conventions.Site.CLOUD)}),
+        (HOME & DEVICE, {**TARGET, DEVICE_LABEL.key: 'absent'}),
+    ],
+    ids=['another site', 'nodes without the device'],
+)
+def test_a_move_to_a_label_value_its_workloads_binder_requirements_refuse_is_refused(
+    constraints: Constraints, moving_to: dict[str, str]
+) -> None:
+    """The destination is held to both, and no node carries two values of one label: it would never be scheduled."""
+    stopped = cast('pulumi.Resource', object())
+    with pytest.raises(storage.MoveOffBinder):
+        _ = claim(
+            'astray',
+            'data',
+            1,
+            off('a cache'),
+            namespace='astray',
+            uid=UID,
+            writer_key=writer_key('astray'),
+            constraints=constraints,
+            generation=1,
+            moving_to=moving_to,
+            stopped=stopped,
+        )
+
+
+@pytest.mark.asyncio
+async def test_a_move_restating_a_required_label_admits_what_one_to_the_target_alone_does() -> None:
+    """Only a label fixed to another value is refused: one fixed to the value required narrows nothing further."""
+    admitted: list[set[tuple[str, bool, bool]]] = []
+    for moving_to in (TARGET, {**TARGET, conventions.SITE_LABEL: str(conventions.Site.HOME)}):
+        monitor = await run_with(Recorder(), stack='apps')
+        async with declaring():
+            workload = k8s.core.v1.ConfigMap('workload')
+            _ = claim(
+                'restated',
+                'data',
+                1,
+                off('a cache'),
+                namespace='restated',
+                uid=UID,
+                writer_key=writer_key('restated'),
+                constraints=HOME,
+                generation=1,
+                moving_to=moving_to,
+                stopped=workload,
+            )
+        (destination,) = monitor.of_type(DESTINATION)
+        mover = {'affinity': destination.inputs['spec']['rsyncTLS'].get('moverAffinity')}
+        admitted.append(schedulable_among(mover, WITH_AND_WITHOUT_TARGET_AND_DEVICE))
+
+    target_alone, restated = admitted
+    assert target_alone
+    assert restated == target_alone
 
 
 def test_a_copy_is_ordered_after_a_workload_it_is_handed() -> None:
@@ -662,7 +778,7 @@ def test_after_the_finish_the_claim_and_its_source_are_the_new_generations_and_t
 def test_every_mover_states_its_security_context_and_resources_and_copies_directly(declared: Recorder) -> None:
     """`restricted` refuses a mover without its context, and the context is the workload's user."""
     found = list(movers(declared))
-    # The backed claims' sources, both copies' pairs, and the source the copy
+    # The backed claims' sources, every copy's pair, and the source the copy
     # of a backed claim keeps.
     assert sorted(name for name, _ in found) == sorted(
         [
@@ -675,6 +791,8 @@ def test_every_mover_states_its_security_context_and_resources_and_copies_direct
             'copying-move-g1',
             'cache-move-g2',
             'cache-move-g2',
+            'transcode-move-g1',
+            'transcode-move-g1',
         ]
     )
     for name, spec in found:
