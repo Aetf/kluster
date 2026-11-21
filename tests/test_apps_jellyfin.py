@@ -50,6 +50,7 @@ from urllib.parse import urlsplit
 import process_sessions
 import pytest
 import pytest_asyncio
+from apps_jellyfin import DISCOVERY, FRONTS, IMAGE, ROUTE, ZONE_IDS, writer_key
 from mock_monitor import Recorder, declaring, run_with
 from pinned_image import (
     COMMAND_TIMEOUT,
@@ -62,16 +63,13 @@ from pinned_image import (
 )
 
 from kluster import conventions
-from kluster.components.apps import Fronts
 from kluster.components.apps import jellyfin as jellyfin_app
 from kluster.components.apps.jellyfin import Jellyfin
-from kluster.components.cilium import InternetPoolMembers
 from kluster.components.gpu import GPU_RESOURCE
 from kluster.conventions.backup import BACKED_NAMESPACES, BackupFamily
 from kluster.conventions.cluster import Transports
 from kluster.conventions.routes import (
     PROXIED,
-    REWRITE,
     Apex,
     Balancer,
     Exposure,
@@ -84,7 +82,6 @@ from kluster.conventions.routes import (
 )
 from kluster.conventions.sso import Client, Factor, Grant, Issuer, Scope, TokenEndpointAuth
 from kluster.lib.k8s import POD_SECURITY_ENFORCE_LABEL, PodSecurity
-from kluster.lib.versions import ImagePin
 
 HTTP_ROUTE = 'crds:gateway.networking.k8s.io/v1:HTTPRoute'
 SERVICE = 'kubernetes:core/v1:Service'
@@ -96,20 +93,7 @@ VOLUME = 'kubernetes:core/v1:PersistentVolume'
 SOURCE = 'crds:volsync.backube/v1alpha1:ReplicationSource'
 POLICY = 'crds:cilium.io/v2:CiliumNetworkPolicy'
 
-FRONTS = Fronts(
-    internet=InternetPoolMembers(
-        node_private_ips={'cp-1': '10.0.1.11'},
-        node_guas={'cp-1': '2001:db8:1::11'},
-        dedicated_vip='10.0.1.99',
-        balancer_v4='203.0.113.10',
-        balancer_v6='2001:db8::10',
-    ),
-    worker_gua='2001:db8:70::10',
-)
-ZONE_IDS = {conventions.ZONE_PRIMARY: 'the-primary-zones-id'}
 
-ROUTE = Route('jf-tube', internet=PROXIED, media=REWRITE)
-DISCOVERY = Port('jf-find', 7359, Transports.UDP, media=Heard())
 #: The route held, as it is while the legacy VPS keeps the name.
 TUBE = Exposure(routes=(Held(ROUTE),), ports=(DISCOVERY,))
 CLIENT = Client(
@@ -123,7 +107,6 @@ CLIENT = Client(
 #: The portal's issuer, as the program would hand it.
 ISSUER = Issuer('https://auth.example.invalid')
 
-IMAGE = ImagePin('registry.example.invalid/jellyfin', 'v9.9.9', f'sha256:{"1" * 64}')
 
 #: A directory the image's fontconfig scans for fonts (its `/etc/fonts/fonts.conf`).
 FONTCONFIG_DIR = '/usr/local/share/fonts'
@@ -157,11 +140,6 @@ NETWORK_ELEMENTS = frozenset(
         'IsRemoteIPFilterBlacklist',
     }
 )
-
-
-def writer_key(namespace: str) -> dict[str, str]:
-    """A namespace's sealed writer key, its ciphertext naming the namespace."""
-    return {'AWS_ACCESS_KEY_ID': f'{namespace}-id', 'AWS_SECRET_ACCESS_KEY': f'{namespace}-secret'}
 
 
 @pytest_asyncio.fixture(scope='module', loop_scope='module')

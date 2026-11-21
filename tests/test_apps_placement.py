@@ -1,10 +1,21 @@
 """Every application component, and the platform's stores, held to the relations of their node constraints at once.
 
-One run declares every application component `kluster.components.apps`
-holds, each with rows, pins and ciphertexts of the test's own, and beside it
-the `k8s-base` program as its stack file holds it, for the monitoring stores'
-values. Every pod the run declares is read the way the scheduler reads it,
-against the nodes as they are labelled (`node_selection`): each workload's pod
+One run declares every application component the installation defines, and
+beside it the `k8s-base` program as its stack file holds it, for the
+monitoring stores' values. What the run declares is derived from the
+package tree: each package directly under `kluster.components.apps` that
+defines an application component, or a function returning one, has a helper
+module `tests/apps_<package>.py`, whose `declared()` declares the package's
+components with the rows, pins and ciphertexts the package's test module
+`test_apps_<package>.py` shares from it. A package whose helper or
+`declared()` is missing fails by name, and so does one whose `declared()`
+leaves out a component the package defines, so a new application joins the
+run from its own helper and needs no edit here. A client of the portal is
+declared there with the portal's issuer and the census's client
+(`sso_portal`).
+
+Every pod the run declares is read the way the scheduler reads it, against
+the nodes as they are labelled (`node_selection`): each workload's pod
 template, each CronJob's, each database instance and the restore drill's
 recovered one, and each restic mover. So a component that forgets what its
 declaration derives, or what its claim records for its pod, fails here
@@ -33,74 +44,38 @@ device plugin offers, Kubernetes' and CloudNativePG's field names, VolSync's.
 
 from __future__ import annotations
 
+import importlib
+import inspect
 import json
-from collections.abc import Iterator, Mapping
+import pkgutil
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Literal, cast
+from typing import Any, Literal, cast, get_args
 
-import image_busybox
+import component_census
 import pytest
 import pytest_asyncio
-from component_census import components, stated
 from k8s_base_installation import Run, applied
 from mock_monitor import Recorder, declaring, run_with
 from node_selection import CLOUD, NODES, schedulable, schedulable_among, selected
+from sso_portal import ISSUER
 
 from kluster import conventions
-from kluster.components.apps import UPLINK_DOWN, Fronts, storage
-from kluster.components.apps import authelia as authelia_app
-from kluster.components.apps import emailproxy as emailproxy_app
-from kluster.components.apps import exim as exim_app
-from kluster.components.apps import hath as hath_app
-from kluster.components.apps import immich as immich_app
-from kluster.components.apps import matrix as matrix_app
-from kluster.components.apps import splitpro as splitpro_app
+from kluster.components import apps
+from kluster.components.apps import UPLINK_DOWN, storage
 from kluster.components.apps.authelia import Authelia
 from kluster.components.apps.echo import Echo
-from kluster.components.apps.emailproxy import EmailProxy
-from kluster.components.apps.exim import Exim
-from kluster.components.apps.golinks import Golinks
-from kluster.components.apps.hath import Hath, Stage
-from kluster.components.apps.immich import Immich
-from kluster.components.apps.jellyfin import Jellyfin
-from kluster.components.apps.matrix import Matrix
-from kluster.components.apps.shoko import Shoko
-from kluster.components.apps.splitpro import SplitPro
-from kluster.components.apps.spoolman import Spoolman
-from kluster.components.apps.static_site import GitSource, NasSource, StaticSite
-from kluster.components.apps.stdiscosrv import Stdiscosrv
-from kluster.components.apps.syncthing import Syncthing
-from kluster.components.apps.syncthing.webdav import WebDav
-from kluster.components.cilium import InternetPoolMembers
 from kluster.components.gpu import GPU_NODE, GPU_RESOURCE
 from kluster.components.monitoring.operator_objects import type_token
-from kluster.conventions.cluster import Transports
-from kluster.conventions.routes import (
-    PROXIED,
-    REWRITE,
-    Apex,
-    Balancer,
-    Dedicated,
-    Direct,
-    Exposure,
-    Gate,
-    Heard,
-    Held,
-    Host,
-    Port,
-    PortRedirect,
-    Proxied,
-    Route,
-    Vip,
-)
 from kluster.conventions.sso import Client
 from kluster.lib.k8s import Constraints
-from kluster.lib.versions import ImagePin
+from putils import Component
 
 DEPLOYMENT = 'kubernetes:apps/v1:Deployment'
 CRONJOB = 'kubernetes:batch/v1:CronJob'
 CONFIG_MAP = 'kubernetes:core/v1:ConfigMap'
 VOLUME = 'kubernetes:core/v1:PersistentVolume'
+NAMESPACE = 'kubernetes:core/v1:Namespace'
 CLUSTER = 'crds:postgresql.cnpg.io/v1:Cluster'
 SERVICE = 'kubernetes:core/v1:Service'
 HTTP_ROUTE = 'crds:gateway.networking.k8s.io/v1:HTTPRoute'
@@ -109,6 +84,9 @@ VM_SINGLE = type_token('VMSingle')
 
 #: The type tokens of the application components, which `kluster.components.apps` defines.
 APPS = 'kluster:apps:'
+
+#: The function each application's helper module declares its components with.
+FACTORY = 'declared'
 
 #: The monitoring component's chart, whose values hold the recent store.
 MONITORING_CHART = 'monitoring'
@@ -127,339 +105,230 @@ WITH_AND_WITHOUT_GPU: dict[tuple[str, bool], dict[str, str]] = {
     for gpu in (False, True)
 }
 
-FRONTS = Fronts(
-    internet=InternetPoolMembers(
-        node_private_ips={'cp-1': '10.0.1.11'},
-        node_guas={'cp-1': '2001:db8:1::11'},
-        dedicated_vip='10.0.1.99',
-        balancer_v4='203.0.113.10',
-        balancer_v6='2001:db8::10',
-    ),
-    worker_gua='2001:db8:70::10',
-)
-ZONE_IDS = {zone: f'{zone}-id' for zone in (conventions.ZONE_PRIMARY, 'blog.example', 'doors.example')}
+
+@dataclass(frozen=True)
+class Application:
+    """One package under `kluster.components.apps` that defines an application component, and the helper module that declares it."""
+
+    package: str
+    defines: frozenset[type[Component]]
+    """Every application component class the package defines, or a function of it returns."""
+    module: str
+    """The helper module under `tests/` that declares the package's components, `apps_<package>`."""
+    factory: Callable[[], Sequence[Component]] | None
+    """The module's `declared()`, or `None` where the module or the function is missing."""
+    found: bool
+    """Whether the helper module is there."""
 
 
-def pin(name: str) -> ImagePin:
-    """A pin of the test's own: a reference that is no published image."""
-    return ImagePin(f'registry.example.invalid/{name}', 'v9.9.9', f'sha256:{"a" * 64}')
+def mentioned(annotation: object) -> set[object]:
+    """Every type an annotation is built from, through unions and generics: `Echo | None` and `tuple[Echo, ...]` each mention `Echo`."""
+    if isinstance(annotation, list):  # a `Callable`'s parameters
+        return {it for argument in cast('list[object]', annotation) for it in mentioned(argument)}
+    return {annotation, *(it for argument in get_args(annotation) for it in mentioned(argument))}
 
 
-def sealed(keys: tuple[str, ...]) -> dict[str, str]:
-    """Ciphertext of each key, which names the key."""
-    return {key: f'sealed-{key}' for key in keys}
+def _package_of(module: str) -> str:
+    """The package directly under `kluster.components.apps` that `module` is, or lies in."""
+    package, _, _ = module.removeprefix(f'{apps.__name__}.').partition('.')
+    assert module.startswith(f'{apps.__name__}.'), (
+        f'{module} defines an application component outside any package under {apps.__name__}, '
+        'so no helper module is named for it'
+    )
+    return package
 
 
-def writer_key(namespace: str) -> dict[str, str]:
-    """A namespace's sealed writer key, its ciphertext naming the namespace."""
-    return {'AWS_ACCESS_KEY_ID': f'{namespace}-id', 'AWS_SECRET_ACCESS_KEY': f'{namespace}-secret'}
+def applications() -> list[Application]:
+    """Every package under `kluster.components.apps` that defines an application component, or a function returning one."""
+    application_classes = {
+        cls
+        for cls in component_census.components()
+        if (token := component_census.stated(cls)) is not None and token.startswith(APPS)
+    }
+    defined: dict[str, set[type[Component]]] = {}
+    for cls in application_classes:
+        defined.setdefault(_package_of(cls.__module__), set()).add(cls)
+    for found in pkgutil.walk_packages(apps.__path__, f'{apps.__name__}.'):
+        module = importlib.import_module(found.name)
+        for value in vars(module).values():
+            if inspect.isfunction(value) and value.__module__ == module.__name__:
+                returned = mentioned(inspect.get_annotations(value, eval_str=True).get('return'))
+                for cls in application_classes & returned:
+                    defined.setdefault(_package_of(module.__name__), set()).add(cls)
 
-
-def client(name: str) -> Client:
-    """The census's client of that name, which the program hands its application."""
-    (found,) = [it for it in conventions.sso.CLIENTS if it.name == name]
-    return found
-
-
-#: The portal's row as its cut leaves it, on `internet` and at home, and the
-#: issuer the program derives from it for each client.
-PORTAL = Exposure(routes=(Route('auth', internet=PROXIED, lan=REWRITE),))
-ISSUER = conventions.sso.issuer(PORTAL)
+    listed: list[Application] = []
+    for package, classes in sorted(defined.items()):
+        name = f'apps_{package}'
+        try:
+            module = importlib.import_module(name)
+        except ModuleNotFoundError as missing:
+            if missing.name != name:
+                raise
+            listed.append(Application(package, frozenset(classes), name, None, found=False))
+        else:
+            factory = cast('Callable[[], Sequence[Component]] | None', getattr(module, FACTORY, None))
+            listed.append(Application(package, frozenset(classes), name, factory, found=True))
+    return listed
 
 
 @dataclass(frozen=True)
 class Declared:
-    """One component the run declared: what its declarations derive, its namespaces, its client of the portal, and its claims."""
+    """One component the run declared: what its declarations derive, its namespaces, the clients its routes serve, and its claims."""
 
+    name: str
+    """Its URN."""
+    kind: type[Component]
     constraints: Constraints
     namespaces: frozenset[str]
-    client: Client | None = None
+    """Every namespace a resource below it declares."""
+    client: bool
+    """Whether it is handed a client of the portal."""
+    serves: frozenset[str]
+    """The census's clients whose name a route in its namespaces serves."""
     claims: tuple[storage.Claim, ...] = ()
     """Every claim the component keeps, as an attribute, with the constraints it records."""
 
 
-def _components() -> dict[str, Declared]:
-    """Every application component, each declared with what the test hands it."""
-    found: dict[str, Declared] = {}
+def handed_a_client(kind: type) -> bool:
+    """Whether a parameter of the class's constructor takes a client of the portal, alone or within its annotation."""
+    return any(Client in mentioned(it.annotation) for it in inspect.signature(kind, eval_str=True).parameters.values())
 
-    def keep(name: str, component: Any, *namespaces: str, sso: Client | None = None) -> None:
-        claims = tuple(
-            it for it in cast('dict[str, object]', vars(component)).values() if isinstance(it, storage.Claim)
-        )
-        found[name] = Declared(cast('Constraints', component.constraints), frozenset(namespaces), sso, claims)
 
-    keep(
-        'authelia',
-        Authelia(
-            'authelia',
-            exposure=PORTAL,
-            image=pin('authelia'),
-            redis_image=pin('redis'),
-            canary_image=pin('curl'),
-            target_image=pin('nginx'),
-            secrets=sealed(authelia_app.SECRETS.keys),
-            config_secrets=sealed(authelia_app.CONFIG_SECRETS.keys),
-            storage_key=sealed(conventions.sealed.AUTHELIA_STORAGE_KEY.keys),
-            writer_key=writer_key(authelia_app.NAMESPACE),
-            gated=('some-application',),
-            fronts=FRONTS,
-            zone_ids=ZONE_IDS,
-        ),
-        authelia_app.NAMESPACE,
-        authelia_app.CANARY_NAMESPACE,
+def _namespaces_below(monitor: Recorder, urn: str) -> frozenset[str]:
+    """Every namespace a registration below the component at `urn` declares, through any chain of parents."""
+
+    def below(request: Any) -> bool:
+        parent = request.parent
+        while parent in monitor.registrations:
+            if parent == urn:
+                return True
+            parent = monitor.registrations[parent].parent
+        return False
+
+    return frozenset(
+        str(request.object['metadata']['name'])
+        for request in monitor.registrations.values()
+        if request.type == NAMESPACE and below(request)
     )
-    keep(
-        'echo',
-        Echo(
-            'echo',
-            exposure=Exposure(routes=(Route('ec-echo', internet=Direct('the client address')),)),
-            image=pin('whoami'),
-            fronts=FRONTS,
-            zone_ids=ZONE_IDS,
-        ),
-        'echo',
+
+
+def _served(monitor: Recorder, namespaces: frozenset[str]) -> frozenset[str]:
+    """The census's clients whose name a route in `namespaces` serves."""
+    hostnames = {
+        name
+        for it in monitor.of_type(HTTP_ROUTE)
+        if it.inputs['metadata']['namespace'] in namespaces
+        for name in it.inputs['spec'].get('hostnames', [])
+    }
+    return frozenset(client.name for client in conventions.sso.CLIENTS if f'{client.host}.{client.zone}' in hostnames)
+
+
+async def _declared(monitor: Recorder, component: Component) -> Declared:
+    """What the run reads of one component it declared: its constraints and claims off the component, the rest off its registrations."""
+    kind = type(component)
+    urn = await component.urn.future()
+    assert urn is not None
+    namespaces = _namespaces_below(monitor, urn)
+    claims = tuple(it for it in cast('dict[str, object]', vars(component)).values() if isinstance(it, storage.Claim))
+    return Declared(
+        urn,
+        kind,
+        cast('Constraints', cast('Any', component).constraints),
+        namespaces,
+        handed_a_client(kind),
+        _served(monitor, namespaces),
+        claims,
     )
-    keep(
-        'emailproxy',
-        EmailProxy(
-            'emailproxy',
-            exposure=Exposure(ports=(Port('ep-mail', 1994, Transports.TCP, lan=Vip('ep-mail')),)),
-            image=pin('emailproxy'),
-            config=sealed(emailproxy_app.PORTED.keys),
-            writer_key=writer_key(emailproxy_app.NAMESPACE),
-            fronts=FRONTS,
-            zone_ids=ZONE_IDS,
-        ),
-        emailproxy_app.NAMESPACE,
-    )
-    keep(
-        'exim',
-        Exim('exim', image=pin('exim'), smtp=sealed(exim_app.SMTP.keys), dkim={'tls.key': 'sealed-dkim-key'}),
-        exim_app.NAMESPACE,
-    )
-    keep(
-        'golinks',
-        Golinks(
-            'golinks',
-            exposure=Exposure(routes=(Route('gl-links', lan=REWRITE),)),
-            image=pin('golinks'),
-            writer_key=writer_key('golinks'),
-            fronts=FRONTS,
-            zone_ids=ZONE_IDS,
-        ),
-        'golinks',
-    )
-    keep(
-        'hath',
-        Hath(
-            'hath',
-            exposure=Exposure(ports=(Port('hh-serve', 60123, Transports.TCP, internet=Dedicated()),)),
-            image=pin('hath'),
-            login=sealed(hath_app.PORTED.keys),
-            stage=Stage('final', final=True),
-            fronts=FRONTS,
-            zone_ids=ZONE_IDS,
-        ),
-        hath_app.NAMESPACE,
-    )
-    photos = client('immich')
-    keep(
-        'immich',
-        Immich(
-            'immich',
-            exposure=Exposure(routes=(Held(Route(photos.host, internet=Direct('large uploads'), lan=REWRITE)),)),
-            client=photos,
-            issuer=ISSUER,
-            server_image=pin('server'),
-            ml_image=pin('ml'),
-            redis_image=pin('redis'),
-            exporter_image=pin('exporter'),
-            database_image=pin('vchord'),
-            drill_image=image_busybox.pinned('database-restore-drill'),
-            redis=sealed(immich_app.REDIS.keys),
-            config=sealed(immich_app.CONFIG.keys),
-            recovery=sealed(immich_app.RECOVERY.keys),
-            writer_key=writer_key(immich_app.NAMESPACE),
-            fronts=FRONTS,
-            zone_ids=ZONE_IDS,
-        ),
-        immich_app.NAMESPACE,
-        sso=photos,
-    )
-    tube = client('jellyfin')
-    keep(
-        'jellyfin',
-        Jellyfin(
-            'jellyfin',
-            exposure=Exposure(
-                routes=(Held(Route(tube.host, internet=PROXIED, media=REWRITE)),),
-                ports=(Port('jf-find', 7359, Transports.UDP, media=Heard()),),
-            ),
-            client=tube,
-            issuer=ISSUER,
-            image=pin('jellyfin'),
-            writer_key=writer_key('jellyfin'),
-            fronts=FRONTS,
-            zone_ids=ZONE_IDS,
-        ),
-        'jellyfin',
-        sso=tube,
-    )
-    homeserver = client('matrix')
-    keep(
-        'matrix',
-        Matrix(
-            'matrix',
-            exposure=Exposure(routes=(Held(Route(homeserver.host, internet=PROXIED)),)),
-            client=homeserver,
-            issuer=ISSUER,
-            image=pin('continuwuity'),
-            oidc=sealed(matrix_app.OIDC.keys),
-            writer_key=writer_key(matrix_app.NAMESPACE),
-            fronts=FRONTS,
-            zone_ids=ZONE_IDS,
-        ),
-        matrix_app.NAMESPACE,
-        sso=homeserver,
-    )
-    keep(
-        'shoko',
-        Shoko(
-            'shoko',
-            exposure=Exposure(routes=(Route('sk-library', lan=REWRITE),)),
-            image=pin('shoko'),
-            writer_key=writer_key('shoko'),
-            fronts=FRONTS,
-            zone_ids=ZONE_IDS,
-        ),
-        'shoko',
-    )
-    split = client('splitpro')
-    keep(
-        'splitpro',
-        SplitPro(
-            'splitpro',
-            exposure=Exposure(routes=(Held(Route(split.host, internet=PROXIED)),)),
-            client=split,
-            issuer=ISSUER,
-            image=pin('splitpro'),
-            database_image=pin('pgcron'),
-            drill_image=image_busybox.pinned('database-restore-drill'),
-            auth=sealed(splitpro_app.AUTH.keys),
-            recovery_key=sealed(splitpro_app.RECOVERY_KEY.keys),
-            database_writer_key=writer_key('barman'),
-            receipts_writer_key=writer_key('volsync'),
-            fronts=FRONTS,
-            zone_ids=ZONE_IDS,
-        ),
-        splitpro_app.NAMESPACE,
-        sso=split,
-    )
-    keep(
-        'spoolman',
-        Spoolman(
-            'spoolman',
-            exposure=Exposure(routes=(Route('sp-spools', internet=Proxied(Gate.SESSION), media=REWRITE),)),
-            image=pin('spoolman'),
-            writer_key=writer_key('spoolman'),
-            fronts=FRONTS,
-            zone_ids=ZONE_IDS,
-        ),
-        'spoolman',
-    )
-    keep(
-        'blog',
-        StaticSite(
-            'blog',
-            exposure=Exposure(
-                routes=(Apex(('blog.example',)), Route('www', internet=PROXIED, zones=('blog.example',)))
-            ),
-            source=GitSource('file:///tmp/upstream', 'built', pin('git-sync')),
-            image=pin('static'),
-            fronts=FRONTS,
-            zone_ids=ZONE_IDS,
-            directories={},
-            documents={'/.well-known/example/server': json.dumps({'server': 'home.blog.example:443'})},
-        ),
-        'blog',
-    )
-    keep(
-        'doors',
-        StaticSite(
-            'doors',
-            exposure=Exposure(routes=(Apex(('doors.example',)),)),
-            source=NasSource('Web/doors'),
-            image=pin('static'),
-            fronts=FRONTS,
-            zone_ids=ZONE_IDS,
-            directories={},
-            documents={},
-        ),
-        'doors',
-    )
-    find = Port('st-find', 8444, Transports.TCP, internet=Balancer((Host('st-find'),)), lan=Vip('st-home'))
-    keep(
-        'stdiscosrv',
-        Stdiscosrv(
-            'stdiscosrv',
-            exposure=Exposure(
-                routes=(PortRedirect('st-home', find.port, internet=Direct('a raw port'), lan=REWRITE),),
-                ports=(find,),
-            ),
-            image=pin('discosrv'),
-            fronts=FRONTS,
-            zone_ids=ZONE_IDS,
-        ),
-        'stdiscosrv',
-    )
-    keep(
-        'syncthing',
-        Syncthing(
-            'syncthing',
-            exposure=Exposure(
-                routes=(Route('st-ui', internet=Proxied(Gate.SESSION)),),
-                ports=(Port('st-peer', 22001, Transports.TCP, internet=Balancer((Host('st-dial'),))),),
-            ),
-            discovery=Port('st-disco', 8443, Transports.TCP, internet=Balancer((Host('st-disco'),))),
-            retired_devices=(),
-            image=pin('syncthing'),
-            config_image=image_busybox.pinned('syncthing-config'),
-            writer_key=writer_key('syncthing'),
-            fronts=FRONTS,
-            zone_ids=ZONE_IDS,
-        ),
-        'syncthing',
-    )
-    keep(
-        'webdav',
-        WebDav(
-            'webdav',
-            exposure=Exposure(routes=(Route('st-files', internet=Proxied(Gate.BASIC)),)),
-            image=pin('dufs'),
-            writer_key=writer_key('webdav'),
-            fronts=FRONTS,
-            zone_ids=ZONE_IDS,
-        ),
-        'webdav',
-    )
-    return found
 
 
 @dataclass(frozen=True)
 class Program:
-    """What the run declared: the components, and the recorder of their resources."""
+    """What the run declared: each application and the components its helper declared, each component, and the recorder."""
 
-    components: Mapping[str, Declared]
+    applications: Mapping[Application, tuple[type[Component], ...]]
+    """Each application, with the class of each component its `declared()` declared."""
+    components: Sequence[Declared]
     monitor: Recorder
 
 
 @pytest_asyncio.fixture(scope='module', loop_scope='module')
 async def program() -> Program:
-    """Every application component, declared in one run."""
+    """Every application component, each declared by its application's helper module, in one run."""
     monitor = await run_with(Recorder(), stack='apps')
+    declared: dict[Application, Sequence[Component]] = {}
     async with declaring():
-        components = _components()
-    return Program(components, monitor)
+        for application in applications():
+            declared[application] = () if application.factory is None else application.factory()
+    return Program(
+        {application: tuple(type(it) for it in found) for application, found in declared.items()},
+        [await _declared(monitor, it) for found in declared.values() for it in found],
+        monitor,
+    )
+
+
+class _OptionalClient:
+    def __init__(self, *, client: Client | None = None) -> None: ...
+
+
+class _NoClient:
+    def __init__(self, name: str, *, clients: tuple[str, ...] = ()) -> None: ...
+
+
+@pytest.mark.parametrize(
+    ('annotation', 'mentions'),
+    [
+        pytest.param(Echo, True, id='the class'),
+        pytest.param(Echo | None, True, id='optional'),
+        pytest.param(tuple[Echo, ...], True, id='a tuple of them'),
+        pytest.param(Sequence[Echo] | None, True, id='nested'),
+        pytest.param(Callable[[int], Echo], True, id='a callable returning one'),
+        pytest.param(tuple[str, ...], False, id='another type'),
+    ],
+)
+def test_a_function_returning_an_application_component_in_any_shape_mentions_it(
+    annotation: object, mentions: bool
+) -> None:
+    """A factory joins the run whatever shape its return annotation wraps the component in."""
+    assert (Echo in mentioned(annotation)) is mentions
+
+
+@pytest.mark.parametrize(
+    ('kind', 'handed'),
+    [
+        pytest.param(_OptionalClient, True, id='an optional client'),
+        pytest.param(_NoClient, False, id='no client'),
+    ],
+)
+def test_a_component_handed_a_client_in_any_shape_is_a_client(kind: type, handed: bool) -> None:
+    """A component that may be handed a client is held to the relations of one, whatever its annotation wraps the client in."""
+    assert handed_a_client(kind) is handed
+
+
+def test_every_application_is_declared_by_its_helper_module(program: Program) -> None:
+    """The run reaches an application only through `declared()` in its helper module, which declares every component the package defines.
+
+    A package the run did not reach renders nowhere here, and every relation
+    below would pass without it; so would a component that declares no
+    namespace, since the relations find a component's pods by its namespaces.
+    """
+    missing = sorted(
+        f'{application.package}: tests/{application.module}.py '
+        + (f'defines no `{FACTORY}()`' if application.found else 'is missing')
+        for application in program.applications
+        if application.factory is None
+    )
+    left_out = sorted(
+        f'{application.package}: `{application.module}.{FACTORY}()` declares no {kind.__name__}'
+        for application, declared in program.applications.items()
+        for kind in application.defines
+        if kind not in declared
+    )
+    unplaced = sorted(it.name for it in program.components if not it.namespaces)
+
+    assert program.applications
+    assert not missing, missing
+    assert not left_out, left_out
+    assert not unplaced, unplaced
 
 
 @pytest_asyncio.fixture(scope='module', loop_scope='module', name='applied')
@@ -624,18 +493,18 @@ def test_every_pod_of_a_component_that_keeps_working_while_the_uplink_is_down_ad
     program: Program,
 ) -> None:
     """With the uplink down the worker reaches no cloud node, so the declaration holds every pod at home."""
-    declaring_ = {
-        name: it
-        for name, it in program.components.items()
+    declaring_ = [
+        it
+        for it in program.components
         if it.constraints.site is not None and UPLINK_DOWN in it.constraints.site.declarations
-    }
+    ]
     assert declaring_
 
-    for name, component in declaring_.items():
+    for component in declaring_:
         held = [pod for pod in pods(program.monitor) if pod.namespace in component.namespaces]
-        assert held, name
+        assert held, component.name
         for pod in held:
-            assert schedulable(pod.spec) <= set(NODES) - CLOUD, (name, pod.name)
+            assert schedulable(pod.spec) <= set(NODES) - CLOUD, (component.name, pod.name)
             assert {it['key'] for it in pod.spec.get('tolerations', [])} >= {'node.kubernetes.io/unreachable'}
 
 
@@ -651,9 +520,12 @@ def test_a_declaring_client_of_the_portal_requires_the_portal_to_declare(program
         site = component.constraints.site
         return site is not None and UPLINK_DOWN in site.declarations
 
-    clients = [it for it in program.components.values() if it.client is not None and declares(it)]
+    clients = [it for it in program.components if it.client and declares(it)]
+    portals = [it for it in program.components if issubclass(it.kind, Authelia)]
+
+    assert portals
     if clients:
-        assert declares(program.components['authelia'])
+        assert [it.name for it in portals if not declares(it)] == []
 
 
 def test_a_pod_that_mounts_a_nas_claim_admits_exactly_the_nodes_its_volume_does(program: Program) -> None:
@@ -750,8 +622,8 @@ def test_a_binder_held_to_what_a_local_path_claim_was_handed_binds_it_only_where
     on_local_path = local_path_claims(program.monitor)
     mounted = {(pod.namespace, it): pod for pod in pods(program.monitor) for it in pod.claims}
     read = [
-        (name, namespace, claim, mounted[namespace, claim.name])
-        for name, component in program.components.items()
+        (component.name, namespace, claim, mounted[namespace, claim.name])
+        for component in program.components
         for claim in component.claims
         for namespace in component.namespaces
         if (namespace, claim.name) in on_local_path
@@ -795,10 +667,10 @@ def test_a_pod_kept_to_one_node_by_a_volume_or_a_device_runs_at_the_held_priorit
 
 def test_a_restore_drills_recovered_instance_is_kept_nowhere(program: Program) -> None:
     """Its claim is made fresh each run, so it binds wherever the instance lands; held, a drill would preempt a serving pod."""
-    for name, component in program.components.items():
+    for component in program.components:
         for pod in pods(program.monitor):
             if pod.kind == 'recovered' and pod.namespace in component.namespaces:
-                assert pod.spec == component.constraints.pod_fields_json(), (name, pod.name)
+                assert pod.spec == component.constraints.pod_fields_json(), (component.name, pod.name)
 
 
 def test_no_pod_mounts_a_backed_claim_beside_a_claim_another_pod_could_bind_it_away_from(program: Program) -> None:
@@ -848,25 +720,23 @@ def test_every_pod_that_serves_a_client_of_the_portal_reaches_the_issuers_name_a
 
     Read over every client of the census whose name a route of the run
     serves, so a component that serves a client and forgets the alias fails
-    here whichever component it is.
+    here whichever component it is. Each component handed a client serves one
+    of the census's, at pods a route's Service selects: one declared with a
+    client of its own would escape the alias it is held to.
     """
     served = {client.name: found for client in conventions.sso.CLIENTS if (found := serving(program.monitor, client))}
     aliased = {(str(address), (ISSUER.host,)) for address in ISSUER.addresses}
+    handed = [it for it in program.components if it.client]
 
     assert ISSUER.addresses
-    assert {it.client.name for it in program.components.values() if it.client is not None} <= served.keys()
+    assert handed
+    for component in handed:
+        assert component.serves, component.name
+        assert component.serves <= served.keys(), (component.name, sorted(component.serves - served.keys()))
     for name, found in served.items():
         for pod in found:
             aliases = {(it['ip'], tuple(it['hostnames'])) for it in pod.spec.get('hostAliases', [])}
             assert aliases == aliased, (name, pod.namespace, pod.name)
-
-
-def test_the_run_declares_every_application_component_the_installation_defines(program: Program) -> None:
-    """A component the run leaves out renders nowhere here, and every relation above would pass without it."""
-    defined = {token for cls in components() if (token := stated(cls)) is not None and token.startswith(APPS)}
-    declared = {request.type for request in program.monitor.requested if request.type.startswith(APPS)}
-
-    assert defined - declared == set()
 
 
 @pytest.mark.parametrize('store', ['recent', 'history'])

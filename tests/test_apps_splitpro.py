@@ -30,12 +30,24 @@ from typing import Any
 import process_sessions
 import pytest
 import pytest_asyncio
+from apps_splitpro import (
+    CIPHERTEXT,
+    CLIENT,
+    DATABASE_IMAGE,
+    DATABASE_WRITER_KEY,
+    DRILL_IMAGE,
+    EXPOSURE,
+    FRONTS,
+    IMAGE,
+    RECEIPTS_WRITER_KEY,
+    RECOVERY_CIPHERTEXT,
+    ZONE_IDS,
+)
 from mock_monitor import Recorder, declaring, run_with
 from node_selection import schedulable
 from pinned_image import COMMAND_TIMEOUT, CONTAINER_TIMEOUT, PULL_TIMEOUT, pinned, pulled, require_podman
 
 from kluster import conventions
-from kluster.components.apps import Fronts
 from kluster.components.apps.splitpro import (
     APPLICATION_SQL,
     AUTH,
@@ -46,10 +58,8 @@ from kluster.components.apps.splitpro import (
     SplitProRefused,
 )
 from kluster.components.apps.storage import claim_name
-from kluster.components.cilium import InternetPoolMembers
 from kluster.conventions.backup import BACKED_NAMESPACES, PRECIOUS, BackupFamily
-from kluster.conventions.routes import PROXIED, REWRITE, Exposure, Gate, Held, Proxied, Route
-from kluster.lib.versions import ImagePin
+from kluster.conventions.routes import PROXIED, REWRITE, Exposure, Gate, Proxied, Route
 
 NAMESPACE_TYPE = 'kubernetes:core/v1:Namespace'
 DEPLOYMENT = 'kubernetes:apps/v1:Deployment'
@@ -65,43 +75,10 @@ POLICY = 'crds:cilium.io/v2:CiliumNetworkPolicy'
 HTTP_ROUTE = 'crds:gateway.networking.k8s.io/v1:HTTPRoute'
 RECORD = 'cloudflare:index/dnsRecord:DnsRecord'
 
-#: The census's client, which the program hands the server.
-(CLIENT,) = [client for client in conventions.sso.CLIENTS if client.name == 'splitpro']
-
-#: The route row the server is declared with: its client's host, behind the
-#: proxy, held as the land declares it.
-EXPOSURE = Exposure(routes=(Held(Route(CLIENT.host, internet=PROXIED)),))
-
-#: The pins it is declared with here: references that are no published image,
-#: so a container carrying one carries that pin.
-IMAGE = ImagePin('registry.example.invalid/splitpro', 'v9.9.9', f'sha256:{"a" * 64}')
-DATABASE_IMAGE = ImagePin('registry.example.invalid/pgcron', '17.9', f'sha256:{"b" * 64}')
-DRILL_IMAGE = ImagePin('registry.example.invalid/drill', '1.0', f'sha256:{"c" * 64}')
 
 #: The portal's issuer, as the program would hand it.
 ISSUER = conventions.sso.Issuer('https://auth.example.invalid')
 
-#: The ciphertexts it is handed, each naming what it stands for.
-CIPHERTEXT = {
-    'nextauth_secret': 'sealed-session-secret',
-    'oidc_client_id': 'sealed-client-id',
-    'oidc_client_secret': 'sealed-client-secret',
-}
-RECOVERY_CIPHERTEXT = {'gcs_credentials': 'sealed-service-account-key'}
-DATABASE_WRITER_KEY = {'AWS_ACCESS_KEY_ID': 'sealed-barman-id', 'AWS_SECRET_ACCESS_KEY': 'sealed-barman-secret'}
-RECEIPTS_WRITER_KEY = {'AWS_ACCESS_KEY_ID': 'sealed-volsync-id', 'AWS_SECRET_ACCESS_KEY': 'sealed-volsync-secret'}
-
-FRONTS = Fronts(
-    internet=InternetPoolMembers(
-        node_private_ips={'cp-1': '10.0.1.11'},
-        node_guas={'cp-1': '2001:db8:1::11'},
-        dedicated_vip='10.0.1.99',
-        balancer_v4='203.0.113.10',
-        balancer_v6='2001:db8::10',
-    ),
-    worker_gua='2001:db8:70::10',
-)
-ZONE_IDS = {conventions.ZONE_PRIMARY: 'the-primary-zones-id'}
 
 #: The path NextAuth sends a browser back to, under its own URL: its callback
 #: route and the provider's identifier, the provider's name lowercased.

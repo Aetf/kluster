@@ -17,14 +17,14 @@ from typing import Any
 
 import pytest
 import pytest_asyncio
+from apps_stdiscosrv import EXPOSURE, FIND, FRONTS, IMAGE, ZONE_IDS
 from mock_monitor import Recorder, declaring, run_with
 
 from kluster import conventions
-from kluster.components.apps import WORLD_ENTITY, Fronts
+from kluster.components.apps import WORLD_ENTITY
 from kluster.components.apps import stdiscosrv as stdiscosrv_app
 from kluster.components.apps.stdiscosrv import Stdiscosrv
 from kluster.components.certificates import ISSUER
-from kluster.components.cilium import InternetPoolMembers
 from kluster.conventions.cluster import Transports
 from kluster.conventions.routes import (
     REWRITE,
@@ -32,16 +32,12 @@ from kluster.conventions.routes import (
     Dedicated,
     Direct,
     Exposure,
-    Held,
     Host,
     Passthrough,
     Port,
-    PortRedirect,
     Route,
-    Vip,
 )
 from kluster.lib.k8s import POD_SECURITY_ENFORCE_LABEL, PodSecurity
-from kluster.lib.versions import ImagePin
 
 SERVICE = 'kubernetes:core/v1:Service'
 DEPLOYMENT = 'kubernetes:apps/v1:Deployment'
@@ -49,34 +45,6 @@ NAMESPACE = 'kubernetes:core/v1:Namespace'
 CERTIFICATE = 'crds:cert-manager.io/v1:Certificate'
 POLICY = 'crds:cilium.io/v2:CiliumNetworkPolicy'
 HTTP_ROUTE = 'crds:gateway.networking.k8s.io/v1:HTTPRoute'
-
-FRONTS = Fronts(
-    internet=InternetPoolMembers(
-        node_private_ips={'cp-1': '10.0.1.11'},
-        node_guas={'cp-1': '2001:db8:1::11'},
-        dedicated_vip='10.0.1.99',
-        balancer_v4='203.0.113.10',
-        balancer_v6='2001:db8::10',
-    ),
-    worker_gua='2001:db8:70::10',
-)
-ZONE_IDS = {conventions.ZONE_PRIMARY: 'the-primary-zones-id'}
-
-#: The discovery port: dialed at two names through the balancer, the first
-#: held as a row whose name the legacy VPS keeps, and at a third at home.
-FIND = Port(
-    'st-find',
-    8444,
-    Transports.TCP,
-    internet=Balancer((Held(Host('st-find')), Host('st-also'))),
-    lan=Vip('st-home'),
-)
-#: The redirect a device that names the server with no port is answered with,
-#: held as the name it shares is.
-REDIRECT = PortRedirect('st-home', FIND.port, internet=Direct('a raw port'), lan=REWRITE)
-EXPOSURE = Exposure(routes=(Held(REDIRECT),), ports=(FIND,))
-
-IMAGE = ImagePin('registry.example.invalid/discosrv', 'v9.9.9', f'sha256:{"3" * 64}')
 
 
 @pytest_asyncio.fixture(scope='module', loop_scope='module')

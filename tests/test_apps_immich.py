@@ -31,6 +31,21 @@ from typing import Any
 import process_sessions
 import pytest
 import pytest_asyncio
+from apps_immich import (
+    CLIENT,
+    CONFIG_CIPHERTEXT,
+    DATABASE_IMAGE,
+    DRILL_IMAGE,
+    EXPORTER_IMAGE,
+    ISSUER,
+    ML_IMAGE,
+    RECOVERY_CIPHERTEXT,
+    REDIS_CIPHERTEXT,
+    REDIS_IMAGE,
+    ROUTE,
+    SERVER_IMAGE,
+    arguments,
+)
 from mock_monitor import Recorder, declaring, run_with
 from pinned_image import (
     COMMAND_TIMEOUT,
@@ -43,11 +58,10 @@ from pinned_image import (
 )
 
 from kluster import conventions
-from kluster.components.apps import Fronts, exim
+from kluster.components.apps import exim
 from kluster.components.apps import immich as immich_app
-from kluster.components.apps.immich import APPLICATION_SQL, CONFIG, RECOVERY, REDIS, Immich, ImmichRefused, Refusal
+from kluster.components.apps.immich import APPLICATION_SQL, CONFIG, Immich, ImmichRefused, Refusal
 from kluster.components.apps.immich import watchdog as watchdog_layer
-from kluster.components.cilium import InternetPoolMembers
 from kluster.components.gpu import GPU_RESOURCE
 from kluster.components.monitoring.operator_objects import type_token
 from kluster.conventions.backup import BACKED_NAMESPACES, BackupFamily
@@ -56,7 +70,6 @@ from kluster.conventions.routes import (
     PROXIED,
     REWRITE,
     Apex,
-    Direct,
     Exposure,
     Gate,
     Held,
@@ -66,9 +79,8 @@ from kluster.conventions.routes import (
     RouteRow,
     Vip,
 )
-from kluster.conventions.sso import Client, Factor, Grant, Issuer, Scope, TokenEndpointAuth
+from kluster.conventions.sso import Client
 from kluster.lib.k8s import POD_SECURITY_ENFORCE_LABEL, PodSecurity
-from kluster.lib.versions import ImagePin
 
 HTTP_ROUTE = 'crds:gateway.networking.k8s.io/v1:HTTPRoute'
 SERVICE = 'kubernetes:core/v1:Service'
@@ -86,44 +98,6 @@ CLUSTER = 'crds:postgresql.cnpg.io/v1:Cluster'
 OBJECT_STORE = 'crds:barmancloud.cnpg.io/v1:ObjectStore'
 VMRULE = type_token('VMRule')
 
-FRONTS = Fronts(
-    internet=InternetPoolMembers(
-        node_private_ips={'cp-1': '10.0.1.11'},
-        node_guas={'cp-1': '2001:db8:1::11'},
-        dedicated_vip='10.0.1.99',
-        balancer_v4='203.0.113.10',
-        balancer_v6='2001:db8::10',
-    ),
-    worker_gua='2001:db8:70::10',
-)
-ZONE_IDS = {conventions.ZONE_PRIMARY: 'the-primary-zones-id'}
-
-ROUTE = Route('im-photos', internet=Direct('uploads larger than the proxy accepts'), lan=REWRITE)
-#: The route held, as it is while the legacy VPS keeps the name.
-PHOTOS = Exposure(routes=(Held(ROUTE),))
-#: The mobile app's own redirect, which immich hands the portal as it is.
-MOBILE = 'app.immich:///oauth-callback'
-CLIENT = Client(
-    'im',
-    'im-photos',
-    ('/auth/login', '/user-settings'),
-    policy=(Grant('im-users', Factor.TWO),),
-    token_endpoint_auth=TokenEndpointAuth.BASIC,
-    scopes=(Scope.OPENID, Scope.PROFILE),
-    native=(MOBILE,),
-)
-ISSUER = Issuer('https://portal.example.invalid')
-
-SERVER_IMAGE = ImagePin('registry.example.invalid/server', 'v9.9.9', f'sha256:{"1" * 64}')
-ML_IMAGE = ImagePin('registry.example.invalid/ml', 'v9.9.9-openvino', f'sha256:{"2" * 64}')
-REDIS_IMAGE = ImagePin('registry.example.invalid/redis', '9.9.9', f'sha256:{"3" * 64}')
-EXPORTER_IMAGE = ImagePin('registry.example.invalid/exporter', 'v9.9.9', f'sha256:{"6" * 64}')
-DATABASE_IMAGE = ImagePin('registry.example.invalid/vchord', '15.99', f'sha256:{"4" * 64}')
-DRILL_IMAGE = ImagePin('registry.example.invalid/drill', '1.0.0', f'sha256:{"5" * 64}')
-
-REDIS_CIPHERTEXT = {key: f'AgB-ported-{key}' for key in REDIS.keys}
-CONFIG_CIPHERTEXT = {key: f'AgB-ported-{key}' for key in CONFIG.keys}
-RECOVERY_CIPHERTEXT = {key: f'AgB-ported-{key}' for key in RECOVERY.keys}
 
 #: One action of the controller's template: a Go string constant, a sealed
 #: key's decrypted value, or that value written by sprig's `toJson`.
@@ -145,31 +119,6 @@ LABEL = f'kluster-test={Path(__file__).stem}'
 SCRIPT = Path(immich_app.__file__).parent / 'templates' / watchdog_layer.SCRIPT
 #: What the kubelet sets in every container, beside what the pod states.
 KUBELET_SET = frozenset({'KUBERNETES_SERVICE_HOST', 'KUBERNETES_SERVICE_PORT'})
-
-
-def writer_key(namespace: str) -> dict[str, str]:
-    """A namespace's sealed writer key, its ciphertext naming the namespace."""
-    return {'AWS_ACCESS_KEY_ID': f'{namespace}-id', 'AWS_SECRET_ACCESS_KEY': f'{namespace}-secret'}
-
-
-def arguments(**changed: Any) -> dict[str, Any]:
-    return {
-        'exposure': PHOTOS,
-        'client': CLIENT,
-        'issuer': ISSUER,
-        'server_image': SERVER_IMAGE,
-        'ml_image': ML_IMAGE,
-        'redis_image': REDIS_IMAGE,
-        'exporter_image': EXPORTER_IMAGE,
-        'database_image': DATABASE_IMAGE,
-        'drill_image': DRILL_IMAGE,
-        'redis': REDIS_CIPHERTEXT,
-        'config': CONFIG_CIPHERTEXT,
-        'recovery': RECOVERY_CIPHERTEXT,
-        'writer_key': writer_key(immich_app.NAMESPACE),
-        'fronts': FRONTS,
-        'zone_ids': ZONE_IDS,
-    } | changed
 
 
 @pytest_asyncio.fixture(scope='module', loop_scope='module')

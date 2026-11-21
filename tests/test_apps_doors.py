@@ -25,17 +25,15 @@ from typing import Any
 import process_sessions
 import pytest
 import pytest_asyncio
+from apps_doors import APEX, COHOST, FRONTS, LAND, SERVER, ZONE_IDS
 from mock_monitor import Recorder, declaring, run_with
 from node_selection import CLOUD, NODES, schedulable
 from pinned_image import COMMAND_TIMEOUT, CONTAINER_TIMEOUT, pinned, pulled, require_podman
 
-from kluster.components.apps import Fronts
 from kluster.components.apps import doors as doors_app
 from kluster.components.apps.doors import directories, doors
-from kluster.components.cilium import InternetPoolMembers
-from kluster.conventions.routes import PROXIED, Apex, Exposure, Held, Route
+from kluster.conventions.routes import PROXIED, Apex, Exposure, Route
 from kluster.lib.k8s import POD_SECURITY_ENFORCE_LABEL, PodSecurity
-from kluster.lib.versions import ImagePin
 
 DEPLOYMENT = 'kubernetes:apps/v1:Deployment'
 CONFIG_MAP = 'kubernetes:core/v1:ConfigMap'
@@ -44,19 +42,6 @@ VOLUME = 'kubernetes:core/v1:PersistentVolume'
 CLAIM = 'kubernetes:core/v1:PersistentVolumeClaim'
 SOURCE = 'crds:volsync.backube/v1alpha1:ReplicationSource'
 
-#: The apex's zone, and the zone of the two other names.
-APEX = 'doors-apex.example'
-COHOST = 'doors-cohost.example'
-
-#: The doors at their land: the apex, and `games` and `game` held while the
-#: legacy VPS still serves them.
-LAND = Exposure(
-    routes=(
-        Apex((APEX,)),
-        Held(Route('games', internet=PROXIED, zones=(COHOST,))),
-        Held(Route('game', internet=PROXIED, zones=(COHOST,))),
-    )
-)
 
 #: The doors once cut.
 CUT = Exposure(
@@ -70,20 +55,6 @@ CUT = Exposure(
 #: The legacy webroot's directory each name was served from, which the copy
 #: onto the NAS keeps.
 LEGACY_WEBROOT = {APEX: 'door-jiahui', f'games.{COHOST}': 'door-shiyu', f'game.{COHOST}': 'door'}
-
-SERVER = ImagePin('registry.example.invalid/static', 'v9.9.9', f'sha256:{"d" * 64}')
-
-FRONTS = Fronts(
-    internet=InternetPoolMembers(
-        node_private_ips={'cp-1': '10.0.1.11'},
-        node_guas={'cp-1': '2001:db8:1::11'},
-        dedicated_vip='10.0.1.99',
-        balancer_v4='203.0.113.10',
-        balancer_v6='2001:db8::10',
-    ),
-    worker_gua='2001:db8:70::10',
-)
-ZONE_IDS = {zone: f'{zone}-id' for zone in (APEX, COHOST)}
 
 
 @pytest_asyncio.fixture(scope='module', loop_scope='module')

@@ -44,6 +44,14 @@ import process_sessions
 import pytest
 import pytest_asyncio
 import yaml
+from apps_authelia import (
+    CONFIG_CIPHERTEXT,
+    GATED,
+    SECRETS_CIPHERTEXT,
+    STORAGE_KEY,
+    WRITER_KEY,
+    declare,
+)
 from committed_stack_files import StackFiles
 from mock_monitor import Recorder, declaring, run_with
 from node_selection import CLOUD, NODES, schedulable
@@ -52,7 +60,6 @@ from pulumi import runtime
 from section_numbers import sections
 
 from kluster import conventions
-from kluster.components.apps import Fronts
 from kluster.components.apps.authelia import (
     ACCESS_RULES,
     AUTH_CANARY,
@@ -64,7 +71,6 @@ from kluster.components.apps.authelia import (
     RECEIVE,
     SECRETS,
     AccessRule,
-    Authelia,
     Group,
     User,
     gate_endpoints,
@@ -72,13 +78,11 @@ from kluster.components.apps.authelia import (
 from kluster.components.apps.exim import HOST as SMTP_HOST
 from kluster.components.apps.exim import PORT as SMTP_PORT
 from kluster.components.apps.storage import claim_name
-from kluster.components.cilium import InternetPoolMembers
 from kluster.components.monitoring.operator_objects import type_token
 from kluster.conventions.backup import BACKED_NAMESPACES, PRECIOUS, BackupFamily, duration, max_age
-from kluster.conventions.routes import PROXIED, REWRITE, Exposure, Gate, Held, Proxied, Route
+from kluster.conventions.routes import PROXIED, REWRITE, Exposure, Gate, Proxied, Route
 from kluster.conventions.sso import Factor
 from kluster.lib.k8s import PORTAL, Backend, Portal, route, sealed_ciphertext
-from kluster.lib.versions import ImagePin
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -95,37 +99,8 @@ GRANT = 'crds:gateway.networking.k8s.io/v1:ReferenceGrant'
 VMRULE = type_token('VMRule')
 PASSWORD = 'random:index/randomPassword:RandomPassword'
 
-#: The route row the portal is declared with, held as the land declares it.
-EXPOSURE = Exposure(routes=(Held(Route('auth', internet=PROXIED, lan=REWRITE)),))
 PORTAL_HOST = f'auth.{conventions.ZONE_PRIMARY}'
 
-#: The pins it is declared with here: references that are no published
-#: image, so a container carrying one carries that pin.
-IMAGE = ImagePin('registry.example.invalid/authelia', 'v9.9.9', f'sha256:{"a" * 64}')
-REDIS_IMAGE = ImagePin('registry.example.invalid/redis', 'v9.9.9', f'sha256:{"b" * 64}')
-CANARY_IMAGE = ImagePin('registry.example.invalid/curl', 'v9.9.9', f'sha256:{"c" * 64}')
-TARGET_IMAGE = ImagePin('registry.example.invalid/nginx', 'v9.9.9', f'sha256:{"d" * 64}')
-
-#: The ciphertexts it is handed, each naming what it stands for.
-SECRETS_CIPHERTEXT = {key: f'sealed-{key}' for key in SECRETS.keys}
-CONFIG_CIPHERTEXT = {key: f'sealed-{key}' for key in CONFIG_SECRETS.keys}
-STORAGE_KEY = {key: f'sealed-{key}' for key in conventions.sealed.AUTHELIA_STORAGE_KEY.keys}
-WRITER_KEY = {'AWS_ACCESS_KEY_ID': 'sealed-key-id', 'AWS_SECRET_ACCESS_KEY': 'sealed-key-secret'}
-
-#: A namespace whose routes the gate guards.
-GATED = 'some-application'
-
-FRONTS = Fronts(
-    internet=InternetPoolMembers(
-        node_private_ips={'cp-1': '10.0.1.11'},
-        node_guas={'cp-1': '2001:db8:1::11'},
-        dedicated_vip='10.0.1.99',
-        balancer_v4='203.0.113.10',
-        balancer_v6='2001:db8::10',
-    ),
-    worker_gua='2001:db8:70::10',
-)
-ZONE_IDS = {conventions.ZONE_PRIMARY: 'the-primary-zones-id'}
 
 #: The label a container started here carries, and so the census of what a run
 #: has left: `podman ps --all --filter label=kluster-test=test_apps_authelia`.
@@ -137,25 +112,6 @@ class Generating(Recorder):
 
     def computed(self, args: runtime.MockResourceArgs) -> dict[str, Any]:
         return {'result': 'generated-in-state'} if args.typ == PASSWORD else {}
-
-
-def declare(*, exposure: Exposure = EXPOSURE, receiving: bool = False) -> Authelia:
-    return Authelia(
-        'authelia',
-        exposure=exposure,
-        image=IMAGE,
-        redis_image=REDIS_IMAGE,
-        canary_image=CANARY_IMAGE,
-        target_image=TARGET_IMAGE,
-        secrets=SECRETS_CIPHERTEXT,
-        config_secrets=CONFIG_CIPHERTEXT,
-        storage_key=STORAGE_KEY,
-        writer_key=WRITER_KEY,
-        gated=(GATED,),
-        fronts=FRONTS,
-        zone_ids=ZONE_IDS,
-        receiving=receiving,
-    )
 
 
 @pytest_asyncio.fixture(scope='module', loop_scope='module')

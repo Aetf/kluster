@@ -34,17 +34,16 @@ from typing import Any
 import process_sessions
 import pytest
 import pytest_asyncio
+from apps_matrix import CIPHERTEXT, CLIENT, EXPOSURE, FRONTS, IMAGE, WRITER_KEY, ZONE_IDS
 from mock_monitor import Recorder, declaring, run_with
 from pinned_image import COMMAND_TIMEOUT, CONTAINER_TIMEOUT, pinned, pulled, require_podman
 from pulumi import runtime
 
 from kluster import conventions
-from kluster.components.apps import Fronts
 from kluster.components.apps.matrix import NAMESPACE, OIDC, RECEIVE, Matrix, delegation, server_configuration
 from kluster.components.apps.storage import claim_name
-from kluster.components.cilium import InternetPoolMembers
 from kluster.conventions.backup import BACKED_NAMESPACES, PRECIOUS, BackupFamily
-from kluster.conventions.routes import PROXIED, REWRITE, Exposure, Gate, Held, Proxied, Route
+from kluster.conventions.routes import PROXIED, REWRITE, Exposure, Gate, Proxied, Route
 from kluster.lib.versions import ImagePin
 
 NAMESPACE_TYPE = 'kubernetes:core/v1:Namespace'
@@ -63,36 +62,10 @@ PASSWORD = 'random:index/randomPassword:RandomPassword'
 #: (`src/service/oidc/mod.rs` at v26.9.1).
 UPSTREAM_REDIRECT_PATH = '/_continuwuity/oidc/complete'
 
-#: The census's client, which the program hands the homeserver.
-(CLIENT,) = [client for client in conventions.sso.CLIENTS if client.name == 'matrix']
-
-#: The route row the homeserver is declared with: its client's host, behind
-#: the proxy, held as the land declares it.
-EXPOSURE = Exposure(routes=(Held(Route(CLIENT.host, internet=PROXIED)),))
-
-#: The pin it is declared with here: a reference that is no published image,
-#: so a container carrying it carries the pin.
-IMAGE = ImagePin('registry.example.invalid/continuwuity', 'v9.9.9', f'sha256:{"e" * 64}')
 
 #: The portal's issuer, as the program would hand it: where the stub issuer
 #: listens beside the server when a case runs the pinned image.
 ISSUER = 'http://127.0.0.1:8080'
-
-#: The ciphertexts it is handed, each naming what it stands for.
-CIPHERTEXT = {'oidc_client_id': 'sealed-client-id', 'oidc_client_secret': 'sealed-client-secret'}
-WRITER_KEY = {'AWS_ACCESS_KEY_ID': 'sealed-key-id', 'AWS_SECRET_ACCESS_KEY': 'sealed-key-secret'}
-
-FRONTS = Fronts(
-    internet=InternetPoolMembers(
-        node_private_ips={'cp-1': '10.0.1.11'},
-        node_guas={'cp-1': '2001:db8:1::11'},
-        dedicated_vip='10.0.1.99',
-        balancer_v4='203.0.113.10',
-        balancer_v6='2001:db8::10',
-    ),
-    worker_gua='2001:db8:70::10',
-)
-ZONE_IDS = {conventions.ZONE_PRIMARY: 'the-primary-zones-id'}
 
 
 class Generating(Recorder):
