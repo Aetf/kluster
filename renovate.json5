@@ -104,7 +104,7 @@
   // equal.
   constraints: {
     uv: '0.13.7',
-    mise: '2026.10.5',
+    mise: '2026.11.8',
   },
   dockerfile: {
     // The self-built images' recipes are `*.Containerfile`, which the
