@@ -58,8 +58,11 @@ except where a bullet says otherwise:
 * provider-facing code has one more requirement —
   [dispatch.md](docs/framework/dispatch.md) §1.1
 
-New behavior ships with a test that fails without it, and the
-documentation the change makes true ships with it rather than after it.
+New behavior ships with a test that fails without it wherever a test
+earns its place ([testing.md](docs/framework/testing.md), "Every test
+earns its place"): a property the design can hold is held by the design
+instead, and is not tested. The documentation the change makes true
+ships with it rather than after it.
 
 ## Writing the code
 
@@ -95,11 +98,10 @@ documentation the change makes true ships with it rather than after it.
   [docs/style/pulumi.md](docs/style/pulumi.md) under "Layering".
 * **Scripts are Python**, not shell — a shell script needs a reason (a
   handful of lines with no logic, or a context with no interpreter). They
-  live under `src/kluster/scripts/` and are exposed as console scripts in
-  `pyproject.toml` (`update_crds`, `credentials`, `state-backend`,
-  `operator-stack`, `ci-stack`, `stack-plan`, `typecheck`, `perf`,
-  `checks-scope`, `drill`), the same way for every script; `just` recipes or
-  symlinks are for convenience on top, never the home of the logic.
+  live under `src/kluster/scripts/`, and every one is exposed as a
+  console script in `pyproject.toml`'s `[project.scripts]`, which is the
+  census of them; `just` recipes or symlinks are for convenience on top,
+  never the home of the logic.
 * How code and prose are written — naming, comments, component and
   provider architecture — is `docs/style/`, and a reviewer holds every
   change to it.
