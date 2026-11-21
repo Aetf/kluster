@@ -238,6 +238,49 @@ Every mover states its pod security context, without which `restricted`
 refuses it, as the user the workload runs as, so that it can read the
 data, and its resources (declarative/workloads.md §1).
 
+**A seed fills a claim from data the cluster does not own.** `claim`
+takes `seeded_from`, a `Seeding` of a `nas_claim`, a tag and whether the
+apply waits, as a second origin of an `rsync-tls` copy beside the move.
+The two share the rendering of the pair and nothing else: a seed raises
+no generation, names no node labels, is ordered after no workload, and
+leaves the claim's hold, and the constraints the `Claim` records, what the
+same call renders without it. Its source reads the NAS claim and its
+destination writes the claim, under one name,
+`<name>-seed-g<generation>`, both started by the tag
+(`trigger.manual`); a waited pass carries the source's
+`pulumi.com/waitFor` on `lastManualSync` under that tag, and a pass not
+waited for carries none, so its apply ends once the objects exist and
+VolSync starts the pass on its first reconcile. Neither mover states an
+affinity: the NAS volume's node affinity places the source, and the
+claim's class places the destination, which the class's allowed topology
+holds to the volume's node. Data the cluster owns is moved with
+`moving_to` instead.
+
+**New rule:** a seed fills only a node volume's claim, under `off`, that
+is not moving, and `claim` refuses every other before anything is
+registered. On `local-path` the destination, the claim's first consumer,
+would bind the claim wherever it landed, in the workload's stead, which
+is a move's case under another name; a node volume's class places the
+claim through its allowed topology, so being first decides nothing there.
+Under a retention class the restic source, which syncs on its first
+reconcile, would keep a snapshot of the half-filled claim for the
+class's whole retention. Beside `moving_to` it is a second copy into the
+claim at the same time. An empty tag is refused too: with no schedule it
+is VolSync's trigger-less sync, which starts again as soon as each one
+ends (`statemachine/machine.go`, `shouldSync`, VolSync 0.16.0).
+
+**New rule:** a waited tag is set only while the pass before it is idle,
+and every tag is new to the pair, which has never recorded it. VolSync
+records, when a pass ends, the tag the spec holds at that moment, not
+the one the pass started under (`transitionToCleaningUp`, the same
+file), so a tag changed while a pass runs reports that pass under the
+new tag, and the wait goes
+green on a copy that began before the writer stopped. A tag already
+recorded asks for no pass at all, and the wait on it passes on the data
+already there, so a pass asked for again, after a rollback in which the
+source was written, takes a new tag. Idle reads as `lastManualSync`
+holding the previous tag and no `lastSyncStartTime`, on both objects.
+
 **A restic mover runs where the workload does.** A `local-path` claim
 binds on the node its first consumer is scheduled to, and VolSync
 0.16.0 places a `Direct` mover beside a pod that uses the claim and
@@ -323,9 +366,16 @@ carries the label until the worker's GPU is bound to the device plugin
 (declarative/cluster-infra.md §1, item 7), and until then the mover of a
 claim beside a GPU request stays pending, as the workload does.
 
-Every claim with a mover carries the allow for its movers' traffic,
-which reaches the claim's namespace, the cluster's DNS and, for a restic
-mover, the bucket's endpoint, and nothing else. **Unproven live**: the
+Every claim with a mover, a restic source's, a move's pair or a seed's,
+carries the allow for its movers' traffic, which reaches the claim's
+namespace, the cluster's DNS and, for a restic mover, the bucket's
+endpoint, and nothing else. The allow is a narrowing: its first egress
+rule turns default-deny on for the movers' egress, and without it a
+mover is held only by its namespace's own policies, under which a seed's
+movers on an `off` claim would reach the public internet. **Unproven
+live**: a seed's destination placed by the class's topology alone on a
+claim that is not yet bound, and its source reading a read-only NFS
+volume under `all_squash` with `rsync -A`; the
 destination's mover placing a claim that is not yet bound, a restic
 mover's affinity holding such a claim to its workload's constraints and
 to the nodes the GPU plugin's rule labels, the destination's affinity

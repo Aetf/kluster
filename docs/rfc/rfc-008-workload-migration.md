@@ -212,6 +212,18 @@
     is an estimate by an assumed placement. §4.1, §4.2's `claim`, §4.3,
     §4.5, §5's image rule and data technique, §5.2, §5.3, §5.5 and §6.1
     follow it.
+*   **Updated:** 2026-11-21. hath's cache is seeded rather than moved
+    ([Aetf/kluster-ops#906](https://github.com/Aetf/kluster-ops/issues/906)):
+    `claim` takes `seeded_from`, a second origin of the move's
+    `rsync-tls` pair, which raises no generation and leaves the claim's
+    hold as it is (§4.2, storage.md §3.1). Its destination selects no
+    node, since the claim's class places it, and §4.2's and §5.4's
+    sentences that had it select the volume's label follow ops#78. hath
+    takes the stage, `Stage(tag, final)`, as its one migration
+    parameter (§5.4); slice 34's head reads the legacy client gone and
+    the warm pass idle before the land; slice 35 deletes the stage, the
+    seed and the NAS claim; and slice 35a deletes the seed's machinery
+    once nothing calls it (§10.3).
 *   **Authority:** AGENTS.md,
     [framework/dispatch.md](../framework/dispatch.md),
     [framework/rfc.md](../framework/rfc.md) and the style rules
@@ -1464,8 +1476,8 @@ canary cluster-infra.md §2 requires lands with Authelia's component
 **One claim on a node, one on the NAS, and a class for a node volume:**
 
 *   **`claim(name, size, retention, *, uid, constraints, generation=0,
-    moving_to=None, storage_class=local-path)`** is the one claim on a
-    node. `constraints` are the workload's node constraints
+    moving_to=None, seeded_from=None, storage_class=local-path)`** is
+    the one claim on a node. `constraints` are the workload's node constraints
     (workloads.md §1), whose node affinity the claim's restic mover
     carries, so that a mover reaching the claim before the pod binds it
     on a node the workload may run on (storage.md §3.1).
@@ -1537,11 +1549,19 @@ under any retention. A move is three steps:
 A mover states `moverSecurityContext`, without which `restricted`
 refuses it, as the identity `claim` takes for the pod, so that it can
 read the data, and its resources, as workloads.md §1 asks. `claim`
-emits, for every claim, the allow for a mover's traffic inside its
-namespace and to the cluster's DNS, and for a restic mover's egress to
-the bucket. **Unproven live**: `moverAffinity` placing an unbound claim,
-the generated key shared by a source and a destination of one name, and
-a DNS name in `address`.
+emits, for every claim that renders a mover, the allow for a mover's
+traffic inside its namespace and to the cluster's DNS, and for a restic
+mover's egress to the bucket. **Unproven live**: `moverAffinity` placing
+an unbound claim, the generated key shared by a source and a destination
+of one name, and a DNS name in `address`.
+
+**A seed is a second origin of the pair.** `seeded_from` copies data the
+cluster does not own, a `nas_claim`, into a node volume's claim under
+`off`, over the same `rsync-tls` pair a move renders, one pass per tag,
+waited for or not. It raises no generation, names no node labels and
+leaves the claim's hold as it is, and storage.md §3.1 has where it is
+admitted and the rules on its tags. hath's cache is seeded from its
+legacy directory on the NAS (§5.4).
 
 immich's model cache, 11 GiB that re-derives, takes `off`, so immich's
 namespace has no restic repository; its barman scope and key stand for
@@ -1563,9 +1583,10 @@ its directory, and the annotation `defaultVolumeType: local`. hath
 declares an ordinary claim of its class, protected. The class's allowed
 topology matches `NODE_VOLUME_LABEL`, the label `physical` already sets
 on the volume's node, so its client selects no node: the scheduler
-places it on the volume's node. The copy pair's destination names that
-label all the same, because a copy names the node labels it moves to
-(`moving_to`) and cannot leave them empty.
+places it on the volume's node. The seed's destination, which fills the
+claim, selects no node either. A pod states a node constraint only for a
+fact the scheduler cannot read from what it mounts, and the destination
+mounts a claim whose class names its node.
 storage.md §6's static `PersistentVolume` and seeding step go, and
 `k8s-base` gains the class and one key of a configuration it already
 renders.
@@ -2111,20 +2132,40 @@ the slice stops and reports if that is what it would take.
 the legacy client still serves, and two clients online under one login
 are refused by the network:
 
-1.  **Stage.** The component is wired with its client not started, and
-    next to it, a copy pair: a `rsync-tls` source on the worker over
-    `nas_claim('Hath', read_only)`, and a destination on the dedicated
-    node, selecting the volume's label, over the cache claim, each
-    `copyMethod: Direct` with `trigger.manual`. The first tag is the
-    warm copy, which the apply does not wait for.
-2.  **Land.** The legacy client is stopped, a second tag copies the
-    final delta and the client state, the apply waiting on
-    `lastManualSync` for it as §4.2's first step does, and the client
-    depending on that, and the client starts.
+1.  **Stage.** The component is wired at `Stage('warm', final=False)`:
+    its client at zero replicas, and its cache's claim seeded from
+    `nas_claim('Hath', read_only)` (§4.2). The seed's `rsync-tls` source
+    runs on the worker, which alone mounts the NAS, and its destination
+    on the dedicated node, where the claim's class places it, each
+    `copyMethod: Direct` with `trigger.manual`. The tag `warm` is the
+    warm copy, which the apply does not wait for. It reads a cache the
+    legacy client is writing, so it is torn, and its attempts may keep
+    failing while the client evicts files, each one bringing the
+    destination closer to the source; nothing reads the destination
+    until the final pass.
+2.  **Land.** The legacy client is stopped, and the warm pass goes idle,
+    each read at the head (§10.3, slice 34). Then `Stage('final',
+    final=True)` changes the tag on both objects, which copies the final
+    delta and the client state from a source nobody writes. The apply
+    waits on `lastManualSync=final`, with a timeout that bounds a full
+    copy, and the client, scaled to one, depends on the seed's source,
+    so its update is issued only once the source's has finished. A land
+    that times out fails the source's step, the client's update is
+    skipped, and the client never starts on a partial cache. A red land
+    is read, not re-applied: `lastManualSync` holding the land's tag
+    means the pass is done; otherwise the pass is still running or
+    failing, as the mover's logs say. A rollback reverts the land: the
+    client goes back to zero and the tag back to `warm`, and that warm
+    pass may start while the client stops, which is harmless, since the
+    next land's pass is the one waited for. A land after a rollback in
+    which the legacy client served again takes a tag the pair has not
+    recorded (storage.md §3.1).
 3.  **Cut.** The new address is registered with the network, and the
-    copy pair and the not-started parameter are deleted. The parameter
-    is a migration layer of the component's own: its boundary is the
-    parameter and the copy pair, and it goes here.
+    stage, the seed and the NAS claim are deleted. They are a migration
+    layer of the component's own, and they go here: the client at one
+    replica with no dependency, and the claim, which the seed never
+    changed, left as it is. The NAS claim reclaims `Retain`, so the
+    legacy data stays on the NAS until slice 45 removes legacy hath.
 
 *   **hath**: its client on the node the volume follows, its login
     ported, strict CPU limits, and the `hath` row. The legacy egress pods
@@ -2662,7 +2703,7 @@ worker has given the memory back. **New rule**, landing in migration.md
 | [framework/ci.md](../framework/ci.md) | ci.md §3: `up-k8s-base` and `up-apps` after `up-dns`, from §3.4; the handler's member among what `credentials derived sync` pushes, `HA_WEBHOOK_URL` at Home Assistant's overlay address, and `deploy.yml` ending in the `alert` job with its webhook secret gone, from §4.1 |
 | [sources-of-truth.md](../sources-of-truth.md) | sources-of-truth.md §3: a component that has not migrated is not wired, from §3.1. Note N4 replaced by its answer, from §3.2 and §3.4. Rows R12 and R13: each flip is a cut, and its pull request edits the row; R12's arrangements, from §5.5 and §5.6; R13 without thread-dashboard, from §11.4 |
 | [cluster/architecture.md](../cluster/architecture.md) | architecture.md §3.2 and §3.5: hath's address and egress on its node's primary private address, from §5.4. architecture.md §3.4: Home Assistant's reach, and `haos` among the names `media-gw` answers, from §4.1. architecture.md §4.3: the operations handler's post over the overlay, from §4.1. architecture.md §5.1: the device relays reaching Home Assistant on the IoT VLAN, the UPS card on the Default LAN and the host's leg on the cluster VLAN, from §4.1. architecture.md §3.5: large syncs, from §4.1. architecture.md §3.6: the two dimensions, and the raw home row on its Gateway's VIP, from §4.1. architecture.md §3.6 and §6.7: a TLS passthrough is dropped beside the zone's wildcard listener, so the discovery server is a raw port on 8443, with a redirect to it on 443, from §4.1 |
-| [declarative/physical.md](../declarative/physical.md) | physical.md §1: the reserved address on the node's primary private address, and no secondary address, from §5.4. physical.md §2: the node volume's label, which hath selects, from §4.2. physical.md §6: a claim made with the volume unmounted stays pending, from §4.2 |
+| [declarative/physical.md](../declarative/physical.md) | physical.md §1: the reserved address on the node's primary private address, and no secondary address, from §5.4. physical.md §2: the node volume's label, which its class's allowed topology matches, from §4.2. physical.md §6: a claim made with the volume unmounted stays pending, from §4.2 |
 | [declarative/cluster-infra.md](../declarative/cluster-infra.md) | cluster-infra.md §1.1: the writer keys' channel, from §4.6. cluster-infra.md §2: the canary as built with authelia, the apex listeners, a pod's device and route MTU and the discovery mode, from §4.1 and §5.2. cluster-infra.md §3: the `mon` route and the Cloudflare provider of `k8s-base`, from §5.5 |
 | [credentials.md](../credentials.md) | credentials.md §3: the operations handler's overlay member and its webhook at Home Assistant's overlay address, `HAOS_DEPLOY_WEBHOOK_URL` gone with `deploy.yml`'s own alert, the alert webhook as Home Assistant's own address, the writer keys' sealed delivery, the zones token's `k8s-base` target, the legacy sealing key's row, from §4.6 and §5.5. credentials.md §4: the seal of the writer keys from `physical`'s state, and the sentence on a new volume, from §4.6 |
 | [cluster/storage.md](../cluster/storage.md) | storage.md §2: the two kinds of claim and `cloud-block-<row>`, from §4.2. storage.md §3.1: a move by `rsync-tls`, from §4.2. storage.md §3.3: `off` has no undo, from §4.2. storage.md §6: a node volume as a `local-path` pool, from §4.2. storage.md §5: one database instance, its server name's generation, and the restore drill in place, from §4.3 |
@@ -2928,7 +2969,8 @@ program before it.
     `cloud-block-<row>` class per row in `k8s-base`, its pool derived
     from `NODE_VOLUMES` in the provisioner's configuration, and
     `conventions.node_volume_class(row)` naming it in place of
-    `SC_CLOUD_BLOCK`, with the label's comment saying hath selects it;
+    `SC_CLOUD_BLOCK`, with the label's comment saying a consumer of the
+    class selects no node of its own;
     workloads.md §2 and §3, storage.md §2, §3.1, §3.3 and §6,
     physical.md §2 and §6 and the security audit's residual are true.
 *   **Owned paths**: `src/kluster/components/apps/storage.py` (new),
@@ -3317,9 +3359,10 @@ ended, and slice 45 carries the rest.
 | 30 | A2 | The head: A1's legacy authelia removed; Home Assistant's configured addresses read; both instances' devices and folders read, and each gap fixed on the device; the DNS-01 token minted for the co-host zone into the land's branch; kluster-code stops A2's applications | kluster-code |
 | 31 | A2 | **Land**: blog, splitpro, matrix, syncthing, stdiscosrv; stdiscosrv's row already stands in `EXPOSURES` (§3.1), so the land changes no `physical` plan for it; matrix lands in two pull requests, its receiver's and then its server's (§5.3) | as slice 28, and `Pulumi.k8s-base.yaml` |
 | 32 | A2 | **Cut**: `split`, `matrix` with its SRV, `dav`, `sync`, `syncapi`, the web origin's served apex and both `www`; the `sync-nas` and `btsync` records deleted; matrix's receiver deleted; splitpro's recovery from the legacy store deleted, once its database has archived a base backup of its own | as slice 29, and `src/kluster/components/dns/base.py`, `src/kluster/components/apps/matrix/`, `tests/test_apps_matrix.py`, `src/kluster/components/apps/splitpro/`, `tests/test_apps_splitpro.py` |
-| 33 | after A2 | The head and the **stage**: A2's legacy applications removed; slice 25 applied; the tree on the NAS read as world-readable, or re-owned, since the source reads it as the export's anonymous user; hath wired with its client not started, and the copy pair; the warm copy | as slice 28; kluster-code |
-| 34 | after A2 | **Land**: kluster-code stops legacy hath; the final delta; the client started | as slice 28; kluster-code |
-| 35 | after A2 | **Cut**: the re-registration; the copy pair and the not-started parameter deleted | as slice 28, and `src/kluster/components/apps/hath/`, `tests/test_apps_hath.py` |
+| 33 | after A2 | The head and the **stage**: A2's legacy applications removed; slice 25 applied; the tree on the NAS read as world-readable, or re-owned, since the source reads it as the export's anonymous user; the root of `Hath` on the NAS read as holding `DIRECTORIES`, as the start script names them; hath wired at `Stage('warm', final=False)`, its cache seeded; the warm copy | as slice 28; kluster-code |
+| 34 | after A2 | The head: kluster-code stops legacy hath, read as no pod of it left in the legacy cluster, not one merely at zero replicas, and the client offline at the network; then the warm pass idle, read as `lastManualSync` holding `warm` and no `lastSyncStartTime` on the seed's source and destination. **Land**: `Stage('final', final=True)`, the final delta waited for, the client started behind it | as slice 28; kluster-code |
+| 35 | after A2 | **Cut**: the re-registration; the stage, the seed and the NAS claim deleted | as slice 28, and `src/kluster/components/apps/hath/`, `tests/test_apps_hath.py`, `tests/test_apps_placement.py` (hath's census entry) |
+| 35a | after A2, once slice 35 merges | The seed's machinery deleted, which nothing calls after the cut: `Seeding`, `Seed`, `Claim.seed`, the seed's refusals, their tests and storage.md's paragraphs on them; the pair's timeout back to one every caller passes; the NAS-claim census relation back to pods alone | `src/kluster/components/apps/storage.py`, `tests/test_apps_storage.py`, `tests/test_apps_placement.py`, `docs/cluster/storage.md` |
 | 36 | B | The head: slice 47 merged; the doors' content; Home Assistant's configured addresses read; the UPS card's address read and reserved; the DNS-01 token minted for `jiahui.love` and Grafana's values sealed afresh, both into the land's branch; kluster-code stops Wave B's applications | kluster-code |
 | 37 | B | **Land**: Wave B's applications and the device relays, the UPS card's address and the host leg's beside their rows, the worker's address and Cloudflare's published ranges in Home Assistant's trusted proxies, `k8s-base` hands the monitoring component the held `mon` row and Grafana's client, and builds the Cloudflare provider and the reference to `dns` | as slice 28, and `src/kluster/conventions/__init__.py`, `src/kluster/conventions/site.py`, `src/kluster/conventions/homelab.py`, `docs/physical/homelab-host.md` (§2), `src/kluster/stacks/k8s_base.py`, `src/kluster/scripts/credentials/slots.py`, `Pulumi.k8s-base.yaml`, `tests/test_stack_programs.py`, `tests/test_slots.py`, `docs/credentials.md`, `docs/declarative/cluster-infra.md`, `docs/style/pulumi.md`, `docs/declarative/README.md`, `docs/declarative/dns.md` (§1) |
 | 38 | B | **Cut**: `spool`, `haos`, `mon`, `games`, `game`, `jiahui.love`'s apex, and the B rows of `LEGACY_VHOSTS`, with the UPS card's; R13 loses thread-dashboard; kluster-code drops the transitional target of the legacy forward-auth checks, and authelia's endpoints for them are deleted | as slice 32, and `src/kluster/conventions/gateway.py`, `docs/physical/gateway.md`, `docs/cluster/security-audit.md`, `docs/cluster/architecture.md`; kluster-code |

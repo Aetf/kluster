@@ -60,7 +60,7 @@ from kluster.components.apps.echo import Echo
 from kluster.components.apps.emailproxy import EmailProxy
 from kluster.components.apps.exim import Exim
 from kluster.components.apps.golinks import Golinks
-from kluster.components.apps.hath import Hath
+from kluster.components.apps.hath import Hath, Stage
 from kluster.components.apps.immich import Immich
 from kluster.components.apps.jellyfin import Jellyfin
 from kluster.components.apps.matrix import Matrix
@@ -256,7 +256,7 @@ def _components() -> dict[str, Declared]:
             exposure=Exposure(ports=(Port('hh-serve', 60123, Transports.TCP, internet=Dedicated()),)),
             image=pin('hath'),
             login=sealed(hath_app.PORTED.keys),
-            started=True,
+            stage=Stage('final', final=True),
             fronts=FRONTS,
             zone_ids=ZONE_IDS,
         ),
@@ -668,13 +668,17 @@ def test_a_pod_that_mounts_a_nas_claim_admits_exactly_the_nodes_its_volume_does(
                 assert schedulable(pod.spec) == selected(term, NODES), (pod.namespace, pod.name)
 
 
-def test_every_nas_claim_is_mounted_by_a_pod_of_its_namespace(program: Program) -> None:
-    """A NAS claim's name carries a digest of what its volume and it cannot change, so a pod mounts it by the name it was given.
+def test_every_nas_claim_is_mounted_by_a_pod_or_read_by_a_source_of_its_namespace(program: Program) -> None:
+    """A NAS claim's name carries a digest of what its volume and it cannot change, so whatever reads it names it as it was given.
 
     A pod that named it any other way, by its base name say, would mount a
-    claim that is not there, and the claim would serve nothing.
+    claim that is not there, and the claim would serve nothing. A seed's
+    source is the one reader of a NAS claim that is no pod of the census: it
+    reads the claim by name, as `sourcePVC`.
     """
-    mounted = {(pod.namespace, it) for pod in pods(program.monitor) for it in pod.claims}
+    mounted = {(pod.namespace, it) for pod in pods(program.monitor) for it in pod.claims} | {
+        (it.inputs['metadata']['namespace'], it.inputs['spec']['sourcePVC']) for it in program.monitor.of_type(SOURCE)
+    }
     claims = set(nas_volumes(program.monitor))
 
     assert claims
