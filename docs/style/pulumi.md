@@ -514,12 +514,11 @@ writes nothing new where the object stands, as `mkdir -p` does on a
 directory that is already there, has no identity to record, so its
 resource declares the option. A target that holds two objects under one
 name between the create and the delete, as AdGuard's rewrite list does,
-needs neither. Today: the homelab worker's disk, seed and domain; a
-forge repository's Environments, Actions variables, branch protection
-and vulnerability alerts; the B2 buckets; a Cloudflare zone, its DNSSEC
-state and its records; the gateway's UniFi firewall groups and
-device directories; and the site's BGP configuration on the controller,
-whose create adopts an identical object and writes nothing.
+needs neither. For example, a target that refuses: a B2 bucket, whose
+name is unique across all of B2. A target that adopts: the
+homelab worker's disk, a libvirt volume. A create that writes nothing
+new: the site's BGP configuration on the controller, whose create takes
+an identical configuration as its own.
 
 **A resource whose replacement is an operation with an order of its own,
 which the engine cannot hold, is protected**, so a replacement the
@@ -540,8 +539,9 @@ needs the state's protection as well as the program's, and a change to
 `protect` alone
 plans nothing: a preview reads the resource as unchanged, and the next
 `up` that runs writes the flag into the state. The option carries its
-reason beside it at the declaration. Today: a cloud node's instance, whose replacement replaces an
-etcd member ([declarative/physical.md](../declarative/physical.md) §1).
+reason beside it at the declaration. For example, a cloud node's
+instance, whose replacement replaces an etcd member
+([declarative/physical.md](../declarative/physical.md) §1).
 
 **An object a resource stands for on the machine running the program is
 placed under the project and stack it belongs to.** The identity a

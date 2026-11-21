@@ -527,7 +527,8 @@ answers an overlay client differently from a home one. The AdGuard pair
     client to cannot depend on some other rewrite existing to resolve
     it. One edit, two stack diffs, both previewable — rather than
     one edit and a second stack to remember. LAN ULA AAAAs are
-    emitted alongside (RFC 6724 caveat noted, architecture.md §1.3).
+    emitted alongside, and the ULA has to answer, since a client may
+    dial it first (architecture.md §1.3).
 -   **A pod reaches the portal's name where a home client does.** An
     OpenID Connect client's server calls the portal by its public name
     to finish a sign-in, since the issuer it validates is that name. The
