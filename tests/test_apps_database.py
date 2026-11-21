@@ -27,14 +27,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
+import control_plane
 import image_busybox
 import pinned_image
 import process_sessions
 import pytest
 import pytest_asyncio
 import yaml
-from cryptography.hazmat.primitives.asymmetric import ec
-from cryptography.hazmat.primitives.serialization import Encoding, NoEncryption, PrivateFormat, PublicFormat
+from control_plane import ADMIN, CASE_TIMEOUT, CONTROL_PLANE_PINS, ApiServer, BesideServer, typed, until
 from mock_monitor import Recorder, declaring, run_with
 from node_selection import matches, schedulable
 from talos_images import default_images
@@ -888,18 +888,9 @@ def test_a_drill_stopped_at_its_deadline_still_removes_its_cluster(declared: Rec
 
 # -- The drill, admitted ------------------------------------------------------------------
 #
-# The drills' policy is judged by the API server the cluster runs: the
-# `kube-apiserver` and `etcd` images the pinned Talos release names by default
-# (`talosctl images default`), which is what the cluster's control plane runs,
-# with `kubectl` from the drill's own image as the client. The two are pinned
-# here by the tag the release names and that tag's digest, and pulled by the
-# digest (`tests/pinned_image.py`); a case holds the tags to the release's, so
-# a Talos bump onto another Kubernetes is red until the pins move with it.
-# The three share one
-# network namespace of their own and publish nothing. The server admits every
-# request its authorizer is asked about, so what a case reads is admission
-# alone; a request is sent as an account by impersonating it, and a create is
-# sent with `--dry-run=server`, which admission judges as it judges a create.
+# The drills' policy is judged by the API server the cluster runs
+# (`tests/control_plane.py`), with `kubectl` from the drill's own image as the
+# client, beside it.
 
 #: The policy's types, and the one CRD the policy is about.
 ADMISSION_POLICY = 'kubernetes:admissionregistration.k8s.io/v1:ValidatingAdmissionPolicy'
@@ -908,45 +899,20 @@ CLUSTER_DEFINITION = 'clusters.postgresql.cnpg.io'
 #: The definitions the program's custom resources are generated from.
 BUNDLE = Path(__file__).resolve().parents[1] / 'packages' / 'crds' / 'crds.yaml'
 
-#: The control plane's images, each the tag the pinned Talos release names
-#: and the digest the registry serves for it, by name.
-CONTROL_PLANE_PINS = {
-    'kube-apiserver': ImagePin(
-        'registry.k8s.io/kube-apiserver',
-        'v1.36.3',
-        'sha256:b4bc06c81fd76f81174e6c19ddacf477acdf1583e7a5846ebbd513493aef6e43',
-    ),
-    'etcd': ImagePin(
-        'registry.k8s.io/etcd', 'v3.6.12', 'sha256:3c2ced08f23b1183e8bd4613064c3fb6b8db5057a4d1f13c3518c76e357a07a8'
-    ),
-}
-#: The server's port, inside the network namespace the three containers share.
-SERVER_PORT = 6443
-#: The user the server's one token authenticates, who sets the server up.
-ADMIN = 'admin'
 #: The account of the database operator, which updates every `Cluster`.
 OPERATOR = f'system:serviceaccount:{conventions.CNPG_NAMESPACE}:cloudnative-pg'
 #: A namespace that holds no database, and so no drill's parameters.
 BARE = 'bare'
-#: A stop-loss, which nothing asserts on: the waits for the server to answer
-#: and for the policy to judge.
-READY_TIMEOUT = 60
-#: The bound on a case of this section, past the suite's own: the first case
-#: a worker runs starts the server, behind the pulls of its two images.
-ADMISSION_CASE_TIMEOUT = 2 * pinned_image.PULL_TIMEOUT + 2 * READY_TIMEOUT
-
-
-def podman(*args: str) -> str:
-    return process_sessions.run(['podman', *args], text=True, timeout=COMMAND_TIMEOUT, check=True).stdout
 
 
 def test_the_control_plane_pins_are_the_images_the_pinned_talos_release_runs() -> None:
-    """The policy is judged by the API server the cluster runs, which is the one the fleet's Talos defaults to."""
+    """Every policy a suite has the API server judge is judged by the one the cluster runs, which the fleet's Talos defaults to."""
     release = default_images()
 
     for name, pin in CONTROL_PLANE_PINS.items():
         assert (pin.repository, pin.tag) == (release[name].repository, release[name].tag), (
-            f'{name}: move the pin in CONTROL_PLANE_PINS to {release[name].repository}:{release[name].tag} '
+            f'{name}: move the pin in CONTROL_PLANE_PINS, in tests/control_plane.py, to '
+            f'{release[name].repository}:{release[name].tag} '
             'and the digest the registry serves for it'
         )
 
@@ -959,51 +925,9 @@ def definition(name: str) -> dict[str, Any]:
     raise AssertionError(f'{BUNDLE} defines no {name}')
 
 
-@dataclass(frozen=True)
-class ApiServer:
-    """The control plane's API server, reached through `kubectl` in the container beside it."""
-
-    client: str
-    token: str
-
-    def kubectl(
-        self, *args: str, user: str | None = None, document: Mapping[str, Any] | None = None
-    ) -> subprocess.CompletedProcess[str]:
-        """`kubectl` with `args`, as `user` where one is named and as `ADMIN` otherwise, reading `document`."""
-        return process_sessions.run(
-            [
-                'podman', 'exec', '--interactive', self.client, 'kubectl',
-                f'--server=https://127.0.0.1:{SERVER_PORT}', '--insecure-skip-tls-verify', f'--token={self.token}',
-                *([f'--as={user}'] if user is not None else []),
-                *args,
-            ],
-            text=True,
-            timeout=COMMAND_TIMEOUT,
-            input=json.dumps(document) if document is not None else None,
-        )  # fmt: skip
-
-    def must(self, *args: str, document: Mapping[str, Any] | None = None) -> str:
-        """`kubectl` with `args` as `ADMIN`, which must succeed."""
-        done = self.kubectl(*args, document=document)
-        assert done.returncode == 0, done.stderr
-        return done.stdout
-
-    def created(self, document: Mapping[str, Any], user: str) -> subprocess.CompletedProcess[str]:
-        """`document` created by `user`, as admission judges it, and nothing stored."""
-        return self.kubectl('create', '--dry-run=server', '-o', 'name', '-f', '-', user=user, document=document)
-
-
 def refused(done: subprocess.CompletedProcess[str]) -> bool:
     """Whether the drills' policy refused the request, as the server words a policy's refusal."""
     return done.returncode != 0 and f"ValidatingAdmissionPolicy '{DRILL_POLICY}'" in done.stderr
-
-
-def until(probe: Callable[[], bool], what: str) -> None:
-    """Return once `probe` holds, within `READY_TIMEOUT`, a stop-loss."""
-    bound = time.monotonic() + READY_TIMEOUT
-    while not probe():
-        assert time.monotonic() < bound, f'{what} within {READY_TIMEOUT}s'
-        time.sleep(0.2)
 
 
 def drill_account(monitor: Recorder, namespace: str, database: str | None = None) -> str:
@@ -1012,51 +936,13 @@ def drill_account(monitor: Recorder, namespace: str, database: str | None = None
     return f'system:serviceaccount:{namespace}:{account}'
 
 
-def typed(api_version: str, kind: str, inputs: Mapping[str, Any]) -> dict[str, Any]:
-    return {'apiVersion': api_version, 'kind': kind, **inputs}
-
-
 @pytest.fixture(scope='module')
 def apiserver(declared: Recorder, tmp_path_factory: pytest.TempPathFactory) -> Iterator[ApiServer]:
     """The control plane's API server, holding the drills' policy and the parameters of every declared drill."""
     pinned_image.require_podman("the drills' policy is judged by the API server image the cluster runs")
-    images = {name: pinned_image.pulled(pin) for name, pin in CONTROL_PLANE_PINS.items()}
     client_image = pinned_image.pulled(DRILL_IMAGE)
     files = tmp_path_factory.mktemp('apiserver')
-    key = ec.generate_private_key(ec.SECP256R1())
-    _ = (files / 'sa.key').write_bytes(key.private_bytes(Encoding.PEM, PrivateFormat.PKCS8, NoEncryption()))
-    _ = (files / 'sa.pub').write_bytes(key.public_key().public_bytes(Encoding.PEM, PublicFormat.SubjectPublicKeyInfo))
-    token = uuid.uuid4().hex
-    _ = (files / 'tokens.csv').write_text(f'{token},{ADMIN},{ADMIN},"system:masters"\n')
-    suffix = uuid.uuid4().hex[:12]
-    etcd, server, client = (f'kluster-test-{role}-{suffix}' for role in ('etcd', 'apiserver', 'client'))
-    common = ['--rm', '--label', LABEL, '--timeout', str(pinned_image.CONTAINER_TIMEOUT)]
-    beside = ['--network', f'container:{etcd}']
-    # The two beside etcd go first: podman refuses to remove a container whose network another shares.
-    with process_sessions.removing(client, server, etcd, timeout=COMMAND_TIMEOUT):
-        _ = podman(
-            'run', '--detach', '--name', etcd, *common, '--network', 'none', '--tmpfs', '/data',
-            images['etcd'], 'etcd', '--data-dir=/data',
-            '--listen-client-urls=http://127.0.0.1:2379', '--advertise-client-urls=http://127.0.0.1:2379',
-            '--listen-peer-urls=http://127.0.0.1:2380',
-        )  # fmt: skip
-        _ = podman(
-            'create', '--name', server, *common, *beside, '--tmpfs', '/certs',
-            images['kube-apiserver'], 'kube-apiserver',
-            '--etcd-servers=http://127.0.0.1:2379', f'--secure-port={SERVER_PORT}',
-            '--bind-address=127.0.0.1', '--advertise-address=127.0.0.1', '--cert-dir=/certs',
-            '--service-cluster-ip-range=10.0.0.0/24', '--service-account-issuer=https://kubernetes.default.svc',
-            '--service-account-key-file=/sa.pub', '--service-account-signing-key-file=/sa.key',
-            '--token-auth-file=/tokens.csv', '--authorization-mode=AlwaysAllow',
-        )  # fmt: skip
-        for name in ('sa.key', 'sa.pub', 'tokens.csv'):
-            _ = podman('cp', str(files / name), f'{server}:/{name}')
-        _ = podman('start', server)
-        _ = podman('run', '--detach', '--name', client, *common, *beside, '--entrypoint', 'sleep', client_image,
-                   str(pinned_image.CONTAINER_TIMEOUT))  # fmt: skip
-        running = ApiServer(client, token)
-        until(lambda: running.kubectl('get', '--raw', '/readyz').returncode == 0, 'the API server did not answer')
-
+    with control_plane.running(LABEL, files, BesideServer(client_image)) as running:
         _ = running.must('create', '-f', '-', document=definition(CLUSTER_DEFINITION))
         _ = running.must('wait', '--for=condition=Established', f'crd/{CLUSTER_DEFINITION}', '--timeout=30s')
         namespaces = {'ledger', 'pair', BARE}
@@ -1165,7 +1051,7 @@ NOT_THE_MANIFESTS: Mapping[str, Callable[[Mapping[str, Any]], dict[str, Any]]] =
 }
 
 
-@pytest.mark.timeout(ADMISSION_CASE_TIMEOUT)
+@pytest.mark.timeout(CASE_TIMEOUT)
 @pytest.mark.parametrize(('namespace', 'database'), [('ledger', None), ('pair', 'alpha'), ('pair', 'beta')])
 def test_a_drill_is_admitted_to_create_the_cluster_its_manifest_names(
     declared: Recorder, apiserver: ApiServer, namespace: str, database: str | None
@@ -1178,7 +1064,7 @@ def test_a_drill_is_admitted_to_create_the_cluster_its_manifest_names(
     assert done.returncode == 0, done.stderr
 
 
-@pytest.mark.timeout(ADMISSION_CASE_TIMEOUT)
+@pytest.mark.timeout(CASE_TIMEOUT)
 def test_a_drill_is_admitted_with_the_annotation_its_kubectl_apply_writes(
     declared: Recorder, apiserver: ApiServer
 ) -> None:
@@ -1188,7 +1074,7 @@ def test_a_drill_is_admitted_with_the_annotation_its_kubectl_apply_writes(
     assert done.returncode == 0, done.stderr
 
 
-@pytest.mark.timeout(ADMISSION_CASE_TIMEOUT)
+@pytest.mark.timeout(CASE_TIMEOUT)
 @pytest.mark.parametrize('change', list(NOT_THE_MANIFESTS))
 def test_a_drill_is_refused_a_cluster_that_differs_from_its_manifest_where_the_policy_holds_it(
     declared: Recorder, apiserver: ApiServer, change: str
@@ -1199,7 +1085,7 @@ def test_a_drill_is_refused_a_cluster_that_differs_from_its_manifest_where_the_p
     assert refused(done := apiserver.created(document, drill_account(declared, 'ledger'))), done.stderr
 
 
-@pytest.mark.timeout(ADMISSION_CASE_TIMEOUT)
+@pytest.mark.timeout(CASE_TIMEOUT)
 def test_a_drill_is_refused_the_cluster_of_the_other_database_in_its_namespace(
     declared: Recorder, apiserver: ApiServer
 ) -> None:
@@ -1209,7 +1095,7 @@ def test_a_drill_is_refused_the_cluster_of_the_other_database_in_its_namespace(
     assert refused(done), done.stderr
 
 
-@pytest.mark.timeout(ADMISSION_CASE_TIMEOUT)
+@pytest.mark.timeout(CASE_TIMEOUT)
 @pytest.mark.parametrize('user', [ADMIN, OPERATOR])
 def test_a_namespace_holding_no_parameters_is_not_judged(declared: Recorder, apiserver: ApiServer, user: str) -> None:
     """The program may create a database's cluster before the parameters beside it, which nothing orders it behind."""
@@ -1218,7 +1104,7 @@ def test_a_namespace_holding_no_parameters_is_not_judged(declared: Recorder, api
     assert (done := apiserver.created(document, user)).returncode == 0, done.stderr
 
 
-@pytest.mark.timeout(ADMISSION_CASE_TIMEOUT)
+@pytest.mark.timeout(CASE_TIMEOUT)
 @pytest.mark.parametrize('user', [ADMIN, OPERATOR, 'system:serviceaccount:ledger:default'])
 def test_every_other_account_is_not_judged(declared: Recorder, apiserver: ApiServer, user: str) -> None:
     """The program, the operator and a namespace's other accounts write clusters the policy is no judge of."""
@@ -1228,7 +1114,7 @@ def test_every_other_account_is_not_judged(declared: Recorder, apiserver: ApiSer
         assert done.returncode == 0, (change, done.stderr)
 
 
-@pytest.mark.timeout(ADMISSION_CASE_TIMEOUT)
+@pytest.mark.timeout(CASE_TIMEOUT)
 def test_a_drill_is_refused_a_change_of_what_the_policy_holds(declared: Recorder, apiserver: ApiServer) -> None:
     """The role patches the drill's cluster, so an update is judged as a create is."""
     manifest = drill_manifest(declared, 'ledger')

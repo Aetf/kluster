@@ -12,8 +12,8 @@ Assistant's own address, which no cloud node has a route to (rfc-008 §4.1,
 operations.md §4; `ALERTMANAGER_CONSTRAINTS`). Every other pod is free
 (`UNCONSTRAINED`) but the stores, which their claims keep to their nodes
 (`stores`), and the node exporter, which runs on every node it reports on, at
-the system's class for a per-node agent (`NODE_AGENT_PRIORITY_CLASS`), so no
-free pod placed on its node first can leave it pending. vmagent is free
+the class per-node agents run at (`conventions.NODE_AGENT_PRIORITY_CLASS`), so
+no free pod placed on its node first can leave it pending. vmagent is free
 because every target it scrapes answers it from any node, a control plane's
 own etcd listener included (`components.talos.CONTROL_PLANE_OPENINGS`).
 Grafana is reached by a
@@ -219,7 +219,6 @@ __all__ = (
     'HISTORY_SIZE',
     'KUBELET_RELABELING',
     'KUBE_STATE_METRICS_ENDPOINT',
-    'NODE_AGENT_PRIORITY_CLASS',
     'NODE_EXPORTER_ENDPOINT',
     'RECEIVER',
     'SNAPSHOTS_MAX_AGE',
@@ -413,10 +412,6 @@ SNAPSHOTS_MAX_AGE = dt.timedelta(days=1)
 HISTORY_DATASOURCE = 'VictoriaMetrics history'
 
 
-#: The system's class for a pod that must run on its node, which the node
-#: exporter takes: it reports on the node it runs on, and nowhere else.
-NODE_AGENT_PRIORITY_CLASS = 'system-node-critical'
-
 #: Alertmanager's constraints: the home site, since it posts to Home
 #: Assistant at Home Assistant's own address, which no cloud node has a
 #: route to: KubeSpan carries the members' addresses alone (rfc-008 §4.1).
@@ -524,7 +519,7 @@ def _stack_values(release: str, chart: ChartPin, restore: Sequence[Mapping[str, 
             # A per-node agent its DaemonSet keeps on its node, where a free pod
             # placed first could otherwise leave it no room it can preempt
             # for; the class per-node agents run at, as Cilium's agent does.
-            'priorityClassName': NODE_AGENT_PRIORITY_CLASS,
+            'priorityClassName': conventions.NODE_AGENT_PRIORITY_CLASS,
         },
         'kubeApiServer': {
             'vmScrape': {

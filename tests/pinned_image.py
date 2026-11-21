@@ -2,9 +2,10 @@
 
 A pin is the one `Pulumi.yaml` holds (`pinned`) where the deployment pulls
 the image, so a move of the pin moves what the suite runs with it. An image
-nothing deploys is pinned in the module whose cases run it, beside what keeps
-the pin on the fleet's: today the control plane's, in
-`tests/test_apps_database.py`, held to the Talos release's listing. The image is pulled from Google's mirror where its
+nothing deploys is pinned in the module whose cases run it, or in the helper
+module the suites that run it share, beside what keeps the pin on the fleet's:
+today the control plane's, in `tests/control_plane.py`, held to the Talos
+release's listing. The image is pulled from Google's mirror where its
 repository is Docker Hub's, by digest (`source`, `pulled`), and only where it
 is not already local.
 

@@ -458,7 +458,29 @@ classes its objects fall into (§1.2):
     flips vfio on the homelab worker (physical/homelab-host.md §3), present from
     day 0, so the cutover needs no k8s-base change. The GPU plugin is
     behind NFD, whose objects it declares, and behind cert-manager,
-    whose objects its operator declares.
+    whose objects its operator declares. **Both per-node agents run at
+    `system-node-critical`**, the node exporter's class
+    (`conventions.NODE_AGENT_PRIORITY_CLASS`), so a held pod cannot
+    preempt them off the node they serve. NFD's worker takes it from its
+    chart. The plugin's DaemonSet is the operator's, built from a
+    manifest it embeds that names no class, and `GpuDevicePlugin` has no
+    field for one, so a `MutatingAdmissionPolicy` and its binding
+    (`components.gpu.plugin_priority`) set it on that one DaemonSet on
+    each write the API server admits once it has taken the policy in. The
+    plugin's chart is installed behind them, which orders the writes to
+    the API; the API server takes the policy in through its informers,
+    after its write. The operator writes the DaemonSet only when it
+    creates it and when the image, the initialization container, the node
+    selector, the arguments or the tolerations it sets change, so a
+    DaemonSet written before the policy took effect keeps no class until
+    its next write. That write is
+    `kubectl -n inteldeviceplugins-system rollout restart daemonset/intel-gpu-plugin-gpu`,
+    a patch the policy matches as an update, and it is a step of the
+    first `up` that installs the policy. The policy and its binding are
+    a removable layer over that upstream gap, removed once
+    `GpuDevicePlugin` gains a priority class field, which a test reading
+    the bundled definition reports. What the removal deletes is listed
+    where the layer is written, in `components.gpu`.
 8.  **The small standing set the legacy cluster already proved**
     (nodes.md §4.4 counted them as "kept as-is" but this list never
     named them — explicit now so the closed list is honest):

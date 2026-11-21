@@ -417,6 +417,23 @@
       groupSlug: 'cilium',
     },
     {
+      // The Intel device-plugin operator's chart. The policy that sets the GPU
+      // plugin's priority class (`components.gpu.plugin_priority`) matches the
+      // DaemonSet by the name the operator gives it and the namespace it runs
+      // in, which nothing of ours observes, so a bump says to re-read them.
+      // The note joins the pull request of whatever group the chart travels
+      // in, since this rule names no group.
+      matchFileNames: [
+        'Pulumi.yaml',
+      ],
+      matchDepNames: [
+        'intel-device-plugins-operator',
+      ],
+      prBodyNotes: [
+        'This moves the Intel device-plugin operator. Re-read `NewDaemonSet` in its `pkg/controllers/gpu/controller.go` at the new release: if the name it gives the GPU plugin\'s DaemonSet (`intel-gpu-plugin-<GpuDevicePlugin name>`) or the namespace it creates it in has changed, move `plugin_daemonset` in `src/kluster/components/gpu/__init__.py` with it, or the class policy matches nothing and the plugin runs at priority 0.',
+      ],
+    },
+    {
       // The VictoriaMetrics stack chart and every pin held to its release,
       // out of the groups that would otherwise take them and into one of
       // their own: the three images the monitoring component runs at the
@@ -741,7 +758,7 @@
       dependencyDashboardApproval: true,
       prBodyNotes: [
         'A Talos release may move the cluster\'s etcd to another minor (`DefaultEtcdVersion` in Talos\' constants). If it does, approve the `registry.k8s.io/etcd` bump of `docker/etcd-age.conf` on the dependency dashboard with it, so the restore-verify restores with the minor the cluster runs.',
-        'A Talos release may default to another `kube-apiserver` or `etcd` tag. If it does, move `CONTROL_PLANE_PINS` in `tests/test_apps_database.py` in this pull request to the tags `talosctl images default` names and the digests the registry serves for them; `test_the_control_plane_pins_are_the_images_the_pinned_talos_release_runs` is red until then.',
+        'A Talos release may default to another `kube-apiserver` or `etcd` tag. If it does, move `CONTROL_PLANE_PINS` in `tests/control_plane.py` in this pull request to the tags `talosctl images default` names and the digests the registry serves for them; `test_the_control_plane_pins_are_the_images_the_pinned_talos_release_runs` is red until then.',
       ],
     },
     {
