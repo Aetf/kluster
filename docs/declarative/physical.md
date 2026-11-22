@@ -1006,6 +1006,11 @@ the order sends the whole batch the controller requires and treats a
 custom policy of the pair that the census does not own as drift, since
 a pair the census orders is the census's whole, so a rule wanted there
 is a row of it whatever traffic it is about (physical/gateway.md §4.2) —
+the **allow from External to the Gateway zone** of ZeroTier's UDP to the
+gateway's overlay member, both families, on the one port its daemon is
+pinned to (`conventions.overlay.UDM_PORT`), with no return flag, the
+device's own traffic toward the WAN being a predefined accept
+(physical/gateway.md §4.2 rule 7),
 the qbittorrent v6 pinhole, on the port and transports of the exposure
 census's one row through the site's forward
 (`conventions.routes.SiteForward`) — declared on every apply, naming the
