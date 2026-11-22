@@ -14,6 +14,8 @@ from dataclasses import dataclass
 from typing import Any, cast
 
 from ruamel.yaml import YAML, YAMLError
+from ruamel.yaml.comments import CommentedMap
+from ruamel.yaml.tokens import CommentToken
 
 from .paths import OwnedPath, PathRefused
 
@@ -31,6 +33,12 @@ RFC_SLICE = re.compile(r'rfc-\d{3} slice \S+')
 
 #: The block's delimiters: a `---` line opening the file, and the next one.
 _FRONT_MATTER = re.compile(r'\A---\n(?P<block>.*?)\n---\n', re.S)
+
+#: The fields whose value is prose. In an unquoted YAML value, whitespace and a
+#: `#` open a comment, so prose holding ` #` — a `#938` after a space — is cut
+#: there without a word of warning. The other fields hold names and numbers,
+#: which a comment after them annotates, as §1.1's example does.
+_PROSE = frozenset({'done'})
 
 
 class BriefRefused(ValueError):
@@ -175,6 +183,27 @@ def front_matter(raw: object) -> FrontMatter:
     )
 
 
+def _cut_by_comment(block: str, key: str) -> bool:
+    """Whether a comment begins on a line of the value of `key`, the top-level field of `block`.
+
+    Asked of ruamel's round-trip loader, which keeps each comment beside the
+    key it follows, so a value wrapped onto lines of its own is read the way
+    YAML reads it. A comment on a line of the value opens with its `#`; a
+    full-line comment below the value opens with the newline that ends the
+    value's last line, and leaves the value whole.
+    """
+    try:
+        loaded: object = YAML().load(block)  # pyright: ignore[reportUnknownMemberType] -- ruamel's `load` is untyped
+    except YAMLError:
+        return False
+    if not isinstance(loaded, CommentedMap):
+        return False
+    comments = cast(Any, loaded.ca)  # ruamel's comment attribute is untyped
+    attached = cast(dict[str, list[object]], comments.items).get(key, [])
+    token = attached[2] if len(attached) > 2 else None
+    return isinstance(token, CommentToken) and token.value.startswith('#')
+
+
 def read(content: bytes) -> Brief:
     """The brief whose file holds `content`."""
     try:
@@ -188,4 +217,15 @@ def read(content: bytes) -> Brief:
         raw: object = YAML(typ='safe', pure=True).load(match['block'])  # pyright: ignore[reportUnknownMemberType] -- ruamel's `load` is untyped
     except YAMLError as exc:
         raise BriefRefused([f'the front matter is not YAML: {exc}']) from exc
-    return Brief(front=front_matter(raw), sha256=hashlib.sha256(content).hexdigest())
+    cut = [
+        f'`{key}` is cut short at its ` #`, which YAML reads as a comment: quote the value'
+        for key in sorted(_PROSE)
+        if _cut_by_comment(match['block'], key)
+    ]
+    try:
+        front = front_matter(raw)
+    except BriefRefused as exc:
+        raise BriefRefused([*cut, *exc.problems]) from None
+    if cut:
+        raise BriefRefused(cut)
+    return Brief(front=front, sha256=hashlib.sha256(content).hexdigest())

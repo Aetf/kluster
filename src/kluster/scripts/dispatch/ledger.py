@@ -23,8 +23,12 @@ KIND = 'kind/'
 #: The family whose labels are the states of a decision (dispatch.md §4.1).
 DECISION = 'decision/'
 
-#: A pull request's line naming a ledger issue it closes or refers to (dispatch.md §4).
-_REFERENCE = re.compile(rf'\b(?:Closes|Refs)\s+{re.escape(LEDGER)}#(?P<number>\d+)\b', re.I)
+#: A keyword that closes the ledger issue it names when the pull request
+#: merges, as GitHub reads one: any of these words, in any case, with or
+#: without a colon after it (GitHub's "Linking a pull request to an issue").
+CLOSES = re.compile(rf'\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?):?\s+{re.escape(LEDGER)}#(?P<number>\d+)\b', re.I)
+#: The line that refers to a ledger issue the pull request does not close (dispatch.md §4).
+REFERS = re.compile(rf'\bRefs\s+{re.escape(LEDGER)}#(?P<number>\d+)\b', re.I)
 
 
 def missing(labels: Collection[str], milestone: str | None) -> list[str]:
@@ -37,7 +41,7 @@ def missing(labels: Collection[str], milestone: str | None) -> list[str]:
 
 def references(body: str) -> frozenset[int]:
     """The ledger issues a pull request's description closes or refers to."""
-    return frozenset(int(number) for number in _REFERENCE.findall(body))
+    return frozenset(int(number) for pattern in (CLOSES, REFERS) for number in pattern.findall(body))
 
 
 def claimed(issue: Issue) -> bool:

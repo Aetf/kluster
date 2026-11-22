@@ -105,7 +105,33 @@ directory, written with its trailing `/`; a pattern, in which `*` and
 narrowed to one of its sections after a `#`. A builder's brief
 carries `closes` and owns at least one path. A review's carries `pr`,
 and it may own nothing, as may a design written on its issue. A field
-outside this block refuses the brief.
+outside this block refuses the brief. So does a `done` that holds a
+space and a `#` unquoted, which YAML reads as the start of a comment
+and cuts the sentence at: such a `done` is quoted.
+
+**A pull request's description has a form**, which a hook checks
+before `gh pr create` runs (§2.2). Its ledger line is
+`Closes Aetf/kluster-ops#<issue>` where the front matter's `closes` is
+true, and `Refs Aetf/kluster-ops#<issue>` where it is false (§4), with
+the issue then named by no keyword GitHub closes it by, in any of the
+forms GitHub reads: `close`, `fix` or `resolve` and their inflections,
+in any case, with or without a colon after it. Four sections follow it somewhere
+in the description, each a `##` heading of exactly that name with
+something under it:
+
+-   **`## Live`**: item 3's drill transcript in a fenced block, or a
+    first line opening `Unproven live:` that says what the first live
+    run must confirm, or one opening `Not provider-facing`.
+-   **`## Fails without`**: each test that fails without the change,
+    named in a code span, with the mutation that reddens it; or a first
+    line opening `No test:` that says why none is owed, which is no new
+    behavior or a design that holds the property instead.
+-   **`## Sweep`**: the sweep for claims the change made false, with its
+    patterns in code spans, the positive control they ran against, and
+    the number of files it read ([style/README.md](../style/README.md),
+    "Comments and docs").
+-   **`## Gate`**: the gate's results, the parts CI does not run
+    included.
 
 ### 1.2 A workspace dies with the dispatch
 
@@ -217,6 +243,11 @@ No workspace outlives the dispatch that created it:
     standing and names its path in the report. Removing it is the
     merging dispatcher's closing step, beside the label and the card,
     because each dispatcher merges only its own pull requests (§2).
+-   An agent that **stops** to ask, for a path outside its brief or a
+    ruling, has not finished: it leaves the workspace standing, with
+    whatever it holds, and its report opens with `Stopped:` (§2.2). The
+    dispatcher's answer resumes it there, or ends the dispatch, and the
+    workspace then goes by one of the cases above.
 -   A reviewer's throwaway workspace is deleted when the review is
     written (§3.2).
 
@@ -244,7 +275,8 @@ back: workspaces share a single store, so the builder rebases onto the
 `main` the fetch already brought in, still without fetching itself. The
 hazard that a fetch abandons commits whose bookmark the forge has
 deleted is that dispatcher's precondition, not a general caution
-against fetching.
+against fetching. A hook of the builder's agent definition refuses a
+builder's fetch (§2.2).
 
 **A workspace goes stale when another workspace rewrites the commits it
 is sitting on**, which a dispatcher's `jj git fetch` does routinely
@@ -762,8 +794,9 @@ retry starts afresh:
 `CLAUDE_CODE_SESSION_ID`, which a Claude Code session's commands
 inherit, and refuse without it. The id names a dispatcher session, not
 a role: every agent the session spawns carries the same one, so the id
-does not keep a builder from claiming, and what does is the hooks of
-the builder's agent definition (Aetf/kluster-ops#917, slice D2). A
+does not keep a builder from claiming, and what does is the hook of
+the builder's agent definition, which refuses `claim`, `queue` and
+`abandon` from a builder (§2.2). A
 forked session has an id of its own, and the claims of the session it
 forked from end and are claimed again on the operator's word.
 
@@ -793,6 +826,98 @@ audit` names its issue, and it refuses claims of that issue and every
 claim of a serialized file (§2 rule 3), but no other. The record
 sits in the private repository because a brief may name what a public
 pull request must not.
+
+### 2.2 The hooks
+
+Claude Code holds a session to this protocol from what `.claude/`
+tracks: hooks and a deny rule in `settings.json`, and the builder's
+agent definition. Each hook runs `dispatch-hook <name>`
+(`src/kluster/scripts/dispatch/hooks.py`) in the checkout the session
+runs in, under `mise x uv -- uv run`, and reads the event Claude Code
+writes on its standard input (the Claude Code documentation's hooks
+reference, "Hook input and output"). A refusal reaches the agent as
+the reason its call did not run, naming what to fix. A call no hook
+refuses goes on to the session's permissions: no hook allows anything.
+
+-   **A spawn** of an agent this repository defines under
+    `.claude/agents/` goes ahead only when its prompt names one brief by
+    absolute path, and the issue that brief names carries a claim whose
+    live records include one for the brief's sha256. A brief edited
+    after its claim is claimed again. An agent of any other type is not
+    held.
+-   **`gh pr create` on this repository** goes ahead only with `--repo`,
+    `--head`, and a `--body` or an absolute `--body-file`, since the
+    hook cannot tell which directory the command runs in. The branch is
+    one a live record names, and the description takes the form of
+    §1.1. The hook runs on the commands Claude Code's `if` filter on
+    `Bash(gh pr create *)` matches. The reference says that filter can
+    miss ("How `if` patterns match Bash commands"), so the hook holds
+    the command as agents run it, and not a pull request opened any
+    other way.
+-   **A builder's report**, its `SubagentHandback`, goes back only under
+    the live record of the brief it names (§4). A report whose first
+    line opens `Stopped:` stops to ask, for a path outside the brief or
+    a ruling, and goes back on that alone, its workspace standing with
+    whatever it holds, pushed or not. Otherwise, with a pull request,
+    the report gives the pull request's head on the forge in full, that
+    head is the parent of the workspace's working-copy commit, and the
+    pull request changes something against its base; with none, the work
+    is finished and the workspace the brief names no longer stands
+    (§1.2). Claude Code hands a refused report back to the builder up to
+    three times and then ends the builder with no report delivered
+    (hooks reference, under `PreToolUse`, on `ask` decisions in auto
+    mode), so a builder fixes what the first refusal names rather than
+    resending, and a dispatcher whose builder ended that way resumes it
+    with `SendMessage`, quoting what the refusal said.
+-   **A builder's command** that fetches, with `jj git fetch`,
+    `git fetch` or `git pull`, or that runs `dispatch claim`, `queue`
+    or `abandon`, is refused by the hook of the builder's agent
+    definition, which runs only in that agent (§1.2, §1.3). The
+    definition also withholds the `Agent` tool, so a builder spawns
+    nothing.
+-   **`gh issue create`** is denied by a permission rule, to every
+    session and agent alike, so a task is filed with `dispatch file`
+    (§4).
+-   **A session's start** carries `dispatch audit`'s findings into its
+    context. An audit that cannot run says so there, and the session
+    starts regardless.
+
+In a cloud session, where `CLAUDE_CODE_REMOTE` is `true`, no
+`dispatch-hook` runs, and the `SessionStart` entry that runs the audit
+locally installs the session's tools instead (§1.4): the session is a
+builder in a clone of its own with no dispatcher beside it, and it
+fetches for itself. The deny rule holds there too.
+
+**Every hook fails closed.** Each entry carries `onFailure: block`, so
+a hook that cannot start, exits with anything but 0 or 2, or times out
+refuses the call it holds (hooks reference, "Block the action when a
+hook fails"), and `dispatch-hook` exits 2 on whatever it cannot read,
+the forge included. A defect in a hook therefore stops that call in
+every session, the dispatcher's own included. The operator turns the
+hooks off with `"disableAllHooks": true` in
+`.claude/settings.local.json`, which outranks the tracked
+`settings.json` and is ignored by `.gitignore` (the documentation's
+settings page, "Settings precedence"), or for one run with
+`claude --settings '{"disableAllHooks": true}'`, and takes it off again
+once the fix has merged. One hook cannot be turned off alone (hooks
+reference, "Disable or remove hooks"), so either form turns off every
+hook of the operator's own as well. The settings reference names the
+hooks of user, project, local and plugin settings as what the key turns
+off, and is silent on an agent definition's. A broken builder hook is
+turned off by deleting the `hooks:` block from the primary checkout's
+working copy of `.claude/agents/kluster-builder.md`, which every builder
+spawned after the edit is defined by, and `jj restore` of that file once
+the fix has merged puts it back. The deny rule is a permission, and none
+of these forms turns it off.
+
+**The builder's hook runs only where the folder is trusted.** Claude
+Code runs the hooks of a project agent's front matter once the workspace
+trust dialog for the folder holding the definition has been accepted,
+and never in a `-p` session, which does not count as trusted. Otherwise,
+it runs the agent without them, noting it only in the debug log (the
+documentation's subagents page, on hooks in a subagent's front matter).
+A builder spawned from a `-p` session is held by the settings' hooks
+alone.
 
 ## 3. Review
 
@@ -899,7 +1024,7 @@ merge can report once:
     the next milestone carry `blocker`; issues needing an operator
     ruling carry a `decision/*` label (§4.1). `dispatch file` is how a
     task is filed, and it refuses one that lacks any of the three
-    (§2.1).
+    (§2.1); `gh issue create` is denied to every session here (§2.2).
 -   **A milestone is formally closed, including its review checkpoint
     and the operator's acceptance, before the next milestone's work
     goes ahead.** An earlier milestone with no open `blocker` is not
@@ -943,7 +1068,12 @@ merge can report once:
     request's head against before merging and before its own rebase (§2
     rule 8), and it is why `git rev-parse HEAD` is not used inside a
     workspace, where it answers for the workspace's `@-` rather than
-    for the branch (§1.2).
+    for the branch (§1.2). The report also names the pull request by
+    URL and the brief by absolute path, as the builder's prompt did,
+    and a report with no pull request names the brief too, opening its
+    first line with `Stopped:` where it stops to ask rather than
+    finishes: a hook checks the report against them before it reaches
+    the dispatcher (§2.2).
 -   **A probe of an address bypasses any HTTP proxy, and a failed
     probe is recorded with the client's error text.** A probe — an HTTP
     request, a TLS handshake, a connection to a port — is taken with no
