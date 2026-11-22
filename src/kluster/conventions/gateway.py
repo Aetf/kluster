@@ -90,6 +90,16 @@ CUSTOM_ROOT = f'{DATA_ROOT}/custom'
 #: else inside it may claim 80.
 ADGUARD_API_PORT = 80
 
+#: The gateway's own management ports, as reached over the overlay: the shell
+#: the desired-state push writes through, and the controller API the firewall
+#: resources call. Both terminate on the gateway itself. They are conventions
+#: because two declarations must agree on them: the overlay flow rules that
+#: admit `ci-physical` to exactly these ports, and the join's reading
+#: (`kluster.scripts.zt_reading`), which probes the gateway on them
+#: and cannot import the rules on the runner.
+SSH_PORT = 22
+UNIFI_API_PORT = 443
+
 
 @dataclass(frozen=True)
 class PlainUpstream:

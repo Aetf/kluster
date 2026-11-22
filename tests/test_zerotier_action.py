@@ -30,6 +30,7 @@ from typing import cast
 
 import process_sessions
 import pytest
+from peer_listings import PEERS, addresses
 from workflow_files import GITHUB, github_name, mapping, read_workflow, workflow_jobs, workflows_and_actions
 
 ACTION = GITHUB / 'actions' / 'zerotier' / 'action.yml'
@@ -181,6 +182,9 @@ def _environment(
         fake.chmod(0o755)
 
     declared, script = _step(step)
+    # A path the action names relative to itself resolves against the action
+    # here as it does on the runner.
+    declared = {key: value.replace('${{ github.action_path }}', str(ACTION.parent)) for key, value in declared.items()}
     return (
         ['bash', '--noprofile', '--norc', '-eo', 'pipefail', '-c', script],
         {
@@ -454,3 +458,44 @@ def test_routes_with_no_deadline_refuse_by_name_instead_of_blaming_the_next_hop(
     assert installed.status == 1
     assert re.fullmatch(r'::error::.*\bclock\b.*\n', installed.stdout), installed.stdout
     assert installed.sudo == []
+
+
+##
+## The join's reading
+##
+
+
+def test_the_waits_peer_listing_goes_through_the_filter(tmp_path: Path) -> None:
+    """The wait prints the listing every ten rounds while a target has not answered, and the log shows none of it raw.
+
+    The stand-in for `sleep` lets the rounds pass in a moment, so the wait
+    reaches its listings well inside the second or two the case leaves it.
+    """
+    peers = tmp_path / 'peers.txt'
+    peers.write_text(PEERS)
+    with _refusing() as refused:
+        waited = _run(
+            tmp_path,
+            'Wait for the target',
+            _targets((refused,), ()),
+            started=int(time.time()) - _deadline() + 2,
+            bin_files={
+                'sudo': f'#!/bin/sh\n[ "$*" = "zerotier-cli peers" ] && cat {peers}\nexit 0\n',
+                'sleep': '#!/bin/sh\nexec /bin/sleep 0.05\n',
+            },
+        )
+
+    assert waited.status == 1
+    assert '<ztaddr>' in waited.stdout, waited.stdout
+    listed = '\n'.join(line for line in waited.stdout.splitlines() if not line.startswith('::error::'))
+    assert addresses(listed) == [], listed
+    assert '<ipv4>' in listed, listed
+
+
+def test_the_reading_ends_inside_the_headroom_and_leaves_the_wait_half_of_it() -> None:
+    """The reading runs after the wait's own error, inside the minute every caller's cap leaves past the deadline."""
+    env, script = _step("Take the join's reading")
+    bound = re.search(r'timeout "\$\(\(READING_SECONDS \+ (\d+)\)\)"', script)
+    assert bound, script
+
+    assert int(env['READING_SECONDS']) + int(bound.group(1)) <= HEADROOM_SECONDS // 2

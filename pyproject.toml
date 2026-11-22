@@ -83,6 +83,7 @@ typecheck = 'kluster.scripts.typecheck:main'
 perf = 'kluster.scripts.perf.cli:main'
 checks-scope = 'kluster.scripts.checks_scope:main'
 drill = 'kluster.scripts.drill.cli:main'
+zt-reading = 'kluster.scripts.zt_reading:main'
 
 [dependency-groups]
 dev = [

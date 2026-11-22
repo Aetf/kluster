@@ -77,12 +77,14 @@ jobs:
         id: join
         with:
           # The join action, the release it pins, the runner labels the jobs
-          # that join run on: all of it is under `.github/`. A change to the
-          # flow rules or the roster can break a join too, and only a run on
-          # `main` proves that one (framework/ci.md §2).
+          # that join run on: all of it is under `.github/`, beside the one
+          # script the action runs from the checkout, the join's reading. A
+          # change to the flow rules or the roster can break a join too, and
+          # only a run on `main` proves that one (framework/ci.md §2).
           filters: |
             join:
               - '.github/**'
+              - 'src/kluster/scripts/zt_reading.py'
 
   preview:
     needs: changes
