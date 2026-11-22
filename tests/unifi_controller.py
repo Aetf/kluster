@@ -1,6 +1,6 @@
 """The gateway's controller, for the suites that declare its firewall and the provider that ranks it.
 
-**A mock monitor.** The firewall looks up the controller's two stock zones by
+**A mock monitor.** The firewall looks up the controller's stock zones by
 name rather than creating them, so a run under mocks needs something to answer
 that lookup. The answer is an invention: every zone exists, is empty, and has
 the id `zone_id` spells for it. A suite asserting which zone a rule names

@@ -359,10 +359,34 @@ attacks.** The controls:
     replies are admitted, by the controller's predefined chains, which
     no declaration of this repository writes
     ([physical/gateway.md](physical/gateway.md) §4.1, which names the
-    reading behind each direction and the ones not read);
+    reading behind each direction and the ones not read), except
+    ZeroTier's UDP to the gateway's overlay member, which a census row
+    admits (physical/gateway.md §4.2 rule 7);
 -   a fork's run receives no secret (framework/ci.md §3);
 -   text an outsider writes on the forge is data to every session
     (framework/dispatch.md §1).
+
+**The gateway's ZeroTier port passes these controls as they stand.**
+ZeroTier authenticates every packet against its sender's identity before
+it acts on it, and a sender reaches a network's traffic only as a member
+Central has authorized. The gateway runs a maintained release, the one
+its digest-pinned image carries. What a sender who knows the port gains
+is ZeroTier's own surface at that release, the daemon's handling of packets
+from an identity it does not know, and nothing more. Weighed as a
+finding, that fails the second clause of §4, because the surface is
+reachable without the port:
+
+-   anyone can mint an identity for free and send to a member by its
+    node id through the roots' relay, and the gateway's node id is in
+    the public roster;
+-   every direct path a member opens already admits its peer's packets
+    as replies;
+-   a flood costs the daemon one authentication check per packet, and
+    the uplink is floodable either way.
+
+The allow is UDP alone, so the daemon's control API, TCP on the same
+number, stays behind the drop. The port is ZeroTier's default, and
+deliberately so.
 
 A port moved to an unusual number quiets a log. It is not a control.
 

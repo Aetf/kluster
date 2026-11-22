@@ -12,6 +12,7 @@ rather than in `pulumi preview`.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 from pathlib import Path
@@ -25,7 +26,7 @@ import pytest_asyncio
 from device_places import DEVICE_ARTIFACT, DEVICE_FILE, stated_type
 from fake_systemd import FakeSystemd
 from mock_monitor import declaring, run_under_backstop
-from unifi_controller import Controller
+from unifi_controller import Controller, zone_id
 
 from kluster import conventions
 from kluster.components.gateway import (
@@ -306,6 +307,48 @@ def daemon_boolean(value: str) -> bool:
     return value[:1] in {'1', 't', 'T'}
 
 
+def overlay_binds(monitor: Controller, directive: str) -> dict[str, str]:
+    """Each bind of the overlay machine's settings under `directive`, its target to its source.
+
+    A bind that names one path binds it at itself.
+    """
+    machine = conventions.gateway.OVERLAY.name
+    directives = str(monitor.inputs_of(f'{NAME}-{machine}-nspawn')['content']).splitlines()
+    found: dict[str, str] = {}
+    for line in directives:
+        if line.startswith(f'{directive}='):
+            source, _, target = line.removeprefix(f'{directive}=').partition(':')
+            found[target or source] = source
+    return found
+
+
+def overlay_home(monitor: Controller) -> str:
+    """The daemon's home inside the machine: where its state is bound."""
+    machine = conventions.gateway.OVERLAY.name
+    homes = [
+        target for target, source in overlay_binds(monitor, 'Bind').items() if source == nspawn.state_path(machine)
+    ]
+    assert len(homes) == 1, homes
+    return homes[0]
+
+
+def overlay_reads(monitor: Controller, read_at: str) -> str:
+    """What the daemon reads at `read_at`: the file bound there read-only, from the machine's directory.
+
+    The machine's directory is where the content stamp covers a file, so a
+    change to it restarts the daemon that reads it.
+    """
+    machine = conventions.gateway.OVERLAY.name
+    delivered = overlay_binds(monitor, 'BindReadOnly')[read_at]
+    assert os.path.dirname(delivered) == nspawn.machine_path(machine)
+    (file,) = (
+        declaration
+        for declaration in monitor.of_type(DEVICE_FILE)
+        if declaration.name.startswith(f'{NAME}-') and declaration.inputs.get('path') == delivered
+    )
+    return str(file.inputs['content'])
+
+
 def test_the_gateways_daemon_admits_global_addresses_and_never_the_default_route(monitor: Controller) -> None:
     """The gateway's overlay daemon reads settings that let it hold a global address and the route with it.
 
@@ -323,36 +366,67 @@ def test_the_gateways_daemon_admits_global_addresses_and_never_the_default_route
     overlay address is one) as a boolean rather than as a whitelist, and
     keeps the default route the gateway is the next hop of refused.
     """
-    machine = conventions.gateway.OVERLAY.name
-    directives = str(monitor.inputs_of(f'{NAME}-{machine}-nspawn')['content']).splitlines()
-
-    def binds(directive: str) -> dict[str, str]:
-        """Each bind's target to its source; a bind that names one path binds it at itself."""
-        found: dict[str, str] = {}
-        for line in directives:
-            if line.startswith(f'{directive}='):
-                source, _, target = line.removeprefix(f'{directive}=').partition(':')
-                found[target or source] = source
-        return found
-
-    # The daemon's home inside the machine is where its state is bound.
-    homes = [target for target, source in binds('Bind').items() if source == nspawn.state_path(machine)]
-    assert len(homes) == 1, directives
-    read_at = f'{homes[0]}/networks.d/{int(conventions.overlay.NETWORK_ID, 16):016x}.local.conf'
-
-    delivered = binds('BindReadOnly')[read_at]
-    assert os.path.dirname(delivered) == nspawn.machine_path(machine)
-    (file,) = (
-        declaration
-        for declaration in monitor.of_type(DEVICE_FILE)
-        if declaration.name.startswith(f'{NAME}-') and declaration.inputs.get('path') == delivered
-    )
-    settings = daemon_settings(str(file.inputs['content']))
+    read_at = f'{overlay_home(monitor)}/networks.d/{int(conventions.overlay.NETWORK_ID, 16):016x}.local.conf'
+    settings = daemon_settings(overlay_reads(monitor, read_at))
 
     assert daemon_boolean(settings['allowGlobal'])
     assert len(settings['allowManaged']) <= 5 and daemon_boolean(settings['allowManaged'])
     assert not daemon_boolean(settings['allowDefault'])
     assert not daemon_boolean(settings['allowDNS'])
+
+
+def test_the_gateways_daemon_binds_the_one_port_the_wan_local_allow_admits(monitor: Controller) -> None:
+    """The port the gateway's overlay member takes unsolicited packets on is the port the firewall opens for it.
+
+    The daemon reads `local.conf` at the root of its home when it starts, a
+    JSON object whose `settings` member holds its own settings, and binds
+    `primaryPort` then, beside two ports its settings can withhold, each on
+    by default (`OneService.cpp` at ZeroTier 1.16.2). A secondary one,
+    `secondaryPort` or a random one, unless `allowSecondaryPort` is false;
+    and a random one again, whatever that says, once the daemon has been
+    offline for a while, unless `secondaryPort` is set. A tertiary one for
+    UPnP and NAT-PMP, unless `portMappingEnabled` is false. The file reaches
+    that read as the network's settings do, bound read-only from the
+    machine's directory. What the firewall opens is the one allow from
+    `External` to `Gateway`. So the case reads both declarations and holds
+    the relation: every bind the daemon makes, at start and after an
+    outage, is one bind of the allow's UDP port. A port the allow does not
+    name is a member a peer reaches only by hole punching.
+    """
+    conf = json.loads(overlay_reads(monitor, f'{overlay_home(monitor)}/local.conf'))
+    settings = conf['settings']
+
+    def switched(name: str) -> bool:
+        value = settings.get(name, True)
+        assert isinstance(value, bool), (name, value)
+        return value
+
+    def port(name: str) -> int:
+        value = settings.get(name, 0)
+        assert isinstance(value, int) and not isinstance(value, bool), (name, value)
+        return value
+
+    # A list, not a set: a second bind of the primary port is a second bind.
+    binds: list[int | str] = [port('primaryPort')]
+    if switched('allowSecondaryPort'):
+        binds.append(port('secondaryPort') or 'a random secondary port')
+    if not port('secondaryPort'):
+        binds.append('a random secondary port, after an outage')
+    if switched('portMappingEnabled'):
+        binds.append(port('tertiaryPort') or 'a random tertiary port')
+
+    allows = [
+        declaration.inputs
+        for declaration in monitor.of_type('unifi:index/firewallZonePolicy:FirewallZonePolicy')
+        if declaration.name.startswith(f'{NAME}-')
+        and declaration.inputs['action'] == 'ALLOW'
+        and declaration.inputs['source']['zoneId'] == zone_id(unifi.ZONE_EXTERNAL)
+        and declaration.inputs['destination']['zoneId'] == zone_id(unifi.ZONE_GATEWAY)
+    ]
+    assert len(allows) == 1, allows
+    (allow,) = allows
+    assert allow['protocol'] == 'udp'
+    assert binds == [allow['destination']['port']]
 
 
 def test_the_health_reading_reads_every_machine_and_every_unit_the_program_delivers(

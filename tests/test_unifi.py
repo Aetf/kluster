@@ -29,8 +29,13 @@ visible in a rendered resource. So the suite asserts them directly:
     worker, because until then the port is the legacy host's;
 -   an allow asks for its return leg wherever the controller lets it:
     everywhere but toward `External`, whose reverse pair already holds the
-    controller's return-only policy; a drop never asks for one, and neither
-    does an allow that is a return leg itself.
+    controller's return-only policy, and toward `Gateway`, whose reply is the
+    device's own traffic and admitted by the controller's predefined accept;
+    a drop never asks for one, and neither does an allow that is a return leg
+    itself;
+-   no two rows open the same port and transport at the device's WAN
+    address, so a forward never takes the gateway's own overlay member off
+    its port.
 
 No controller is contacted: the boundary is Pulumi's mock monitor, which
 answers the zone lookups and hands back the inputs each resource was given.
@@ -188,13 +193,17 @@ async def test_every_policy_is_declared_in_force(mocks: Controller) -> None:
 
 
 @pytest.mark.asyncio
-async def test_only_an_allow_away_from_external_asks_for_a_return_leg(mocks: Controller) -> None:
+async def test_only_an_allow_away_from_external_and_the_gateway_asks_for_a_return_leg(mocks: Controller) -> None:
     """The return flag follows the action and the destination zone, because the controller's own return policy does.
 
     Every zone but `External` itself gets a predefined `External → <zone>`
     `Allow Return Traffic`, and the controller refuses a flagged allow to
     `External` for asking for a second one (Aetf/kluster-ops#709). So an
-    allow to `External` that sets the flag fails the apply. Between the
+    allow to `External` that sets the flag fails the apply. An allow to
+    `Gateway` is answered by the device's own traffic toward the WAN, which
+    the controller's predefined chain accepts whole (Aetf/kluster-ops#881),
+    so its flag would ask for a policy nothing needs on a pair the
+    controller has not been read to take one on. Between the
     cluster zone and `Internal` the flag is the only thing that admits the
     reply, because the reverse pair is a predefined block, so an allow there
     without it admits a request and drops its answer. A drop has no answer
@@ -211,10 +220,14 @@ async def test_only_an_allow_away_from_external_asks_for_a_return_leg(mocks: Con
     # unvisited.
     assert any(inputs['action'] == 'ALLOW' for inputs in policies.values()), 'the build declared no allow'
     assert any(inputs['action'] == 'BLOCK' for inputs in policies.values()), 'the build declared no drop'
+    answered = {zone_id(unifi.ZONE_EXTERNAL), zone_id(unifi.ZONE_GATEWAY)}
+    assert {inputs['destination']['zoneId'] for inputs in policies.values()} >= answered, (
+        'the build declared no allow toward a zone whose reverse pair answers for it'
+    )
     for name, inputs in policies.items():
         asks = (
             inputs['action'] == 'ALLOW'
-            and inputs['destination']['zoneId'] != zone_id(unifi.ZONE_EXTERNAL)
+            and inputs['destination']['zoneId'] not in answered
             and inputs['connectionStateType'] != 'RESPOND_ONLY'
         )
         assert inputs.get('autoAllowReturnTraffic') is (True if asks else None), name
@@ -280,7 +293,7 @@ async def test_the_cluster_vlan_takes_its_ipv6_from_the_delegated_prefix_within_
 async def test_the_cluster_sits_alone_in_a_zone_this_program_creates() -> None:
     """A zone of its own is what makes the nodes separately policeable.
 
-    The two stock zones are looked up because they are the controller's; this
+    The stock zones are looked up because they are the controller's; this
     one is declared because it exists for the cluster. Membership is stated
     once, from the network — the controller takes the association from either
     end, and two ends managing it fight over it.
@@ -525,6 +538,7 @@ async def test_no_policy_hands_a_subnet_to_a_field_of_single_addresses(mocks: Co
 ORDERINGS = [
     ('iot-pool-order', zone_id(unifi.ZONE_INTERNAL), zone_id(unifi.ZONE_EXTERNAL)),
     ('peer-order', zone_id(unifi.ZONE_EXTERNAL), f'{NAME}-zone_id'),
+    ('overlay-member-order', zone_id(unifi.ZONE_EXTERNAL), zone_id(unifi.ZONE_GATEWAY)),
     ('cluster-egress-order', f'{NAME}-zone_id', zone_id(unifi.ZONE_EXTERNAL)),
     ('cluster-internal-order', f'{NAME}-zone_id', zone_id(unifi.ZONE_INTERNAL)),
 ]
@@ -796,6 +810,66 @@ async def test_both_halves_of_the_peer_flow_name_the_same_port_and_host() -> Non
     assert await firewall.forwards['peer-v4'].src_ip.future() == 'any'
 
 
+#: The transports a row's protocol opens a port on; `all` opens one on each.
+TRANSPORTS: Mapping[str, tuple[str, ...]] = {
+    'tcp': ('tcp',),
+    'udp': ('udp',),
+    'tcp_udp': ('tcp', 'udp'),
+    'all': ('tcp', 'udp'),
+}
+
+
+def _wan_openings(census: Sequence[unifi.Pair | unifi.Forward]) -> list[tuple[str, str, int | None]]:
+    """Each port a row opens at the device's own WAN address: the row's key, the transport and the port.
+
+    Those rows are the forwards, which take a port of that address and send
+    it elsewhere, and the allows from `External` to `Gateway`, which admit it
+    to the device itself. A port of `None` is every port. Every row is read,
+    a conditional one included, since a condition met later is the same
+    collision arriving then.
+    """
+    openings: list[tuple[str, str, int | None]] = []
+    for row in census:
+        if isinstance(row, unifi.Forward):
+            openings += [(row.key, transport, row.port) for transport in TRANSPORTS[row.protocol]]
+        elif (row.source, row.destination) == (unifi.Zone.EXTERNAL, unifi.Zone.GATEWAY):
+            openings += [
+                (policy.key, transport, policy.port)
+                for policy in row.policies
+                if policy.action == 'ALLOW'
+                for transport in TRANSPORTS[policy.protocol]
+            ]
+    return openings
+
+
+def test_no_two_rows_open_the_same_port_at_the_wan_address() -> None:
+    """A port of the WAN address answers one row, so a forward never takes the gateway's overlay member off its port.
+
+    The gateway's daemon holds the WAN address itself and binds the one port
+    the WAN-local allow admits (`conventions.overlay.UDM_PORT`). A forward on
+    the same port and transport would rewrite every packet to that port
+    toward another host before the device's own socket saw it, and nothing
+    would report it: the allow would read as in force while the member was
+    relayed. Two forwards on one port is the same collision between hosts.
+    """
+    openings = _wan_openings(unifi.CENSUS)
+    # A loop is only a claim about what it visits: the collision this case
+    # exists for is between a forward and an allow, so both must be here.
+    keys = {key for key, _, _ in openings}
+    assert keys & {row.key for row in unifi.CENSUS if isinstance(row, unifi.Forward)}, 'the census opens no forward'
+    assert keys - {row.key for row in unifi.CENSUS if isinstance(row, unifi.Forward)}, (
+        'the census admits nothing to the gateway'
+    )
+
+    for index, (key, transport, port) in enumerate(openings):
+        for other, other_transport, other_port in openings[index + 1 :]:
+            if key == other or transport != other_transport:
+                continue
+            assert port is not None and other_port is not None and port != other_port, (
+                f'{key} and {other} both open {transport} {port or "every port"} at the WAN address'
+            )
+
+
 @pytest.mark.asyncio
 async def test_no_port_forward_exists_until_the_application_runs_on_the_worker(mocks: Controller) -> None:
     """Before its move, the application's legacy copy holds the WAN port.
@@ -921,7 +995,7 @@ async def test_every_controller_resource_and_lookup_is_signed_by_it(mocks: Contr
 
     The zone, the network, the address groups, the policies and the port
     forward are children of the component that built the provider, so each
-    takes it from its parent rather than naming it. The two zone lookups are
+    takes it from its parent rather than naming it. The zone lookups are
     invokes, which inherit only through a parent -- so they name one, and the
     provider they end up signing with is the same one.
     """

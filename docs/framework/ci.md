@@ -86,7 +86,7 @@ the instance moves from the homelab host to an **OCI VM.Standard.E2.1.Micro**
 | OCI / Cloudflare / B2 APIs | all layers (Cloudflare: `dns`, `apps`) | public |
 | kube API, cloud Talos apid | `physical`, `k8s-base`, `apps` | public (NLB 6443/50000, mTLS) |
 | homelab worker's Talos apid | `physical` | public — the cluster endpoint (NLB 50000), naming `--nodes <homelab>`; the control plane that answers proxies over KubeSpan (**bootstrap verification item**) |
-| libvirt + UDM SSH (the device files), UniFi Network API (firewall rules — `physical` only, API-key auth), AdGuard APIs | `physical`, `dns` (AdGuard rewrites) | **per-run ZeroTier join** (pre-authorized CI member identities, gateway.md §2.1/§2.6) — no standing runner, no home inbound ports |
+| libvirt + UDM SSH (the device files), UniFi Network API (firewall rules — `physical` only, API-key auth), AdGuard APIs | `physical`, `dns` (AdGuard rewrites) | **per-run ZeroTier join** (pre-authorized CI member identities, gateway.md §2.1/§2.6) — no standing runner; the one inbound port the join uses is the overlay's own UDP to the gateway (gateway.md §4.2 rule 7) |
 | State backend | all layers | public TLS (§1) |
 
 Only the `physical` and `dns` jobs touch ZeroTier; `apps` — the stack

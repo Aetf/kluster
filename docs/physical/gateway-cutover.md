@@ -301,12 +301,12 @@ without its state.
     port to the worker's address. Each is named `kluster-probe` in the
     console. Each order depends on the allow whose `(Return)` lands on
     its pair, where there is one, so that policy is on the pair when the
-    order runs. Internal to External, the one census pair of stock
-    zones, carries no probe policy and no probe order: a census pair
-    holds no custom policy but the census's (gateway.md §4.2), and the
-    census's own are there once the window has run, so the readings of
-    that pair below read them, unchanged. The addresses are the
-    documentation ranges, `192.0.2.0/24` and
+    order runs. The census pairs of stock zones, Internal to External
+    and External to Gateway, carry no probe policy and no probe order: a
+    census pair holds no custom policy but the census's (gateway.md
+    §4.2), and the census's own are there once the window has run. The
+    readings below read Internal to External's, unchanged. The
+    addresses are the documentation ranges, `192.0.2.0/24` and
     `2001:db8::/32`. Every policy has the scratch zone on one
     side, and a zone holding no network neither sends nor receives
     traffic, so nothing they say matches anything. The forward is
@@ -478,7 +478,7 @@ without its state.
     returns() {     # every `(Return)` on the pair, with each field that says what it is
         pair_of "$1" "$2" | "$JQ" 'map(select(.name | endswith(" (Return)")))'
     }
-    site_pair() {   # the pair of stock zones the census orders
+    site_pair() {   # the census pair of stock zones the readings compare
         ranks Internal External
     }
     ```

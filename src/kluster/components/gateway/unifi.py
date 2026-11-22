@@ -92,9 +92,11 @@ __all__ = ('CENSUS', 'SiteFirewall', 'controller_provider', 'policy_order', 'ret
 #: than by id: an id is per-site state, a name is stock. `Internal` holds
 #: every LAN network object; `External` is the uplink — and, because the
 #: `lan` pool is no network object, also where pool-bound traffic is
-#: classified.
+#: classified; `Gateway` is the device itself, the destination of what
+#: arrives at its own addresses, the WAN's among them.
 ZONE_INTERNAL = 'Internal'
 ZONE_EXTERNAL = 'External'
+ZONE_GATEWAY = 'Gateway'
 
 #: The port the media Gateway serves. The one thing the IoT VLAN may reach in
 #: the pool, and it is HTTPS because everything behind that Gateway is.
@@ -258,12 +260,14 @@ def site_bgp(
 class Zone(enum.Enum):
     """The zones a policy is declared between.
 
-    Two are the controller's own and looked up by name (`ZONE_INTERNAL`,
-    `ZONE_EXTERNAL`); the cluster's is the one `SiteFirewall` creates.
+    The controller's own are looked up by name (`ZONE_INTERNAL`,
+    `ZONE_EXTERNAL`, `ZONE_GATEWAY`); the cluster's is the one `SiteFirewall`
+    creates.
     """
 
     INTERNAL = enum.auto()
     EXTERNAL = enum.auto()
+    GATEWAY = enum.auto()
     CLUSTER = enum.auto()
 
 
@@ -275,28 +279,37 @@ def return_flag(
     """A zone policy's `auto_allow_return_traffic`: how an allow admits its return leg.
 
     Set, the controller creates a `<name> (Return)` allow on the reverse pair
-    beside the policy. That is how an allow gets its return leg. The exception
-    is an allow to `External`, whose reverse pair already holds the return
-    leg: the controller gives every other zone, `Internal`
-    and the one `SiteFirewall` creates alike, a predefined `External →
-    <zone>` policy named `Allow Return Traffic`, which admits related and
-    established traffic only (`RESPOND_ONLY`), and it refuses to create a
-    second one — `400 … Firewall policy create respond traffic not
-    allowed`, on every pair whose destination is `External` — while it
-    accepts the flag on every other pair the census declares (read off the
-    controller 2026-11-05, Aetf/kluster-ops#709). So an allow to `External`
-    sets no flag, and its return leg is that predefined policy.
+    beside the policy. That is how an allow gets its return leg. The exceptions
+    are allows whose reverse pair already admits the return leg. An allow to
+    `External` is one: the controller gives every other zone, `Internal` and
+    the one `SiteFirewall` creates alike, a predefined `External → <zone>`
+    policy named `Allow Return Traffic`, which admits related and established
+    traffic only (`RESPOND_ONLY`), and it refuses to create a second one — `400
+    … Firewall policy create respond traffic not allowed`, on every pair whose
+    destination is `External` — while it accepts the flag on every other pair
+    the census declares (read off the controller 2026-11-05,
+    Aetf/kluster-ops#709). So an allow to `External` sets no flag, and its
+    return leg is that predefined policy.
 
-    That is a dependency on a policy this program neither declares nor reads,
-    and nothing in it would notice the policy going away: a refresh compares
-    only what is declared. Its absence would surface as dropped replies to
-    the allows toward `External` — the cluster's egress and the IoT VLAN's
-    reach to the media VIP — not as a diff. physical/gateway.md §4.2 records
-    the same dependency.
+    An allow to `Gateway` is the other, and sets no flag either. Its reply is
+    the device's own traffic, and the census's allows to `Gateway` come from
+    `External`, so the reply is the device's traffic toward the WAN: the
+    chain `UBIOS_LOCAL_WAN_USER`, which ends in an unconditional accept in
+    both families (read off the device 2026-11-22, Aetf/kluster-ops#881). So
+    its return leg is the controller's predefined accept on `Gateway →
+    External`. An allow to `Gateway` from another zone would rest on a
+    reading of its own reverse pair, which nothing has taken.
+
+    Both are dependencies on policies this program neither declares nor
+    reads, and nothing in it would notice one going away: a refresh compares
+    only what is declared. Their absence would surface as dropped replies —
+    to the allows toward `External`, the cluster's egress and the IoT VLAN's
+    reach to the media VIP, and to the gateway's overlay member — not as a
+    diff. physical/gateway.md §4.2 records the same dependencies.
 
     A drop has no return leg to admit, so it sets nothing.
     """
-    if action != 'ALLOW' or destination is Zone.EXTERNAL:
+    if action != 'ALLOW' or destination in (Zone.EXTERNAL, Zone.GATEWAY):
         return None
     # An allow of `RESPOND_ONLY` is itself a return leg: every packet it
     # matches answers a connection opened from the other side, whose own allow
@@ -390,9 +403,9 @@ class Policy:
     """One zone policy, on the pair whose row holds it.
 
     An allow also admits its return leg: an allow whose return leg is not
-    allowed is not an allow, and the reverse zone pair is where the return
-    leg is classified. Toward `External` that leg is a policy the
-    controller keeps on its own; on every other pair it is the one the
+    allowed is not an allow, and the reverse zone pair is where the return leg
+    is classified. Toward `External` and toward `Gateway` that leg is a policy
+    the controller keeps on its own; on every other pair it is the one the
     allow asks for (`return_flag`). A drop admits nothing there, and an allow
     of `RESPOND_ONLY` is a return leg already.
 
@@ -688,11 +701,42 @@ CENSUS: tuple[Pair | Forward, ...] = (
             ),
         ),
     ),
-    # The IPv4 half of the same flow, and the only port forward on the device.
-    # Nothing else is published inbound: cluster and node management arrive
-    # over the cloud load balancer, home-side management over ZeroTier. Both
-    # halves take the port and its transports from the census row they open
-    # (`PEER`), because two rules that disagree on it admit nothing.
+    # ZeroTier's own UDP to the gateway's overlay member, from anyone on the
+    # internet, at the device's own WAN addresses in both families. The
+    # member runs in the device's network namespace and holds those
+    # addresses itself, and the WAN-local chain drops every new packet, so
+    # without this row a peer reaches it directly only by hole punching from
+    # both ends and is relayed until then (physical/gateway.md §2.6, §4.1).
+    # The port is the one the daemon pins in its `local.conf`
+    # (`conventions.overlay.UDM_PORT`), and it binds no other.
+    #
+    # UDP alone, never `tcp_udp`: TCP on the same number is the daemon's
+    # control API, which stays behind the drop. No address on either side,
+    # since the device's WAN addresses are the zone and a ZeroTier peer may
+    # be anywhere. ZeroTier authenticates every packet against its sender's
+    # identity before it acts on it (threat-model.md §2.9).
+    Pair(
+        order='overlay-member-order',
+        source=Zone.EXTERNAL,
+        destination=Zone.GATEWAY,
+        policies=(
+            Policy(
+                key='overlay-member',
+                title='inbound overlay member',
+                description="ZeroTier's UDP to the gateway's overlay member, on the one port its daemon binds.",
+                action='ALLOW',
+                ip_version='BOTH',
+                protocol='udp',
+                port=conventions.overlay.UDM_PORT,
+            ),
+        ),
+    ),
+    # The IPv4 half of the bulk-transfer flow, and the only port forward on
+    # the device. No management is published inbound: cluster and node
+    # management arrive over the cloud load balancer, home-side management
+    # over ZeroTier. Both halves take the port and its transports from the
+    # census row they open (`PEER`), because two rules that disagree on it
+    # admit nothing.
     #
     # It lands on the worker VM's node address because that is the address
     # the application's outbound peer traffic already wears: the cluster
@@ -786,6 +830,7 @@ class SiteFirewall(Component, pulumi_type='kluster:gateway:SiteFirewall'):
         zones: dict[Zone, pulumi.Input[str]] = {
             Zone.INTERNAL: unifi.get_firewall_zone_output(name=ZONE_INTERNAL, site=site, opts=invoke).id,
             Zone.EXTERNAL: unifi.get_firewall_zone_output(name=ZONE_EXTERNAL, site=site, opts=invoke).id,
+            Zone.GATEWAY: unifi.get_firewall_zone_output(name=ZONE_GATEWAY, site=site, opts=invoke).id,
             Zone.CLUSTER: self.zone.id,
         }
 

@@ -241,10 +241,11 @@ async def test_the_probe_reads_every_zone_pair_the_census_declares_on_the_cluste
     `(Return)` onto runs after that allow, which is what lets a pass say the
     derivative needs no place in a batch.
 
-    The pairs are the census's with the cluster zone on one side. The pair of
-    stock zones is the exception: a census pair holds no custom policy but the
-    census's, so the probe has none to put there, and the census's own stand on
-    it once the window has run.
+    The pairs are the census's with the cluster zone on one side. Every census
+    pair of stock zones is the exception, `Internal → External` and
+    `External → Gateway` among them: a census pair holds no custom policy but
+    the census's, so the probe has none to put there, and the census's own
+    stand on it once the window has run.
     """
     controller = await run_probe()
 
@@ -252,6 +253,7 @@ async def test_the_probe_reads_every_zone_pair_the_census_declares_on_the_cluste
     zones = {
         unifi.Zone.INTERNAL: zone_id(unifi.ZONE_INTERNAL),
         unifi.Zone.EXTERNAL: zone_id(unifi.ZONE_EXTERNAL),
+        unifi.Zone.GATEWAY: zone_id(unifi.ZONE_GATEWAY),
         unifi.Zone.CLUSTER: f'{scratch}_id',
     }
     census = {
@@ -262,8 +264,13 @@ async def test_the_probe_reads_every_zone_pair_the_census_declares_on_the_cluste
     allows = [inputs for inputs in controller.by_name(POLICY).values() if inputs['action'] == 'ALLOW']
     probed = {(inputs['source']['zoneId'], inputs['destination']['zoneId']) for inputs in allows}
     assert census <= probed, sorted(census - probed)
-    stock = (zones[unifi.Zone.INTERNAL], zones[unifi.Zone.EXTERNAL])
-    assert stock not in probed, 'the probe holds a policy on a census pair of stock zones'
+    stock = {
+        (zones[row.source], zones[row.destination])
+        for row in unifi.CENSUS
+        if isinstance(row, unifi.Pair) and unifi.Zone.CLUSTER not in (row.source, row.destination)
+    }
+    assert stock, 'the census orders no pair of stock zones'
+    assert not stock & probed, f'the probe holds a policy on a census pair of stock zones: {sorted(stock & probed)}'
     for inputs in allows:
         toward_external = inputs['destination']['zoneId'] == zones[unifi.Zone.EXTERNAL]
         assert inputs.get('autoAllowReturnTraffic') is (None if toward_external else True), inputs['name']

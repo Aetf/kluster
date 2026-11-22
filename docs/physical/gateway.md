@@ -262,11 +262,11 @@ declarative/physical.md §4.
     The ZeroTier member
     is told nothing through its environment: it is host-networked, and
     what it needs of its machine is the tunnel device, the state
-    directory that is its identity on the overlay, and its settings on
-    the network. Two files are declared into that directory. An initial
-    state names the network it joins, `networks.d/<network id>.conf`,
-    placed before the daemon's first start and the daemon's own from
-    then on. Its settings on that network,
+    directory that is its identity on the overlay, its own settings, and
+    its settings on the network. Each is a file declared into that
+    directory. An initial state names the network it joins,
+    `networks.d/<network id>.conf`, placed before the daemon's first
+    start and the daemon's own from then on. Its settings on that network,
     `networks.d/<network id>.local.conf` (§2.2), are a mounted file
     bound read-only over the state directory, this program's on every
     deployment. The daemon reads that file when the network comes up
@@ -277,9 +277,24 @@ declarative/physical.md §4.
     deletes it only when it leaves the network. Against a read-only
     bind both fail while the daemon carries on, so a setting changed by
     hand lasts until the machine next starts, and the declaration is
-    what it starts with. The bind lands inside the state directory's
-    own bind because nspawn mounts a machine's binds in the order of
-    their targets, a directory before what is under it
+    what it starts with. Its own settings, `local.conf` at the root of
+    that directory (`container.OVERLAY_DAEMON_SETTINGS`), are a mounted
+    file on the same terms. They pin the daemon to one UDP port,
+    `conventions.overlay.UDM_PORT`, the port the census admits from the
+    internet (§4.2 rule 7), with no UPnP or NAT-PMP mapping and no
+    secondary port: `allowSecondaryPort` off binds none at start, and
+    `secondaryPort`, set to that same port and never bound, is what
+    keeps the daemon from binding a random one after an outage, a path
+    that asks only whether `secondaryPort` is set. Setting it makes the
+    daemon log `WARNING: using manually-specified secondary and/or
+    tertiary ports. This can cause NAT issues.` whenever it reads the
+    file, which is expected and harmless: the gateway is behind no NAT.
+    The daemon binds its ports when it starts, so a change restarts
+    the machine through the same content stamp. Its one write of that
+    file, its control API's `POST /config`, fails against the read-only
+    bind, and nothing on the device sends it. Each bind lands inside the
+    state directory's own bind because nspawn mounts a machine's binds
+    in the order of their targets, a directory before what is under it
     (`custom_mount_prepare_all` in systemd 257, the device's).
 
     **Host-networked is a requirement rather than an accident**, and it
@@ -3018,17 +3033,20 @@ Facts that shape it (decided 2026-08-24):
     dominated by NAT traversal toward a NATed host member (relay first,
     then a hole-punched direct path). Here the peer is the UDM itself,
     whose ZeroTier socket (host-networking container) holds the WAN
-    address un-NATed. Its WAN-local chain admits no new inbound packet
-    (§4.1), so a runner's first packet toward it is dropped, the direct
-    path forms by hole punching from both ends, and until it does
-    traffic flows, slowly, through ZeroTier's relays. §2.4 item 7
-    measures it, as the seconds on the gateway's readiness line in every
-    job that joins with the `physical` identity, which waits for the
-    gateway's shell: 9 s in gateway-cutover.md §8.3's drift run. A join
-    that misses its deadline fails its job, as one did on 2026-11-19
-    (run 44657773238, the gateway's peer listed as `RELAY`). The same
-    day, run 44639021122's dial to the homelab host timed out after its
-    join. Each passed when rerun, and the cause is open in
+    address un-NATed. Its WAN-local chain admits UDP to the one port the
+    daemon binds, `conventions.overlay.UDM_PORT` (§4.1, §4.2 rule 7), so
+    a runner's first packet toward that port is admitted, and the direct
+    path needs no hole punching. ZeroTier's relays carry the traffic
+    until the runner has learned that address from the roots, and
+    wherever the direct path fails. §2.4 item 7 measures it, as the
+    seconds on the gateway's readiness line in every job that joins with
+    the `physical` identity, which waits for the gateway's shell: 9 s in
+    gateway-cutover.md §8.3's drift run. A join that misses its deadline
+    fails its job, as one did on 2026-11-19 (run 44657773238, the
+    gateway's peer listed as `RELAY`). The same day, run 44639021122's
+    dial to the homelab host timed out after its join. Each passed when
+    rerun. The readings that tell whether the allow answers the first,
+    and what the second still needs, are
     [Aetf/kluster-ops#881](https://github.com/Aetf/kluster-ops/issues/881).
 
 ### 2.7 Managed DNS: the tunnel's resolver
@@ -3679,17 +3697,25 @@ Each item names when it was read.
     masqueraded, so the tunnel's traffic from `10.144.0.0/16` reaches
     the internet with no rule of this program's
     ([Aetf/kluster-ops#755](https://github.com/Aetf/kluster-ops/issues/755#issuecomment-6893045703)).
--   **From the WAN to the gateway itself, only replies are admitted.**
+-   **From the WAN to the gateway itself, the controller's chain admits
+    only replies, and the census adds ZeroTier's UDP.**
     `UBIOS_WAN_LOCAL_USER`, the chain for traffic from the WAN to the
     device's own addresses, accepts `RELATED,ESTABLISHED` and drops
-    every `NEW` packet, and no rule in it admits UDP to ZeroTier's
-    ports. So the gateway's ZeroTier member, which runs in the device's
-    own network namespace and holds the WAN address itself, takes no
-    unsolicited packet from the internet: a peer reaches it directly
-    only once the gateway has sent toward that peer, which is hole
-    punching from both ends, and is relayed until then (§2.6). Read on
-    2026-11-22
+    every `NEW` packet, in both families, the IPv6 chain also admitting
+    neighbor discovery and the DHCPv6 client; it held no custom rule.
+    The other direction, the device's own traffic toward the WAN, is
+    `UBIOS_LOCAL_WAN_USER`, which ends in an unconditional `ACCEPT` in
+    both families. The device runs no UPnP or NAT-PMP service, and its
+    `nat` table holds no DNAT but the DNS redirects. Read on 2026-11-22
     ([Aetf/kluster-ops#881](https://github.com/Aetf/kluster-ops/issues/881#issuecomment-7071914936)).
+    The gateway's ZeroTier member runs in the device's own network
+    namespace and holds the WAN address itself, and §4.2 rule 7 is the
+    `External → Gateway` allow of UDP to the one port its daemon binds,
+    ahead of that drop. So it takes unsolicited ZeroTier packets on that
+    port, and the drop answers everything else, the daemon's control API
+    on TCP at the same number included. The allow's place in the chain
+    is the first apply's to read
+    ([Aetf/kluster-ops#881](https://github.com/Aetf/kluster-ops/issues/881)).
 -   **From the cluster zone to the gateway itself, the zone policy
     admits every packet.** `INPUT` first passes every packet through two
     firmware chains that are no zone policy: `ALIEN`, which drops a
@@ -3847,23 +3873,33 @@ looked up by, while the site's address plan does state its subnets.
 The cluster VLAN needs neither: it is alone in its zone, and a policy
 names it by naming the zone.
 
-**An allow admits its return leg, and toward External the controller's
-own policy is that leg.** An allow sets
+**An allow admits its return leg, and toward External and toward
+Gateway the controller's own policy is that leg.** An allow sets
 `auto_allow_return_traffic`, which has the controller add a
 `<name> (Return)` allow on the reverse pair, unless it goes to External
-or is a return leg itself. An allow to External — rule 1's and rule
-2's — sets nothing. The controller gives every other zone
+or Gateway, or is a return leg itself. An allow to External — rule 1's
+and rule 2's — sets nothing. The controller gives every other zone
 a predefined `External → <zone>` policy, `Allow Return Traffic`, which
 admits related and established traffic only, and it refuses the flag on
 every pair whose destination is External — `Firewall policy create
 respond traffic not allowed` — while it accepts it on every other pair
 the census declares, read off the controller on 2026-11-05
-(Aetf/kluster-ops#709). The return leg of those allows
-therefore rests on a policy the census does not declare. Nothing in the
-program would notice that policy going away, since the program neither
-declares nor reads it and a refresh compares only what is declared. Its
-absence would surface as dropped replies — the nodes cut off from their
-off-site control plane, the televisions from the media VIP — and not as
+(Aetf/kluster-ops#709). An allow to Gateway — rule 7's — sets nothing
+either. Its reply is the device's own traffic toward the WAN, the chain
+`UBIOS_LOCAL_WAN_USER`, which ends in an unconditional `ACCEPT` in both
+families (§4.1, read 2026-11-22): that is the controller's predefined
+accept on Gateway → External, the reverse of the one pair the census
+declares toward Gateway. An allow to Gateway from another zone would
+need its own reverse pair read first. Whether the controller takes an
+unflagged allow on External → Gateway is read by the first apply that
+declares it, which fails by name on a refusal before the overlay
+machine is touched, the machine depending on the firewall. The return
+leg of all those allows therefore rests on policies the census does not
+declare. Nothing in the program would notice one going away, since the
+program neither declares nor reads them and a refresh compares only
+what is declared. An absence would surface as dropped replies — the
+nodes cut off from their off-site control plane, the televisions from
+the media VIP, the gateway's overlay member from its peers — and not as
 a diff. A return-only allow (rule 4) sets nothing either: it is a return
 leg itself, and the controller stores the shape with the flag off (read
 2026-11-05, Aetf/kluster-ops#714). The rule is `return_flag` in
@@ -4033,6 +4069,25 @@ leg itself, and the controller stores the shape with the flag off (read
     to its holder. Moving it is a step of Wave D
     (cluster/migration.md §2): read the console for what holds the
     port, clear it, set the key, apply.
+7.  **External → Gateway: ZeroTier's UDP to the gateway's overlay
+    member**, both families, on `conventions.overlay.UDM_PORT` alone,
+    the one port its daemon binds (§1), with no address on
+    either side, since the zone is the device's own addresses and a
+    peer may be anywhere. **UDP only**: TCP on the same number is the
+    daemon's control API, which stays behind the WAN-local chain's
+    `NEW` drop (§4.1). A peer's first packet therefore reaches the
+    member, and the direct path needs no hole punching (§2.6). The pair
+    held no custom policy when read (§4.1), so the census owns it whole
+    from its first apply: a WAN-local rule made by hand, a VPN port
+    say, is drift there as anywhere and becomes a row. What it exposes
+    and why that passes is threat-model.md §2.9.
+
+    **No two rows open the same port and transport at the WAN
+    address**, the forwards and the allows to Gateway being the rows
+    that do. A forward on this port would rewrite the packets meant for
+    the gateway's own daemon toward another host, the allow reading as
+    in force while the member is relayed, and `tests/test_unifi.py`
+    holds the relation over the census.
 
 Nothing else. A custom policy on a pair this census orders that is not
 a row of it is drift.

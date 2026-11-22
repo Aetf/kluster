@@ -42,6 +42,7 @@ creates — cannot acquire one by accident.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from ipaddress import IPv4Address
@@ -74,6 +75,8 @@ __all__ = (
     'ENV_IPV4_GATEWAY',
     'ENV_IPV6_TOKEN',
     'KILL_SIGNAL',
+    'OVERLAY_DAEMON_CONF',
+    'OVERLAY_DAEMON_SETTINGS',
     'OVERLAY_NETWORKS',
     'OVERLAY_SETTINGS',
     'OVERLAY_STATE',
@@ -96,6 +99,7 @@ __all__ = (
     'mounted_path',
     'net_setup_environment',
     'nspawn_file',
+    'overlay_daemon_conf',
     'overlay_settings',
     'resolv_conf',
 )
@@ -183,6 +187,46 @@ OVERLAY_SETTINGS: Mapping[str, bool] = MappingProxyType(
         'allowGlobal': True,
         'allowDefault': False,
         'allowDNS': False,
+    }
+)
+
+#: The daemon's own settings file, at the root of `OVERLAY_STATE`: the name
+#: and the place the daemon reads it from at start (`OneService.cpp` at
+#: ZeroTier 1.16.2).
+OVERLAY_DAEMON_CONF = 'local.conf'
+
+#: The gateway's daemon settings, in the daemon's names, which pin it to one
+#: UDP port: the port the census's WAN-local allow admits
+#: (`conventions.overlay.UDM_PORT`). Each is read at start, as the
+#: `local.conf` section of the daemon's `service/README.md` and its
+#: `OneService.cpp` at 1.16.2 have it:
+#:
+#: - `primaryPort`: the port bound. The daemon exits rather than hunting for
+#:   another when the bind fails, so its primary port is never one the
+#:   allow does not name.
+#: - `allowSecondaryPort` off: no secondary port at start. That port is for
+#:   NATs that misbehave when two hosts behind them share an internal port,
+#:   and the gateway is behind no NAT.
+#: - `secondaryPort` set, which is what keeps it so after an outage. Once the
+#:   daemon has been offline for two ping periods, or reads a clock jump as
+#:   a wake while offline, it binds a random secondary port whatever
+#:   `allowSecondaryPort` says, unless `secondaryPort` is set: that path asks
+#:   only whether it is. With `allowSecondaryPort` off, the value is never
+#:   bound. It is the primary port, `UDM_PORT`, so that a reading of it that
+#:   did bind it would name no port beyond the one the allow admits. Setting
+#:   it makes the daemon log `WARNING: using manually-specified secondary
+#:   and/or tertiary ports. This can cause NAT issues.` each time it reads
+#:   the file, which is expected here.
+#: - `portMappingEnabled` off: no UPnP or NAT-PMP mapping, and with it no
+#:   tertiary port, which exists only for that mapping. The device runs no
+#:   such service, so the port mapped nothing. No tertiary port is named,
+#:   since nothing binds one while the mapping is off.
+OVERLAY_DAEMON_SETTINGS: Mapping[str, int | bool] = MappingProxyType(
+    {
+        'primaryPort': conventions.overlay.UDM_PORT,
+        'allowSecondaryPort': False,
+        'secondaryPort': conventions.overlay.UDM_PORT,
+        'portMappingEnabled': False,
     }
 )
 
@@ -493,7 +537,8 @@ class OverlayDaemon(ContainerDeclaration[conventions.gateway.HostNetworkService]
     Nothing is injected into its environment: the daemon is started with its
     state directory as its only argument, and it reaches its roots by literal
     address. What it needs of its machine is the tunnel device, the state
-    bind that is its identity on the overlay, and its settings on the network.
+    bind that is its identity on the overlay, its own settings, and its
+    settings on the network.
 
     **The network it joins is an initial state.** At start the daemon joins
     exactly the networks named by the files in `networks.d/` of that directory,
@@ -523,10 +568,18 @@ class OverlayDaemon(ContainerDeclaration[conventions.gateway.HostNetworkService]
     again. So nothing on the device contends with the declaration, and a
     setting changed by hand lasts until the machine restarts.
 
-    The bind lands inside the state bind, and that holds because nspawn
+    **Its own settings are a mounted file too**, `local.conf` at the root of
+    its home (`OVERLAY_DAEMON_SETTINGS`), which pin it to one UDP port, the one
+    the census's WAN-local allow admits, at start and after an outage alike. It
+    binds its ports at start, so a change takes a restart, and the content
+    stamp gives it one. It writes the file in one place, its control API's
+    `POST /config`, which nothing on the device sends; bound read-only, that
+    write fails, and the declaration holds.
+
+    Each bind lands inside the state bind, and that holds because nspawn
     mounts a machine's binds in the order of their targets, a directory
     before what is under it (`custom_mount_prepare_all` in systemd 257, the
-    device's). Mounting it leaves an empty file at its target in the state
+    device's). Mounting one leaves an empty file at its target in the state
     directory, after the initial state is placed, and the daemon reads an
     empty file as its defaults.
     """
@@ -545,6 +598,9 @@ class OverlayDaemon(ContainerDeclaration[conventions.gateway.HostNetworkService]
         return (
             MountedFile(
                 name=settings, target=f'{OVERLAY_STATE}/{OVERLAY_NETWORKS}/{settings}', content=overlay_settings()
+            ),
+            MountedFile(
+                name=OVERLAY_DAEMON_CONF, target=f'{OVERLAY_STATE}/{OVERLAY_DAEMON_CONF}', content=overlay_daemon_conf()
             ),
         )
 
@@ -821,6 +877,18 @@ def overlay_settings() -> str:
     who manages it; `OverlayDaemon` says why nothing else writes it.
     """
     return ''.join(f'{name}={int(value)}\n' for name, value in OVERLAY_SETTINGS.items())
+
+
+def overlay_daemon_conf() -> str:
+    """The gateway's daemon settings, as its daemon reads them.
+
+    A JSON object whose `settings` member holds them: the format of the file
+    the daemon parses at start, and of the one its control API writes. A
+    file that does not parse stops the daemon rather than starting it on its
+    defaults. JSON has no comment syntax, so the file carries no header naming
+    who manages it; `OverlayDaemon` says why nothing else writes it.
+    """
+    return json.dumps({'settings': dict(OVERLAY_DAEMON_SETTINGS)}, indent=4) + '\n'
 
 
 class Container(Component, pulumi_type='kluster:gateway:Container'):

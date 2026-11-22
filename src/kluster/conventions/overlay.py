@@ -49,6 +49,17 @@ UDM = IPv4Address('10.144.1.1')
 CI_PHYSICAL = IPv4Address('10.144.2.1')
 CI_DNS = IPv4Address('10.144.2.2')
 
+#: The UDP port the gateway's member takes ZeroTier's own traffic on, which is
+#: the one port its daemon binds. It is ZeroTier's default, the port the
+#: daemon bound before it was pinned, so pinning it moves nothing a peer
+#: already knows. Two declarations read it: the daemon's `local.conf`, which
+#: pins it (`OverlayDaemon` in `components/gateway/container.py`), and the
+#: census row that admits it from the internet, the WAN-local allow
+#: (`components/gateway/unifi.py`, physical/gateway.md §4.2 rule 7). That
+#: traffic runs underneath the overlay rather than on it, so no flow rule
+#: reads the port.
+UDM_PORT = 9993
+
 #: The tag the roles are carried in on the network.
 TAG_ROLE_ID = 1000
 
