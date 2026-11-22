@@ -15,11 +15,9 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping
 from pathlib import Path
-from typing import cast
 
 import pytest
 import pytest_asyncio
-import yaml
 from device_places import DEVICE_ARTIFACT, DEVICE_FILE
 from gateway_services import ACME_TOKEN, DIGEST, TAG, caddy, pin, served
 from mock_monitor import Recorder, declaring, run_with
@@ -111,8 +109,8 @@ def test_the_census_places_services_on_the_container_vlan() -> None:
     survive is the census having none: the loops over those entries would
     visit nothing and pass, and a case parametrized over an empty roster is
     skipped rather than failed, so the addressing, the bridge, the rendered
-    settings and a fresh resolver's forwarding would go unasserted with the
-    suite green.
+    settings and what a resolver is given would go unasserted with the suite
+    green.
     """
     assert BRIDGED
     assert RESOLVERS
@@ -324,12 +322,11 @@ def test_a_machine_boots_a_tree_it_does_not_name() -> None:
     assert 'Directory=' not in settings
 
 
-def test_a_resolver_is_placed_statically_and_points_at_more_than_one_upstream() -> None:
+def test_a_resolver_is_placed_statically() -> None:
     """A resolver that waited for a lease would be waiting on itself.
 
     Its address is what the leases hand out as the name server, so it is
-    configured rather than learned; and its own upstreams are two providers,
-    because the LAN's name service must not stop with any one of them.
+    configured rather than learned.
     """
     address = bridged_service('adguard-alice').address
     environment = container.net_setup_environment(address)
@@ -339,64 +336,6 @@ def test_a_resolver_is_placed_statically_and_points_at_more_than_one_upstream() 
     # The v6 half is an interface identifier, not an address: the prefix keeps
     # arriving in advertisements, so the resolver survives it changing.
     assert environment[container.ENV_IPV6_TOKEN] == f'::{address}'
-
-    rendered = container.adguard_initial_state(address)
-    assert f'{address}:{conventions.gateway.ADGUARD_API_PORT}' in rendered
-    for upstream in container.ADGUARD_UPSTREAMS:
-        assert upstream in rendered
-    assert len(container.ADGUARD_UPSTREAMS) > 1
-
-
-def initial_dns(service: str) -> dict[str, object]:
-    """The `dns` section of one resolver's initial state, as the instance parses it."""
-    document = yaml.safe_load(container.adguard_initial_state(bridged_service(service).address))
-    assert isinstance(document, dict)
-    section = cast('dict[str, object]', document)['dns']
-    assert isinstance(section, dict)
-    return cast('dict[str, object]', section)
-
-
-def per_domain_upstreams(dns: Mapping[str, object]) -> dict[str, str]:
-    """The `[/zone/]resolver` entries of `upstream_dns`, as zone to resolver."""
-    upstreams = dns['upstream_dns']
-    assert isinstance(upstreams, list)
-    entries = (re.fullmatch(r'\[/([^/]+)/\](\S+)', str(entry)) for entry in cast('list[object]', upstreams))
-    return {match[1]: match[2] for match in entries if match}
-
-
-@pytest.mark.parametrize('service', RESOLVERS)
-def test_a_fresh_resolver_asks_the_gateway_about_the_sites_own_names_and_addresses(service: str) -> None:
-    """No public resolver answers a device's name or a site address's pointer.
-
-    Those names are the gateway's: it derives the device plane from its leases
-    and answers the pointers of the networks it numbers. An instance that comes
-    up on its initial state — new, or rebuilt after its device was lost — sends
-    them to the gateway as the running pair does, or it answers none of them,
-    and every name behind a device-plane alias goes with them. A private
-    address's pointer takes a path of its own inside the instance, which asks
-    only the resolvers named for private addresses and only while it is
-    allowed to.
-    """
-    dns = initial_dns(service)
-    gateway = str(conventions.CONTAINER_VLAN.require_gateway())
-    forwarded = per_domain_upstreams(dns)
-
-    assert forwarded.get('home.arpa') == gateway
-    # Every network the gateway serves has its pointers answered by it: some
-    # zone sent to the gateway holds the network's own pointer.
-    for network in conventions.SITE_NETWORKS:
-        pointer = network.v4.network_address.reverse_pointer
-        zones = [zone for zone in forwarded if pointer.endswith(f'.{zone}')]
-        assert zones, network.name
-        assert all(forwarded[zone] == gateway for zone in zones), network.name
-    assert dns['local_ptr_upstreams'] == [gateway]
-    assert dns['use_private_ptr_resolvers'] is True
-    # The public pair still takes everything else.
-    upstreams = dns['upstream_dns']
-    assert isinstance(upstreams, list)
-    assert [entry for entry in cast('list[object]', upstreams) if not str(entry).startswith('[')] == list(
-        container.ADGUARD_UPSTREAMS
-    )
 
 
 def test_the_gateway_issues_its_own_certificates_from_its_own_credential() -> None:
@@ -624,28 +563,23 @@ def test_what_the_converger_will_stamp_is_the_files_this_component_declares(moni
         assert delivered == (set() if initial is None else {nspawn.initial_state_path(service, initial.into)}), service
 
 
-def test_a_resolvers_own_configuration_is_installed_once_and_then_left_alone(monitor: Recorder) -> None:
-    """The instance rewrites the file the moment the `dns` stack adds a rewrite.
+@pytest.mark.parametrize('service', RESOLVERS)
+def test_a_resolver_is_given_no_configuration_so_a_fresh_one_starts_in_first_run(
+    service: str, monitor: Recorder
+) -> None:
+    """The `dns` stack's setup configures an instance in first run, and first run is a missing configuration file.
 
-    So the initial state is delivered into a directory of the machine's that
-    holds nothing else, and the converger copies that directory onto the
-    working directory only while the working directory is empty — which is the
-    state of a machine the device has never run, and never the state of one
-    that has been running. Being in there is also what keeps it out of the
-    content stamp: a change to it can never be a reason to restart an instance
-    that has already made the file its own.
+    The converger copies whatever is delivered under a machine's
+    `initial-state/` into its state directory while that directory is empty,
+    which is exactly the state of a rebuilt instance. A configuration file
+    copied in that way would start the instance on a configuration with no
+    account in it, which its setup refuses until the instance is reset, and on
+    listen addresses that are this program's rather than the ones the `dns`
+    stack declares. So nothing is delivered there.
     """
-    alice = declared_for('adguard-alice')
-    initial = alice.initial_state
-    assert initial is not None
-    assert declared_for('caddy').initial_state is None, 'caddy owns nothing it is given'
+    initial = f'{nspawn.machine_path(service)}/{nspawn.INITIAL_STATE}/'
 
-    # The path it is delivered at is the path it lands at, one directory over:
-    # the converger copies the machine's initial-state directory onto its state
-    # directory, and the state directory is bound at the working directory the
-    # instance is started with. That the copy happens only once, and only into
-    # an empty directory, is `test_nspawn_runtime`'s -- it runs the script.
-    _ = monitor.inputs_of(f'{NAME}-adguard-alice-initial-state')
+    assert {path for path in machine_files(monitor, service) if path.startswith(initial)} == set()
 
 
 def test_a_resolver_is_bound_at_the_working_directory_its_image_is_started_with() -> None:
@@ -654,16 +588,14 @@ def test_a_resolver_is_bound_at_the_working_directory_its_image_is_started_with(
     The resolver runs from an installation the root filesystem carries and
     keeps its configuration, query log and statistics in a working directory
     outside it. Binding the machine's state anywhere else would give the
-    instance an empty directory to fill and leave the initial state sitting
-    where nothing reads it — the failure would be a resolver that came up with
-    default settings rather than an error anyone sees.
+    instance a directory that the next root filesystem throws away, with the
+    account its setup made in it — the failure would be a resolver that comes
+    up in first run after a digest bump rather than an error anyone sees.
     """
     alice = declared_for('adguard-alice')
 
     assert container.ADGUARD_STATE != container.ADGUARD_INSTALL
-    # The live configuration is the working directory's, and the initial state
-    # is delivered beside it rather than into it, so that placing one can never
-    # overwrite the other.
+    # The live configuration is the working directory's alone.
     assert alice.mounted_files == ()
 
     settings = container.nspawn_file(alice)
@@ -806,9 +738,10 @@ async def test_the_tree_lands_last_so_the_machine_starts_once_with_everything(
     for mounted in caddy.mounted_files.values():
         assert str(await mounted.urn.future()) in settings
 
-    alice = next(child for child in containers if child.unit_name == nspawn.machine_unit('adguard-alice'))
-    assert alice.initial_state is not None
-    assert str(await alice.initial_state.urn.future()) in monitor.depends_on(f'{NAME}-adguard-alice-image')
+    overlay = conventions.gateway.OVERLAY.name
+    daemon = next(child for child in containers if child.unit_name == nspawn.machine_unit(overlay))
+    assert daemon.initial_state is not None
+    assert str(await daemon.initial_state.urn.future()) in monitor.depends_on(f'{NAME}-{overlay}-image')
 
 
 def dropin_of(service: str) -> str:

@@ -566,11 +566,10 @@ whole configuration, the split-horizon rewrites among it.
     and the `ci-dns` identity reaches the API's port alone
     (physical/gateway.md §2.3). The run that sets an instance up
     therefore goes from the checkout that holds `.credentials/`
-    (physical/gateway.md §3). The initial state `physical` still
-    installs into an empty state directory (physical/gateway.md §1.1)
-    names no account, so an instance started from it is refused by its
-    setup until it is reset; its removal is `kluster-ops#507`'s last
-    slice.
+    (physical/gateway.md §3). `physical` gives a resolver machine no
+    configuration file (physical/gateway.md §1), so a new or rebuilt
+    instance is in first run when it first starts, and every setting it
+    is configured with comes from this stack.
 -   **The account is the setup's, so a rotation is a reset.** An
     instance keeps the account its setup made, and no endpoint changes
     it: rotating the login, or recovering an instance whose account is
@@ -622,10 +621,9 @@ whole configuration, the split-horizon rewrites among it.
     container VLAN: the API at the port
     `conventions.gateway.ADGUARD_API_PORT` names — the same constant the
     caddy vhost that proxies the instance, the setup's listen address,
-    the initial state that tells it where to listen, and the overlay
-    flow rule that admits a `dns` run all meet on — and the setup
-    wizard at `conventions.gateway.ADGUARD_SETUP_PORT`, the appliance's
-    own. The overlay carries no route to that address: a run's join
+    and the overlay flow rule that admits a `dns` run all meet on — and
+    the setup wizard at `conventions.gateway.ADGUARD_SETUP_PORT`, the
+    appliance's own. The overlay carries no route to that address: a run's join
     installs one through the gateway for itself (framework/ci.md §2).
     There is no endpoint key to set, and therefore nothing for a
     stale one to disagree with; `Pulumi.dns.yaml` carries the AdGuard

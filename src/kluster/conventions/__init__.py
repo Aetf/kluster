@@ -158,7 +158,7 @@ register
 
 initial state
     The configuration installed into a state directory that has never held
-    one (`gateway.ADGUARD_API_PORT`; `components.gateway.container.InitialState`;
+    one (`components.gateway.container.InitialState`, `OverlayDaemon`;
     rfc-002 §3.1). "Seed" is not a synonym but a reserved word, the nocloud
     seed image and the credential seed kit, which this package names in that
     sense alone (`homelab.HOMELAB_STORAGE_DIR`, `providers.OCI_SEED_USER_EMAIL`).

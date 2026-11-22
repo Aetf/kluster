@@ -6,10 +6,11 @@ reads the way the instance reports it. Each value is the one the instances
 answer with, apart from what the rendering of the rule list and the client set
 derive.
 
-**Two values are the program's to hand in, not this module's to know**: the
-zones the instances forward to the gateway's own resolver, and that resolver's
-address. Both are also read by `physical`, which renders them into the
-instances' initial state, so they arrive as `configuration`'s parameters.
+**One value is the program's to hand in, not this module's to know**: the
+address of the gateway's own resolver, which is the container VLAN's gateway, a
+fact of the site that `physical` reads as well, for the resolver the proxy asks.
+It arrives as `configuration`'s parameter. The zones forwarded to it are this
+module's, since nothing but this program reads them.
 """
 
 from __future__ import annotations
@@ -42,6 +43,7 @@ __all__ = (
     'FILTERING',
     'FILTERS',
     'FILTER_INTERVAL',
+    'FORWARDED_ZONES',
     'LISTEN',
     'PARENTAL',
     'QUERYLOG',
@@ -70,6 +72,14 @@ LISTEN: Listen = {
 #: The public resolvers for every name outside the forwarded zones, over TLS,
 #: each run by a different operator so that no single one's outage is the LAN's.
 UPSTREAMS = ('tls://dns.quad9.net', 'tls://dns.google', 'tls://one.one.one.one')
+
+#: The zones every instance forwards to the gateway's own resolver instead: the
+#: device plane, whose names that resolver derives from its leases (dns.md §4
+#: item 1), and the reverse zones of the private ranges every network of this
+#: site is numbered from. No public resolver answers any of them, so an
+#: instance that sent them to `UPSTREAMS` would answer no device's name and no
+#: site address's pointer.
+FORWARDED_ZONES = ('home.arpa', '10.in-addr.arpa', '168.192.in-addr.arpa')
 
 #: The plain resolvers the upstreams' own names are looked up through.
 BOOTSTRAP = ('9.9.9.10', '149.112.112.10', '2620:fe::10', '2620:fe::fe:10')
@@ -178,14 +188,14 @@ def upstream_dns(*, forwarded_zones: Sequence[str], gateway: IPv4Address) -> lis
     ]
 
 
-def dns_settings(*, forwarded_zones: Sequence[str], gateway: IPv4Address) -> DnsSettings:
-    """The DNS server's settings: the forwarded zones to the gateway's resolver, every other name to `UPSTREAMS`.
+def dns_settings(*, gateway: IPv4Address) -> DnsSettings:
+    """The DNS server's settings: `FORWARDED_ZONES` to the gateway's resolver, every other name to `UPSTREAMS`.
 
     The gateway's resolver also answers the pointer lookups for the site's own
     addresses, so it is the private reverse resolver too.
     """
     return {
-        'upstream_dns': upstream_dns(forwarded_zones=forwarded_zones, gateway=gateway),
+        'upstream_dns': upstream_dns(forwarded_zones=FORWARDED_ZONES, gateway=gateway),
         'upstream_dns_file': '',
         'bootstrap_dns': list(BOOTSTRAP),
         'fallback_dns': [],
@@ -216,14 +226,12 @@ def dns_settings(*, forwarded_zones: Sequence[str], gateway: IPv4Address) -> Dns
     }
 
 
-def configuration(
-    *, blocks: Sequence[RuleBlock], forwarded_zones: Sequence[str], gateway: IPv4Address
-) -> AdGuardConfiguration:
+def configuration(*, blocks: Sequence[RuleBlock], gateway: IPv4Address) -> AdGuardConfiguration:
     """The one configuration both instances are handed: the rule list and its clients from `blocks`, the rest here."""
     return AdGuardConfiguration(
         listen=LISTEN,
         rules=user_rules(blocks),
-        dns=dns_settings(forwarded_zones=forwarded_zones, gateway=gateway),
+        dns=dns_settings(gateway=gateway),
         access=ACCESS,
         filtering=FILTERING,
         safebrowsing=SAFEBROWSING,

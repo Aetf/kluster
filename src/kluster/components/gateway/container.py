@@ -60,11 +60,8 @@ from kluster.providers.device_files.provider import Connection, DeviceArtifact, 
 from putils import Component
 
 __all__ = (
-    'ADGUARD_CONFIG',
-    'ADGUARD_GATEWAY_ZONES',
     'ADGUARD_INSTALL',
     'ADGUARD_STATE',
-    'ADGUARD_UPSTREAMS',
     'CADDY_CONFIG',
     'CADDY_CONFIG_HOME',
     'CADDY_RESOLV_CONF',
@@ -95,7 +92,6 @@ __all__ = (
     'ResolverService',
     'Rootfs',
     'ServiceDeclaration',
-    'adguard_initial_state',
     'caddyfile',
     'mounted_path',
     'net_setup_environment',
@@ -111,35 +107,18 @@ SECRET_MODE = '0600'
 # What the images are
 # ---------------------------------------------------------------------------
 
-#: The public resolvers every AdGuard instance forwards to, for every name
-#: outside `ADGUARD_GATEWAY_ZONES`. Two providers on purpose: the LAN's name
-#: service must not fail with any single one of them.
-ADGUARD_UPSTREAMS = ('https://dns.quad9.net/dns-query', 'https://dns.cloudflare.com/dns-query')
-
-#: The zones every AdGuard instance forwards to the gateway's own resolver
-#: instead: the device plane, whose names that resolver derives from its
-#: leases (dns.md §4 item 1), and the reverse zones of the private ranges
-#: every network of this site is numbered from. No public resolver answers
-#: any of them, so an instance that sent them to `ADGUARD_UPSTREAMS` would
-#: answer no device's name and no site address's pointer.
-ADGUARD_GATEWAY_ZONES = ('home.arpa', '10.in-addr.arpa', '168.192.in-addr.arpa')
-
 #: The resolvers' own working directory, bind-mounted from the device so that a
-#: digest bump replaces the software and keeps the configuration; and the file
-#: inside it the instance is started against, which is what an initial state is
-#: named for — an initial-state file is delivered under the path it lands at,
-#: in a directory of the machine's that holds nothing else
-#: (`nspawn.INITIAL_STATE`), so the live file and its initial state are
-#: separated by *where* they sit rather than by two spellings of one name.
+#: digest bump replaces the software and keeps the configuration.
 #:
 #: The working directory is the image's, not a path of this program's choosing:
 #: the resolver is started with `-w /data/adguard -c /data/adguard/AdGuardHome.yaml`
 #: and its installation lives at `ADGUARD_INSTALL`, which the tree carries and a
 #: digest bump replaces. Splitting them that way is what makes the software
 #: disposable and the configuration durable, so the bind lands on the state half.
+#: The configuration file is the instance's own from its first start, and its
+#: absence is what puts a fresh instance in first run (`ResolverService`).
 ADGUARD_STATE = '/data/adguard'
 ADGUARD_INSTALL = '/opt/AdGuardHome'
-ADGUARD_CONFIG = 'AdGuardHome.yaml'
 
 #: Where caddy looks for its configuration and where it keeps what it must not
 #: lose. Both are directories the image names through the environment rather than
@@ -304,12 +283,12 @@ class InitialState:
     The difference from a `MountedFile` is who owns the file afterwards. A
     mounted file is this program's, rewritten on every deployment; an
     initial-state file becomes the service's the moment it is placed, because
-    the software behind it rewrites it — a resolver accepting a rewrite through
-    its API, for instance. It is therefore delivered to the device, copied into
-    the state directory only while that directory is empty, and left alone
-    afterwards; it is not bind-mounted and it is not in the content stamp,
-    because a change to it can never be a reason to restart something that has
-    already made the file its own.
+    the software behind it rewrites it — the overlay daemon writing what its
+    controller sends into its network file, for instance. It is therefore
+    delivered to the device, copied into the state directory only while that
+    directory is empty, and left alone afterwards; it is not bind-mounted and
+    it is not in the content stamp, because a change to it can never be a
+    reason to restart something that has already made the file its own.
 
     One name and not two: what keeps an initial-state file from overwriting the
     live file is the directory it is delivered into
@@ -478,10 +457,15 @@ class ResolverService(BridgedDeclaration):
     guards is allowed to start, so a resolver never comes up on an address the
     LAN was not told about.
 
-    Its live configuration is its own: the instance rewrites the file whenever
-    the `dns` stack adds a rewrite through its API (dns.md §3). So what is
-    declared here is an initial state, placed once into a working directory
-    that has none.
+    **Its configuration is its own, and nothing here gives it one.** An
+    instance whose working directory holds no configuration file starts in
+    first run, and first run is the one state the `dns` stack's setup
+    configures: it makes the account and binds the listen addresses through
+    the instance's own wizard, and then writes the rest through the API
+    (dns.md §3). So the machine is given no initial state. A configuration
+    file placed there would be one with no account in it, which the setup
+    refuses until the instance is reset, and its listen addresses would be
+    this program's rather than the ones the `dns` stack declares.
     """
 
     @property
@@ -491,13 +475,6 @@ class ResolverService(BridgedDeclaration):
     @property
     def environment(self) -> Mapping[str, str]:
         return net_setup_environment(self.service.address)
-
-    @property
-    def initial_state(self) -> InitialState:
-        # `into` is relative to the state directory, which is bind-mounted at
-        # `ADGUARD_STATE` -- so the file lands at exactly the path the instance
-        # is started with.
-        return InitialState(into=ADGUARD_CONFIG, content=adguard_initial_state(self.service.address))
 
 
 @final
@@ -846,65 +823,16 @@ def overlay_settings() -> str:
     return ''.join(f'{name}={int(value)}\n' for name, value in OVERLAY_SETTINGS.items())
 
 
-@final
-@dataclass(frozen=True)
-class _AdguardInitialParams:
-    """What `adguard-home.initial.yaml.j2` reads."""
-
-    cluster: str
-    address: IPv4Address
-    api_port: int
-    upstreams: tuple[str, ...]
-    gateway_zones: tuple[str, ...]
-    gateway_resolver: IPv4Address
-
-
-def adguard_initial_state(address: IPv4Address) -> str:
-    """One resolver's static configuration, as an initial state rather than live.
-
-    A running instance rewrites this file whenever it accepts a change through
-    its API, and the `dns` stack writes the split-horizon rewrites that way. So
-    what is declared is what the instance needs in order to exist at all — where
-    it listens, what it forwards to — and the converger installs it only while
-    the state directory is empty. That is the state of a service whose working
-    directory the device has never held: a new instance, or a device rebuilt
-    from nothing. Replacing the root filesystem is not such a moment, because
-    the working directory is bind-mounted from the device and survives the tree
-    that is thrown away with it.
-
-    **What it forwards to is two sets of resolvers.** The public pair takes
-    everything except `ADGUARD_GATEWAY_ZONES`, which go to the gateway's own
-    resolver: the container VLAN's gateway, the address the instance's own
-    default route names. A pointer query for a private address is the
-    instance's own case. It sends one only to the resolvers named for private
-    addresses, and only while it is allowed to use them, so the gateway is
-    named there too and the permission is given; without it, the instance
-    answers a site address's pointer with nothing.
-    """
-    return templates.render(
-        TEMPLATE_PACKAGE,
-        'templates/adguard-home.initial.yaml.j2',
-        _AdguardInitialParams(
-            cluster=conventions.CLUSTER_NAME,
-            address=address,
-            api_port=conventions.gateway.ADGUARD_API_PORT,
-            upstreams=ADGUARD_UPSTREAMS,
-            gateway_zones=ADGUARD_GATEWAY_ZONES,
-            gateway_resolver=conventions.CONTAINER_VLAN.require_gateway(),
-        ),
-    )
-
-
 class Container(Component, pulumi_type='kluster:gateway:Container'):
     """One container service on the device, and every file that defines it.
 
     It owns its root filesystem artifact, its settings file, the files it mounts
-    and its initial state — all of them in the machine's own directory — and
-    that directory is also the whole of what the device is told: the converger
-    carries no roll of machines and no per-machine case, so declaring this
-    component is what makes the machine exist and dropping it is what retires
-    one (`nspawn.machines_script`). The one fact it exposes is the unit that
-    runs the machine.
+    and its initial state where it has one — all of them in the machine's own
+    directory — and that directory is also the whole of what the device is
+    told: the converger carries no roll of machines and no per-machine case, so
+    declaring this component is what makes the machine exist and dropping it is
+    what retires one (`nspawn.machines_script`). The one fact it exposes is the
+    unit that runs the machine.
 
     **Every file of the machine runs the runtime's hook once it lands**, which
     converges the machine and then holds it to having come up (`nspawn`). It is

@@ -46,7 +46,6 @@ from kluster.components.dns.rewrites import (
     rewrites,
 )
 from kluster.components.dns.zone import ManagedZone
-from kluster.components.gateway.container import ADGUARD_GATEWAY_ZONES
 from kluster.lib import stack_addresses
 
 #: Where the zones token is read: at the line that builds the provider it
@@ -145,8 +144,7 @@ def resolver_configuration() -> AdGuardConfiguration:
             RuleBlock(PS4_UPDATES_SOURCE, (PS4_UPDATES,)),
         ),
         # The device plane and the site's reverse zones go to the gateway's
-        # own resolver, the one `physical` renders into the initial state too.
-        forwarded_zones=ADGUARD_GATEWAY_ZONES,
+        # own resolver (`resolver_settings.FORWARDED_ZONES`).
         gateway=conventions.CONTAINER_VLAN.require_gateway(),
     )
 
