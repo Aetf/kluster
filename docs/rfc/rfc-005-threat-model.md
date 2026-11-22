@@ -20,11 +20,8 @@
     [framework/ci.md](../framework/ci.md) §3, where the move is built.
     The operator has run it, and the generation of the stack passphrase
     that `physical`'s earlier ciphertexts are under is in no Environment.
-    The move's first contact is still to be observed: a job of a pull
-    request or of a branch push naming `physical-plan` refused before
-    any step, and `dns`'s preview reading `physical`'s addresses
-    (Aetf/kluster-ops#487). Where this text and those documents
-    disagree, they are right. **What moved since acceptance:** §4.6 and
+    Where this text and those documents disagree, they are right.
+    **What moved since acceptance:** §4.6 and
     §9.3 describe the pins as they stood then. Since then the tools
     `mise.toml` pins, the charts served from an OCI registry and the
     Gateway API definitions record their bytes; the pins threat-model.md
@@ -62,6 +59,10 @@
     between two moves is one those runs use, and the billing is no
     reason to weigh a self-hosted runner; what runs there and what is
     not built is [operations.md](../operations.md) §4.
+*   **Updated:** 2026-11-21. The status: the move's first contact is
+    observed, both halves recorded on Aetf/kluster-ops#487, so the
+    sentence that held it pending goes; threat-model.md §3.1 cites the
+    refusal.
 *   **Authority:** AGENTS.md,
     [framework/dispatch.md](../framework/dispatch.md),
     [framework/rfc.md](../framework/rfc.md) and the style rules

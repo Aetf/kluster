@@ -29,8 +29,9 @@ DNS controller (architecture.md §6.4); the standalone DNSControl repo
 > [sources-of-truth.md](../sources-of-truth.md) holds the readings and
 > how a change is applied until the deploy chain applies it on merge,
 > and its note N1 holds the records the cutover deleted and the
-> emergency way back. The resolvers' configuration is declared and not
-> applied: its first apply is a flip of its own (row R2).
+> emergency way back. The resolvers' configuration is applied by the
+> deploy chain: its first write was the merge of Aetf/kluster#454, row
+> R2's flip.
 
 ## 1. Why a fourth stack
 
@@ -547,11 +548,10 @@ whole configuration, the split-horizon rewrites among it.
     and their availability as a dependency of every CI run that touches
     the stack — off the busiest stack in the repo and on the quietest
     one. `apps` then needs no LAN access at all.
--   **adguardhome-sync retires.** With every API-settable key written
-    to both instances, a synchronizer carries nothing the stack does
-    not write, and it would be a conflict source: it would overwrite
-    bob's configuration with whatever alice held. It stops before the
-    stack first writes either instance
+-   **No synchronizer runs between the instances.** With every
+    API-settable key written to both, a synchronizer carries nothing the
+    stack does not write, and it would be a conflict source: it would
+    overwrite bob's configuration with whatever alice held
     ([sources-of-truth.md](../sources-of-truth.md), note N2).
 -   **A rebuilt instance is set up by this stack.** An instance whose
     state directory holds no `AdGuardHome.yaml` starts in **first

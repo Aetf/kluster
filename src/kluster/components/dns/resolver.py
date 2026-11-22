@@ -25,9 +25,9 @@ resources are actuated behind `after`, the restarting resources of the
 instance before it, which the program hands in following the order of
 `conventions.gateway.RESOLVERS`. The order holds on every update, not only
 on the first create; its cost is that a restarting write held behind an
-instance that failed waits for the next run. Dual-writing is also what
-retires adguardhome-sync, which would overwrite whichever instance the stack
-wrote second.
+instance that failed waits for the next run. Dual-writing is also why no
+synchronizer runs between the instances: one would overwrite whichever
+instance the stack wrote second.
 
 The instance is taken as its census entry rather than as a URL, which leaves
 `conventions.gateway.resolver_api_url` and `resolver_setup_url` the only

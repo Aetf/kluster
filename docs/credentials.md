@@ -675,12 +675,13 @@ Consequences, all deliberate:
     which is why the recovery chain (kit → recovery key →
     `escrow/backup/age/<generation>` → the dump in B2 → state) is
     designed to be drilled rather than assumed (operations.md §4).
-    As of 2026-09-25 no drill has run, and every link of that chain
-    but the B2 one has run by hand: a dump opened with an escrowed
-    generation and restored, into a scratch box on 2026-09-18 and into
-    the production appliance on its first replace-and-restore on
-    2026-09-25 (physical/state-backend.md §7.3.1). No dump the
-    appliance uploaded had been opened by then (`kluster-ops#281`).
+    As of 2026-11-21 no drill has run, and every link of that chain
+    has run by hand (physical/state-backend.md §7.3.1): a dump opened
+    with an escrowed generation and restored, into a scratch box on
+    2026-09-18 and into the production appliance on its first
+    replace-and-restore on 2026-09-25; and on 2026-11-21 the newest
+    dump the appliance had uploaded, downloaded from B2 and opened
+    whole with the kit (`kluster-ops#281`).
 -   **Escrow constrains no algorithm.** An escrowed key is generated
     the way its consumer wants it and stored as the bytes it is, so the
     state-backend PKI's curve and age's X25519 are each their own
@@ -1152,8 +1153,7 @@ stays the permanent store: an App key downloads once, and a lost slot
 is a re-push rather than a console visit. `credentials derived sync
 --only github-trigger-key` recovers the trigger key and pushes it as
 `TRIGGER_APP_PRIVATE_KEY`, the name the ops repository's drift trigger,
-`drift-trigger.yml`, is designed to read it under — a workflow not built
-as of 2026-09-25 (`kluster-ops#57`); `--only github-dispatch-key` pushes
+`drift-trigger.yml`, reads it under; `--only github-dispatch-key` pushes
 the dispatch
 key as `DISPATCH_APP_PRIVATE_KEY`, a repository secret of `kluster`, the
 name `sdk-regenerate.yml` reads it under and the one the `alert` job

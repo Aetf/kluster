@@ -597,8 +597,9 @@ not moved.
         architecture.md §5.1 records a fallback for: a
         `UnifiFirewallPolicy` resource on the device-files provider,
         driving the controller's API directly. That resource is not
-        built. The rules move to it before the window, and the window
-        waits on it.
+        built: at the window the controller took the census's
+        resources, with its policies ranked ahead of the predefined ones
+        (`kluster-ops#75`).
     -   **The refreshed preview proposes a change.** The diff names the
         field. A field the controller reads back as another spelling of
         the same value is answered in the component, by declaring that
@@ -1652,8 +1653,9 @@ row, a `+` for every roster entry but the gateway's, and no row for
 `+-`, and the run is not made: a `+` means step 2 has not been made
 against this state, and the others write to the gateway's admission
 beside the flow rules that confine the CI identities to its address.
-That the bridged provider plans no row there is unproven live, and gateway.md §2.5 step 3 says what the first such preview
-settles. After the `up`:
+The pinned bridged provider plans no row there, as read live on
+2026-11-15, and gateway.md §2.5 step 3 says why the stop rule stands
+all the same. After the `up`:
 
 -   On the homelab host and on the operator's workstation,
     `r=$(ip -4 route show) && grep -cF 'via 10.144.1.1' <<<"$r"`
@@ -2053,7 +2055,7 @@ what holds it now:
 | `secrets/cf_token` | the minted token, delivered as a device secret |
 | `deploy.sh` and the daily drift check | `pulumi preview`, which diffs the device itself |
 | the daily check's runtime readings: machines, boot chain, offline package cache | `gateway-health` on the device, which runs `10-packages.sh --check` for the cache, read daily by `check-gateway` on the homelab host (gateway.md §1.6) |
-| `backups/adguard-*` | the state directory, which is now the persisted thing; the rewrites in it are the `dns` stack's declaration. Until sources-of-truth.md R2 flips, `gateway-backup-pull` also copies each resolver's configuration into `~/.config/gw-backups` |
+| `backups/adguard-*` | the state directory, which is now the persisted thing; the rewrites in it are the `dns` stack's declaration. `gateway-backup-pull` copies the controller's autobackups into `~/.config/gw-backups` |
 | `backups/machines-manifest.txt` | the declaration: pins, machine set and settings are all in the program |
 
 Nothing reads or writes `~/.config/gw-config` once the old check is

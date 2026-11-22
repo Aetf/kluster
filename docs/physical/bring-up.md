@@ -154,11 +154,11 @@ These run alongside and gate no stage:
 *   **The gateway's soak and its cleanup.** The soak ends at stage 2's
     gate. gateway-cutover.md §7 then runs, once its second routing
     reading has taken a reboot.
-*   **The resolvers' flip**, row R2 of sources-of-truth.md, after stage 4:
-    adguardhome-sync stopped, both instances reading their rewrites
-    again, and the declared rule list merged. The echo row is public, so
-    no stage here needs it, and the first wave with a row on a home
-    Gateway waits on it.
+*   **The resolvers' flip**, row R2 of sources-of-truth.md, after stage 4.
+    It ran on 2026-11-22: adguardhome-sync stopped, and the merge of the
+    declared configuration applied it to both instances, drilled by
+    `kluster-ops#223`. The echo row is public, so no stage here needs
+    it. The first wave with a row on a home Gateway lands after it.
 *   **The peak recorder**, operations.md §8.5: `perf record` from the
     end of stage 2, once `physical` holds the control planes'
     addresses, through stage 5's gate; then the recorder is stopped, and

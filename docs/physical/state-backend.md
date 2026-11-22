@@ -50,17 +50,17 @@ shape nor the domain, which reads like a permissions problem.
 > commands the §7.1 and §7.4 playbooks name for the CA and the age
 > identity; the one step no command takes is deleting a compromised
 > generation's objects from the bucket early. The box runs the Postgres
-> image `POSTGRES_IMAGE` pins by digest (§2) once the first
-> `operator-stack state-backend up --force` after that pin has run
-> (Aetf/kluster-ops#504): until then the stack's `plan` shows that
-> replacement -- a dump, a new box, a restore -- and the box runs the
-> `postgres:17` its first boot pulled. As of 2026-09-25 the
-> scheduled drill of §7.3 is design-only, so no drill runs. §7.3.1 is
-> the restore rehearsal an operator runs in its place. It ran on
-> 2026-09-18 against a scratch box, on a dump taken from a workstation,
-> and `state-backend restore` ran against the appliance itself in its
-> first replace-and-restore on 2026-09-25; §7.3.1 says which steps each
-> proved, and what neither did.
+> image `POSTGRES_IMAGE` pins by digest (§2), which every replacement
+> since 2026-11-05 has launched (`kluster-ops#665`). As of 2026-11-21
+> the scheduled drill of §7.3 is not written (`kluster-ops#57`), so no
+> drill runs. §7.3.1 is the restore rehearsal an operator runs in its
+> place, and every link of the restore path has run by hand: steps 2
+> to 9 against a scratch box on 2026-09-18, on a dump taken from a
+> workstation; `state-backend restore` against the appliance itself in
+> its first replace-and-restore on 2026-09-25; and, on 2026-11-21,
+> step 1 as written and the decrypt with the kit of a nightly the box
+> uploaded (`kluster-ops#281`). §7.3.1 says which steps each run
+> proved.
 
 ## 1. OS & configuration management
 
@@ -1196,13 +1196,13 @@ key and has no kit at all (§7.3). Each path's `age` binary has a home
 of its own, and no pin beyond the pair a test holds equal: the
 appliance's timer runs `/opt/bin/age`, which `age-install.service`
 fetches once at first boot from `settings.AGE_URL` and verifies against
-`settings.AGE_SHA256`; a workstation's `dump` and `restore` run the
+`settings.AGE_SHA256`; and a workstation's `dump` and `restore` run the
 `age` that `mise.toml` pins, which
 `tests/test_age.py::test_local_age_matches_the_appliance_pin` holds
-equal to `settings.AGE_VERSION`; and the drill workflow's runner
-installs mise through `jdx/mise-action` inside its
-checkout of this repository at a pinned commit, so its `age` is that
-same `mise.toml` pin as of that commit. Their `pg_dump` and `pg_restore`
+equal to `settings.AGE_VERSION`. The drill workflow of §7.3, not
+written (`kluster-ops#57`), takes the workstation's: it is to install
+`age` from the `mise.toml` pin of the commit of this repository it
+checks out. Their `pg_dump` and `pg_restore`
 are `mise.toml`'s `postgres` pin, whose major
 `tests/test_postgres_client.py::test_the_local_client_is_on_the_appliance_major`
 holds equal to the one `settings.POSTGRES_IMAGE` names. Both commands connect over the
@@ -1353,23 +1353,26 @@ is the moment nobody can afford to find out later:
 
 ### 7.3.1 Restore rehearsal
 
-**Status: run on 2026-09-18; its restore ran against the appliance on
-2026-09-25.** The rehearsal of 2026-09-18 (`kluster-ops#281`) ran
-steps 2 to 9 against a scratch box, on a dump an operator took with
-`state-backend dump` from a workstation, because the bucket held no
-object to take (`kluster-ops#385`). The dump opened with the escrowed
-generation in the kit, the restore landed rows, a client with the
-scratch bundle selected a stack, and the times were recorded. Of step
-1, the minted key listed the prefix and found it empty; as of
-2026-09-25 no object has been downloaded from it. The appliance's
-first replace-and-restore, on 2026-09-25 (`kluster-ops#385`), ran
+**Status: every step has run by hand, across three runs.** The
+rehearsal of 2026-09-18 (`kluster-ops#281`) ran steps 2 to 9 against a
+scratch box, on a dump an operator took with `state-backend dump` from
+a workstation, because the bucket held no object to take
+(`kluster-ops#385`). The dump opened with the escrowed generation in
+the kit, the restore landed rows, a client with the scratch bundle
+selected a stack, and the times were recorded. The appliance's first
+replace-and-restore, on 2026-09-25 (`kluster-ops#385`), ran
 `state-backend restore` against production, on the dump the
-appliance's earlier script took of the box it replaced: the
-dump opened with the kit, went in as one transaction, and the
-restored backend served `dns`, `github` and `physical`. Neither opened an object the appliance
-uploaded itself, so as of 2026-09-25 that is unproven: step 1 as
-written, and the decrypt of a nightly with the kit
-(`kluster-ops#281`).
+appliance's earlier script took of the box it replaced: the dump
+opened with the kit, went in as one transaction, and the restored
+backend served `dns`, `github` and `physical`. Step 1 ran as written on
+2026-11-21 (`kluster-ops#281`): a key confined to `pulumi-state/` with
+`listFiles` and `readFiles`, minted from the B2 seed and deleted after
+the download, listed the prefix and downloaded its newest object,
+`pulumi-state/20261121T023112Z.dump.age`, which the box serving the
+state had uploaded that night. The escrowed backup identity in the kit
+opened it whole, and `pg_restore --list` read its entries. What no run
+has exercised is the drill key's `--identity-file` restore, the form
+the §7.3 workflow is to run (`kluster-ops#57`).
 
 The rest of §7 is outline because a command carries the detail; this
 one is written out because it proves `state-backend restore` against a
@@ -1725,15 +1728,15 @@ box is an `up --force`, which launches a new one and exits 3 on an empty
 backend, followed by `state-backend restore` of the newest object — the
 path the drill is designed to exercise (§7.3),
 and the operator form of it, run by hand against a scratch box with the kit, is
-§7.3.1. As of 2026-09-25 the drill workflow is not written
-(`kluster-ops#57`). The operator form has run: the §7.3.1 rehearsal on
-2026-09-18 opened a workstation dump with the kit (a dump encrypted to the same
-escrowed generation as the appliance's), restored it into a scratch box with its
-rows, and selected a stack against it (`kluster-ops#281`); and the first
-production replace-and-restore followed on 2026-09-25 (`kluster-ops#385`). Two
-halves of the path are unproven as of 2026-09-25, and so assumed broken rather
-than known to work: opening, with the kit, an object the appliance uploaded
-itself, and the drill key's `--identity-file` restore.
+§7.3.1. As of 2026-11-21 the drill workflow is not written
+(`kluster-ops#57`). The operator form has run, each link of it: the §7.3.1
+rehearsal on 2026-09-18 opened a workstation dump with the kit, restored it
+into a scratch box with its rows, and selected a stack against it
+(`kluster-ops#281`); the first production replace-and-restore followed on
+2026-09-25 (`kluster-ops#385`); and on 2026-11-21 a key minted for the purpose
+downloaded the newest object the box had uploaded, which the kit opened whole
+(`kluster-ops#281`). The drill key's `--identity-file` restore has not run, and
+so is assumed broken rather than known to work.
 
 **A lost stack state** — only with every clone of the repository, since
 every checkpoint that ever landed is in `main`'s history — costs one

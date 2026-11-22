@@ -105,7 +105,7 @@ Created as each area reaches detailed design:
 -   **[dns.md](dns.md)** (written) — the `dns` stack: zones + base
     records + anchors in `dns`, per-app CNAMEs in `apps` (zone sets
     replace the alias-domain copy-paste), split-horizon via direct
-    dual-write to both AdGuard instances (adguardhome-sync retires),
+    dual-write to both AdGuard instances, with no synchronizer between them,
     one-line helpers; DNSControl repo absorbed and retired.
 -   **[cluster-infra.md](cluster-infra.md)** (written) — the `k8s-base`
     stack: closed component list (Gateway API CRDs → Cilium →

@@ -1,8 +1,26 @@
 # RFC 006: The State-Backend Appliance as a Pulumi Stack
 
-*   **Status:** Accepted, 2026-09-28. The operator approved the design
-    with every question of §15.1 answered at its recommended option; the
-    answers are written into §15.1. The approach — the whole appliance is
+*   **Status:** Implemented, 2026-10-15. Every slice of §14 is done,
+    slices 1 to 7 merged as Aetf/kluster#403, #409, #410, #411, #413,
+    #414 and, the last, #537 on 2026-10-15; its live
+    drill ran on 2026-10-09 and 2026-10-10 (`kluster-ops#462`, steps 0
+    to 8), and the replacement that carries the Postgres digest pin ran
+    on 2026-11-05 (`kluster-ops#665`), after which the stack's `plan`
+    finds every resource the same. The text below is kept as the
+    accepted proposal rather than as a description of the system. What
+    the system *is* lives in the design documents: the appliance, its
+    keys, its dump and restore, and its playbooks in
+    [physical/state-backend.md](../physical/state-backend.md); the
+    operator stacks, the committed checkpoint and the checks a run makes
+    around it in [framework/pulumi.md](../framework/pulumi.md) §3.3. The
+    code is the stack program `src/kluster/stacks/state_backend.py`, its
+    component `kluster.components.state_backend`, the machine and its
+    library in `src/kluster/lib/state_backend/`, and the `operator-stack`
+    driver in `src/kluster/scripts/operator_stack/`. Where this text and
+    a design document disagree, the design document is right.
+    Accepted 2026-09-28: the operator approved the design with every
+    question of §15.1 answered at its recommended option; the answers
+    are written into §15.1. The approach — the whole appliance is
     one Pulumi stack — was ruled on the design this document was promoted
     from, together with three things that design lacked, and this one
     carries: the state's home argued with a `file://` backend committed to
