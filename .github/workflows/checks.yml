@@ -54,13 +54,13 @@ jobs:
       # The log names the interpreter every step after this one runs -- the
       # build uv installs for `.python-version` -- and the OpenSSL that build
       # carries, which is what every TLS connection a job's Python makes runs
-      # on.
+      # on (`kluster.scripts.interpreter`).
       - name: Install dependencies
         timeout-minutes: 5
         run: |
           set -euo pipefail
           mise x uv -- uv sync --locked
-          mise x uv -- uv run python -c 'import ssl, sys; print(sys.version, ssl.OPENSSL_VERSION)'
+          mise x uv -- uv run interpreter
 
       # `stack-files` for a pull request of the fast path's shape
       # (framework/ci.md §3, `kluster.scripts.checks_scope`); `full` for
@@ -123,7 +123,7 @@ jobs:
       # registry, GitHub's, by its digest. Each is then tagged with the
       # repository and tag of its pin, which is what lets the pinned
       # reference -- tag and digest -- resolve to it locally, as the cases
-      # run it.
+      # run it. `appliance-image` prints each pin's three parts.
       #
       # The podman every case runs containers on is `mise.ci.toml`'s pin, not
       # the runner image's (framework/ci.md §3). Its archive's binaries are
@@ -179,12 +179,12 @@ jobs:
             echo "::error::podman is $found, and mise.ci.toml pins $expected"
             exit 1
           fi
-          pin=$(mise x uv -- uv run python -c 'from kluster.lib.state_backend import settings as s; print(s.POSTGRES_REPOSITORY, s.POSTGRES_TAG, s.POSTGRES_DIGEST)')
+          pin=$(mise x uv -- uv run appliance-image postgres)
           read -r repository tag digest <<<"$pin"
           echo "pulling $repository:$tag@$digest from mirror.gcr.io"
           id=$(mise x -- podman pull --quiet "mirror.gcr.io/${repository#docker.io/}@$digest")
           mise x -- podman tag "$id" "$repository:$tag"
-          pin=$(mise x uv -- uv run python -c 'from kluster.lib.state_backend import settings as s; print(s.PGBOUNCER_REPOSITORY, s.PGBOUNCER_TAG, s.PGBOUNCER_DIGEST)')
+          pin=$(mise x uv -- uv run appliance-image pgbouncer)
           read -r repository tag digest <<<"$pin"
           echo "pulling $repository:$tag@$digest"
           id=$(mise x -- podman pull --quiet "$repository@$digest")
@@ -217,13 +217,14 @@ jobs:
         run: mise x uv -- uv run state-backend pins
 
       # The prose gate AGENTS.md describes, run the way it says: the two word
-      # lists under `.vscode/` become one client configuration (the checker
-      # reads neither list on its own, and a reference to a list file is
-      # silently dropped, so the words go in whole), and the checker is handed
-      # one file per invocation, because a batch large enough stops making
-      # progress and dies at the bound instead of finishing -- the cost of
-      # the serial form, and why batching is not the way out of it, are in
-      # framework/ci.md §3. Only the markdown the event changed is checked --
+      # lists under `.vscode/` become one client configuration, which
+      # `ltex-config` writes (the checker reads neither list on its own, and a
+      # reference to a list file is silently dropped, so the words go in
+      # whole), and the checker is handed one file per invocation, because a
+      # batch large enough stops making progress and dies at the bound
+      # instead of finishing -- the cost of the serial form, and why batching
+      # is not the way out of it, are in framework/ci.md §3. Only the
+      # markdown the event changed is checked --
       # at several seconds a file, the whole tree is minutes, and a file the
       # change did not touch says nothing about the change. Deleted files are
       # left out (`--diff-filter=d`) since there is nothing to read. So are
@@ -259,22 +260,17 @@ jobs:
         run: |
           set -euo pipefail
           config="$RUNNER_TEMP/ltex.json"
-          python3 - "$config" <<'PY'
-          import json, pathlib, sys
-          words = lambda name: pathlib.Path(f'.vscode/ltex.{name}.en-US.txt').read_text().split()
-          pathlib.Path(sys.argv[1]).write_text(json.dumps({
-              'dictionary': {'en-US': words('dictionary')},
-              'disabledRules': {'en-US': words('disabledRules')},
-          }))
-          PY
+          mise x uv -- uv run ltex-config "$config"
 
           # No base to diff against (a freshly created branch) means every
-          # markdown file in the tree, and so does a change to what the
-          # checker is or reads -- the pin, the two word lists, this
-          # workflow: a bumped checker or a dropped dictionary word is proven
-          # against the prose it judges, not landed unchecked for the next
-          # change to an affected file to fail on.
-          machinery=(mise.toml .vscode/ltex.dictionary.en-US.txt .vscode/ltex.disabledRules.en-US.txt .github/workflows/checks.yml)
+          # markdown file in the tree, and so does a change to the machinery:
+          # every file, other than the prose it judges, that decides which
+          # checker runs or what it is configured with -- today its pin and
+          # lock, the word lists, the script that writes its configuration,
+          # and this workflow. A bumped checker or a dropped dictionary word is
+          # then proven against the prose it judges, not landed unchecked for
+          # the next change to an affected file to fail on.
+          machinery=(mise.toml mise.lock .vscode/ltex.dictionary.en-US.txt .vscode/ltex.disabledRules.en-US.txt src/kluster/scripts/ltex_config.py .github/workflows/checks.yml)
           generated=(':(exclude)sdks/')
           if git cat-file -e "${BASE:-none}^{commit}" 2>/dev/null \
              && [ -z "$(git diff --name-only "$BASE...HEAD" -- "${machinery[@]}")" ]; then

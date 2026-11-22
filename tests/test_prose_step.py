@@ -24,19 +24,22 @@ import json
 import os
 import re
 import shutil
-import sys
 from pathlib import Path
 from typing import cast
 
+import ltex_config_stand_in
 import process_sessions
 from workflow_files import GITHUB, mapping, read_workflow, workflow_jobs
 
 ROOT = Path(__file__).parent.parent
 
-#: A stand-in for `mise x -- ltex-cli-plus … <file>`: the file is its last
-#: argument, and its exit is the next code the script holds for that file.
-STAND_IN = f"""#!{sys.executable}
-import json, os, pathlib, sys
+#: A stand-in for `mise`. Handed `ltex-config`, it runs the script
+#: (`ltex_config_stand_in`). Otherwise it is `mise x -- ltex-cli-plus …
+#: <file>`: the file is its last argument, and its exit is the next code the
+#: script holds for that file.
+STAND_IN = (
+    ltex_config_stand_in.HEAD
+    + """import json, os, pathlib
 state = pathlib.Path(os.environ['STAND_IN_STATE'])
 script = json.loads(state.read_text())
 file = sys.argv[-1]
@@ -46,6 +49,7 @@ code = script[file].pop(0)
 state.write_text(json.dumps(script))
 sys.exit(code)
 """
+)
 
 
 def prose_run() -> str:
