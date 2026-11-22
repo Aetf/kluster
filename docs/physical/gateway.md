@@ -3273,10 +3273,12 @@ down, or the gateway, fail the job at the join.
     resolvers and runs step 4 once, at the cost of the LAN having no
     resolver for that run.
 
-The readings of §1.6 name the entries below: `gateway-health`'s
-findings first, then the ones `check-gateway` raises of its own, then
-the one its check-in's timer raises. Every
-command runs on the device unless the entry says otherwise.
+An entry below whose trigger is a finding of §1.6's readings —
+`gateway-health`'s, one `check-gateway` raises of its own, or its
+check-in timer's — is the one that finding names by its title. An
+entry whose trigger is a symptom, such as the uplink's own record of a
+window, is reached by that symptom. Every command runs on the device
+unless the entry says otherwise.
 
 -   **A declared machine not running** — trigger: `gateway-health`
     reports `systemd-nspawn@<name>.service` not active. Its drop-in
@@ -3505,6 +3507,93 @@ command runs on the device unless the entry says otherwise.
     boot chain's entry above. No recent autobackup on the device at all
     is the controller's schedule, a console setting. Then
     `systemctl --user start gateway-backup.service` takes a copy.
+-   **The uplink's own record of a window** — trigger: failures close
+    together in time, each of which crosses the uplink, such as a CI
+    join that does not reach the gateway, a stale check against B2, or
+    a node's lost watches of the API server; or any question of whether
+    the home's internet was down at a given time. The device keeps a
+    record of its WAN in the controller's statistics database, which
+    answers on the device alone, and `mongo`, which the device ships,
+    reads it without writing. The window's ends are UTC times, such as
+    `2026-11-22T04:35:00Z`; `<start>` is in the window and `<end>` is
+    not:
+
+    ```sh
+    mongo --quiet --port 27117 ace_stat --eval '
+      var from = ISODate("<start>").getTime(), to = ISODate("<end>").getTime();
+      db.stat_5minutes.find({o: "gw", time: {$gte: from, $lt: to}}).sort({time: 1}).forEach(function (r) {
+        print(new Date(r.time).toISOString(), r["wan-downtime"], r["wan-latency-avg"], r.latency_avg);
+      });'
+    ```
+
+    For a longer window, `stat_hourly`, `stat_daily` or `stat_monthly`
+    takes the place of `stat_5minutes`.
+    -   **The rows.** `o: "gw"` selects the gateway's rows. `time` is
+        the bucket's start, in milliseconds since the epoch. The daily
+        and monthly rows start at the controller's local midnight, in
+        `America/Los_Angeles`: 08:00 UTC, or 07:00 UTC under daylight
+        saving time. A bucket has a row only once it has closed, so
+        the newest stretch of a window is the finer resolution's to
+        read.
+    -   **The fields.** `wan-downtime` is the seconds the uplink was
+        down in the bucket, and `wan-uptime` the seconds it was up.
+        `wan-availability-avg` and `wan-availability-min` are percent.
+        `wan-latency-avg`, `wan-latency-min` and `wan-latency-max` are
+        the WAN's latency to its monitors, in ms; `latency_avg`,
+        `latency_min` and `latency_max` are the gateway's own internet
+        latency, in ms. Each `x-samples-*` field counts the samples
+        behind an average.
+    -   **`wan-*` and `wan2-*`.** `wan-*` is the controller's WAN
+        network group `WAN`, "Internet 1", which carries the uplink.
+        `wan2-*` is `WAN2`, the second WAN port, which carries none: it
+        reads its whole bucket as downtime, about 300 s in every
+        5-minute row, so `wan2-downtime` is never an outage.
+    -   **How long each resolution is kept.** The controller's settings
+        `data_retention_time_in_hours_for_<scale>_scale`, in
+        `ace.setting` under the key `super_mgmt`, name it, and the rows
+        the device held on 2026-11-22 agree with them:
+
+        | Collection | Kept | Rows held on 2026-11-22 |
+        | --- | --- | --- |
+        | `stat_5minutes` | 24 hours | 288 |
+        | `stat_hourly` | 168 hours | 169 |
+        | `stat_daily` | 2,160 hours | 91 |
+        | `stat_monthly` | 8,760 hours | 13 |
+
+    -   **Each outage as an event.** The `downtime` collection holds one
+        document per outage of a WAN port: `timestamp` is its start, in
+        milliseconds since the epoch, and `downtime` its length in
+        seconds. The query selects outages by their start, so one
+        already under way at `<start>` is listed only by a window that
+        starts earlier, while the rows show it regardless.
+
+        ```sh
+        mongo --quiet --port 27117 ace_stat --eval '
+          var from = ISODate("<start>").getTime(), to = ISODate("<end>").getTime();
+          db.downtime.find({wan_networkgroup: "WAN", timestamp: {$gte: NumberLong(from), $lt: NumberLong(to)}}).sort({timestamp: 1}).forEach(function (e) {
+            print(new Date(Number(e.timestamp)).toISOString(), Number(e.downtime));
+          });'
+        ```
+
+        The second port's outages are there too, under `WAN2`, and
+        they are no outage of the uplink. No setting names its
+        retention; on 2026-11-22 it held events from 2026-10-22 on.
+    -   **What the reading tells apart.** Downtime in the window means
+        the uplink failed, and the failures in it that cross the uplink
+        share that cause. No downtime and a steady latency mean the
+        uplink held, and the failures are separate faults.
+
+    The readings agree with each other. Run on 2026-11-22, on UniFi OS
+    6.0.17 and UniFi Network 10.6.109, with `<start>`
+    `2026-11-22T04:35:00Z` and `<end>` `2026-11-22T07:45:00Z`, the
+    event query lists 72 `WAN` events, the first starting at 04:39:52
+    and the last at 07:42:32, summing to 1,645 s. The 5-minute query
+    lists the rows 04:35 through 07:40, whose `wan-downtime` sums to the
+    same. So do the hourly rows of 04:00 through 07:00, and the daily
+    row that holds the window, the controller's local 2026-11-21, which
+    starts at 2026-11-21T08:00Z. The first event lasts 35 s, which puts
+    8 s in the 04:35 bucket, and that bucket reads 9: `timestamp` is the
+    outage's start, not its end.
 
 ## 4. Firewall target state
 
@@ -3601,6 +3690,33 @@ Each item names when it was read.
     punching from both ends, and is relayed until then (§2.6). Read on
     2026-11-22
     ([Aetf/kluster-ops#881](https://github.com/Aetf/kluster-ops/issues/881#issuecomment-7071914936)).
+-   **From the cluster zone to the gateway itself, the zone policy
+    admits every packet.** `INPUT` first passes every packet through two
+    firmware chains that are no zone policy: `ALIEN`, which drops a
+    source in the firmware's `ALIEN` set (`ALIEN6` for IPv6) less its
+    whitelists, and `UBIOS_DNS_PBR_JUMP`, which drops DNS to the device
+    on packets carrying one firewall mark and accepts packets carrying
+    another to port 20201. Then `UBIOS_INPUT_USER_HOOK` dispatches by
+    ingress interface alone and sends `-i br7` to
+    `UBIOS_CUSTOM1_LOCAL_USER`. That chain holds, in order, an mDNS
+    accept, a log rule for new connections and an unconditional accept,
+    the controller's predefined `Allow All Traffic` on the cluster zone
+    → `Gateway` pair; it holds no state match and no `INVALID` drop. So
+    traffic that enters on the cluster VLAN reaches the controller's leg
+    there, and every other service the device answers on, with no rule
+    of this program's. The worker's BGP session rests on it (§1.3).
+    Neither end is passive, and the session read was the worker's
+    connection to the gateway's port 179; whichever end opens it, every
+    segment that reaches the gateway enters on `br7`, and the chain,
+    with no state match, admits it by that last rule. No
+    pair of the census is that pair (§4.2), so a change to its policy
+    shows in no `physical` preview, and in no finding of
+    `gateway-health`, which reads the session's configuration and not
+    its state (§1.6). A change that cut the path would show as the
+    session down, and with it the gateway's routes to the `lan` pool,
+    which the session carries. Read in both families on 2026-11-25,
+    UniFi OS 6.0.17
+    ([Aetf/kluster-ops#744](https://github.com/Aetf/kluster-ops/issues/744#issuecomment-7153526626)).
 
 ### 4.2 Declared-objects census
 
