@@ -65,10 +65,11 @@ every boot until its source is removed by hand.
 old directory aside and the new one into place, so any file Pulumi wrote in it
 would be deleted by the next refresh and reported as drift forever. This layer
 declares that the directory exists and never what is in it, and declares
-nothing about the `dpkg.*` directories beside it: the ones the script makes and
-removes as it runs, and `dpkg.base`, the saved firmware database it rewrites
-on the boot after every firmware update. Declaring any of them would make the
-script's own writes drift.
+nothing about the `dpkg.*` paths beside it: the directories the script makes
+and removes as it runs, `dpkg.base`, the saved firmware database it rewrites
+on the boot after every firmware update, and `dpkg.history`, the record it adds
+to on every boot that installs. Declaring any of them would make the script's
+own writes drift.
 
 **A directory is a resource, not a file that stands for one.** `skeleton_dir`
 declares a `DeviceDirectory`, whose existence, mode and ownership are compared
@@ -123,11 +124,15 @@ __all__ = (
     'DPKG',
     'DPKG_BASE_DIR',
     'DPKG_DIR',
+    'DPKG_HISTORY',
     'DPKG_STATUS',
     'DROPIN_DIR_SUFFIX',
     'DROPIN_SUFFIX',
+    'FILE_LOCKS',
     'FILE_MODE',
+    'FIRMWARE_PACKAGE_RESTORE',
     'FIRMWARE_RELEASE',
+    'FIRMWARE_UPDATE_MARK',
     'LIVE_UNIT_DIR',
     'NETWORK',
     'NETWORKD_CONF',
@@ -204,9 +209,23 @@ BIN_DIR, DPKG_DIR, UNIT_SOURCE_DIR = (f'{conventions.gateway.CUSTOM_ROOT}/{name}
 #: because it outlives the firmware update that wipes the live copy.
 DPKG_BASE_DIR = f'{DPKG_DIR}.base'
 
+#: Where `10-packages.sh` keeps a line for each thing a boot that installs
+#: found at dpkg's lock -- free, or held by which process and for how long --
+#: and for how its install ended. It sits on `/data` because what it is read for
+#: is a boot whose journal is gone: the first boot after a firmware update, the
+#: one on which the firmware's own package restore runs as well. It grows by a
+#: few lines on each boot that finds part of the set missing, and by nothing on
+#: any other.
+DPKG_HISTORY = f'{DPKG_DIR}.history'
+
 #: dpkg's database on the running system, which the base is saved from. The
-#: path is dpkg's, not this program's.
+#: path is dpkg's, not this program's, and so is the frontend lock beside it
+#: that every dpkg and apt run on the device takes.
 DPKG_STATUS = '/var/lib/dpkg/status'
+
+#: The kernel's table of file locks, which names the process holding dpkg's
+#: frontend lock.
+FILE_LOCKS = '/proc/locks'
 
 #: The firmware's release string, one line in the read-only image, of the form
 #: `UDMPROSE.al324.v5.1.33.44ce47b.260909.0025`. It is part of the image, so it
@@ -229,6 +248,14 @@ NETWORKD_SCRIPT = '05-networkd.sh'
 PACKAGES_SCRIPT = '10-packages.sh'
 UNITS_SCRIPT = '20-units.sh'
 UDM_BOOT_UNIT = 'udm-boot.service'
+
+#: The firmware's package restore, which runs on the boot after a firmware
+#: update and kills whatever holds dpkg's locks when it is done, and the file
+#: whose presence is that boot's mark, which is the restore's own condition
+#: (`ConditionPathExists=`). `10-packages.sh` waits for the restore on that
+#: boot alone, before it touches dpkg (physical/gateway.md §1.2).
+FIRMWARE_PACKAGE_RESTORE = 'ubnt-dpkg-restore.service'
+FIRMWARE_UPDATE_MARK = '/boot/.fwupdate'
 
 #: The firmware's own network daemon, which `05-networkd.sh` restarts and
 #: nothing here installs, enables or stops (physical/gateway.md §1.2).
@@ -414,7 +441,7 @@ def networkd_hook(directory: NetworkdDirectory, name: str) -> str:
 @final
 @dataclass(frozen=True)
 class _PackagesParams:
-    """What `10-packages.sh.j2` reads: the set, where the cache lives, the two databases, and the release."""
+    """What `10-packages.sh.j2` reads: the set, the cache, both databases, the release, the locks, the record, the restore."""
 
     cluster: str
     packages: tuple[str, ...]
@@ -422,6 +449,10 @@ class _PackagesParams:
     base: str
     status: str
     release: str
+    locks: str
+    history: str
+    restore_unit: str
+    fwupdate: str
 
 
 @final
@@ -504,6 +535,9 @@ def packages_script(
     base: str = DPKG_BASE_DIR,
     status: str = DPKG_STATUS,
     release: str = FIRMWARE_RELEASE,
+    locks: str = FILE_LOCKS,
+    history: str = DPKG_HISTORY,
+    fwupdate: str = FIRMWARE_UPDATE_MARK,
 ) -> str:
     """The boot-chain script that reinstalls what a firmware update wiped.
 
@@ -511,7 +545,9 @@ def packages_script(
     version-locked packages resolve together, an offline cache refreshed on the
     boot apt succeeded from what apt downloads for the set against the saved
     firmware base, and that cache as the fallback for the boot where apt is
-    unreachable.
+    unreachable. On the boot after a firmware update it waits for the
+    firmware's package restore before it touches dpkg, and every dpkg it runs,
+    through apt or itself, first waits for dpkg's lock.
 
     The set is sorted and deduplicated here, so the file the device holds is a
     function of what the installation requires rather than of the order the
@@ -527,7 +563,10 @@ def packages_script(
     `base` is the directory the firmware base is saved in (`DPKG_BASE_DIR`),
     `status` the live database it is saved from (`DPKG_STATUS`), and
     `release` the running firmware's release it is saved under
-    (`FIRMWARE_RELEASE`). Each
+    (`FIRMWARE_RELEASE`). `locks` is the kernel's table of file locks
+    (`FILE_LOCKS`), read for what holds dpkg's lock, and `history` the file
+    the script keeps what it found there in (`DPKG_HISTORY`), and `fwupdate`
+    the mark of the boot after a firmware update (`FIRMWARE_UPDATE_MARK`). Each
     defaults to the device's own, and is a parameter so the script can be run
     against a tree that is not a device.
     """
@@ -541,6 +580,10 @@ def packages_script(
             base=base,
             status=status,
             release=release,
+            locks=locks,
+            history=history,
+            restore_unit=FIRMWARE_PACKAGE_RESTORE,
+            fwupdate=fwupdate,
         ),
     )
 

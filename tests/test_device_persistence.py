@@ -22,8 +22,11 @@ would surface.
 from __future__ import annotations
 
 import itertools
+import os
 import re
 import sys
+from collections.abc import Generator
+from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 from typing import final
@@ -539,6 +542,72 @@ put() {{
 }}
 """
 
+#: dpkg's frontend lock as both stand-ins and the converger read it: a lock
+#: file, and the kernel's table of file locks, in `/proc/locks`'s own format,
+#: whose line for the file's inode names the pid holding it. The stand-in for
+#: that table is a file the case writes. `release` is the holder finishing:
+#: the table loses its line, and the holder leaves installed what `finishing`
+#: names, a package and its version — the firmware's own restore, done.
+LOCK_SH = """
+holder() {{
+    inode=$(stat -c %i "$1" 2>/dev/null) || return 0
+    awk -v inode="$inode" '$2 == "POSIX" {{ n = split($6, f, ":"); if (f[n] == inode) {{ print $5; exit }} }}' {locks}
+}}
+release() {{
+    : >{locks}
+    if [ -s {finishing} ]; then
+        read -r finished finished_version <{finishing}
+        put "$finished" 'install ok installed' {status} "$finished_version"
+    fi
+}}
+"""
+
+#: `journalctl` as the converger asks it when a dpkg dies under apt: the
+#: kernel's lines of this boot (`-k`), and one unit's (`-u`), each a file the
+#: case or a stand-in writes. Under `--cursor-file` it shows what comes after
+#: the cursor the file holds, once it holds one, and writes the last entry's
+#: cursor back; a cursor here is the count of lines already shown.
+JOURNALCTL = """#!/bin/sh
+log=
+cursor=
+for word in "$@"; do
+    case "$word" in
+        -k) log={kernel_log} ;;
+        -u) log={restore_log} ;;
+        --cursor-file=*) cursor=${{word#--cursor-file=}} ;;
+    esac
+done
+[ -f "$log" ] || exit 0
+after=0
+[ -z "$cursor" ] || [ ! -s "$cursor" ] || after=$(cat "$cursor")
+tail -n +$((after + 1)) "$log"
+[ -z "$cursor" ] || wc -l <"$log" >"$cursor"
+exit 0
+"""
+
+#: `systemctl` as the converger asks it of the firmware's package restore:
+#: `is-active` and `is-failed` answer from flags the case raises, the first
+#: `activating` while the restore runs and `inactive` otherwise, and `start` returns once
+#: the restore has run, leaving installed the package it restores. Every call
+#: is recorded, beside apt's and dpkg's.
+SYSTEMCTL = (
+    """#!/bin/sh
+echo "systemctl $*" >>{calls}
+"""
+    + DATABASE_SH
+    + """
+case "$1" in
+    is-active)
+        if [ -e {restore_activating} ]; then echo activating; else echo inactive; fi
+        exit 3
+        ;;
+    is-failed) [ -e {restore_failed} ] ;;
+    start) put {restored} 'install ok installed' {status} 1.0 ;;
+    *) echo "fake systemctl: $1 is not modeled" >&2; exit 2 ;;
+esac
+"""
+)
+
 #: Debian's version order, as dpkg's `verrevcmp` defines it: an epoch first,
 #: then the upstream version and the revision, each compared as alternating
 #: runs of non-digits — where `~` sorts before everything, even the end of the
@@ -604,13 +673,16 @@ holds = {'lt': result < 0, 'le': result <= 0, 'eq': result == 0, 'ne': result !=
 sys.exit(0 if holds[op] else 1)
 """
 
-#: `dpkg` as the package converger asks it. `-s` prints the record of a package
-#: and exits 0 whenever there is one, whatever its status — as `dpkg` does,
-#: so a converger that trusted the exit status would take a removed package for
-#: an installed one — and refuses a package it holds no record of.
+#: `dpkg` as the package converger asks it.
 #:
 #: `--compare-versions <a> <op> <b>` compares two versions in Debian's order
 #: (`COMPARE_VERSIONS`).
+#:
+#: `-i` and `--configure -a` take dpkg's frontend lock without waiting, as
+#: dpkg does: one that another process holds is refused, in dpkg's words, and
+#: nothing is done. Both replay the journal an interrupted dpkg left
+#: (`updates/`). `--configure -a` configures every package dpkg holds unpacked
+#: or half-configured.
 #:
 #: `-i` unpacks every deb it is handed, named for its package the way a deb's
 #: file is, refusing an archive that is not there, and then configures what it
@@ -631,6 +703,7 @@ DPKG = (
 echo "dpkg $*" >>{calls}
 """
     + DATABASE_SH
+    + LOCK_SH
     + """
 held() {{
     awk -v p="Package: $1" 'BEGIN {{ RS = "" }} {{ split($0, l, "\\n") }} l[1] == p {{ sub(/^Version: /, "", l[3]); print l[3] }}' "$2"
@@ -639,16 +712,25 @@ newer() {{
     {python} {compare} "$1" gt "$2"
 }}
 case "$1" in
+    -i | --configure)
+        pid=$(holder {frontend})
+        if [ -n "$pid" ]; then
+            echo "dpkg: error: dpkg frontend lock was locked by another process with pid $pid" >&2
+            exit 2
+        fi
+        rm -rf {journal}
+        ;;
+esac
+case "$1" in
     --compare-versions)
         exec {python} {compare} "$2" "$3" "$4"
         ;;
-    -s)
-        if [ -n "$(state "$2" {status})" ]; then
-            awk -v p="Package: $2" 'BEGIN {{ RS = "" }} {{ split($0, l, "\\n") }} l[1] == p' {status}
-            exit 0
-        fi
-        echo "dpkg-query: package '$2' is not installed and no information is available" >&2
-        exit 1
+    --configure)
+        [ "$2" = -a ] || {{ echo "fake dpkg: --configure $2 is not modeled" >&2; exit 2; }}
+        for package in $(awk 'BEGIN {{ RS = "" }} {{ split($0, l, "\\n") }} l[2] == "Status: install ok unpacked" || l[2] == "Status: install ok half-configured" {{ sub(/^Package: /, "", l[1]); print l[1] }}' {status}); do
+            put "$package" 'install ok installed' {status} "$(held "$package" {status})"
+        done
+        exit 0
         ;;
     -i)
         shift
@@ -735,6 +817,30 @@ exit 2
 """
 )
 
+#: `dpkg-query -W -f=<format> <package>`, as the converger asks it, for the
+#: two fields it reads. A package with any record is shown, exiting 0 whatever
+#: its status — as `dpkg-query` does, so a converger that trusted the exit
+#: status would take a removed package for an installed one — and one with none
+#: is refused, in dpkg-query's words.
+DPKG_QUERY = (
+    """#!/bin/sh
+"""
+    + DATABASE_SH
+    + """
+[ "$1" = -W ] || {{ echo "fake dpkg-query: $1 is not modeled" >&2; exit 2; }}
+record=$(awk -v p="Package: $3" 'BEGIN {{ RS = "" }} {{ split($0, l, "\\n") }} l[1] == p' {status})
+if [ -z "$record" ]; then
+    echo "dpkg-query: no packages found matching $3" >&2
+    exit 1
+fi
+case "$2" in
+    '-f=${{Status}}') printf '%s' "$(state "$3" {status})" ;;
+    '-f=${{Version}}') printf '%s' "$(echo "$record" | sed -n 's/^Version: //p')" ;;
+    *) echo "fake dpkg-query: $2 is not modeled" >&2; exit 2 ;;
+esac
+"""
+)
+
 #: `apt-get` as the package converger asks it. Online, `install` resolves the
 #: packages it is named against a dpkg database — the live one, or the file `-o
 #: Dir::State::status=` names — and downloads a deb of each package that
@@ -762,6 +868,20 @@ exit 2
 #: `DEPENDENT` unpacked, when it is `DEPENDENCY` — and apt exits the way it does
 #: when dpkg returned an error.
 #:
+#: `install` and `check` first take dpkg's frontend lock beside the database
+#: they read, as apt does (`debSystem::Lock`). One that another process holds
+#: is waited for only under a `DPkg::Lock::Timeout` above 0, and the wait ends
+#: with the holder finishing when `releases` is raised, and in apt's refusal
+#: otherwise, which is also what a run with no timeout meets. A journal that
+#: an interrupted dpkg left beside the database is refused next, in apt's
+#: words, until `dpkg --configure -a` replays it; `check` then exits 0.
+#: `update` adds the line `appears` holds to the lock table: a holder taking
+#: the lock while the converger is on its way to the install. `killed` counts
+#: the installs whose dpkg ends on a signal: each leaves the packages it was
+#: named unpacked and the journal unreplayed, and exits with apt's report of
+#: such a dpkg. `leaves-unpacked` names a package an install that succeeds
+#: leaves unpacked all the same.
+#:
 #: apt's own terms hold, as apt 2.2.4 states them: the archives directory is
 #: its shared one unless `-o Dir::Cache::archives=` names another, it makes
 #: `partial/` and its `lock` inside, and it refuses a directory that is not
@@ -772,9 +892,11 @@ APT_GET = (
 echo "apt-get $*" >>{calls}
 """
     + DATABASE_SH
+    + LOCK_SH
     + """
 archives={archives}
 database={status}
+timeout=0
 command=
 download_only=0
 reinstall=0
@@ -785,6 +907,7 @@ for word in "$@"; do
         case "$word" in
             Dir::Cache::archives=*) archives=${{word#Dir::Cache::archives=}} ;;
             Dir::State::status=*) database=${{word#Dir::State::status=}} ;;
+            DPkg::Lock::Timeout=*) timeout=${{word#DPkg::Lock::Timeout=}} ;;
         esac
         value=0
         continue
@@ -797,17 +920,37 @@ for word in "$@"; do
         *) if [ -z "$command" ]; then command=$word; else packages="$packages $word"; fi ;;
     esac
 done
-if [ -e {offline} ]; then
-    if [ "$command" = update ]; then
-        echo "W: Failed to fetch the archive's indexes" >&2
-        exit 0
+if [ "$command" = update ]; then
+    [ ! -s {appears} ] || cat {appears} >>{locks}
+    [ ! -e {offline} ] || echo "W: Failed to fetch the archive's indexes" >&2
+    exit 0
+fi
+admin=${{database%/*}}
+if [ "$command" = install ] || [ "$command" = check ]; then
+    lock=$admin/lock-frontend
+    pid=$(holder "$lock")
+    if [ -n "$pid" ]; then
+        if [ "$timeout" -gt 0 ] && [ -e {releases} ]; then
+            echo "Waiting for cache lock: Could not get lock $lock. It is held by process $pid (dpkg)..."
+            release
+        else
+            echo "E: Could not get lock $lock. It is held by process $pid (dpkg)" >&2
+            echo "E: Unable to acquire the dpkg frontend lock ($lock), is another process using it?" >&2
+            exit 100
+        fi
     fi
+    if [ -n "$(ls -A "$admin/updates" 2>/dev/null)" ]; then
+        echo "E: dpkg was interrupted, you must manually run 'dpkg --configure -a' to correct the problem." >&2
+        exit 100
+    fi
+    [ "$command" != check ] || exit 0
+fi
+if [ -e {offline} ]; then
     for package in $packages; do
         echo "E: Unable to locate package $package" >&2
     done
     exit 100
 fi
-[ "$command" = update ] && exit 0
 candidate=$(cat {candidate} 2>/dev/null || echo 1.0)
 if [ "$command" = download ]; then
     if [ -e {download_fails} ]; then
@@ -833,6 +976,17 @@ failing=0
 [ "$download_only" -eq 1 ] && [ -e {refresh_fails} ] && failing=1
 power_loss=0
 [ "$download_only" -eq 0 ] && [ -e {power_loss} ] && power_loss=1
+if [ "$download_only" -eq 0 ] && [ "$(cat {killed} 2>/dev/null || echo 0)" -gt 0 ]; then
+    echo $(($(cat {killed}) - 1)) >{killed}
+    for package in $packages; do
+        [ "$(state "$package" "$database")" = 'install ok installed' ] || put "$package" 'install ok unpacked' "$database" "$candidate"
+    done
+    mkdir -p "$admin/updates"
+    : >"$admin/updates/0000"
+    echo "Out of memory: Killed process $((4240 + $(cat {killed}))) (dpkg)" >>{kernel_log}
+    echo "Error: Sub-process /usr/bin/dpkg exited unexpectedly" >&2
+    exit 100
+fi
 for package in $packages; do
     wanted=$package
     [ "$package" != {dependent} ] || [ "$failing" -eq 1 ] || wanted="$package {dependencies}"
@@ -873,6 +1027,9 @@ if [ "$failing" -eq 1 ]; then
     echo "E: Some files failed to download" >&2
     exit 100
 fi
+if [ "$download_only" -eq 0 ] && [ -s {leaves_unpacked} ]; then
+    put "$(cat {leaves_unpacked})" 'install ok unpacked' "$database" "$candidate"
+fi
 exit 0
 """
 )
@@ -888,6 +1045,15 @@ FIRMWARE = 'libc6'
 #: The package `DEPENDENT` pins to its own version, which a firmware can ship
 #: at a newer one than the cache holds.
 PINNED = 'systemd'
+
+#: What the kernel says of a dpkg it killed, as the stand-in `apt-get` adds it,
+#: and what the firmware's restore says of one.
+OOM_KILL = re.compile(r'Out of memory: Killed process \d+ \(dpkg\)')
+RESTORE_KILL = 'pid:4242 cmdline:/usr/bin/dpkg --status-fd 23 --configure'
+
+#: A package the firmware's own package restore leaves installed when it
+#: finishes with dpkg's lock.
+RESTORED = 'firmware-restored'
 
 #: The statuses a record can carry that are not an installation, in dpkg's words.
 UNPACKED = 'install ok unpacked'
@@ -927,6 +1093,32 @@ class _Packages:
     postinst_fails: Path
     #: The version the archive offers, 1.0 while the file is absent.
     candidate: Path
+    #: dpkg's frontend lock beside the live database, the stand-in for the
+    #: kernel's table of file locks, and the journal an interrupted dpkg leaves.
+    frontend: Path
+    locks: Path
+    journal: Path
+    #: The flags of the lock's holder (`LOCK_SH`, `APT_GET`): that it finishes
+    #: when apt waits for it, what it leaves installed when it does, and the
+    #: line it adds to the lock table once the converger runs `apt-get update`.
+    releases: Path
+    finishing: Path
+    appears: Path
+    #: How many installs through apt end with dpkg killed, each adding the
+    #: kernel's line of it to `kernel_log`, and the package an install that
+    #: succeeds leaves unpacked.
+    killed: Path
+    leaves_unpacked: Path
+    #: The record the converger keeps of what it found at dpkg's lock.
+    history: Path
+    #: What `journalctl` shows of the kernel and of the firmware's restore.
+    kernel_log: Path
+    restore_log: Path
+    #: The mark of the boot after a firmware update, and the flag that says the
+    #: firmware's restore failed on it.
+    fwupdate: Path
+    restore_failed: Path
+    restore_activating: Path
     tools: Path
 
 
@@ -994,8 +1186,24 @@ def _packages(
         power_loss=tmp_path / 'power-loss',
         postinst_fails=tmp_path / 'postinst-fails',
         candidate=tmp_path / 'candidate',
+        frontend=tmp_path / 'lock-frontend',
+        locks=tmp_path / 'locks',
+        journal=tmp_path / 'updates',
+        releases=tmp_path / 'releases',
+        finishing=tmp_path / 'finishing',
+        appears=tmp_path / 'appears',
+        killed=tmp_path / 'killed',
+        leaves_unpacked=tmp_path / 'leaves-unpacked',
+        history=tmp_path / 'history',
+        kernel_log=tmp_path / 'kernel.log',
+        restore_log=tmp_path / 'restore.log',
+        fwupdate=tmp_path / 'fwupdate',
+        restore_failed=tmp_path / 'restore-failed',
+        restore_activating=tmp_path / 'restore-activating',
         tools=tmp_path / 'tools',
     )
+    _ = device.frontend.write_text('')
+    _ = device.locks.write_text('')
     for directory in (device.cache, device.archives, device.tools):
         directory.mkdir()
     _ = device.status.write_text(_database(FIRMWARE, *installed, records=records, versions=versions))
@@ -1008,7 +1216,13 @@ def _packages(
         _ = deb(device.cache, package).write_text('')
     compare = device.tools / 'compare-versions.py'
     _ = compare.write_text(COMPARE_VERSIONS)
-    for name, stub in (('dpkg', DPKG), ('apt-get', APT_GET)):
+    for name, stub in (
+        ('dpkg', DPKG),
+        ('dpkg-query', DPKG_QUERY),
+        ('apt-get', APT_GET),
+        ('journalctl', JOURNALCTL),
+        ('systemctl', SYSTEMCTL),
+    ):
         tool = device.tools / name
         _ = tool.write_text(
             stub.format(
@@ -1027,6 +1241,19 @@ def _packages(
                 dependencies=f'{DEPENDENCY} {FIRMWARE}',
                 python=sys.executable,
                 compare=compare,
+                frontend=device.frontend,
+                locks=device.locks,
+                journal=device.journal,
+                releases=device.releases,
+                finishing=device.finishing,
+                appears=device.appears,
+                killed=device.killed,
+                leaves_unpacked=device.leaves_unpacked,
+                kernel_log=device.kernel_log,
+                restore_log=device.restore_log,
+                restore_failed=device.restore_failed,
+                restore_activating=device.restore_activating,
+                restored=RESTORED,
             )
         )
         tool.chmod(0o755)
@@ -1037,6 +1264,9 @@ def _packages(
             base=str(device.base),
             status=str(device.status),
             release=str(device.release),
+            locks=str(device.locks),
+            history=str(device.history),
+            fwupdate=str(device.fwupdate),
         )
     )
     return device
@@ -1069,6 +1299,7 @@ def _install(
     download_fails: bool = False,
     power_loss: bool = False,
     postinst_fails: tuple[str, str] | None = None,
+    killed: int = 0,
     args: tuple[str, ...] = (),
 ) -> _Run:
     """Run the package converger once, with `args` after it, and read back what it asked of apt and dpkg.
@@ -1089,6 +1320,10 @@ def _install(
         device.postinst_fails.unlink(missing_ok=True)
     else:
         _ = device.postinst_fails.write_text(' '.join(postinst_fails))
+    if killed:
+        _ = device.killed.write_text(f'{killed}\n')
+    else:
+        device.killed.unlink(missing_ok=True)
     device.calls.unlink(missing_ok=True)
     # The script starts processes of its own -- the stand-ins, `awk`, the
     # version comparator, a `yes | dpkg` pipeline -- so it leads a POSIX session
@@ -1106,7 +1341,7 @@ def _install(
     calls = device.calls.read_text().splitlines() if device.calls.exists() else []
     return _Run(
         status=completed.returncode,
-        calls=[call for call in calls if not call.startswith(('dpkg -s ', 'dpkg --compare-versions '))],
+        calls=[call for call in calls if not call.startswith('dpkg --compare-versions ')],
         output=completed.stdout + completed.stderr,
     )
 
@@ -1154,7 +1389,7 @@ def test_a_package_removed_but_not_purged_is_installed_again(tmp_path: Path) -> 
     """dpkg answers for a package it holds any record of, installed or not.
 
     A package removed without a purge leaves its configuration files and a
-    record that says so, and `dpkg -s` prints that record and exits 0. A
+    record that says so, and `dpkg-query -W` shows that record and exits 0. A
     converger that took the exit status for an installation would call such a
     device done and install nothing.
     """
@@ -1628,6 +1863,218 @@ def test_a_boot_that_finds_part_of_the_set_and_a_networkless_boot_after_it_insta
 
     assert run.status == 0
     assert _dpkg_installs(run) == [_offline_install(device, *PACKAGES, DEPENDENCY)]
+    assert _listed(device.status) == {FIRMWARE, *PACKAGES, DEPENDENCY}
+
+
+@contextmanager
+def _hold_lock(
+    device: _Packages, *, releases: bool, finishing: tuple[str, str] | None = None, appears: bool = False
+) -> Generator[int]:
+    """Another process holds dpkg's frontend lock: from the start, or, with `appears`, from the converger's `apt-get update` on.
+
+    The holder is this case's own process, with the lock file open, so the pid
+    the converger reads is a live process's that holds the file, as a lock's
+    holder does. Under `releases` it finishes when apt waits for it, leaving
+    `finishing` installed. Yields its pid.
+    """
+    pid = os.getpid()
+    line = f'1: POSIX  ADVISORY  WRITE {pid} 00:00:{device.frontend.stat().st_ino} 0 EOF\n'
+    _ = (device.appears if appears else device.locks).write_text(line)
+    if releases:
+        _ = device.releases.write_text('')
+    if finishing is not None:
+        _ = device.finishing.write_text(' '.join(finishing))
+    with device.frontend.open('rb'):
+        yield pid
+
+
+def test_a_boot_waits_for_another_dpkg_to_finish_before_it_records_the_base_or_installs(tmp_path: Path) -> None:
+    """The firmware runs a package restore of its own on the boot after an update.
+
+    dpkg refuses a second dpkg rather than waiting for the first, so the boot
+    waits for dpkg's lock the way apt does. The base is the firmware's own
+    database, read once the firmware's restore is done writing it: a package
+    that restore leaves installed is in the base. What the boot found at the
+    lock is kept on `/data`, naming the holder, because what that boot's
+    journal said does not last.
+    """
+    device = _packages(tmp_path, installed=(), cached=())
+    with _hold_lock(device, releases=True, finishing=(RESTORED, '2.0')) as pid:
+        run = _install(device, online=True)
+
+    assert run.status == 0
+    assert _listed(device.status) == {FIRMWARE, RESTORED, *PACKAGES, DEPENDENCY}
+    assert RESTORED in _listed(device.base_status)
+    assert f'pid {pid} (' in device.history.read_text()
+
+
+def test_a_dpkg_that_takes_the_lock_after_the_boot_began_is_waited_for_by_the_install(tmp_path: Path) -> None:
+    """A holder can take the lock during `apt-get update`, after the lock was read free.
+
+    The install through apt waits for it as apt waits, and installs the set;
+    the record names the holder, since the boot's journal does not last.
+    """
+    device = _packages(tmp_path, installed=(), cached=())
+    with _hold_lock(device, releases=True, appears=True) as pid:
+        run = _install(device, online=True)
+
+    assert run.status == 0
+    assert _listed(device.status) == {FIRMWARE, *PACKAGES, DEPENDENCY}
+    assert not _dpkg_installs(run)
+    assert f'pid {pid} ' in device.history.read_text()
+
+
+def test_a_lock_still_held_after_the_wait_records_no_base_and_fails_the_boot(tmp_path: Path) -> None:
+    """A database another dpkg is part-way through writing is not the firmware's base.
+
+    The base is not recorded and its release is not written, so the next boot
+    that finds none of the set installed records it. The install meets the
+    holder and fails, and the record names the holder.
+    """
+    device = _packages(tmp_path, installed=(), cached=())
+    with _hold_lock(device, releases=False) as pid:
+        run = _install(device, online=True)
+
+    assert run.status == 1
+    assert not device.base_release.exists()
+    assert f'pid {pid} ' in device.history.read_text()
+
+
+def test_a_lock_table_line_for_a_file_the_process_does_not_hold_is_not_dpkgs(tmp_path: Path) -> None:
+    """The lock table is searched by inode alone, and an inode number repeats across filesystems.
+
+    A line whose pid does not have the lock file open is another file's lock:
+    the boot records the firmware base as on a free lock.
+    """
+    device = _packages(tmp_path, installed=(), cached=())
+    _ = device.locks.write_text(
+        f'1: POSIX  ADVISORY  WRITE {os.getpid()} 00:00:{device.frontend.stat().st_ino} 0 EOF\n'
+    )
+
+    _ = _install(device, online=True)
+
+    assert device.base_release.exists()
+
+
+def _restore_started_before_dpkg(run: _Run) -> bool:
+    """Whether the run started the firmware's restore, and before any call of apt or dpkg."""
+    start = f'systemctl start {persistence.FIRMWARE_PACKAGE_RESTORE}'
+    if start not in run.calls:
+        return False
+    first = run.calls.index(start)
+    return not [call for call in run.calls[:first] if call.startswith(('apt-get ', 'dpkg '))]
+
+
+def test_the_boot_after_a_firmware_update_waits_for_the_firmwares_restore_before_dpkg(tmp_path: Path) -> None:
+    """The firmware's restore kills whatever holds dpkg's locks when it is done.
+
+    On the boot it runs on, which its own condition marks, the converger
+    starts it before anything touches dpkg: the start joins the job the boot
+    queued and returns once the restore is done. The base is read after it, so
+    what the restore installed is in the firmware's base.
+    """
+    device = _packages(tmp_path, installed=(), cached=())
+    _ = device.fwupdate.write_text('')
+
+    run = _install(device, online=True)
+
+    assert run.status == 0
+    assert _restore_started_before_dpkg(run)
+    assert RESTORED in _listed(device.base_status)
+
+
+def test_an_ordinary_boot_does_not_wait_for_the_firmwares_restore(tmp_path: Path) -> None:
+    """The restore runs on the boot after a firmware update and no other, and the rest do not wait for it."""
+    device = _packages(tmp_path, installed=(), cached=())
+
+    run = _install(device, online=True)
+
+    assert run.status == 0
+    assert not [call for call in run.calls if call.startswith('systemctl start ')]
+
+
+def test_a_restore_still_running_is_waited_for_with_no_mark_left(tmp_path: Path) -> None:
+    """What removes the update's mark, and when, is the firmware's.
+
+    A restore still running can still kill, mark or no mark, so the converger
+    starts it before dpkg whenever the unit is activating.
+    """
+    device = _packages(tmp_path, installed=(), cached=())
+    _ = device.restore_activating.write_text('')
+
+    run = _install(device, online=True)
+
+    assert run.status == 0
+    assert _restore_started_before_dpkg(run)
+
+
+def test_a_firmware_restore_that_failed_is_not_started_again(tmp_path: Path) -> None:
+    """Starting a failed oneshot runs it again, and the firmware's restore is the firmware's to run.
+
+    The boot goes on behind dpkg's lock, and installs the set.
+    """
+    device = _packages(tmp_path, installed=(), cached=())
+    _ = device.fwupdate.write_text('')
+    _ = device.restore_failed.write_text('')
+
+    run = _install(device, online=True)
+
+    assert run.status == 0
+    assert f'systemctl start {persistence.FIRMWARE_PACKAGE_RESTORE}' not in run.calls
+
+
+def test_an_install_whose_dpkg_ended_on_a_signal_is_replayed_and_installed_once_more(tmp_path: Path) -> None:
+    """A dpkg killed under apt leaves a journal apt will not install over.
+
+    The boot replays it with `dpkg --configure -a` and installs through apt
+    again, so the set comes up through apt with no offline cache to fall back
+    on.
+    """
+    device = _packages(tmp_path, installed=(), cached=())
+    _ = device.restore_log.write_text(f'{RESTORE_KILL}\n')
+
+    run = _install(device, online=True, killed=1)
+
+    assert run.status == 0
+    assert _listed(device.status) == {FIRMWARE, *PACKAGES, DEPENDENCY}
+    assert not _dpkg_installs(run)
+    history = device.history.read_text()
+    assert OOM_KILL.search(history), 'the kernel says whether the out-of-memory killer took it'
+    assert RESTORE_KILL in history, "the firmware's restore says whether it killed the holder"
+
+
+def test_a_second_install_whose_dpkg_ended_on_a_signal_fails_the_boot_whatever_the_cache_installs(
+    tmp_path: Path,
+) -> None:
+    """The install through apt is retried once, and the second failure is the finding.
+
+    The offline cache still brings the set up, so the machines start, and the
+    boot fails all the same: two dpkg runs killed on one boot are for the
+    operator to look at, through the boot health reading.
+    """
+    device = _packages(tmp_path, installed=(), cached=(*PACKAGES, DEPENDENCY))
+
+    run = _install(device, online=True, killed=2)
+
+    assert run.status == 1
+    assert _listed(device.status) == {FIRMWARE, *PACKAGES, DEPENDENCY}
+    kills = OOM_KILL.findall(device.history.read_text())
+    assert len(kills) == len(set(kills)) == 2, 'each death keeps what the kernel said of it, and only of it'
+
+
+def test_an_install_through_apt_that_leaves_a_member_uninstalled_fails_the_boot(tmp_path: Path) -> None:
+    """apt exiting 0 is not the set installed: every member is read back from dpkg afterwards.
+
+    The offline cache brings the member up, and the boot fails all the same,
+    since an apt that reports success over a member it did not install is the
+    finding.
+    """
+    device = _packages(tmp_path, installed=(), cached=(*PACKAGES, DEPENDENCY))
+    _ = device.leaves_unpacked.write_text(DEPENDENT)
+
+    run = _install(device, online=True)
+
+    assert run.status == 1
     assert _listed(device.status) == {FIRMWARE, *PACKAGES, DEPENDENCY}
 
 

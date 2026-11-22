@@ -535,8 +535,9 @@ by hand. It occupies two roots:
 -   **`/data/custom`**, which is this program's: `bin/` for
     executables, `units/` for unit-file sources, `network/` and
     `networkd.conf.d/` for the sources of `systemd-networkd`'s
-    configuration, `dpkg/` for the offline package cache and
-    `dpkg.base/` for the firmware base it is resolved against, plus
+    configuration, `dpkg/` for the offline package cache,
+    `dpkg.base/` for the firmware base it is resolved against and
+    `dpkg.history` for the package step's record of its installs, plus
     whatever directory a layer of the gateway asks for.
 
 **Only `/data` is promised across a firmware update.** An update
@@ -652,14 +653,17 @@ update's boot records the base, and from then on the cache is exact.
 The offline boot installs the cache in one `dpkg -i`, less the debs it
 holds back (below). **A run succeeds when the set is up, and on nothing
 else**: it exits 0 only when apt installed the set, or when dpkg
-succeeded over the cache and every member of the set is installed
+succeeded over the cache, and in either case every member of the set
+reads `install ok installed` from `dpkg-query -W -f='${Status}'`
 afterward. Otherwise, it names the members that are not installed and
-exits 1. dpkg's exit status alone is not enough, since a cache from
-before the set last grew installs cleanly and still lacks a package of
-it. A package an install cut short left unpacked, or a failed maintainer
-script left half-configured, is handed to dpkg like any other and
-replaced from the cache at whatever version it was left at, so the
-offline install repairs what an interrupted or failed run left behind.
+exits 1. Neither tool's exit status is enough: a cache from before the
+set last grew installs cleanly and still lacks a package of it, and an
+apt that exits 0 over a member it left uninstalled fails the run even
+where the cache then installs that member. A package an install cut
+short left unpacked, or a failed maintainer script left
+half-configured, is handed to dpkg like any other and replaced from the
+cache at whatever version it was left at, so the offline install
+repairs what an interrupted or failed run left behind.
 
 **The base is the firmware that ran the last refresh**, and that is what
 the closure means once an update changes the firmware. A networkless
@@ -692,6 +696,106 @@ boot that succeeds on a downgraded `systemd`. The next boot that reaches
 apt installs the set against the firmware's version. A held-back package
 the live system does not have installed — a firmware package an
 interrupted upgrade left unpacked — stays as it is too.
+
+**On the boot after a firmware update, the script waits for the
+firmware's package restore before it touches dpkg.**
+`ubnt-dpkg-restore.service` runs once, on that boot
+(`ConditionPathExists=/boot/.fwupdate`), as a `Type=oneshot` unit ordered
+after `unifi-core.service` and before the UniFi applications, with
+`TimeoutStartSec=30min`. Its script, `/usr/sbin/ubnt-dpkg-restore`,
+traps its exit with `cleanup`, which calls `restore_dpkg_lock`. That
+function finds whatever holds `/var/lib/dpkg/lock` or
+`/var/lib/dpkg/lock-frontend` with `fuser`, kills it with `kill -9`, and
+removes the lock file; it does the same after any package whose restore
+timed out (read on the device, Aetf/kluster-ops#746). A dpkg of
+`10-packages.sh` still running at the restore's end is therefore killed,
+which apt reports as `Sub-process /usr/bin/dpkg exited unexpectedly`,
+and no wait on the lock prevents it, since the restore kills the holder
+whoever it is. So a run that finds part of the set missing, while the
+restore can still kill, first runs `systemctl start
+ubnt-dpkg-restore.service`. The restore can still kill while
+`/boot/.fwupdate` is there or the unit is `activating`: the mark proves
+the update's boot only until the restore's job begins, and nothing the
+device holds says when the mark goes (`/usr/sbin/ubnt-dpkg-restore`
+mentions it only in a comment, and `/etc/fwupdate/post.d/` not at all;
+read on the device, 2026-11-22). The start joins the job the boot
+queued and returns once the restore is done, or at once when it is done
+already (`RemainAfterExit=yes`). The restore's own 30-minute start
+timeout counts only once its job runs, after `unifi-core.service`, and
+the chain's own unit, `Type=oneshot`, has no start timeout at all, so the call runs under
+`timeout 2400`, the 30 minutes and ten more; a call cut off leaves the
+job in place, and the run goes on behind dpkg's lock. The start cannot
+wait on the chain itself: nothing the restore is ordered after is
+ordered after `udm-boot.service` (`systemctl list-dependencies --after
+--all --plain` on the restore names no `udm-boot.service`, where the same
+on `multi-user.target` does; read on the device, 2026-11-22). The record
+says that the run waited, and for how long. A restore that failed is not
+started again, since that would run it a second time, and the run goes
+on behind dpkg's lock. The firmware base is read after the wait, so what
+the restore installed is in it. **Other boots do not wait**: one that
+finds the set installed stops before this, and one without the mark
+costs one `systemctl is-active`, the restore being skipped and never
+`activating`. An ordering of the whole chain after the restore
+would hold every boot instead, since a unit its condition skips still
+waits for what it is ordered after, here `unifi-core.service`, which
+becomes active later in the boot than the chain does.
+
+**What remains is a defense, and the record that confirms the cause.**
+dpkg takes its locks without waiting (`modstatdb_lock`, dpkg's
+`lib/dpkg/dbmodify.c`), so a second dpkg refuses rather than running
+beside the first, and apt waits for them only when `DPkg::Lock::Timeout`
+says so (`debSystem::Lock`, apt's `apt-pkg/deb/debsystem.cc`; it does not
+wait by default). Every apt run of the script therefore waits for them,
+and before the base is recorded, and before each dpkg the script runs
+itself, it reads what holds dpkg's frontend lock off `/proc/locks` and,
+while something does, waits for it through `apt-get check` under the
+same bound. A process the table names counts only when it has the lock
+file open, since the table is searched by the file's number on its
+filesystem alone, which another filesystem's file can share. The bound is 300
+seconds a wait, a first guess at how long another dpkg holds the lock,
+which the record measures. A holder that never lets go costs three
+waits in a row, before the base, apt's own inside the install and
+before the offline cache, so about a quarter of an hour passes before
+the rest of the chain runs. On the boot after a firmware update, the rest
+of the chain, `40-machines.sh` included, also waits for
+`unifi-core.service` and then for the restore, up to the restore's 30
+minutes, with the 40-minute bound behind that. That is the price of
+the set on that boot: the machines need it, and a dpkg that runs before
+the restore ends is killed. **The base is recorded only when the wait
+found the lock free**, so it is copied from a database no other dpkg is
+writing. A lock still held when the wait ends is not broken: the base is
+not recorded and its release is not written, so the next boot that
+finds none of the set installed records it, and apt or dpkg refuses the
+install after it, and the run fails.
+
+**A dpkg that ends on a signal under apt is answered by one retry.** apt
+reports such a dpkg as `Sub-process /usr/bin/dpkg exited unexpectedly`,
+or as `received a segmentation fault` for `SIGSEGV`, both untranslated
+(`pkgDPkgPM::Go`, `apt-pkg/deb/dpkgpm.cc`); a dpkg that met a held lock
+exits instead, and apt reports `returned an error code`. The killed dpkg
+leaves a journal it did not replay, and apt refuses to install over it. On
+that report the script waits for the lock, runs `dpkg --configure -a`,
+which replays the journal, and installs through apt once more. A second
+failure fails the run, and the offline cache is still tried after it,
+so the machines can start on a boot the health reading reports as
+failed. Any other failure of apt's install, an archive out of reach
+first among them, would meet a second install the same way, and goes
+straight to the cache.
+
+**Every run that goes past finding the set installed keeps a record in
+`/data/custom/dpkg.history`**, one line each, stamped with the UTC time
+and the firmware's release. It says what the run found at dpkg's lock
+before each step and after `apt-get update` (free, or held by which
+process, its command line and its parent's, and for how many seconds),
+apt's own `Waiting for cache lock` lines, each retry, and how the run
+ended. On each death of a dpkg under apt it also keeps what will not
+outlast the boot: the kernel's lines of this boot's out-of-memory kills,
+and the restore unit's journal since the run began, which names the
+process it killed. The record is on `/data` because the boot it is read for is
+the first after a firmware update, whose journal this program does not
+rely on keeping. Read after the next such boot, it confirms the cause
+above: no death, or a death the restore's journal claims. Only a run
+that finds part of the set missing adds to it, a few lines each time.
 
 A failing `10-packages.sh` does not stop the rest of the chain.
 `udm-boot.service` runs the files of `/data/on_boot.d` through `xargs -n
@@ -753,8 +857,9 @@ one into place — two renames, and a run stopped between them leaves the
 new cache beside a missing one, which the next run of the boot path or
 of `--refresh` puts in place before reading the cache — so **`dpkg/` is
 that script's alone**: a file this program wrote there would be deleted
-by the next refresh and reported as drift forever after. The program declares nothing about `dpkg.base/`
-either, which the script rewrites on every post-update boot.
+by the next refresh and reported as drift forever after. The program
+declares nothing about `dpkg.base/` either, which the script rewrites on
+every post-update boot, nor about `dpkg.history`, which it adds to.
 
 **`20-units.sh` converges the unit sources** into
 `/etc/systemd/system`, enables them, and restarts the ones whose file
@@ -1183,8 +1288,11 @@ What it reads:
     `Type=oneshot` unit among them sets `RemainAfterExit`, so a run that succeeded leaves it
     active and one that failed leaves it failed. `udm-boot.service` not
     active is the boot chain's last run having failed: a failing
-    on_boot script, the offline install among them, marks it failed
-    (§1.2). That finding names a playbook of its own.
+    on_boot script marks it failed, the package step among them, which
+    fails whenever the run ends without the set installed, and whenever
+    apt's install is itself the finding: a second failure after the
+    replay, or an exit 0 over a member it did not install (§1.2). That finding names a
+    playbook of its own.
 3.  **The BGP daemon holds the declared peer**:
     `vtysh -c 'show bgp neighbors <peer> json'` answers, and names the
     session's neighbor at the cluster's AS (`conventions.CLUSTER_ASN`)
@@ -3206,10 +3314,18 @@ command runs on the device unless the entry says otherwise.
 -   **The boot chain's last run failed** — trigger: `udm-boot.service`
     is not active. Every script of the chain runs whatever an earlier
     one exits with (§1.2), so `journalctl -b -u udm-boot.service` names
-    the one that failed. The common case is `10-packages.sh` on an
-    offline boot, which names the members it could not install: run
-    `/data/on_boot.d/10-packages.sh` again, with no argument, once apt
-    is reachable. Once the cause is
+    the one that failed. The common case is `10-packages.sh`, which
+    names the members it could not install. Its record,
+    `/data/custom/dpkg.history`, outlives the journal and says what the
+    run found at dpkg's lock, whether it retried, and how it ended. On
+    an offline boot, run `/data/on_boot.d/10-packages.sh` again, with no
+    argument, once apt is reachable. A lock held past the wait names its
+    holder: once that process is gone, run the script again the same
+    way. An install that failed again after `dpkg --configure -a` is
+    the finding, and the record says whether dpkg died again, and for
+    each death what the kernel and the firmware's restore said of it;
+    running the script again once the cause is answered completes the
+    set through apt. Once the cause is
     gone, `systemctl restart udm-boot.service` runs the chain as a boot
     does, and the unit is active again.
 -   **A delivered unit disabled or failed** — trigger: `gateway-health`
