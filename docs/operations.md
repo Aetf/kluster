@@ -1749,7 +1749,7 @@ Owning docs keep the content — the index only locates it.
 | Playbook family | Lives in |
 | --- | --- |
 | State backend (cert/CA, PG major, rebuild, age rotation; the state table's daily upkeep, a run that failed or the job gone stale; the cluster's dump and certificate checks, a run that failed or a check gone stale, which §6 there routes to its playbook) | physical/state-backend.md §6 and §7 |
-| Gateway (ZeroTier container down, firmware-wiped device, UDM replacement; and every finding of the daily gateway check: a machine, the boot chain, a delivered unit, the routing daemon or the offline package cache, a check that did not run, a check that stopped checking in, a certificate not renewing, an autobackup not copied off) | physical/gateway.md §3 |
+| Gateway (ZeroTier container down, firmware-wiped device, UDM replacement, the uplink's own record of a window; and every finding of the daily gateway check: a machine, the boot chain, a delivered unit, the routing daemon or the offline package cache, a check that did not run, a check that stopped checking in, a certificate not renewing, an autobackup not copied off) | physical/gateway.md §3 |
 | Node replacement (CP node, worker VM, block volume and VIP extras; the whole cluster with the account intact) | §3 here |
 | Upgrades (Talos serial, Cilium canary); the cluster credential's copies near their expiry (`KubeconfigCopyExpiring`) | §2 here |
 | Backup restores (CNPG, VolSync, etcd) | storage.md §5; the drills are §4 here |
