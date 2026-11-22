@@ -5,6 +5,6 @@ config:
   kluster-py:cloudflareApiToken:
     secure: v1:kfIab7T9iQv9V2/x:Hwex2rc/v8aOJNyVlnQEuQJJjKmNx0C0C0/Wx0otDUyROrLmASurW//8hjJCPuYCdTt/n/IPSy6XPFxOpJnsNfJXDolh
   kluster-py:adguardUsername:
-    secure: v1:tEtRm0fYletYOIIZ:bAS9EBKYuNjHtOVhoa4hwh8AVrk=
+    secure: v1:NQVgVfmphj2Mq+hj:bgiGc8+R9hSvAuJwKjkCpVmu4qI=
   kluster-py:adguardPassword:
-    secure: v1:F13lwy+P+nopAkkO:43haSFSTpXG/hzt/Xg5zYt0ygsP6ez1z4LgTaHQPq9nDTCPDuQ1LSg==
+    secure: v1:RoGkYjSHGRFugCbI:/Ioox0sJZsGr9wWckHsnJQbmcooeGbZ2z0/lXojajw8dMn0RmhDj7A==
