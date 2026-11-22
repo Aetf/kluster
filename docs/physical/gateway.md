@@ -1143,7 +1143,7 @@ each sits where the fact it compares against is declared:
 | --- | --- | --- | --- |
 | `gateway-health` | this repository, rendered onto the device as `/data/custom/bin/gateway-health` | on demand, over the homelab host's SSH | what `Gateway` declares: its machines and the bridge each attaches to, the units the persistence layer delivers, the BGP daemon's hold on the declared peer, each declared network's /64 of the delegated prefix and the PD lease's line for it, the offline package cache, the base the program is written for, and what `networkd` is told |
 | `check-gateway` | homelab-ops, behind a yadm timer on the homelab host | daily | `gateway-health`'s verdict, the proxy's certificates as a LAN host sees them, and how fresh the copies of the backups are; it mails each finding with its playbook, and checks in to a Home Assistant timer of its own after every run that delivered its findings or had none |
-| `gateway-backup-pull` | homelab-ops, behind a yadm timer on the homelab host | weekly | nothing: it copies the controller's autobackups into `~/.config/gw-backups`, and the resolvers' configuration until [sources-of-truth.md](../sources-of-truth.md) R2 flips |
+| `gateway-backup-pull` | homelab-ops, behind a yadm timer on the homelab host | weekly | nothing: it copies the controller's autobackups into `~/.config/gw-backups` |
 
 The two host jobs are scripts in homelab-ops, a repository of the
 homelab host's own, run by timers yadm installs there and pinned by
@@ -1367,23 +1367,15 @@ and `Persistent=true`. Each run:
 A healthy run writes two journal lines: the run's own, and the
 check-in's `checked in: check-gateway`.
 
-**`gateway-backup-pull`** runs weekly, on Monday at 07:41. It reads the
-same paths on the layout before the cutover and on the declared one, so
-it runs across the window and across a rollback:
-
--   **The controller's autobackups**: `rsync -rt
-    gw:/data/unifi/data/backup/autobackup/ ~/.config/gw-backups/unifi/`.
-    The path is the controller's own, and `rsync` on the device end is
-    why the package set carries it (§1.2).
--   **Each resolver's `AdGuardHome.yaml`, until R2 flips**, into
-    `~/.config/gw-backups/<name>/`. It reads the declared state
-    directory, `/data/custom/machines/<name>/state/`, where that exists,
-    and otherwise `/data/<name>/`, where the file sits before the window
-    and after a rollback. The second path is transitional and leaves
-    with the transfer, which [sources-of-truth.md](../sources-of-truth.md)
-    R2 removes in the change that applies the stack's rewrites.
--   **Each transfer stands alone**: one that fails is named on stderr
-    and in the exit status, and the others still run.
+**`gateway-backup-pull`** runs weekly, on Monday at 07:41, and copies
+the controller's autobackups: `rsync -rt
+gw:/data/unifi/data/backup/autobackup/ ~/.config/gw-backups/unifi/`.
+The path is the controller's own, and `rsync` on the device end is why
+the package set carries it (§1.2). A transfer that fails is named on
+stderr and in the exit status. The resolvers' configuration is not
+copied: the `dns` stack declares it whole
+([sources-of-truth.md](../sources-of-truth.md) R2), and a reset
+resolver is set up again from that declaration.
 
 There is no machine manifest: the declaration holds the pins and the
 machine set.
@@ -1930,8 +1922,8 @@ device.
     exercises the multicast settings and the final-accept fallthrough
     together.
 7.  **Join latency**: a fresh CI member's join→SSH-reachable time
-    against the gateway (the expectation, and why it should beat the
-    legacy 1–2 min: §2.6).
+    against the gateway (how the path forms, and the measured time:
+    §2.6).
 8.  **Address ownership and the controller door**, in three parts. The
     first: items 1 and 4 pass with the program's `chr ipauth` matches in
     place, which holds only if Central issues each member a certificate
@@ -2455,12 +2447,29 @@ beside it. The directory goes in every case, since its configuration
 and state hold the Central token under a passphrase anyone can read
 above.
 
-**Unproven until the first run:** the drill against a scratch network
-as a whole. That the stand-in form starts — the device's image under
-rootless podman with the device's grants, emulated on an `x86_64`
-workstation, `zerotier-cli info` reporting `ONLINE` and a joined
-network's interface created — is what the procedure's first readings
-confirm, before any reading depends on it.
+**The drill ran on 2026-11-05**, against scratch network
+`8286ac0e4782e48f`, from the homelab host
+([Aetf/kluster-ops#75](https://github.com/Aetf/kluster-ops/issues/75#issuecomment-6651864907)).
+The probe project planned and applied, and its refreshed preview then
+read `16 unchanged`. Every stand-in reported `ONLINE` on 1.16.2, the
+action's `ZEROTIER_VERSION`. Items 1, 2 and 5 matched in every cell but
+the homelab stand-in's column, and items 3, 6 and 9 and item 8's third
+part passed. Item 4 is indicative only under emulation, where
+`ci-physical`'s first dial connected and `ci-dns`'s connected on its
+retry; gateway-cutover.md §8.3 is its record.
+
+**The stand-in form's known limit is that host's own stand-in.** On
+the homelab host, the homelab stand-in joins (`OK`, its address
+assigned) and its interface receives nothing: its tap sent frames and
+received none, no peer listed it, and nothing reached it, `personal-b`
+included, which the program accepts in full. That is a fault of the
+stand-in on that host and not of the program; it held across a rebuild
+and a move to podman's bridge network. So that column is read in
+production instead: `ci-physical`'s leg to the homelab host's SSH by
+gateway-cutover.md §8.3's drift run, with the real identity. `ci-dns`
+toward the homelab host has no leg in the program, so it meets the
+closing drop that every other cell's drop met, and it has no reading of
+its own.
 
 #### 2.4.2 The device's half: the real gateway, after step 4
 
@@ -2702,17 +2711,23 @@ gateway's member and nothing else; step 3 converges the network; step
     the flow rules that confine the CI identities to its address — a
     replace deletes the member before it creates one.
 
-    **Unproven live: that the preview plans no row there.** The member
-    takes `networkId` from the network, which this run updates, and the
-    network's `networkId` is optional and computed in the bridged
-    provider's schema. A provider that keeps that value at its prior
-    one in the plan gives the member no diff; one that plans it unknown
-    gives a `~` on the member, as the stand-in of
-    `tests/test_targeted_import_engine.py` does. The first run with no
-    targets confirms which: a `~` there whose only diff is `networkId`
-    turning unknown still stops the run, and is a finding against this
-    paragraph rather than against the state. The update is applied
-    only after the preview shows, on the network row:
+    **The pinned bridged provider plans no row there**, as read live on
+    2026-11-15: the converge's preview showed the network row, a `+`
+    for each roster entry but the gateway's, and no row for
+    `kluster-member-udm`
+    ([Aetf/kluster-ops#755](https://github.com/Aetf/kluster-ops/issues/755#issuecomment-6899332678)).
+    The member takes `networkId` from the network, which this run
+    updates, and the network's `networkId` is optional and computed in
+    the provider's schema; the provider at its pin (`sdks/zerotier`)
+    keeps that value at its prior one in the plan, so the member has no
+    diff. The stop rule stands whatever the provider does, because a
+    provider bump can change it: a `~` there whose only diff is
+    `networkId` turning unknown still stops the run, and is a finding
+    against this paragraph rather than against the state. A `~` there is
+    what the stand-in provider of `tests/test_targeted_import_engine.py`
+    plans, which is that stand-in's behavior and not the bridged
+    provider's. The update is applied only after the preview shows, on
+    the network row:
 
     -   `routes`: the via-less `10.144.0.0/16` route on **both**
         sides, and `0.0.0.0/0` added via `10.144.1.1`.
@@ -2723,8 +2738,9 @@ gateway's member and nothing else; step 3 converges the network; step
         composed program on the right.
     -   `dns`: the block added.
     -   `assignIpv6s`: `rfc4193` and `sixplane` from on to off, and
-        `zerotier` off on the right side. Central has both derived
-        IPv6 schemes on (sources-of-truth.md R7), and turning them off
+        `zerotier` off on the right side. Central held both derived
+        IPv6 schemes on until the converge of 2026-11-15 (sources-of-truth.md
+        R7), and turning them off
         is the single-family overlay of §2.2: each member drops the two
         IPv6 addresses derived from the network id at its next
         configuration refresh.
@@ -2845,8 +2861,8 @@ Two things that are *not* part of the cycle:
 -   **The default route is a net-new addition, and inert** — it appears
     where none existed, and only a device that opens the tunnel installs
     it (§2.2). No member loses a route, because the census also carries
-    the route Central holds today (sources-of-truth.md R7), the
-    overlay's own.
+    the overlay's own, `10.144.0.0/16`, the one route Central held
+    before the converge.
 -   **CI's per-run overlay join becomes load-bearing only after §2.4.1
     and §2.4.2 pass** — until the flow rules are verified,
     `physical` runs stay operator-local. What makes it load-bearing is
@@ -2892,17 +2908,22 @@ Facts that shape it (decided 2026-08-24):
     rules exist to provide. The legacy cluster's CI joins exactly
     this way until kluster-code retires: not part of this design, and
     the residual threat-model.md §2.10 names (§2.1).
--   **Join latency expectation**: kluster-code's measured 1–2 min
-    wait-for-peer is dominated by NAT traversal toward a NATed host
-    member (relay first, then a hole-punched direct path). Here the
-    peer is the UDM itself, whose ZeroTier socket (host-networking
-    container) sits on the WAN interface un-NATed — the direct path
-    should form on first contact, and traffic flows (slowly, via ZeroTier
-    relays) even before it does. Seconds-class is the expectation, not
-    a measurement: §2.4 item 7 is what measures it, as the seconds on
-    the gateway's readiness line in every job that joins with the
-    `physical` identity, which waits for the gateway's shell. If it stays minutes
-    it is a per-job fixed cost, not a correctness problem.
+-   **Join latency**: kluster-code's measured 1–2 min wait-for-peer is
+    dominated by NAT traversal toward a NATed host member (relay first,
+    then a hole-punched direct path). Here the peer is the UDM itself,
+    whose ZeroTier socket (host-networking container) holds the WAN
+    address un-NATed. Its WAN-local chain admits no new inbound packet
+    (§4.1), so a runner's first packet toward it is dropped, the direct
+    path forms by hole punching from both ends, and until it does
+    traffic flows, slowly, through ZeroTier's relays. §2.4 item 7
+    measures it, as the seconds on the gateway's readiness line in every
+    job that joins with the `physical` identity, which waits for the
+    gateway's shell: 9 s in gateway-cutover.md §8.3's drift run. A join
+    that misses its deadline fails its job, as one did on 2026-11-19
+    (run 44657773238, the gateway's peer listed as `RELAY`). The same
+    day, run 44639021122's dial to the homelab host timed out after its
+    join. Each passed when rerun, and the cause is open in
+    [Aetf/kluster-ops#881](https://github.com/Aetf/kluster-ops/issues/881).
 
 ### 2.7 Managed DNS: the tunnel's resolver
 
@@ -3460,6 +3481,17 @@ Each item names when it was read.
     masqueraded, so the tunnel's traffic from `10.144.0.0/16` reaches
     the internet with no rule of this program's
     ([Aetf/kluster-ops#755](https://github.com/Aetf/kluster-ops/issues/755#issuecomment-6893045703)).
+-   **From the WAN to the gateway itself, only replies are admitted.**
+    `UBIOS_WAN_LOCAL_USER`, the chain for traffic from the WAN to the
+    device's own addresses, accepts `RELATED,ESTABLISHED` and drops
+    every `NEW` packet, and no rule in it admits UDP to ZeroTier's
+    ports. So the gateway's ZeroTier member, which runs in the device's
+    own network namespace and holds the WAN address itself, takes no
+    unsolicited packet from the internet: a peer reaches it directly
+    only once the gateway has sent toward that peer, which is hole
+    punching from both ends, and is relayed until then (§2.6). Read on
+    2026-11-22
+    ([Aetf/kluster-ops#881](https://github.com/Aetf/kluster-ops/issues/881#issuecomment-7071914936)).
 
 ### 4.2 Declared-objects census
 

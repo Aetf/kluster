@@ -195,11 +195,10 @@ runbook, from the gateway window to a verified, empty cluster.
     the stack builds it through the Image Factory and imports it itself
     (declarative/physical.md §1). ZeroTier Central config is
     Pulumi-managed (architecture.md §5.3).
-    **The overlay's home-LAN routes are net-new** (today the overlay and
-    the LANs are not connected at all): the UDM container deploys via an
-    operator-local run over the LAN, routes are added, and only after
-    the flow-rules verification does CI's per-run overlay join become
-    load-bearing (physical/gateway.md §2.5).
+    **The overlay's home-LAN routes were net-new at the ceremony**: the
+    UDM container deploys via an operator-local run over the LAN, routes
+    are added, and only after the flow-rules verification does CI's
+    per-run overlay join become load-bearing (physical/gateway.md §2.5).
 2.  `physical` up: 3× A1 (A1 capacity confirmed at creation), worker VM
     (its disk created at its ~60 GB bootstrap size,
     physical/homelab-host.md §1), NLB, the UDM's BGP configuration and container services, B2. The gateway's share of this is
@@ -633,9 +632,6 @@ waves leave it:
     cluster (nodes.md §4.2); JuiceFS redis/mount residue gone with k3s;
     `lan.ucw.phd` entries emptied (dns.md §4).
 3.  Trackers: gw-config repo retired (provider owns the device);
-    adguardhome-sync unit removed, here at the latest: it may stop at
-    any time and must stop before the `dns` stack first writes bob
-    (operator ruling, sources-of-truth.md note N2);
     qbittorrent/quadlet units removed
     from yadm/aconfmgr; the legacy state backend's Postgres stops last,
     once kluster-code needs no further `pulumi` operations. The legacy

@@ -354,6 +354,12 @@ attacks.** The controls:
 -   every exposed port either authenticates before it acts, or is a public
     service by design that runs contained (cluster/architecture.md §4.1);
 -   every exposed port runs a maintained release;
+-   at the gateway's WAN side, a connection the internet opens toward the
+    gateway itself or toward an overlay address is dropped and only
+    replies are admitted, by the controller's predefined chains, which
+    no declaration of this repository writes
+    ([physical/gateway.md](physical/gateway.md) §4.1, which names the
+    reading behind each direction and the ones not read);
 -   a fork's run receives no secret (framework/ci.md §3);
 -   text an outsider writes on the forge is data to every session
     (framework/dispatch.md §1).
@@ -481,9 +487,11 @@ below. `physical`'s configuration is under a passphrase of its own,
 which only `physical-plan` and `physical` receive. Those Environments
 take protected branches only, so a job of a pull request or of a branch
 push that names either is refused before any step of it runs: GitHub
-documents this, and the move's first contact, not yet run, observes it
-(Aetf/kluster-ops#487; [framework/github.md](framework/github.md) §1,
-framework/ci.md §3).
+documents this, and the move's first contact observed it on 2026-11-21,
+when run 44945065946, a branch push whose one job names
+`physical-plan`, failed with no step run
+([Aetf/kluster-ops#487](https://github.com/Aetf/kluster-ops/issues/487#issuecomment-7068601533);
+[framework/github.md](framework/github.md) §1, framework/ci.md §3).
 `Pulumi.physical.yaml` is under that passphrase (Aetf/kluster-ops#487).
 The move comes before `physical`'s first `up`, because the backend keeps
 every checkpoint written before it in rows those runs read. Git history

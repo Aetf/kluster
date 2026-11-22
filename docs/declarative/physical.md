@@ -8,8 +8,8 @@ the *how* for the `physical` stack of [README.md](README.md) §1.
 
 > **Status**: designed 2026-08-22; provider choices verified against
 > current releases (pulumiverse-talos 0.8.1 wrapping the official
-> siderolabs terraform-provider 0.11). **Declared in full, applied
-> nowhere.** `src/kluster/stacks/physical.py` calls every area this
+> siderolabs terraform-provider 0.11). **Declared in full, and
+> applied.** `src/kluster/stacks/physical.py` calls every area this
 > document describes, and each one is written: the OCI network, image,
 > load balancer and nodes (§1) and the Talos day-1 chain (§2) in the
 > `cloud` and `talos` areas of `src/kluster/components/`, the libvirt
@@ -17,8 +17,21 @@ the *how* for the `physical` stack of [README.md](README.md) §1.
 > and firewall (§4) in `components/gateway/` with the overlay
 > configuration beside it in `components/overlay/`, and the B2
 > bucket (§5) in `components/backup/` — so a run stops at no named gap.
-> Nothing described here has been provisioned: the stack has never been
-> applied, so §6's bootstrap gate is entirely ahead of it.
+> Every area is provisioned. The bring-up applied the stack by hand
+> (`kluster-ops#75`): the gateway and the controller census in the
+> cutover window's targeted run on 2026-11-05
+> ([physical/gateway-cutover.md](../physical/gateway-cutover.md) §4);
+> the OCI fleet, the Talos chain, the worker and the B2 bucket in step
+> 5's first form on 2026-11-14, whose last `up` reported
+> `212 unchanged` and wrote every output; and the overlay in the
+> ceremony that followed (physical/gateway.md §2.5). Since 2026-11-15
+> the deploy chain applies it on every merge, behind the `physical`
+> Environment's reviewer ([framework/ci.md](../framework/ci.md) §3),
+> and an operator's run from a workstation applies it outside the
+> chain. §6's items that need no network
+> plugin passed at bring-up (physical/gateway-cutover.md §8.1); the
+> ones that exercise Cilium are read at the verification gate after
+> `k8s-base` ([cluster/migration.md](../cluster/migration.md) §1).
 
 ## 0. Scope and outputs
 
