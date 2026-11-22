@@ -82,6 +82,10 @@ ships with it rather than after it.
   glue over an untyped or partially typed library turns off, for that
   file alone, the checks the library defeats — a file-level
   `# pyright: report…=false` comment, and the file names the library.
+  A Python file under a directory whose name starts with a dot is never
+  type-checked: `basedpyright` skips such a directory even where
+  `include` or the command line names it, and still reports 0 errors.
+  So Python lives outside dot directories.
   The generated SDKs under `sdks/` — the bridged providers and the CRD
   types — are excluded; they are not ours to annotate.
 * **The source tree is layered, and the layering is a checked contract.**
@@ -250,7 +254,7 @@ ships with it rather than after it.
   [dispatch.md](docs/framework/dispatch.md) §1.1.
 * Shared files — `AGENTS.md`, `docs/framework/ci.md`, `pyproject.toml` —
   are **serialized**: at most one open pull request may touch each of
-  them, whoever opened it.
+  them, whoever opened it, a bot aside.
 * **A change to a domain a legacy tracker still owns lands in that
   tracker first**, and here second in the same sitting, never applied
   until the domain's row flips. Which tracker owns each domain, and what

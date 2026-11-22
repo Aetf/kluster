@@ -84,6 +84,7 @@ perf = 'kluster.scripts.perf.cli:main'
 checks-scope = 'kluster.scripts.checks_scope:main'
 drill = 'kluster.scripts.drill.cli:main'
 zt-reading = 'kluster.scripts.zt_reading:main'
+dispatch = 'kluster.scripts.dispatch.cli:main'
 
 [dependency-groups]
 dev = [

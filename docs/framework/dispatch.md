@@ -17,13 +17,14 @@ its own pull request**. The dispatcher
 commissions the review (§3) and merges; it does not also implement the
 work it dispatched (§1.3).
 
-**Path ownership is what makes it parallel.** Two agents may not be
-able to edit the same file, so each brief names the paths its work
-owns, and an agent that finds it needs a path outside that list stops
-and reports rather than widening its own scope; the one exception is
-§1.1 item 5. A few files every brief would otherwise want are
-**serialized** — AGENTS.md names the set, and the constraint is
-repository-wide (§2).
+**Path ownership bounds what an agent edits.** Each brief names the
+paths its work owns, and an agent that finds it needs a path outside
+that list stops and reports rather than widening its own scope; the one
+exception is §1.1 item 5. Two briefs may own overlapping paths, and the
+conflict between them, if any, is settled at merge by the rebase that
+goes back to the builder (§2 rule 4). A few files every brief would
+otherwise want are **serialized** — AGENTS.md names the set, and the
+constraint is repository-wide (§2).
 
 An agent that finishes early does not pick up more work; it reports.
 Scope creep is the failure mode this structure exists to prevent.
@@ -70,14 +71,41 @@ them:
     nothing able to carry one — owned paths permit a **new** file, and
     the pull request discloses it; they never permit editing a path the
     brief did not name. The asymmetry is the reason: a new file cannot
-    collide with another agent's edits, so it costs the
-    parallel-dispatch property nothing, while an edit to an unnamed
-    file can, which is why that half stays absolute.
+    collide with another agent's edits, while an edit to an unnamed
+    file is an overlap no claim saw or recorded (§2 rule 2), which is
+    why that half stays absolute.
 6.  **A pull request whose description is written for a stranger** —
     this repository is public. What changed and why, what a reviewer
     should check, what was deliberately left out. No internal
     shorthand, no credentials, no host names that are not already in
     the repository.
+
+**A brief opens with front matter**, a YAML block between two `---`
+lines, which `dispatch` reads (§2.1). The prose below it is the brief
+the agent reads.
+
+```yaml
+---
+issue: <N>              # the ledger issue, Aetf/kluster-ops#<N>
+role: builder           # builder | design | review
+done: The blog's component and tests merge, and the gate passes.
+owned: [src/kluster/components/apps/blog/, tests/test_apps_blog.py, docs/operations.md#§3.5]
+closes: true            # false: the pull request says Refs, and the issue gets a comment on what remains
+rfc: rfc-008 slice 12   # an RFC slice only: the issue's title leads with it
+workspace: b-s12
+branch: b-s12-blog
+pr: null                # a review names the pull request it reads
+---
+```
+
+`issue`, `done` and `owned` are items 1 and 2. An owned path is a
+file, which owns everything under it too should it be a directory; a
+directory, written with its trailing `/`; a pattern, in which `*` and
+`?` match within one path segment and `**` across segments; or a file
+narrowed to one of its sections after a `#`. A builder's brief
+carries `closes` and owns at least one path. A review's carries `pr`,
+and it may own nothing, as may a design written on its issue. A field
+outside this block refuses the brief.
 
 ### 1.2 A workspace dies with the dispatch
 
@@ -489,10 +517,10 @@ queue**, one item at a time, instead of from a brief pasted into it:
 -   **The queue is the ops issues labeled `cloud/ready`.** An issue's
     brief is its latest comment that starts with `## Brief`, a brief in
     §1.1's sense. Only a dispatcher writes that comment and applies the
-    label, and applying it is how the dispatcher selects the work, so
-    the session selects nothing (§1). The label goes on only where §2
-    would let that dispatcher claim the issue, and claims it until the
-    session takes it (§2 rule 1).
+    label, both with `dispatch queue` (§2.1), and applying it is how the
+    dispatcher selects the work, so the session selects nothing (§1).
+    The label goes on only where §2 would let that dispatcher claim the
+    issue, and claims it until the session takes it (§2 rule 1).
 -   **Taking an item** means taking the oldest open `cloud/ready` issue
     not labeled `in-flight` and adding `in-flight`: the claim, placed in
     the name of the dispatcher that queued the issue, which reviews and
@@ -597,17 +625,35 @@ milestone). The rules that keep them out of each other's way:
     takes it off. Because those labels are the claim and nothing else is, a
     `decision/*` label beside it does not release it (§4.1) — an issue
     parked on a ruling with no claim is one a second dispatcher would
-    pick up.
-2.  **Claims must not overlap in paths.** Before claiming, a
-    dispatcher lists every other claimed issue and open pull
-    request; if the owned paths would intersect, it does not claim.
-    While a structural campaign runs, the parallel dispatcher prefers
-    work that cannot collide: other repositories, `scripts/`-only,
-    tests-only, and docs the campaign's briefs do not name.
+    pick up. `dispatch claim` applies `in-flight` and posts the
+    dispatch record in one step (§2.1), and refuses an issue whose
+    claim label stands under another dispatcher's record or under none.
+2.  **Claims may overlap in paths, and an overlap is recorded.**
+    Owned paths bound what each agent edits, not what another claim may
+    own, so two concurrent claims whose paths intersect both go ahead,
+    and the conflict, if any, is settled at merge: the rebase that
+    conflicts goes back to the builder (rule 4). `dispatch claim`
+    compares each owned path against every path a live record owns and
+    every file an open pull request changes, the issue's own records
+    and pull requests aside, and prints each overlap and writes it into
+    the record. Two patterns it cannot tell apart count as
+    intersecting; two sections of one file do not. A bot's pull
+    request, Renovate's, holds no paths. Only the serialized files
+    refuse an overlap (rule 3). While a structural campaign runs, the
+    parallel dispatcher prefers work that cannot collide: other
+    repositories, `scripts/`-only, tests-only, and docs the campaign's
+    briefs do not name.
 3.  **Serialized files serialize across sessions**: the set AGENTS.md
     names is constrained repository-wide rather than per session — at
     most one open pull request may touch each of them, whoever opened
-    it.
+    it, a bot aside: a bot's bump is settled at merge like any overlap.
+    `dispatch claim` reads the set from AGENTS.md and refuses a claim on
+    one of them, whichever section, while another live record owns it,
+    an open pull request that is not a bot's touches it, or a claimed
+    issue's paths cannot be read, for a record that does not read or a
+    claim label with none; the refusal names each such issue. Where
+    AGENTS.md names no such file in a form it reads, every claim is
+    refused.
 4.  **Each dispatcher merges only its own pull requests** and absorbs
     its own rebases when another's merge advances `main` — `jj rebase
     -d main`, which rewrites commit hashes but carries every change ID
@@ -666,6 +712,87 @@ milestone). The rules that keep them out of each other's way:
     back on disk and no other effect. Reach for `jj op restore` only
     when no one else is running: it rolls the whole repository back,
     `main` and every other workspace's commits included.
+
+### 2.1 The `dispatch` script
+
+Each of the ledger's steps is a command of the console script `dispatch`
+(`src/kluster/scripts/dispatch/`), run from the dispatcher's checkout
+under `mise x uv -- uv run`, which puts the pinned `gh` and `jj` on
+`PATH`. Each refuses before it changes anything on the forge, naming
+every precondition that failed, and every `gh` call it makes names its
+repository. Each posts its record before it changes a label, so a step
+that fails between the two leaves a record no reader reads, and the
+retry starts afresh:
+
+-   **`dispatch file`** files a task, and refuses one that lacks an
+    `area/*` label, a `kind/*` label or an open milestone (§4).
+-   **`dispatch claim <issue> <brief>`** is the claim of rule 1. It
+    refuses unless the issue is open, carries its labels and milestone,
+    and is the one the front matter names; no other dispatcher holds
+    it; an RFC slice's issue title leads with the slice
+    ([rfc.md](rfc.md) §3.4); the milestone gate (§4) and the design gate
+    (§3.1) pass; and rule 3 holds. It records rule 2's overlaps and
+    prints them. A review's brief is claimed
+    under the build claim the same session holds, and its claim checks
+    only the issue and that claim. `--operator-word '<quote>'` passes
+    the milestone gate, and a blank word is refused wherever one is
+    taken, since it would pass and leave no quote. `--adopt` takes over an `in-flight` that stands
+    with no record, as every claim made before records existed does, on
+    the operator's word, which it requires and the record quotes as
+    `abandon`'s does: it writes the record under the same
+    preconditions, and refuses an issue without `in-flight`, one queued
+    with `cloud/ready` included, or one that already carries a
+    record.
+-   **`dispatch queue <issue> <brief>`** is the claim for the cloud
+    queue (§1.4), under the same preconditions: the brief as a
+    `## Brief` comment, the record, then `cloud/ready`, taking off the
+    `in-flight` of a claim the same session held.
+-   **`dispatch abandon <issue>`** ends a claim: an `end` record, then
+    the claim labels off. A claim another session holds, or one with no
+    record, ends only on the operator's word, which the `end` record
+    quotes.
+-   **`dispatch audit`** lists the ledger's anomalies and changes
+    nothing. Each kind is a member of `audit.Anomaly`, among them an
+    open issue lacking a label family or a milestone (an `alert`
+    aside), a claim label with no record, a claimed build with no open
+    pull request naming its issue, and a `jj` workspace no live record
+    names.
+
+`claim`, `queue` and `abandon` name the dispatcher by
+`CLAUDE_CODE_SESSION_ID`, which a Claude Code session's commands
+inherit, and refuse without it. The id names a dispatcher session, not
+a role: every agent the session spawns carries the same one, so the id
+does not keep a builder from claiming, and what does is the hooks of
+the builder's agent definition (Aetf/kluster-ops#917, slice D2). A
+forked session has an id of its own, and the claims of the session it
+forked from end and are claimed again on the operator's word.
+
+**The dispatch record is the claim's evidence**: a comment on the
+ledger issue whose first line is `**Dispatch record**`, then a line for
+a reader, then a fenced `json` block holding the event, the dispatcher's
+session, the front matter, the brief's sha256, and the operator's word
+where one was given, with the milestones it went past. A claim made
+while the issue carries no claim label starts a run, since a claim
+that ended with its label taken off by hand left no `end` record. An
+issue's **live claim** is its records after its last `end` or start,
+the start included, read while it carries a claim label; the latest is
+the live record, and each builder or design record among them still
+owns its paths.
+
+**Only a record the account `gh` runs as wrote is read**: anyone else's
+comment is data, whatever its first line says. Within that account
+every session writes as the operator (§1), so who wrote a comment
+proves nothing more, and the record states its session itself. An
+edited record is read as it now stands. A record is read with what
+reading needs, the event, the session, the issue, the role and the
+owned paths, and the rest of its front matter is carried unread, so a
+field a later brief adds leaves every earlier record readable. A
+record that does not end in its block, is newer than the reader, or
+names another issue than the one it sits on does not read: `dispatch
+audit` names its issue, and it refuses claims of that issue and every
+claim of a serialized file (§2 rule 3), but no other. The record
+sits in the private repository because a brief may name what a public
+pull request must not.
 
 ## 3. Review
 
@@ -729,6 +856,15 @@ it moves through and the labels that carry them, the operator's gate,
 amendment after acceptance, and numbering — and this document says
 nothing about it that rfc.md does not settle.
 
+**A milestone names its design issue** in its description, on a line
+of its own: `Design: Aetf/kluster-ops#N`. `dispatch claim` refuses a
+builder's claim of a phase (§4) while that issue is open without
+`decision/lgtm`, or while the description names no single design
+issue (§2.1). **Its review checkpoint is the issue on the milestone
+that carries the `checkpoint` label**, and the operator's acceptance of
+the milestone is recorded on that issue as `decision/lgtm` (§4.1)
+before it closes.
+
 ### 3.2 A reviewer does not hold the branch
 
 A review is read-only: the reviewer does not push, does not merge,
@@ -761,10 +897,31 @@ merge can report once:
     `kind/*` label, and a **milestone** (the roadmap's phases M0–M4
     plus `Parallel`; the index is the roadmap issue). Issues that gate
     the next milestone carry `blocker`; issues needing an operator
-    ruling carry a `decision/*` label (§4.1).
+    ruling carry a `decision/*` label (§4.1). `dispatch file` is how a
+    task is filed, and it refuses one that lacks any of the three
+    (§2.1).
+-   **A milestone is formally closed, including its review checkpoint
+    and the operator's acceptance, before the next milestone's work
+    goes ahead.** An earlier milestone with no open `blocker` is not
+    enough: it is closed on the forge, its review checkpoint is closed,
+    and the operator's acceptance is recorded on the checkpoint (§3.1).
+    The gate orders the phases, each a milestone whose title opens
+    with `M`, its number and a space. The milestone whose title opens
+    with `Parallel` is not one, and its work goes ahead regardless. Any
+    other title, such as `M5a` or `m3`, cannot be ordered, and every
+    claim of phase work refuses until it is retitled. `dispatch claim`
+    refuses a builder's or a design's claim of a phase while an earlier
+    phase is not formally closed, except on the operator's word given
+    with `--operator-word`:
+    the record quotes it beside the phases it went past, and
+    `dispatch audit` lists every live claim made that way. The forge
+    cannot tell the operator's word from a session's, so the word is
+    made loud and kept beside the work it licensed rather than
+    verified.
 -   **Dispatch is visible**: `in-flight` marks a dispatched issue — it
     is the dispatcher's claim as well (§2) — and comes off when the
-    pull request merges or the dispatch is abandoned. **`in-flight` and
+    pull request merges or the dispatch is abandoned
+    (`dispatch abandon`, §2.1). **`in-flight` and
     `decision/*` answer different questions** — whether somebody is
     dispatched, and who holds the ball — so an issue may carry both,
     and an issue waiting on the operator is still claimed: neither the
