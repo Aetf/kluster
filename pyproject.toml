@@ -86,6 +86,9 @@ drill = 'kluster.scripts.drill.cli:main'
 zt-reading = 'kluster.scripts.zt_reading:main'
 dispatch = 'kluster.scripts.dispatch.cli:main'
 dispatch-hook = 'kluster.scripts.dispatch.hooks:main'
+interpreter = 'kluster.scripts.interpreter:main'
+appliance-image = 'kluster.scripts.appliance_image:main'
+ltex-config = 'kluster.scripts.ltex_config:main'
 
 [dependency-groups]
 dev = [

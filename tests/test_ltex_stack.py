@@ -28,16 +28,17 @@ import subprocess
 import tomllib
 from pathlib import Path
 
+import ltex_checker
 import pinned_tools
 import process_sessions
 
 ROOT = Path(__file__).parent.parent
 REPRODUCER = Path(__file__).parent / 'data' / 'ltex-lone-dollar.txt'
 
-#: How long either case lets the checker run: a stop-loss well inside the
-#: 60 s case bound. On a workstation the overflow is thrown about 4 s in,
-#: and the check under the larger stack finishes in about 7 s.
-STOP_LOSS = 40
+#: How long either case lets the checker run (`ltex_checker`). On a
+#: workstation the overflow is thrown about 4 s in, and the check under the
+#: larger stack finishes in about 7 s.
+STOP_LOSS = ltex_checker.STOP_LOSS
 
 #: How often the first case looks at the server's exception log, as the
 #: bound of each wait on the checker: the overflow has no other outward sign.

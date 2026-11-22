@@ -126,10 +126,10 @@ ships with it rather than after it.
   by `mise install` and reached the same way on a workstation and in
   CI. It reads neither word list on its own, so a
   run is two steps — build a client configuration carrying the contents
-  of both lists, then check one file against it. From the workspace
-  root:
+  of both lists, which the `ltex-config` script writes, then check one
+  file against it. From the workspace root:
 
-      mkdir -p .claude && python3 -c 'import json,pathlib as P;w=lambda n:P.Path(f".vscode/ltex.{n}.en-US.txt").read_text().split();P.Path(".claude/ltex.json").write_text(json.dumps({"dictionary":{"en-US":w("dictionary")},"disabledRules":{"en-US":w("disabledRules")}}))'
+      mkdir -p .claude && mise x uv -- uv run ltex-config .claude/ltex.json
       mise x -- ltex-cli-plus --client-configuration=.claude/ltex.json <file.md>
 
   The `checks` workflow runs exactly that, one invocation per markdown
@@ -137,9 +137,11 @@ ships with it rather than after it.
   findings too. Which files is decided in `checks.yml`'s prose step.
   Ordinarily it is the markdown the change touched. It is **every**
   markdown file in the tree when the run has no base commit to diff
-  against, and when the change touches the checker or what it reads —
-  the `machinery` list in that step, which names `mise.toml` (where the
-  checker is pinned), both word lists and `checks.yml` itself
+  against, and when the change touches the prose gate's machinery: a
+  file, other than the prose it judges, that decides which checker runs
+  or what it is configured with — today its pin and lock, the word
+  lists, the script that writes its configuration, and the workflow that
+  runs it. The `machinery` list in that step is the census of those files
   ([docs/framework/ci.md](docs/framework/ci.md) §3 says why). Outside
   those cases a file the change did not touch is not checked, so a
   finding an untouched file already carries on `main` surfaces on the

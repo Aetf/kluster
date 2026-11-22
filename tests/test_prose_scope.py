@@ -5,32 +5,40 @@ every markdown file in the tree when there is no base to diff against or the
 change touches the checker's machinery (framework/ci.md §3). Either way, what
 is under `sdks/` is not this repository's prose: `pulumi install` writes it
 from the generator's own text, as it writes the code basedpyright and ruff
-exclude there. Held by running the step's `run` text, as `test_prose_step`
-does for the retry, in a scratch repository holding one authored and one generated document,
-with a stand-in for the checker that logs which files it was handed.
+exclude there. The machinery takes in the script that writes the checker's
+configuration, `kluster.scripts.ltex_config`, wherever the module lives: what
+it writes is what the checker reads. Held by running the step's `run` text,
+as `test_prose_step` does for the retry, in a scratch repository holding one
+authored and one generated document, with a stand-in for the checker that
+logs which files it was handed.
 """
 
 from __future__ import annotations
 
 import os
-import sys
 import tomllib
 from pathlib import Path, PurePosixPath
 from typing import cast
 
+import ltex_config_stand_in
 import process_sessions
 import pytest
 from workflow_files import GITHUB, mapping, read_workflow, workflow_jobs
 
+from kluster.scripts import ltex_config
+
 ROOT = Path(__file__).parent.parent
 
-#: A stand-in for `mise x -- ltex-cli-plus … <file>` that logs the file, its
-#: last argument, and passes it.
-STAND_IN = f"""#!{sys.executable}
-import os, sys
+#: A stand-in for `mise`. Handed `ltex-config`, it runs the script
+#: (`ltex_config_stand_in`). Otherwise it is `mise x -- ltex-cli-plus …
+#: <file>`, and logs the file, its last argument, and passes it.
+STAND_IN = (
+    ltex_config_stand_in.HEAD
+    + """import os
 with open(os.environ['STAND_IN_LOG'], 'a') as log:
     log.write(sys.argv[-1] + '\\n')
 """
+)
 
 
 def prose_run() -> str:
@@ -52,6 +60,8 @@ def prose_run() -> str:
 #: present in the commit the step reads.
 AUTHORED = 'docs/notes.md'
 GENERATED = 'sdks/probe/pulumi_probe/README.md'
+#: The script that writes the checker's configuration, as a path in the checkout.
+CONFIGURATION_SCRIPT = str(PurePosixPath(Path(ltex_config.__file__).resolve().relative_to(ROOT.resolve())))
 
 
 #: Each git call's bound, and the step's. Summed over a case they stay below
@@ -96,8 +106,8 @@ def _commit(repo: Path, files: list[str], message: str) -> None:
     _ = _git(repo, '-c', 'user.name=probe', '-c', 'user.email=probe@example.invalid', 'commit', '-q', '-m', message)
 
 
-def checked(tmp_path: Path, *, whole_tree: bool) -> list[str]:
-    """The files the step hands the checker, over the whole tree or over the last commit's change."""
+def checked(tmp_path: Path, *, whole_tree: bool, change: tuple[str, ...] = (AUTHORED, GENERATED)) -> list[str]:
+    """The files the step hands the checker, over the whole tree or over the last commit's change, which adds `change`."""
     repo = tmp_path / 'repo'
     (repo / '.vscode').mkdir(parents=True)
     for name in ('dictionary', 'disabledRules'):
@@ -107,7 +117,7 @@ def checked(tmp_path: Path, *, whole_tree: bool) -> list[str]:
     _ = _git(repo, 'init', '-q')
     _commit(repo, ['README.md'], 'base')
     base = _git(repo, 'rev-parse', 'HEAD').strip()
-    _commit(repo, [AUTHORED, GENERATED], 'change')
+    _commit(repo, list(change), 'change')
 
     bin_dir = tmp_path / 'bin'
     bin_dir.mkdir()
@@ -152,3 +162,9 @@ def test_the_tree_the_prose_step_skips_is_one_basedpyright_excludes(tmp_path: Pa
     # directory.
     assert GENERATED not in checked(tmp_path, whole_tree=True)
     assert PurePosixPath(GENERATED).parts[0] in excluded
+
+
+def test_a_change_to_the_configuration_script_checks_every_markdown_file(tmp_path: Path) -> None:
+    files = checked(tmp_path, whole_tree=False, change=(CONFIGURATION_SCRIPT,))
+
+    assert 'README.md' in files

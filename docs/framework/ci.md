@@ -412,11 +412,17 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     push's against the commit `main` moved from — one file per
     invocation under a 120-second bound. An event checks **every**
     markdown file in the tree instead when it has no base commit to
-    diff against, or when it changes the checker or what it reads — the
-    `mise.toml` pin, either `.vscode/` word list, `checks.yml` itself —
-    so that a bumped checker or a dropped dictionary
-    word is proven against the prose it judges rather than landing for
-    the next change to an affected file to fail on. Neither way picks
+    diff against, or when it changes the prose gate's machinery: a file,
+    other than the prose it judges, that decides which checker runs or
+    what it is configured with — today its pin and lock, the word lists,
+    the script that writes its configuration, and the workflow that runs
+    it. The `machinery` list in the prose step is the census of those
+    files, and `tests/test_prose_scope.py` fails when that list stops
+    naming the module that writes the checker's configuration, wherever
+    the module lives. The whole-tree pass is there so that
+    a bumped checker or a dropped dictionary word is proven against the
+    prose it judges rather than landing for the next change to an
+    affected file to fail on. Neither way picks
     up the generated SDKs under `sdks/`: their markdown is the
     generator's text, written back as it was on every regeneration, and
     the step leaves the directory out the way `basedpyright` and `ruff` do,
