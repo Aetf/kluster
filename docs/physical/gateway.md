@@ -299,36 +299,34 @@ declarative/physical.md §4.
     port is the appliance's rather than this program's, and the
     declaration follows it. Both instances bind their interface there,
     the window carries each instance's live configuration into its
-    machine directory whole, and the initial state this program declares
-    is installed only into a state directory that has never held one
-    (§1.1) — so an instance that already has a configuration never reads
-    the declaration, and declaring another port would describe a
-    listener that does not exist. Declaring the port the appliance
-    answers on is also what keeps the window free of a write into a
-    state directory this program does not own. Every declaration naming
-    that interface takes the same convention
+    machine directory whole, and the listen address the `dns` stack
+    declares is applied only by the first-run setup of an instance that
+    has no configuration (declarative/dns.md §3) — so an instance that
+    already has one never reads the declaration, and declaring another
+    port would describe a listener that does not exist. Declaring the
+    port the appliance answers on is also what keeps the window free of
+    a write into a state directory this program does not own. Every
+    declaration naming that interface takes the same convention
     (`conventions.gateway.ADGUARD_API_PORT`) — each instance's vhost,
-    the initial state, and the flow rule that admits the `dns` stack's
-    runner (§2.3) — and a test holds the four to one value.
+    the flow rule that admits the `dns` stack's runner (§2.3), and the
+    endpoint and the listen address that stack declares — and tests
+    hold them to one value.
 
-    **A fresh instance asks the gateway about the site's own names.**
-    The initial state forwards `home.arpa` and the reverse zones of the
-    private ranges the site is numbered from to the device's own
-    resolver, at the container VLAN's gateway address, and lets the
-    instance send a private address's pointer query there too; every
-    other name goes to two public resolvers
-    (`container.ADGUARD_GATEWAY_ZONES`, `ADGUARD_UPSTREAMS`). No public
-    resolver answers any of those names, so an instance without the
-    forward answers no device's name and no site address's pointer. The
-    running pair forwards them the same way, and the initial state is
-    read only by an instance that has no configuration of its own — a
-    new one, or one rebuilt after the device was lost (§3). The rest of
-    a running instance's settings is carried by the window, and the
-    `dns` stack declares all of it (declarative/dns.md §3): an instance
-    rebuilt from the initial state comes up without its filter lists
-    and clients, and on the initial state's public resolvers rather
-    than the ones the pair forwards to, until it is reset and that
-    stack's run sets it up (§3).
+    **A resolver machine is given no configuration.** An instance
+    whose state directory holds no `AdGuardHome.yaml` starts in first
+    run, and first run is what the `dns` stack's setup configures: it
+    makes the account and binds the listen addresses through the
+    instance's own wizard, on every address of both families, and then
+    writes the rest of the configuration through the API, the zones
+    forwarded to the device's own resolver included
+    (declarative/dns.md §3). So a resolver machine has no initial state
+    (§1.1): a configuration file placed in its empty state directory
+    would be one with no account in it, which the setup refuses until
+    the instance is reset. A new instance, or one rebuilt after the
+    device was lost, answers no DNS until that stack's run sets it up
+    (§3). A running instance keeps its configuration across a digest
+    bump, because its state directory is bind-mounted from the device
+    and outlives the tree.
 
     **Which resolver a container asks is a fact about this site, not
     about the image**, so where it differs from the image's own default
@@ -3128,9 +3126,6 @@ down, or the gateway, fail the job at the join.
     one, as it has to for the `physical` re-run before it; and a
     resolver's state directory has to be writable by its machine, or
     the instance exits before its wizard starts (`kluster-ops#515`).
-    The initial state `physical` installs (§1.1) names no account, so
-    an instance started from it is refused by its setup, and the reset
-    below is what lets the run set it up.
 -   **A resolver's login rotated, or its account lost** — trigger: a
     new `adguardPassword`, or a setup refusing the stack's login. No
     endpoint changes an account, so each resolver is reset in turn, and
@@ -3150,10 +3145,8 @@ down, or the gateway, fail the job at the join.
         (declarative/dns.md §3): stop its machine with
         `systemctl stop systemd-nspawn@<name>.service`, which its
         restart policy does not act on; move
-        `/data/custom/machines/<name>/state/AdGuardHome.yaml` aside —
-        the `data/` beside it keeps the state directory from reading as
-        empty, so no initial state is copied back in (§1.1) — and start
-        the machine again.
+        `/data/custom/machines/<name>/state/AdGuardHome.yaml` aside, and
+        start the machine again, which then comes up in first run.
     3.  Run `mise x uv -- uv run ci-stack dns up --refresh --continue-on-error`.
         Its refresh drops the reset resolver's resources, and its update
         sets that resolver up and writes its whole configuration. Where

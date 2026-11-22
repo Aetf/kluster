@@ -69,10 +69,10 @@ CUSTOM_ROOT = f'{DATA_ROOT}/custom'
 
 #: The port a resolver's interface and API answer on. Every declaration naming
 #: that interface meets here: the caddy vhost that proxies each instance's
-#: interface, the three legacy names the census below transcribes, the initial
-#: state that tells an instance where to listen, the first-run setup the `dns`
-#: stack configures an instance with, the overlay flow rule that admits a
-#: continuous-integration member to exactly that port, and `resolver_api_url`,
+#: interface, the three legacy names the census below transcribes, the
+#: first-run setup the `dns` stack configures an instance with, the overlay
+#: flow rule that admits a continuous-integration member to exactly that port,
+#: and `resolver_api_url`,
 #: which is the address the `dns` stack configures each instance at through
 #: that rule. It is a convention rather than a constant each of them keeps,
 #: because they are free to disagree and the failure is a resolver that answers
@@ -80,11 +80,11 @@ CUSTOM_ROOT = f'{DATA_ROOT}/custom'
 #:
 #: **The value is the appliance's, and the declaration follows it.** Both
 #: instances bind their interface to 80. The cutover carries each instance's
-#: live configuration into its machine directory whole, and the initial state
-#: declared here is installed only into a state directory that has never held
-#: one — so an instance that already has a configuration never reads it, and a
-#: value here other than the one the instances bind describes a listener that
-#: does not exist.
+#: live configuration into its machine directory whole, and the listen address
+#: the `dns` stack's setup declares is applied only in first run, to an instance
+#: that has no configuration — so an instance that already has one never reads
+#: it, and a value here other than the one the instances bind describes a
+#: listener that does not exist.
 #:
 #: A resolver machine serves two ports, this one and DNS on 53, and nothing
 #: else inside it may claim 80.

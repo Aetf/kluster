@@ -28,7 +28,6 @@ from kluster.components.dns.base import overlay_label
 from kluster.components.dns.resolver import ResolverConfiguration
 from kluster.components.dns.rewrites import overlay_rewrites, user_rules
 from kluster.components.dns.zone import ManagedZone
-from kluster.components.gateway.container import ADGUARD_GATEWAY_ZONES
 from kluster.providers import adguard, configured
 
 LB_ADDRESS = '203.0.113.10'
@@ -540,18 +539,30 @@ def test_every_cname_target_is_under_a_zone_forwarded_to_the_gateway(stack: Appl
             assert any(target.endswith(f'.{zone}') for zone in forwarded), (target, forwarded)
 
 
-def test_the_forwarded_zones_are_the_ones_physical_renders_into_the_initial_state(stack: AppliedPhysical) -> None:
-    """Until the initial state shrinks, both programs declare the zones the gateway's resolver answers.
+def test_each_instance_asks_the_gateway_about_every_site_networks_pointers(stack: AppliedPhysical) -> None:
+    """No public resolver answers the pointer of a site address; the gateway numbers the networks and answers them.
 
-    `physical` renders them into the template from the same constant, so the
-    two cannot name different zones.
+    So some zone the instance forwards to the gateway holds each network's own
+    pointer. A private address's pointer also takes a path of its own inside
+    the instance, which asks only the resolvers named for private addresses and
+    only while it is allowed to, so the gateway is named there and the
+    permission given. Everything else goes to more than one public resolver,
+    so the LAN's name service does not stop with any one of them.
     """
     gateway = str(conventions.CONTAINER_VLAN.require_gateway())
-    upstreams = resource(stack, conventions.gateway.ADGUARD_ALICE, 'dns-server')['dns']['upstream_dns']
-
-    assert [line for line in upstreams if FORWARDED.fullmatch(line)] == [
-        f'[/{zone}/]{gateway}' for zone in ADGUARD_GATEWAY_ZONES
-    ]
+    for resolver in conventions.gateway.RESOLVERS:
+        dns = resource(stack, resolver, 'dns-server')['dns']
+        upstreams = dns['upstream_dns']
+        forwarded = {match['zone']: match['upstream'] for line in upstreams if (match := FORWARDED.fullmatch(line))}
+        for network in conventions.SITE_NETWORKS:
+            pointer = network.v4.network_address.reverse_pointer
+            zones = [zone for zone in forwarded if pointer.endswith(f'.{zone}')]
+            assert zones, (resolver.name, network.name)
+            assert all(forwarded[zone] == gateway for zone in zones), (resolver.name, network.name)
+        assert dns['local_ptr_upstreams'] == [gateway], resolver.name
+        assert dns['use_private_ptr_resolvers'] is True, resolver.name
+        public = [line for line in upstreams if not line.startswith(('[', '#'))]
+        assert len(public) > 1, resolver.name
 
 
 def test_the_client_set_holds_every_client_a_blocklist_rule_names(stack: AppliedPhysical) -> None:

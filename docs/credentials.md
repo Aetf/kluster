@@ -1109,8 +1109,8 @@ computes the hash itself (declarative/dns.md §3). Both instances
 answer to the same login, because the stack configures alice and bob
 directly rather than through a synchronizer. The account then lives in
 each instance's own `AdGuardHome.yaml`, state the device keeps, and in
-no second store: the initial state `physical` installs names none
-(physical/gateway.md §1.1). So a rotation is the command and then a
+no second store: `physical` gives a resolver machine no configuration
+file (physical/gateway.md §1). So a rotation is the command and then a
 reset of each instance in turn, in the passes physical/gateway.md §3
 gives, with the new stack file kept off `main` until the last of them:
 no `up` may record the new login before then. A login recorded without
