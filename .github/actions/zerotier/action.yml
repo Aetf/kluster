@@ -4,9 +4,12 @@ description: >
   using an identity generated in Pulumi state rather than a Central API
   token — a leaked join credential is then one confined member, not the
   ability to enroll more (physical/gateway.md §2.6). Every run, passing or
-  failing, ends in a `zt-reading:` line: the path to the gateway and the
-  roots, the overlay MTU the runner received, and whether full-size packets
-  cross in each direction (`kluster.scripts.zt_reading`; framework/ci.md §2).
+  failing, ends in a `zt-reading:` line: the path to each member the run
+  dials and to the roots, the overlay MTU the runner received, and whether
+  full-size packets cross to each target in each direction
+  (`kluster.scripts.zt_reading`; framework/ci.md §2). The reading keeps what
+  it was taken from, and `ZT_READING_KEPT` names where for the rest of the
+  job, so that a job's last step takes it again when a later step fails.
 
 inputs:
   network_id:
@@ -279,22 +282,36 @@ runs:
 
     # The join's reading, on every run whether the join passed or not, so that
     # a run that reached the home and one that did not are read side by side:
-    # how the gateway's member and the roots are reached, the MTU the overlay
-    # interface received, and whether a segment filling it crosses in each
-    # direction. `kluster.scripts.zt_reading` says how to read the line it
-    # prints. The runner has no environment of this project's at this step,
-    # so the script runs by path from the checkout this action is part of,
-    # under the runner's own `python3` and its standard library. It is a
-    # diagnostic, so nothing it finds fails the join, and it runs inside the
-    # headroom the clock step leaves: READING_SECONDS is its own deadline, and
-    # the `timeout` a guard against a hang past it.
+    # how each member the run dials and the roots are reached, the MTU the
+    # overlay interface received, and whether a segment filling it crosses to
+    # each target in each direction. The members and the legs probed are the
+    # ones this join's own `wait_for`, `wait_for_any` and `routes` name.
+    # `kluster.scripts.zt_reading` says how to read the line it prints. The
+    # runner has no environment of this project's at this step, so the script
+    # runs by path from the checkout this action is part of, under the
+    # runner's own `python3` and its standard library. It is a diagnostic, so
+    # nothing it finds fails the join, and it runs inside the headroom the
+    # clock step leaves: READING_SECONDS is its own deadline, and the
+    # `timeout` a guard against a hang past it.
+    #
+    # The reading keeps what it was taken from in the job's temporary
+    # directory, and ZT_READING_KEPT names the file for every later step, so a
+    # job whose later step fails takes the same reading again as its last
+    # step (framework/ci.md §2). A job whose join never ran has no such
+    # variable, and takes none.
     - name: Take the join's reading
       if: always()
       shell: bash
       env:
         NETWORK_ID: ${{ inputs.network_id }}
+        TARGETS: ${{ inputs.wait_for }}
+        ANY_TARGETS: ${{ inputs.wait_for_any }}
+        ROUTES: ${{ inputs.routes }}
         ZT_READING: ${{ github.action_path }}/../../../src/kluster/scripts/zt_reading.py
         READING_SECONDS: '20'
       run: |
+        kept="$RUNNER_TEMP/zt-reading.json"
+        echo "ZT_READING_KEPT=$kept" >>"$GITHUB_ENV"
         timeout "$((READING_SECONDS + 5))" \
-          python3 -I -S "$ZT_READING" reading "$NETWORK_ID" "$READING_SECONDS" || true
+          python3 -I -S "$ZT_READING" reading "$NETWORK_ID" "$READING_SECONDS" \
+          --every "$TARGETS" --any "$ANY_TARGETS" --routes "$ROUTES" --keep "$kept" || true

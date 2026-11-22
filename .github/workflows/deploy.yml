@@ -41,7 +41,7 @@ jobs:
     # The sum of its steps' bounds, a `uses:` step twice, plus five minutes
     # for the runner's own phases: a backstop for what no step bound reaches
     # (framework/ci.md §3).
-    timeout-minutes: 90
+    timeout-minutes: 91
     # Ungated on purpose: reading the diff is the approval moment, so the
     # reading itself must not need approval.
     environment: physical-plan
@@ -137,6 +137,15 @@ jobs:
               exit "$status"
               ;;
           esac
+      # The join's reading again, once the job has failed: how each member
+      # the run dials was reached at the failure, and not only at the join
+      # (framework/ci.md §2). The join kept what its
+      # reading was taken from, in the file ZT_READING_KEPT names. A
+      # diagnostic, it never fails the job, and ends inside its bound.
+      - name: Take the join's reading again
+        if: failure() && env.ZT_READING_KEPT != ''
+        timeout-minutes: 1
+        run: timeout 30 python3 -I -S "$GITHUB_WORKSPACE/src/kluster/scripts/zt_reading.py" again "$ZT_READING_KEPT" || true
 
   up-physical:
     needs: plan-physical
@@ -145,7 +154,7 @@ jobs:
     # The sum of its steps' bounds, a `uses:` step twice, plus five minutes
     # for the runner's own phases: a backstop, since the `Up` step's bound
     # fires first and fails the job (framework/ci.md §3).
-    timeout-minutes: 180
+    timeout-minutes: 181
     # Reviewer-gated: this is the layer that can root the gateway.
     environment: physical
     concurrency:
@@ -218,6 +227,15 @@ jobs:
             [ "$status" -ne 0 ] || status=1
           fi
           exit "$status"
+      # The join's reading again, once the job has failed: how each member
+      # the run dials was reached at the failure, and not only at the join
+      # (framework/ci.md §2). The join kept what its
+      # reading was taken from, in the file ZT_READING_KEPT names. A
+      # diagnostic, it never fails the job, and ends inside its bound.
+      - name: Take the join's reading again
+        if: failure() && env.ZT_READING_KEPT != ''
+        timeout-minutes: 1
+        run: timeout 30 python3 -I -S "$GITHUB_WORKSPACE/src/kluster/scripts/zt_reading.py" again "$ZT_READING_KEPT" || true
 
   up-dns:
     needs: [plan-physical, up-physical]
@@ -231,7 +249,7 @@ jobs:
     # The sum of its steps' bounds, a `uses:` step twice, plus five minutes
     # for the runner's own phases: a backstop, since the `Up` step's bound
     # fires first and fails the job (framework/ci.md §3).
-    timeout-minutes: 180
+    timeout-minutes: 181
     environment: dns
     # Shared with every other job that joins on the dns environment's identity:
     # a drift check, and a pull request's join proof. The group queues, so
@@ -312,6 +330,15 @@ jobs:
             [ "$status" -ne 0 ] || status=1
           fi
           exit "$status"
+      # The join's reading again, once the job has failed: how each member
+      # the run dials was reached at the failure, and not only at the join
+      # (framework/ci.md §2). The join kept what its
+      # reading was taken from, in the file ZT_READING_KEPT names. A
+      # diagnostic, it never fails the job, and ends inside its bound.
+      - name: Take the join's reading again
+        if: failure() && env.ZT_READING_KEPT != ''
+        timeout-minutes: 1
+        run: timeout 30 python3 -I -S "$GITHUB_WORKSPACE/src/kluster/scripts/zt_reading.py" again "$ZT_READING_KEPT" || true
 
   up-k8s-base:
     # After `up-dns` whatever its result, as `up-apps` is: a name a cut hands

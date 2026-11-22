@@ -34,7 +34,7 @@ jobs:
     # The sum of its steps' bounds, a `uses:` step twice, plus five minutes
     # for the runner's own phases: a backstop for what no step bound reaches
     # (framework/ci.md §3).
-    timeout-minutes: 90
+    timeout-minutes: 91
     strategy:
       fail-fast: false
       matrix:
@@ -138,6 +138,15 @@ jobs:
         # from values its inputs in state carry whole, so a refresh needs
         # nothing on disk. An entry without it expands to nothing.
         run: mise x -- pulumi preview --stack ${{ matrix.stack }} --refresh ${{ matrix.run_program }} --diff --expect-no-changes
+      # The join's reading again, once the job has failed: how each member
+      # the run dials was reached at the failure, and not only at the join
+      # (framework/ci.md §2). The join kept what its
+      # reading was taken from, in the file ZT_READING_KEPT names. A
+      # diagnostic, it never fails the job, and ends inside its bound.
+      - name: Take the join's reading again
+        if: failure() && env.ZT_READING_KEPT != ''
+        timeout-minutes: 1
+        run: timeout 30 python3 -I -S "$GITHUB_WORKSPACE/src/kluster/scripts/zt_reading.py" again "$ZT_READING_KEPT" || true
 
   # The alert job (framework/ci.md §3). This workflow has no pull-request
   # trigger, so the guard on the event is never what stands it down; it is kept
