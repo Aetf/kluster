@@ -457,19 +457,25 @@ def test_standard_output_is_pulumis_alone_and_ci_stacks_lines_are_on_standard_er
 STAND_IN_LIFETIME = 300
 
 #: A `pulumi` that answers ^C the way the real one does, by finishing what it
-#: has in flight before it exits, and says so once it has. Everything is in
-#: place before it says it has started, so a ^C at any moment after that line
-#: meets its handler.
+#: has in flight before it exits, and says so once it has.
+#:
+#: **It takes the ^C as an event its own flow waits for, not in a handler.**
+#: SIGINT is blocked before it says it has started, so a ^C at any moment
+#: after that line stays pending until `sigtimedwait` takes it. A Python
+#: handler runs wherever the main flow is when the signal lands, and that can
+#: be inside the `print` of `started`, after its line has reached the pipe
+#: and before the call returns: a `print` from the handler then meets
+#: standard output's buffer still held, raises `RuntimeError: reentrant
+#: call`, and the stand-in exits 1 having said nothing more.
 PULUMI_ANSWERING_SIGINT = f"""\
 import signal, sys, time
-def cancelled(*_):
-    time.sleep(1)
-    print('finished', flush=True)
-    sys.exit(3)
-signal.signal(signal.SIGINT, cancelled)
+signal.pthread_sigmask(signal.SIG_BLOCK, {{signal.SIGINT}})
 print('started', flush=True)
-time.sleep({STAND_IN_LIFETIME})
-sys.exit(4)
+if signal.sigtimedwait({{signal.SIGINT}}, {STAND_IN_LIFETIME}) is None:
+    sys.exit(4)
+time.sleep(1)
+print('finished', flush=True)
+sys.exit(3)
 """
 
 #: How long the case waits on `ci-stack` once it has sent ^C: a stop-loss
