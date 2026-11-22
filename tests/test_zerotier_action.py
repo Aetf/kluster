@@ -11,7 +11,9 @@ relation between the deadline the action declares and every cap a workflow
 puts on a step that uses it, both read out of the files and neither restated;
 and they run the route and wait steps as they are written, against stand-ins
 for `ip` and `sudo` and against ports on this host, for what they do and the
-lines they print.
+lines they print. Every job that joins takes the join's reading again as its
+last step when it fails, and the cases find those jobs in the workflows and
+run that step after the action's own reading, as the runner would.
 """
 
 from __future__ import annotations
@@ -30,8 +32,11 @@ from typing import cast
 
 import process_sessions
 import pytest
-from peer_listings import PEERS, addresses
+from peer_listings import PEERS, addresses, peer, zerotier_stand_ins
 from workflow_files import GITHUB, github_name, mapping, read_workflow, workflow_jobs, workflows_and_actions
+
+from kluster import conventions
+from kluster.scripts import zt_reading
 
 ACTION = GITHUB / 'actions' / 'zerotier' / 'action.yml'
 #: How a step names this action in `uses:`.
@@ -499,3 +504,154 @@ def test_the_reading_ends_inside_the_headroom_and_leaves_the_wait_half_of_it() -
     assert bound, script
 
     assert int(env['READING_SECONDS']) + int(bound.group(1)) <= HEADROOM_SECONDS // 2
+
+
+#: The checkout the action and the workflows run from.
+CHECKOUT = GITHUB.parent
+
+
+def _joining_jobs() -> dict[str, list[dict[str, object]]]:
+    """Every workflow job a step of which uses the action, as `<file>: <job>`, with its steps."""
+    jobs: dict[str, list[dict[str, object]]] = {}
+    for path in workflows_and_actions():
+        if path.parent.name != 'workflows':
+            continue
+        for name, job in workflow_jobs(read_workflow(path), github_name(path)).items():
+            where = f'{github_name(path)}: {name}'
+            steps = [mapping(step, f'{where} step') for step in cast('list[object]', job.get('steps', []))]
+            if any(step.get('uses') == USES for step in steps):
+                jobs[where] = steps
+    return jobs
+
+
+def _reading_step(
+    tmp_path: Path, inputs: dict[str, str], *, runner: str, mtu: int | None
+) -> tuple[str, dict[str, str], Path]:
+    """Run the action's reading step as the runner runs it, over a join's `inputs` as the step's environment names them.
+
+    The stand-in daemon lists the gateway's member and gives the runner the
+    address `runner`. What it returns is the line the step printed, the
+    variables it exported to the job's later steps, and `PATH`'s stand-ins.
+    """
+    udm = conventions.overlay.member(conventions.overlay.MEMBER_UDM)
+    assert isinstance(udm, conventions.overlay.EnrolledMember)
+    bin_dir = zerotier_stand_ins(
+        tmp_path,
+        peers=[peer(udm.node_id, 'LEAF', 23, '192.0.2.1/21032')],
+        network={'nwid': conventions.overlay.NETWORK_ID, 'mtu': 1280, 'assignedAddresses': [f'{runner}/16']},
+        mtu=mtu,
+    )
+    exported = tmp_path / 'github_env'
+    declared, script = _step("Take the join's reading")
+    declared = {key: value.replace('${{ github.action_path }}', str(ACTION.parent)) for key, value in declared.items()}
+    done = process_sessions.run(
+        ['bash', '--noprofile', '--norc', '-eo', 'pipefail', '-c', script],
+        env={
+            **declared,
+            'NETWORK_ID': conventions.overlay.NETWORK_ID,
+            'TARGETS': '',
+            'ANY_TARGETS': '',
+            'ROUTES': '',
+            **inputs,
+            'GITHUB_ENV': str(exported),
+            'RUNNER_TEMP': str(tmp_path),
+            'PATH': f'{bin_dir}{os.pathsep}{os.environ["PATH"]}',
+        },
+        text=True,
+        timeout=60,
+    )
+    assert done.returncode == 0, done.stdout
+    variables = dict(line.split('=', 1) for line in exported.read_text().splitlines())
+    return cast('str', done.stdout), variables, bin_dir
+
+
+def _joined(tmp_path: Path) -> tuple[dict[str, str], Path]:
+    """What a `physical`-shaped join's reading leaves the rest of its job: the variables it exports, and `PATH`'s stand-ins.
+
+    The runner's address is no identity's, so no leg is probed.
+    """
+    line, variables, bin_dir = _reading_step(
+        tmp_path, {'TARGETS': f'{conventions.overlay.UDM}:22'}, runner='192.0.2.200', mtu=1280
+    )
+    assert re.match(r'zt-reading: member=none .*\budm=DIRECT/23ms/ipv4\b', line), line
+    return variables, bin_dir
+
+
+def test_a_dns_joins_reading_reads_the_gateway_its_routes_go_through_and_the_resolvers_it_waited_for(
+    tmp_path: Path,
+) -> None:
+    """A `dns` join names its targets in `wait_for_any` and reaches them by `routes`, and the step hands the reading both.
+
+    The inputs are a `dns` join's shape: resolvers no member holds, each
+    routed through the gateway's overlay address. The gateway's path is read
+    only through the route, and the resolvers' legs only through the targets.
+    The runner holds the `dns` identity's address, so the legs are the ones
+    the reading would probe; `ip` reports no MTU, so it probes none of them
+    and the case dials nothing.
+    """
+    resolvers = conventions.gateway.RESOLVERS
+    port = conventions.gateway.ADGUARD_API_PORT
+    inputs = {
+        'ANY_TARGETS': ' '.join(f'{resolver.address}:{port}' for resolver in resolvers),
+        'ROUTES': ''.join(f'{resolver.address}/32 via {conventions.overlay.UDM}\n' for resolver in resolvers),
+    }
+
+    line, _, _ = _reading_step(tmp_path, inputs, runner=str(conventions.overlay.CI_DNS), mtu=None)
+
+    fields = dict(field.split('=', 1) for field in line.split()[1:])
+    assert fields['member'] == conventions.overlay.MEMBER_CI_DNS, line
+    assert fields[conventions.overlay.MEMBER_UDM] == 'DIRECT/23ms/ipv4', line
+    first = resolvers[0].name
+    assert [fields.get(f'{first}.{probe}') for probe in zt_reading.PROBES] == ['skipped'] * 4, line
+
+
+def test_every_job_that_joins_takes_the_reading_again_as_its_last_step_once_it_has_failed(tmp_path: Path) -> None:
+    """The join's reading shows the paths at the join; a job that failed later shows them again at its end.
+
+    The jobs are every one a step of which uses the action, found in the
+    workflows. Each one's last step runs only on a failure, and only where
+    the join exported what it read with; run as written after the action's
+    own reading, it prints the same members under its own label, and a
+    reading with nothing to read from still prints and passes.
+    """
+    variables, bin_dir = _joined(tmp_path)
+    (variable,) = variables
+    jobs = _joining_jobs()
+    # A read that stopped finding the jobs would pass the loop below on nothing.
+    assert jobs, f'no workflow step uses {USES}'
+
+    findings: dict[str, str] = {}
+    for where, steps in jobs.items():
+        last = steps[-1]
+        condition = str(last.get('if', ''))
+        if 'failure()' not in condition or f'env.{variable}' not in condition:
+            findings[where] = f'its last step runs under {condition!r}, not on a failure after a join'
+            continue
+        for kept, expected in ((variables[variable], r'.*\budm=DIRECT/23ms/ipv4\b.*'), (str(tmp_path / 'none'), r'.*')):
+            done = process_sessions.run(
+                ['bash', '--noprofile', '--norc', '-eo', 'pipefail', '-c', str(last.get('run'))],
+                env={
+                    variable: kept,
+                    'GITHUB_WORKSPACE': str(CHECKOUT),
+                    'PATH': f'{bin_dir}{os.pathsep}{os.environ["PATH"]}',
+                },
+                text=True,
+                timeout=120,
+            )
+            line = cast('str', done.stdout)
+            if done.returncode != 0 or not re.fullmatch(rf'zt-reading\(at-failure\): {expected}\n', line):
+                findings[where] = f'with {kept}, exit {done.returncode}: {line!r}'
+    assert findings == {}, findings
+
+
+def test_the_reading_a_failing_job_takes_again_ends_inside_its_step_and_the_readings_own_deadline_inside_that() -> None:
+    """The step's `timeout` lets the reading's own deadline end it, and ends it before the step's cap does."""
+    env, _ = _step("Take the join's reading")
+    seconds = int(env['READING_SECONDS'])
+    for where, steps in _joining_jobs().items():
+        last = steps[-1]
+        bound = re.search(r'\btimeout (\d+) ', str(last.get('run')))
+        assert bound, f'{where}: {last.get("run")!r}'
+        cap = last.get('timeout-minutes')
+        assert isinstance(cap, int), where
+        assert seconds < int(bound.group(1)) < cap * 60, where

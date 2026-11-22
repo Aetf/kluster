@@ -1,11 +1,12 @@
-"""The join's reading: the filter that keeps physical paths out of a public log, and the verdicts of its probes.
+"""The join's reading: the filter that keeps physical paths out of a public log, the members it reads, and the verdicts of its probes.
 
 The filter and the reading run as the action runs them, by path under
 `python3 -I -S`, so the cases also hold that the script needs nothing past the
 standard library and `kluster.conventions`. The probes run against ports on
 this host's loopback, each shaped so that a wrong verdict reads differently
 from the right one: a far end advertising a runner's MSS, a byte never sent,
-a page in writes smaller than a segment, a TLS flight in narrow segments.
+a page in writes smaller than a segment, a TLS flight or a key-exchange reply
+in narrow segments.
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ import re
 import signal
 import socket
 import ssl
+import struct
 import subprocess
 import sys
 import threading
@@ -35,7 +37,7 @@ from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import NameOID
-from peer_listings import PEER_PORTS, PEERS, addresses
+from peer_listings import PEER_PORTS, PEERS, addresses, peer, zerotier_stand_ins
 
 from kluster import conventions
 from kluster.scripts import zt_reading
@@ -73,51 +75,37 @@ def test_the_peer_listing_keeps_each_paths_kind_and_latency_and_no_address() -> 
     assert families == ['<ipv4>', '<ipv6>', '<ipv6>', '<ipv6>', '<ipv6>', '<ipv4>'], redacted
 
 
-def _peer(node: str, role: str, latency: int, address: str | None, *, tunneled: bool = False) -> dict[str, object]:
-    """One peer as `zerotier-cli -j peers` prints it, with its preferred path at `address`, or none."""
-    paths = [] if address is None else [{'address': address, 'active': True, 'expired': False, 'preferred': True}]
-    return {'address': node, 'role': role, 'latency': latency, 'paths': paths, 'tunneled': tunneled}
+def _roster(name: str) -> conventions.overlay.EnrolledMember:
+    entry = conventions.overlay.member(name)
+    assert isinstance(entry, conventions.overlay.EnrolledMember), name
+    return entry
 
 
-def test_the_reading_names_the_gateway_from_the_roster_and_reports_the_interfaces_mtu(tmp_path: Path) -> None:
-    """The reading takes the gateway's node id from the roster, under the standard library alone.
+def test_the_reading_reads_each_member_the_join_dialed_by_its_node_id_in_the_roster(tmp_path: Path) -> None:
+    """Each target the join waited for is read as the member the roster places there, found by its node id.
 
-    The gateway is one leaf among others, listed after a leaf on a relay, so a
-    reading that took the first leaf reads `RELAY`. The interface's MTU and the
+    The two members are leaves among others, listed after a leaf on a relay,
+    and each is reached differently, so a reading that took the first leaf, or
+    one member's path for the other's, reads wrong. The interface's MTU and the
     configured one differ, so a reading that printed one for the other shows
-    it. The member's address is no identity's, so the size probes are skipped
-    and the case dials nothing.
+    it. The member's address is no identity's, so no leg is probed and the case
+    dials nothing.
     """
-    udm = conventions.overlay.member(conventions.overlay.MEMBER_UDM)
-    assert isinstance(udm, conventions.overlay.EnrolledMember)
+    udm = _roster(conventions.overlay.MEMBER_UDM)
+    homelab = _roster(conventions.overlay.MEMBER_HOMELAB)
     peers = [
-        _peer('0123456789', 'LEAF', 90, None),
-        _peer(udm.node_id, 'LEAF', 23, '192.0.2.1/21032'),
-        _peer('778cde7190', 'PLANET', 84, '192.0.2.66/9993'),
-        _peer('cafe04eba9', 'PLANET', 160, '[2001:db8::1]/9993', tunneled=True),
+        peer('0123456789', 'LEAF', 90, None),
+        peer(udm.node_id, 'LEAF', 23, '192.0.2.1/21032'),
+        peer('778cde7190', 'PLANET', 84, '192.0.2.66/9993'),
+        peer(homelab.node_id, 'LEAF', 16, '[2001:db8::7]/21033', tunneled=True),
+        peer('cafe04eba9', 'PLANET', 160, '[2001:db8::1]/9993', tunneled=True),
     ]
-    network = {
-        'nwid': conventions.overlay.NETWORK_ID,
-        'mtu': 2800,
-        'portDeviceName': 'ztprobe0',
-        'assignedAddresses': ['192.0.2.200/24'],
-    }
-    answers = tmp_path / 'answers'
-    answers.mkdir()
-    (answers / 'peers').write_text(json.dumps(peers))
-    (answers / 'listnetworks').write_text(json.dumps([network]))
-    (answers / 'link').write_text(json.dumps([{'ifname': 'ztprobe0', 'mtu': 1280}]))
-    bin_dir = tmp_path / 'bin'
-    bin_dir.mkdir()
-    for name, script in {
-        'sudo': f'#!/bin/sh\n[ "$1 $2" = "zerotier-cli -j" ] && exec cat {answers}/"$3"\nexit 64\n',
-        'ip': f'#!/bin/sh\n[ "$*" = "-j link show dev ztprobe0" ] && exec cat {answers}/link\nexit 64\n',
-    }.items():
-        (bin_dir / name).write_text(script)
-        (bin_dir / name).chmod(0o755)
+    network = {'nwid': conventions.overlay.NETWORK_ID, 'mtu': 2800, 'assignedAddresses': ['192.0.2.200/24']}
+    bin_dir = zerotier_stand_ins(tmp_path, peers=peers, network=network, mtu=1280)
+    targets = f'{udm.address}:22 {homelab.address}:22'
 
     done = process_sessions.run(
-        [sys.executable, '-I', '-S', str(READING), 'reading', conventions.overlay.NETWORK_ID, '10'],
+        [sys.executable, '-I', '-S', str(READING), 'reading', conventions.overlay.NETWORK_ID, '10', '--every', targets],
         env={'PATH': f'{bin_dir}{os.pathsep}{os.environ["PATH"]}'},
         text=True,
         timeout=30,
@@ -127,11 +115,68 @@ def test_the_reading_names_the_gateway_from_the_roster_and_reports_the_interface
     assert done.returncode == 0, line
     assert line.startswith('zt-reading: '), line
     fields = dict(field.split('=', 1) for field in line.split()[1:])
-    assert fields['gateway'] == 'DIRECT/23ms/ipv4', line
+    assert fields[udm.name] == 'DIRECT/23ms/ipv4', line
+    assert fields[homelab.name] == 'RELAY/16ms/ipv6', line
     assert fields['roots'] == 'DIRECT/84ms/ipv4,RELAY/160ms/ipv6', line
     assert (fields['mtu'], fields['netconf']) == ('1280', '2800'), line
-    assert {fields[probe] for probe in ('up.small', 'up.full', 'down.small', 'down.full')} == {'skipped'}, line
+    assert [field for field in fields if '.' in field] == [], line
     assert addresses(line) == [], line
+
+
+def test_the_members_a_run_dials_are_the_roster_entries_its_targets_or_its_routes_name() -> None:
+    """A target is read as the member the roster places at its address, or as the next hop of the run's route to it.
+
+    Every member is found at its own address, so a selection that knew only
+    the members today's runs dial misses one. A target no member holds is read
+    as the member its route goes through -- a member other than the gateway
+    here, so a reading that assumed the gateway for every routed target reads
+    the wrong one -- and as none when no route carries it. A member two
+    targets name is read once, in the order the targets name it. Of two
+    routes that hold a target, the one with the longer prefix is its route, as
+    the kernel picks it.
+    """
+    roster = conventions.overlay.ROSTER
+    for entry in roster:
+        assert zt_reading.Inputs('n', 1, every=f'{entry.address}:22').dialed() == [entry], entry.name
+    haos = conventions.overlay.member('haos')
+    routed = zt_reading.Inputs('n', 1, any_of='192.0.2.7:80 192.0.2.8:80', routes=f'192.0.2.0/29 via {haos.address}')
+    unrouted = zt_reading.Inputs('n', 1, every='192.0.2.7:80')
+    first, second = roster[0], roster[1]
+    twice = zt_reading.Inputs('n', 1, every=f'{second.address}:22 {first.address}:22', any_of=f'{second.address}:443')
+
+    assert routed.dialed() == [haos]
+    assert unrouted.dialed() == []
+    assert twice.dialed() == [second, first]
+    # Routes that overlap: the target goes the way of the longest prefix
+    # holding it, whichever is listed first.
+    udm = conventions.overlay.member(conventions.overlay.MEMBER_UDM)
+    overlapping = f'192.0.2.0/24 via {haos.address}\n192.0.2.7/32 via {udm.address}'
+    assert zt_reading.Inputs('n', 1, every='192.0.2.7:80', routes=overlapping).dialed() == [udm]
+
+
+def test_each_target_is_probed_on_the_leg_of_the_service_it_names_and_the_stand_ins_together() -> None:
+    """A member's shell, the gateway and a resolver each get their own leg; targets that stand in for one another are one dependency.
+
+    A runner that holds no identity's address is admitted to no leg, so it
+    probes none.
+    """
+    homelab = conventions.overlay.member(conventions.overlay.MEMBER_HOMELAB)
+    resolvers = conventions.gateway.RESOLVERS
+    inputs = zt_reading.Inputs(
+        'n',
+        1,
+        every=f'{conventions.overlay.UDM}:22 {homelab.address}:22',
+        any_of=' '.join(f'{resolver.address}:{conventions.gateway.ADGUARD_API_PORT}' for resolver in resolvers),
+    )
+
+    groups = inputs.legs(conventions.overlay.CI_PHYSICAL)
+
+    assert [[(leg.name, leg.host) for leg in group] for group in groups] == [
+        [(conventions.overlay.MEMBER_UDM, conventions.overlay.UDM)],
+        [(homelab.name, homelab.address)],
+        [(resolver.name, resolver.address) for resolver in resolvers],
+    ]
+    assert inputs.legs(ipaddress.IPv4Address('192.0.2.200')) == []
 
 
 #: The MSS a runner on an overlay of MTU 1280 advertises: the MTU less the
@@ -303,6 +348,107 @@ def test_a_handshake_reads_as_received_in_full_only_when_a_segment_filling_the_m
     assert result == full
 
 
+def _ssh_string(value: bytes) -> bytes:
+    return struct.pack('>I', len(value)) + value
+
+
+def _ssh_packet(payload: bytes) -> bytes:
+    """A packet as RFC 4253 §6 frames one before keys: length, padding length, payload, at least four bytes of padding."""
+    padding = 4 + (-(5 + 4 + len(payload)) % 8)
+    return struct.pack('>IB', 1 + len(payload) + padding, padding) + payload + bytes(padding)
+
+
+def _read_packet(client: socket.socket, buffered: bytearray) -> bytes | None:
+    """The next packet's payload off `client`, or `None` once it has closed."""
+    while len(buffered) < 4 or len(buffered) < 4 + struct.unpack_from('>I', buffered)[0]:
+        chunk = client.recv(65536)
+        if not chunk:
+            return None
+        buffered += chunk
+    length, padding = struct.unpack_from('>IB', buffered)
+    payload = bytes(buffered[5 : 4 + length - padding])
+    del buffered[: 4 + length]
+    return payload
+
+
+#: The payload of the key-exchange reply OpenSSH 10 sends for the hybrid with
+#: an Ed25519 host key: the host key, the ML-KEM ciphertext and X25519 share,
+#: and the signature.
+SSH_REPLY = 1267
+
+
+def _ssh_server(offered: str, seen: list[str]) -> Callable[[socket.socket], None]:
+    """An SSH server offering the key exchanges `offered`, which answers a client's share with a reply the size OpenSSH's is.
+
+    What it is sent goes into `seen`, so the case reads the client's side of
+    the exchange as the server took it: the identification line, the key
+    exchanges the client offers, and the length of the share it sends, or
+    that it sent none.
+    """
+
+    def serve(client: socket.socket) -> None:
+        client.settimeout(10)
+        lists = (offered, 'ssh-ed25519', 'aes128-ctr', 'aes128-ctr', 'hmac-sha2-256', 'hmac-sha2-256', 'none', 'none')
+        offer = bytes([20]) + bytes(16) + b''.join(_ssh_string(names.encode()) for names in (*lists, '', ''))
+        client.sendall(b'SSH-2.0-OpenSSH_10.0\r\n' + _ssh_packet(offer + bytes(5)))
+        buffered = bytearray()
+        while b'\n' not in buffered:
+            buffered += client.recv(4096)
+        line, _, rest = bytes(buffered).partition(b'\n')
+        buffered[:] = rest
+        seen.append(line.decode().strip())
+        kexinit = _read_packet(client, buffered)
+        assert kexinit is not None
+        (length,) = struct.unpack_from('>I', kexinit, 17)
+        seen.append(kexinit[21 : 21 + length].decode())
+        share = _read_packet(client, buffered)
+        if share is None:
+            seen.append('no share')
+            return
+        (length,) = struct.unpack_from('>I', share, 1)
+        # The share arrived in segments short of a full one at MTU 1280.
+        full = zt_reading.TcpInfo.of(client).received_full(1280)
+        seen.append(f'{share[0]} {length}' + (' in a full segment' if full else ''))
+        client.sendall(_ssh_packet(bytes([31]) + bytes(SSH_REPLY - 1)))
+        _holding(client)
+
+    return serve
+
+
+@pytest.mark.parametrize(
+    ('offered', 'mss', 'full', 'share'),
+    [
+        ('mlkem768x25519-sha256,curve25519-sha256', None, 'ok', '30 1216'),
+        ('mlkem768x25519-sha256,curve25519-sha256', NARROW_MSS, 'short', '30 1216'),
+        ('curve25519-sha256', None, 'short', 'no share'),
+    ],
+    ids=['full-segments', 'narrow', 'no-hybrid'],
+)
+def test_a_shells_key_exchange_reads_as_received_in_full_only_when_its_reply_came_in_a_segment_filling_the_mtu(
+    mss: int | None, offered: str, full: str, share: str
+) -> None:
+    """A member's shell's full-size leg: the hybrid key exchange, whose reply is larger than one segment at MTU 1280.
+
+    The client's share is an ML-KEM-768 key and an X25519 point, 1216 bytes in
+    an `SSH_MSG_KEX_ECDH_INIT`, and it reaches the server in segments short of
+    a full one, so a path that drops full-size segments upward cannot keep the
+    reply from being sent. A server that offers no hybrid is sent none,
+    since the exchange it would answer has no reply that size, and reads
+    `short` rather than a failure of the path.
+    """
+    seen: list[str] = []
+    with _serving(_ssh_server(offered, seen), mss=mss) as port:
+        result = zt_reading.key_exchange(LOOPBACK, port, 1280, zt_reading.Budget(10))
+        give_up = time.monotonic() + 10
+        while len(seen) < 3 and time.monotonic() < give_up:
+            time.sleep(0.02)
+
+    assert result == full
+    assert seen[0].startswith('SSH-2.0-'), seen
+    assert 'mlkem768x25519-sha256' in seen[1].split(','), seen
+    assert seen[2:] == [share], seen
+
+
 def _closing(client: socket.socket) -> None:
     """Read the ClientHello, then close without a word of TLS."""
     client.settimeout(10)
@@ -359,7 +505,7 @@ def _never(_mtu: int, _budget: zt_reading.Budget) -> str:
 
 @pytest.mark.parametrize('first', ['refused', 'unreachable'])
 def test_the_reading_moves_past_a_leg_whose_small_segment_fails_however_it_fails(first: str) -> None:
-    """The first of two legs fails its small segment; the reading probes the second and names it.
+    """The first of two legs fails its small segment; the reading probes the second, each under its own name.
 
     A leg left for any failure but a refusal or a stall would stop at the
     unreachable one, as it did when only those two moved the reading on.
@@ -377,32 +523,100 @@ def test_the_reading_moves_past_a_leg_whose_small_segment_fails_however_it_fails
         fields: dict[str, str] = {}
         zt_reading.probe(legs, 1280, zt_reading.Budget(10), fields)
 
-    assert fields == {'leg': 'second', 'up.small': 'ok', 'up.full': 'ok', 'down.small': 'ok', 'down.full': 'ok'}
+    assert fields == {
+        'first.up.small': first,
+        'first.up.full': 'skipped',
+        'second.up.small': 'ok',
+        'second.up.full': 'ok',
+        'second.down.small': 'ok',
+        'second.down.full': 'ok',
+    }
 
 
-def test_a_reading_ended_by_the_steps_timeout_prints_what_it_had(tmp_path: Path) -> None:
-    """The step's `timeout` ends a reading wedged in a wait, and the line still prints, marked as cut.
+class _Exited(BaseException):
+    """The process exit the cut handler makes, raised instead so the case outlives it."""
+
+
+@pytest.mark.parametrize('cut', [False, True], ids=['whole', 'cut'])
+def test_each_line_the_reading_prints_carries_no_address(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], cut: bool
+) -> None:
+    """Both ways a reading prints its line pass the filter: once it has finished, and when the step's `timeout` cuts it short.
+
+    No field the reading takes today holds an address; the case has a reading
+    take fields that would, and then end, or be signalled as `timeout` signals
+    it, which runs the handler the reading installed for that.
+    """
+    handlers: dict[int, Callable[[int, object], None]] = {}
+
+    def installed(number: int, handler: Callable[[int, object], None]) -> None:
+        handlers[number] = handler
+
+    monkeypatch.setattr(zt_reading.signal, 'signal', installed)
+
+    def exit_(code: int) -> None:
+        raise _Exited(code)
+
+    monkeypatch.setattr(zt_reading.os, '_exit', exit_)
+
+    def leaking(_inputs: zt_reading.Inputs, taken: zt_reading.Reading) -> None:
+        taken.fields.update({'member': 'ci-dns', 'probe': '192.0.2.1:9993', 'path': '[2001:db8::1]:9993'})
+        if cut:
+            handlers[signal.SIGTERM](signal.SIGTERM, None)
+
+    monkeypatch.setattr(zt_reading, 'reading', leaking)
+    with pytest.raises(_Exited) if cut else contextlib.nullcontext():
+        _ = zt_reading.take(lambda: zt_reading.Inputs('n', 1), zt_reading.Reading())
+
+    (line,) = capsys.readouterr().out.splitlines()
+    assert line.startswith('zt-reading: member=ci-dns '), line
+    assert line.endswith(' cut=timeout') == cut, line
+    assert addresses(line) == [], line
+
+
+@pytest.mark.parametrize('command', ['reading', 'again'])
+def test_a_reading_ended_by_the_steps_timeout_prints_what_it_had(tmp_path: Path, command: str) -> None:
+    """The step's `timeout` ends a reading wedged in a wait, and the line still prints, marked as cut, under its own label.
 
     The stand-in for `sudo` answers the peer listing and then never answers
     the network listing; the case signals the reading once the stand-in has
-    been asked for it, as `timeout` would.
+    been asked for it, as `timeout` would. The join's reading keeps its inputs
+    in a file, and the one a failing job takes again reads them back from it.
     """
     asked = tmp_path / 'asked'
     bin_dir = tmp_path / 'bin'
     bin_dir.mkdir()
-    peers = [_peer('778cde7190', 'PLANET', 84, '192.0.2.66/9993')]
+    peers = [peer('778cde7190', 'PLANET', 84, '192.0.2.66/9993')]
     (bin_dir / 'sudo').write_text(
         f'#!/bin/sh\n[ "$3" = peers ] && exec printf %s \'{json.dumps(peers)}\'\ntouch {asked}\nexec sleep 30\n'
     )
     (bin_dir / 'sudo').chmod(0o755)
-    argv = [sys.executable, '-I', '-S', str(READING), 'reading', conventions.overlay.NETWORK_ID, '60']
+    kept = tmp_path / 'kept.json'
+    target = f'{conventions.overlay.UDM}:22'
+    network = conventions.overlay.NETWORK_ID
+    reading = [*('reading', network, '60', '--every', target), *('--keep', str(kept))]
+    if command == 'again':
+        # The join's own reading, which keeps its inputs before it reads,
+        # against a daemon that refuses every command.
+        refusing = tmp_path / 'refusing'
+        refusing.mkdir()
+        (refusing / 'sudo').write_text('#!/bin/sh\nexit 64\n')
+        (refusing / 'sudo').chmod(0o755)
+        _ = process_sessions.run(
+            [sys.executable, '-I', '-S', str(READING), *reading],
+            env={'PATH': f'{refusing}{os.pathsep}{os.environ["PATH"]}'},
+            text=True,
+            timeout=60,
+        )
+    argv = [sys.executable, '-I', '-S', str(READING), *(reading if command == 'reading' else ['again', str(kept)])]
     environment = {'PATH': f'{bin_dir}{os.pathsep}{os.environ["PATH"]}'}
-    with process_sessions.started(argv, env=environment, stdout=subprocess.PIPE, text=True) as command:
+    with process_sessions.started(argv, env=environment, stdout=subprocess.PIPE, text=True) as process:
         give_up = time.monotonic() + 20
         while not asked.exists():
             assert time.monotonic() < give_up, 'the reading never asked for the network listing'
             time.sleep(0.05)
-        os.kill(command.pid, signal.SIGTERM)
-        stdout, _ = command.communicate(timeout=20)
+        os.kill(process.pid, signal.SIGTERM)
+        stdout, _ = process.communicate(timeout=20)
 
-    assert re.fullmatch(r'zt-reading: gateway=absent roots=DIRECT/84ms/ipv4 cut=timeout\n', stdout), stdout
+    label = 'zt-reading' if command == 'reading' else r'zt-reading\(at-failure\)'
+    assert re.fullmatch(rf'{label}: roots=DIRECT/84ms/ipv4 udm=absent cut=timeout\n', stdout), stdout

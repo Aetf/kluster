@@ -135,39 +135,58 @@ same terms. The action's last step runs `kluster.scripts.zt_reading`
 by path from the checkout, under the runner's own `python3` and its
 standard library, since the runner has no environment of this
 project's at that step. It prints one `zt-reading:` line, shown wrapped
-here:
+here for a `physical` run:
 
-    zt-reading: member=ci-dns gateway=DIRECT/23ms/ipv4
-      roots=DIRECT/84ms/ipv4,DIRECT/160ms/ipv6 mtu=1280 netconf=1280
-      leg=adguard-alice up.small=ok up.full=ok
-      down.small=ok down.full=ok
+    zt-reading: member=ci-physical
+      roots=DIRECT/26ms/ipv4,DIRECT/103ms/ipv4 mtu=1280 netconf=1280
+      udm=RELAY/?ms Aetf-Arch-Homelab=DIRECT/16ms/ipv4
+      udm.up.small=ok udm.up.full=ok udm.down.small=ok udm.down.full=ok
+      Aetf-Arch-Homelab.up.small=ok Aetf-Arch-Homelab.up.full=ok
+      Aetf-Arch-Homelab.down.small=ok Aetf-Arch-Homelab.down.full=ok
 
-`gateway=` is how the gateway's member is reached, `DIRECT` or `RELAY`
-(through a root or ZeroTier's TCP relay), with the latency ZeroTier
-measured and the address family of the physical path. The member is
-found by the gateway's node id in the roster, and `roots=` reads the
-planet roots the same way. `mtu=` is the overlay interface's MTU as
+**The reading covers every member the join dials**, and the members
+come from the join's own inputs and the roster rather than from a list
+of their own. A target the roster places a member at is that member,
+and a target no member holds is the member that the run's route to it
+names as the next hop: a `physical` run reads the gateway and the
+homelab host, the two shells it waits for, and a `dns` run reads the
+gateway, through which its routes reach the resolvers. Each member's
+field, named as the roster names it, says how that member is reached:
+`DIRECT` or `RELAY` (through a root or ZeroTier's TCP relay), with the
+latency ZeroTier measured and the address family of the physical path.
+The member is found by its node id in the roster, and `roots=` reads
+the planet roots the same way. `mtu=` is the overlay interface's MTU as
 `ip link` reads it, and `netconf=` the MTU the network's configuration
 handed the daemon: the two agree once Central's value has reached the
 runner.
 
-The size probes ride a leg the run's flow rules already admit, because
-those rules admit a continuous-integration identity to its own TCP legs
-alone. An ICMP echo matches no rule that names a port, so it is dropped
-on the runner itself, and a ping would fail on every run. `leg=` names
-that leg: for `ci-physical`, the gateway; for `ci-dns`, the first
-resolver that acknowledges the small segment, or the last one tried.
-`up.*` is the runner sending towards the home: a small segment, then
-one filling the interface's MTU, with fragmentation forbidden, each
-read as acknowledged from the connection's `TCP_INFO`. `down.*` is the
-home sending to the runner: for `ci-dns`, the resolver's status
-endpoint, which refuses a request with no session in a few hundred
-bytes, and its login page, which it serves to anyone; for
-`ci-physical`, the gateway's SSH identification line and its TLS
-handshake, whose server flight carries the certificate chain.
+The size probes ride the legs the run's flow rules already admit,
+because those rules admit a continuous-integration identity to its own
+TCP legs alone. An ICMP echo matches no rule that names a port, so it
+is dropped on the runner itself, and a ping would fail on every run.
+Each target the join waits for is probed on its own leg, and its four
+fields carry the leg's name: the gateway's, a member's shell, or a
+resolver's API. The targets that stand in for one another, the two
+resolvers, are one leg between them, probed in turn until one
+acknowledges the small segment, each under its own name. `up.*` is the
+runner sending towards the home: a small segment, then one filling the
+interface's MTU, with fragmentation forbidden, each read as
+acknowledged from the connection's `TCP_INFO`. `down.*` is the home
+sending to the runner: for a resolver, its status endpoint, which
+refuses a request with no session in a few hundred bytes, and its login
+page, which it serves to anyone; for the gateway, its SSH
+identification line and its TLS handshake, whose server flight carries
+the certificate chain; for another member's shell, its identification
+line and the reply to a post-quantum key exchange, whose ciphertext
+alone is 1088 bytes. The key exchange stops at that reply, before any
+authentication. The runner's share goes up in two writes of half a full
+segment each, the second once the first is acknowledged, so a path that
+drops full-size segments upward still delivers it, and the reply
+measures the downward direction alone. A server that offers no such
+exchange reads `short`.
 
 `small=ok` with `full=stalled` in one direction is a size fault in that
-direction. Both `ok` in both directions rules the MTU out for that run.
+direction. Both `ok` in both directions rules the MTU out for that leg.
 A small probe that fails as well is a path fault and says nothing about
 size. `full=short` is an exchange that completed without a packet of
 the MTU's size in it, which proves nothing either way. The same flow
@@ -179,16 +198,30 @@ fails reads `refused`, or `unreachable` when nothing answers for the
 address on the way (no route, or an ARP that goes unanswered), and any
 other failure reads as its `errno` name. The reading is a diagnostic:
 nothing it finds fails the job, and it runs under a bound of its own
-inside the minute the join's deadline leaves before a caller's cap. A
-reading the step's `timeout` ends still prints what it had taken,
-marked `cut=timeout`.
+inside the minute the join's deadline leaves before a caller's cap,
+each leg given an even share of what is left so that one that stalls
+leaves the others theirs. A reading the step's `timeout` ends still
+prints what it had taken, marked `cut=timeout`.
+
+**A job that joined reads the paths again when it fails.** A path can
+lapse after the join has passed, so a failing job's reading at the join
+says how its members were reached minutes before the failure, not at
+it. The join's reading keeps what it was taken from in the job's
+temporary directory and exports `ZT_READING_KEPT`, naming that file, to
+the job's later steps. The last step of every job that joins runs on
+`failure()` wherever that variable is set, and takes the same reading
+again, printed as a `zt-reading(at-failure):` line under the join's
+deadline and a bound of its own step's. It never fails the job. `test_zerotier_action` finds every job
+that joins in the workflows and runs that step after the action's own
+reading.
 
 **The repository is public, and so are its logs.** Nothing the join
-prints carries the address or port of a peer's physical path: the
-reading prints only the path's kind, its latency and its family. The
-`zerotier-cli peers` listing the wait prints every ten rounds goes
-through the same filter, which `test_zerotier_action` holds against a
-listing in each form an address and port are written in.
+prints carries the address or port of a peer's physical path: either
+reading prints only the path's kind, its latency and its family, and
+every line it prints passes the same filter. The `zerotier-cli peers`
+listing the wait prints every ten rounds goes through that filter too,
+which `test_zerotier_action` holds against a listing in each form an
+address and port are written in.
 
 Residual on
 record (audit M6): the AdGuard credential is full-admin (AdGuard has

@@ -151,7 +151,7 @@ jobs:
     # The sum of its steps' bounds, a `uses:` step twice, plus five minutes
     # for the runner's own phases: a backstop for what no step bound reaches
     # (framework/ci.md §3).
-    timeout-minutes: 25
+    timeout-minutes: 26
     environment: dns
     # The identity is live in one job at a time, and a group it shares with
     # the merge chain delays this job rather than cancelling it, or being
@@ -175,3 +175,12 @@ jobs:
             10.0.5.3/32 via 10.144.1.1
             10.0.5.4/32 via 10.144.1.1
           wait_for_any: '10.0.5.3:80 10.0.5.4:80'
+      # The join's reading again, once the job has failed: how each member
+      # the run dials was reached at the failure, and not only at the join
+      # (framework/ci.md §2). The join kept what its
+      # reading was taken from, in the file ZT_READING_KEPT names. A
+      # diagnostic, it never fails the job, and ends inside its bound.
+      - name: Take the join's reading again
+        if: failure() && env.ZT_READING_KEPT != ''
+        timeout-minutes: 1
+        run: timeout 30 python3 -I -S "$GITHUB_WORKSPACE/src/kluster/scripts/zt_reading.py" again "$ZT_READING_KEPT" || true

@@ -1,27 +1,37 @@
-"""The join's reading: how the run reaches the overlay, and whether full-size packets cross it.
+"""The join's reading: how the run reaches each member it dials, and whether full-size packets cross to it.
 
 `action.yml` runs `reading` once a join has reached its targets or given up,
 passing or failing, and prints one `zt-reading:` line, so a run that could not
-reach the home and one that could are read side by side. The line answers
-three questions:
+reach the home and one that could are read side by side. A job that joined
+runs `again` as its last step once a later step has failed, which prints the
+same reading as a `zt-reading(at-failure):` line: the paths as they stood when
+the job failed, not only at the join. The line answers three questions:
 
-* **Path** -- `gateway=` is the gateway's member, `roots=` the planet roots:
-  `DIRECT` or `RELAY`, the latency ZeroTier measured, and the address family of
-  the physical path. A `RELAY` gateway is reached through a root or ZeroTier's
-  TCP relay rather than peer to peer.
+* **Path** -- one field per member the run dials, named for the member as the
+  roster names it, and `roots=` for the planet roots: `DIRECT` or `RELAY`, the
+  latency ZeroTier measured, and the address family of the physical path. A
+  `RELAY` member is reached through a root or ZeroTier's TCP relay rather than
+  peer to peer. The members are the join's own targets (`dialed`): each one
+  the roster places at a target's address, and each one a route of the run's
+  names as the next hop to a target no member holds, which is how a `dns` run
+  dials the gateway.
 * **MTU** -- `mtu=` is the overlay interface's MTU as `ip link` reads it, and
   `netconf=` the MTU the network's configuration handed the daemon. The two
   agree once Central's value has reached the runner.
-* **Size** -- `up.*` sends from the runner towards the home, and `down.*` has
-  the home send to the runner, each a small exchange and then one carrying a
-  segment that fills the interface's MTU. It rides TCP because the flow rules
-  admit a continuous-integration identity to its own TCP legs and nothing else:
-  an ICMP echo matches no rule that names a port, so it would be dropped on the
-  runner itself.
+* **Size** -- one group of four fields per target the run depends on, named
+  for the leg it probes (`legs`). `<leg>.up.*` sends from the runner towards
+  the home, and `<leg>.down.*` has the home send to the runner, each a small
+  exchange and then one carrying a segment that fills the interface's MTU.
+  It rides TCP to the target's own service, because the flow rules admit a
+  continuous-integration identity to its own TCP legs and nothing else: an
+  ICMP echo matches no rule that names a port, so it would be dropped on the
+  runner itself. A run's targets that stand in for one another, the two
+  resolvers, are one dependency, probed in turn until one acknowledges the
+  small segment.
 
 How to read a size probe: `small=ok full=stalled` in one direction is a size
 fault in that direction; `small=ok full=ok` in both rules the MTU out for that
-run; a small one that fails too is a path fault that says nothing about size.
+leg; a small one that fails too is a path fault that says nothing about size.
 `full=short` means the exchange completed without a packet the MTU's size
 crossing, so it proves nothing. The same rules drop every ICMP message sent to
 the identity, "fragmentation needed" among them, so path MTU discovery never
@@ -34,19 +44,21 @@ failure its `errno` name. A run cut short by the step's `timeout` still prints
 what it had read by then, marked `cut=timeout`.
 
 The repository is public, so its logs are: nothing printed carries the address
-or port of a physical path. `redact` is the one filter, and `action.yml` routes
+or port of a physical path. `redact` is the one filter, every line the reading
+prints passes through it whichever label it carries, and `action.yml` routes
 its own `zerotier-cli peers` dump through it too.
 
 It is the `zt-reading` console script, and the action runs it by path from
 the checkout instead, with `python3 -I -S`: the runner has no environment of
 this project's at that step. Run that way it puts the checkout's `src/` on
 `sys.path` itself and needs nothing past the standard library and
-`kluster.conventions`, so it reads the gateway's node id and the identities'
+`kluster.conventions`, so it reads the members' node ids and the identities'
 addresses from the roster rather than from literals of its own.
 """
 
 from __future__ import annotations
 
+import argparse
 import contextlib
 import errno
 import json
@@ -59,9 +71,9 @@ import struct
 import subprocess
 import sys
 import time
-from collections.abc import Callable, Generator
-from dataclasses import dataclass
-from ipaddress import IPv4Address, ip_interface
+from collections.abc import Callable, Generator, Iterable
+from dataclasses import asdict, dataclass
+from ipaddress import IPv4Address, IPv4Network, ip_interface
 from pathlib import Path
 from types import FrameType
 from typing import cast
@@ -151,7 +163,7 @@ class Spent(TimeoutError):
 
 
 class Budget:
-    """The reading's one deadline, which every step's own wait stays inside."""
+    """A deadline, which every step's own wait stays inside."""
 
     def __init__(self, seconds: float) -> None:
         self._deadline = time.monotonic() + seconds
@@ -165,6 +177,10 @@ class Budget:
 
     def spent(self) -> bool:
         return time.monotonic() >= self._deadline
+
+    def share(self, parts: int) -> Budget:
+        """An even share of what is left, among `parts` that still have to run, so one stalled leg cannot spend the rest."""
+        return Budget(max(0.0, self._deadline - time.monotonic()) / parts)
 
 
 #: The errors a connect gives when nothing answers for the address on the way:
@@ -294,9 +310,131 @@ def handshake(host: IPv4Address, port: int, mtu: int, budget: Budget) -> str:
     return 'ok' if info.received_full(mtu) else 'short'
 
 
+#: The key exchange the shell's full-size probe asks for: the post-quantum
+#: hybrid (draft-ietf-sshm-mlkem-hybrid-kex), whose server reply carries an
+#: ML-KEM-768 ciphertext of 1088 bytes besides the host key and its signature,
+#: so it always takes a segment that fills an MTU of 1280. A smaller exchange
+#: fits in one short segment and would prove nothing.
+SSH_KEX = 'mlkem768x25519-sha256'
+#: What the probe's `SSH_MSG_KEXINIT` offers besides (RFC 4253 §7.1): wide
+#: enough that a stock server finds one of each in common, though the exchange
+#: never gets as far as using any of them.
+SSH_HOST_KEYS = 'ssh-ed25519,ecdsa-sha2-nistp256,ecdsa-sha2-nistp384,ecdsa-sha2-nistp521,rsa-sha2-512,rsa-sha2-256'
+SSH_CIPHERS = 'chacha20-poly1305@openssh.com,aes128-gcm@openssh.com,aes256-gcm@openssh.com,aes128-ctr,aes256-ctr'
+SSH_MACS = 'hmac-sha2-256-etm@openssh.com,hmac-sha2-512-etm@openssh.com,hmac-sha2-256,hmac-sha2-512'
+SSH_MSG_KEXINIT = 20
+SSH_MSG_KEX_ECDH_INIT = 30
+SSH_MSG_KEX_ECDH_REPLY = 31
+#: The client's share: an ML-KEM-768 encapsulation key of zeros, which passes
+#: the key check a server makes (every coefficient below the modulus), then
+#: the X25519 base point, whose product with the server's key is never zero.
+#: The probe never derives a key from the exchange, so neither half needs a
+#: secret behind it.
+SSH_CLIENT_SHARE = bytes(1184) + b'\x09' + bytes(31)
+#: The longest packet the probe reads (RFC 4253 §6.1 has a server handle
+#: 35000 bytes).
+SSH_PACKET_LIMIT = 35000
+
+
+def _ssh_packet(payload: bytes) -> bytes:
+    """`payload` as an SSH binary packet before any key is in force: length, padding to eight bytes, no MAC."""
+    padding = 8 - (5 + len(payload)) % 8
+    padding += 8 if padding < 4 else 0
+    return struct.pack('>IB', 1 + len(payload) + padding, padding) + payload + bytes(padding)
+
+
+def _ssh_string(value: bytes) -> bytes:
+    return struct.pack('>I', len(value)) + value
+
+
+class _Received:
+    """A connection read as SSH reads it: lines, then packets, each wait inside one step."""
+
+    def __init__(self, connection: socket.socket, budget: Budget) -> None:
+        self._connection = connection
+        self._budget = budget
+        self._buffer = b''
+
+    def _fill(self) -> None:
+        self._connection.settimeout(self._budget.step())
+        chunk = self._connection.recv(65536)
+        if not chunk:
+            raise EOFError
+        self._buffer += chunk
+
+    def line(self) -> bytes:
+        while b'\n' not in self._buffer:
+            self._fill()
+        line, _, self._buffer = self._buffer.partition(b'\n')
+        return line
+
+    def packet(self) -> bytes | None:
+        """The next packet's payload, or `None` for a length no server sends."""
+        while len(self._buffer) < 5:
+            self._fill()
+        length, padding = struct.unpack_from('>IB', self._buffer)
+        if not padding < length <= SSH_PACKET_LIMIT:
+            return None
+        while len(self._buffer) < 4 + length:
+            self._fill()
+        payload = self._buffer[5 : 4 + length - padding]
+        self._buffer = self._buffer[4 + length :]
+        return payload
+
+
+def key_exchange(host: IPv4Address, port: int, mtu: int, budget: Budget) -> str:
+    """Home to runner, full: an SSH server's key-exchange reply, which carries a post-quantum ciphertext.
+
+    The exchange goes as far as the server's reply and no further, so nothing
+    is authenticated and no credential rides the connection; the server logs
+    a client that disconnected before authenticating. A server that offers no
+    `SSH_KEX` is never sent a share for it, and reads `short`, since no reply
+    of a size that fills the MTU was asked of it; one that answers with
+    anything but the reply reads `declined`. The share itself goes up in
+    segments of half a full one, so what the reply reads is the downward
+    direction's alone.
+    """
+    # Each name-list for both directions where it has two, then none for the
+    # languages, no guessed packet to follow, and the reserved word.
+    lists = (SSH_KEX, SSH_HOST_KEYS, SSH_CIPHERS, SSH_CIPHERS, SSH_MACS, SSH_MACS, 'none', 'none', '', '')
+    kexinit = bytes([SSH_MSG_KEXINIT]) + os.urandom(16) + b''.join(_ssh_string(names.encode()) for names in lists)
+    kexinit += b'\x00' + bytes(4)
+    with connected(host, port, budget) as connection:
+        received = _Received(connection, budget)
+        try:
+            # A server may send other lines before its identification.
+            while not received.line().startswith(b'SSH-'):
+                pass
+            connection.sendall(b'SSH-2.0-zt-reading\r\n' + _ssh_packet(kexinit))
+            offer = received.packet()
+            if offer is None or offer[:1] != bytes([SSH_MSG_KEXINIT]):
+                return 'declined'
+            (length,) = struct.unpack_from('>I', offer, 17)
+            if SSH_KEX not in offer[21 : 21 + length].decode(errors='replace').split(','):
+                return 'short'
+            share = _ssh_packet(bytes([SSH_MSG_KEX_ECDH_INIT]) + _ssh_string(SSH_CLIENT_SHARE))
+            # In two writes, the second once the first is acknowledged, so
+            # each leaves as a segment of its own, half a full one: a path
+            # that drops full-size segments upward still delivers the share,
+            # and the reply measures the downward direction alone.
+            half = len(share) // 2
+            start = TcpInfo.of(connection).bytes_acked
+            connection.sendall(share[:half])
+            if not acknowledged(connection, start + half, budget):
+                return 'stalled'
+            connection.sendall(share[half:])
+            reply = received.packet()
+        except EOFError:
+            return 'empty'
+        if reply is None or reply[:1] != bytes([SSH_MSG_KEX_ECDH_REPLY]):
+            return 'declined'
+        info = TcpInfo.of(connection)
+    return 'ok' if info.received_full(mtu) else 'short'
+
+
 @dataclass(frozen=True)
 class Leg:
-    """One identity's probes: where it goes, and how each direction is sent."""
+    """One target's probes: where they go, and how each direction is sent."""
 
     name: str
     host: IPv4Address
@@ -319,7 +457,7 @@ def down(leg: Leg, mtu: int, budget: Budget) -> tuple[str, str]:
 
 
 def _resolver(resolver: gateway.BridgedService) -> Leg:
-    """A `dns` run's leg: a resolver's API, whose login page needs no session."""
+    """A resolver's API, whose login page needs no session."""
     address, port = resolver.address, gateway.ADGUARD_API_PORT
     return Leg(
         name=resolver.name,
@@ -337,7 +475,7 @@ def _resolver(resolver: gateway.BridgedService) -> Leg:
 
 
 def _gateway() -> Leg:
-    """A `physical` run's leg: the gateway's own shell and controller API."""
+    """The gateway's own shell and controller API, whose TLS flight fills a segment whatever its shell offers."""
     address = overlay.UDM
     return Leg(
         name=overlay.MEMBER_UDM,
@@ -352,13 +490,119 @@ def _gateway() -> Leg:
     )
 
 
-def legs(member: IPv4Address | None) -> list[Leg]:
-    """The legs the member at `member` may probe, in the order to try them: the ones its flow rules admit."""
-    if member == overlay.CI_DNS:
-        return [_resolver(resolver) for resolver in gateway.RESOLVERS]
-    if member == overlay.CI_PHYSICAL:
-        return [_gateway()]
-    return []
+def _shell(member: overlay.RosterEntry) -> Leg:
+    """A member's shell: its identification line, then its key exchange's reply.
+
+    Each of the leg's three connections ends before authentication, as a
+    scanner's would. An `sshd` that penalizes such clients by source
+    (`PerSourcePenalties`) adds a second for each by default, which runs down
+    as it accrues, and enforces nothing until fifteen have accrued.
+    """
+    address, port = member.address, gateway.SSH_PORT
+    return Leg(
+        name=member.name,
+        host=address,
+        port=port,
+        # An identification line that never ends, which the server reads up to
+        # a limit far above one segment.
+        prefix=b'SSH-2.0-',
+        filler=b'a',
+        small=lambda _mtu, budget: banner(address, port, budget),
+        full=lambda mtu, budget: key_exchange(address, port, mtu, budget),
+    )
+
+
+@dataclass(frozen=True)
+class Target:
+    """A `host:port` the join waited for."""
+
+    host: IPv4Address
+    port: int
+
+    @classmethod
+    def parse(cls, text: str) -> list[Target]:
+        """Every target in a wait input, as the wait step reads it: separated by spaces or newlines."""
+        targets: list[Target] = []
+        for word in text.split():
+            host, _, port = word.rpartition(':')
+            with contextlib.suppress(ValueError):
+                targets.append(cls(IPv4Address(host), int(port)))
+        return targets
+
+
+def _routes(text: str) -> list[tuple[IPv4Network, IPv4Address]]:
+    """A join's `routes` input, one `<target> via <next hop>` per line, as the route step reads it."""
+    routes: list[tuple[IPv4Network, IPv4Address]] = []
+    for line in text.splitlines():
+        match line.split():
+            case [target, 'via', hop]:
+                with contextlib.suppress(ValueError):
+                    routes.append((IPv4Network(target), IPv4Address(hop)))
+            case _:
+                pass
+    return routes
+
+
+@dataclass(frozen=True)
+class Inputs:
+    """What a reading is taken from, which the join's reading keeps for the one a failing job takes again."""
+
+    network_id: str
+    seconds: float
+    #: The targets every one of which the join waited for, as `wait_for` is written.
+    every: str = ''
+    #: The targets the first answer among which ended the join's wait, as `wait_for_any` is written.
+    any_of: str = ''
+    #: The run's own routes, as `routes` is written.
+    routes: str = ''
+
+    def dialed(self) -> list[overlay.RosterEntry]:
+        """The members the run dials: one at a target's address, or the next hop of the run's route to one.
+
+        The route to a target is the one with the longest prefix holding it, as
+        the kernel picks it.
+
+        In the order the targets name them, each once. A target no member holds
+        and no route of the run's carries names none.
+        """
+        routes = _routes(self.routes)
+        members: list[overlay.RosterEntry] = []
+        for target in Target.parse(f'{self.every} {self.any_of}'):
+            # The route the kernel takes for it: the longest prefix holding it.
+            carrying = [route for route in routes if target.host in route[0]]
+            hops = [target.host, *([max(carrying, key=lambda route: route[0].prefixlen)[1]] if carrying else [])]
+            found = next((entry for hop in hops for entry in overlay.ROSTER if entry.address == hop), None)
+            if found is not None and found not in members:
+                members.append(found)
+        return members
+
+    def legs(self, member: IPv4Address | None) -> list[list[Leg]]:
+        """The legs to probe, one list per dependency of the join, for a runner holding `member`.
+
+        Each target of `every` is a dependency of its own, and the targets of
+        `any_of` one together, tried in order. A target's leg is the service it
+        names: a resolver's API, the gateway, or another member's shell. A
+        runner that holds no continuous-integration identity has no leg the
+        flow rules admit it to, and probes none.
+        """
+        identities = {overlay.member(name).address for name in overlay.CI_MEMBERS}
+        if member not in identities:
+            return []
+        groups = [[leg] for leg in map(_leg, Target.parse(self.every)) if leg is not None]
+        alternatives = [leg for leg in map(_leg, Target.parse(self.any_of)) if leg is not None]
+        return [*groups, alternatives] if alternatives else groups
+
+
+def _leg(target: Target) -> Leg | None:
+    if target.host == overlay.UDM:
+        return _gateway()
+    for resolver in gateway.RESOLVERS:
+        if resolver.address == target.host and target.port == gateway.ADGUARD_API_PORT:
+            return _resolver(resolver)
+    for entry in overlay.ROSTER:
+        if entry.address == target.host and target.port == gateway.SSH_PORT:
+            return _shell(entry)
+    return None
 
 
 def _zerotier(command: str) -> object:
@@ -384,13 +628,21 @@ def path(peer: dict[str, object] | None) -> str:
     return f'{link}/{measured}/{family}'
 
 
-def _peers() -> tuple[str, str]:
+def key(name: str) -> str:
+    """A roster name as a field name: the line is split at spaces, and several names hold one."""
+    return '-'.join(name.split())
+
+
+def _peers(members: Iterable[overlay.RosterEntry]) -> tuple[dict[str, str], str]:
+    """Each member's path, found by its node id in the roster, and the roots'."""
     peers = cast('list[dict[str, object]]', _zerotier('peers'))
-    udm = overlay.member(overlay.MEMBER_UDM)
-    node = udm.node_id if isinstance(udm, overlay.EnrolledMember) else None
-    gateway_peer = next((peer for peer in peers if peer.get('address') == node), None)
+    by_node = {peer.get('address'): peer for peer in peers}
+    paths = {
+        key(entry.name): path(by_node.get(entry.node_id)) if isinstance(entry, overlay.EnrolledMember) else 'unknown'
+        for entry in members
+    }
     roots = [path(peer) for peer in peers if peer.get('role') == 'PLANET']
-    return path(gateway_peer), ','.join(roots) or 'none'
+    return paths, ','.join(roots) or 'none'
 
 
 def _network(network_id: str) -> tuple[IPv4Address | None, int | None, int | None]:
@@ -417,98 +669,140 @@ def _network(network_id: str) -> tuple[IPv4Address | None, int | None, int | Non
     return member, mtu if isinstance(mtu, int) else None, configured if isinstance(configured, int) else None
 
 
-#: The fields of the line, in the order it prints them.
-ORDER = (
-    'member',
-    'gateway',
-    'roots',
-    'mtu',
-    'netconf',
-    'leg',
-    'up.small',
-    'up.full',
-    'down.small',
-    'down.full',
-    'error',
-)
+#: The fields every line opens with, in this order; each member's path and each
+#: leg's probes follow in the order the reading takes them, and `error` closes it.
+HEAD = ('member', 'roots', 'mtu', 'netconf')
+#: The four fields of one leg's probes, each under the leg's name.
+PROBES = ('up.small', 'up.full', 'down.small', 'down.full')
 
 
 class Reading:
     """The line, field by field as the reading takes it, so a reading cut short still prints what it had."""
 
-    def __init__(self) -> None:
+    def __init__(self, label: str = 'zt-reading') -> None:
+        self.label = label
         self.fields: dict[str, str] = {}
 
     def line(self, *, cut: bool = False) -> str:
-        fields = [f'{key}={self.fields[key]}' for key in ORDER if key in self.fields]
-        return redact(' '.join(['zt-reading:', *fields, *(['cut=timeout'] if cut else [])]))
+        keys = [k for k in HEAD if k in self.fields]
+        keys += [k for k in self.fields if k not in HEAD and k != 'error']
+        keys += ['error'] if 'error' in self.fields else []
+        fields = [f'{k}={self.fields[k]}' for k in keys]
+        return redact(' '.join([f'{self.label}:', *fields, *(['cut=timeout'] if cut else [])]))
 
 
-def reading(network_id: str, seconds: float, taken: Reading) -> None:
+def reading(inputs: Inputs, taken: Reading) -> None:
     """Take the whole reading into `taken`."""
-    budget = Budget(seconds)
+    budget = Budget(inputs.seconds)
     fields = taken.fields
+    members = inputs.dialed()
     try:
-        fields['gateway'], fields['roots'] = _peers()
+        paths, fields['roots'] = _peers(members)
+        fields.update(paths)
     except (OSError, ValueError, subprocess.SubprocessError) as error:
-        fields['gateway'] = fields['roots'] = outcome(error)
+        fields['roots'] = outcome(error)
+        fields.update(dict.fromkeys((key(entry.name) for entry in members), outcome(error)))
     member: IPv4Address | None = None
     mtu: int | None = None
     try:
-        member, mtu, configured = _network(network_id)
+        member, mtu, configured = _network(inputs.network_id)
         fields['mtu'] = str(mtu)
         fields['netconf'] = str(configured)
     except (OSError, ValueError, subprocess.SubprocessError) as error:
         fields['mtu'] = fields['netconf'] = outcome(error)
-    candidates = legs(member)
     fields['member'] = next((e.name for e in overlay.ROSTER if e.address == member), 'none')
-    probes = ('up.small', 'up.full', 'down.small', 'down.full')
-    fields.update(dict.fromkeys(probes, 'skipped'))
+    groups = inputs.legs(member)
+    for group in groups:
+        fields.update(dict.fromkeys((f'{key(group[0].name)}.{probe}' for probe in PROBES), 'skipped'))
     if mtu is None:
         return
-    probe(candidates, mtu, budget, fields)
+    for index, group in enumerate(groups):
+        if budget.spent():
+            break
+        probe(group, mtu, budget.share(len(groups) - index), fields)
 
 
 def probe(candidates: list[Leg], mtu: int, budget: Budget, fields: dict[str, str]) -> None:
-    """Probe the first leg whose small segment is acknowledged, or the last one tried, into `fields`."""
+    """Probe each leg in turn into `fields`, under its name, until one's small segment is acknowledged or the last is tried."""
     for leg in candidates:
         if budget.spent():
             break
-        fields['leg'] = leg.name
-        fields['up.small'], fields['up.full'] = up(leg.host, leg.port, leg.prefix, leg.filler, mtu, budget)
-        if fields['up.small'] != 'ok' and leg is not candidates[-1]:
+        name = key(leg.name)
+        fields[f'{name}.up.small'], fields[f'{name}.up.full'] = up(
+            leg.host, leg.port, leg.prefix, leg.filler, mtu, budget
+        )
+        if fields[f'{name}.up.small'] != 'ok' and leg is not candidates[-1]:
             # Whatever kept the small segment from this one, the next may answer.
             continue
-        fields['down.small'], fields['down.full'] = down(leg, mtu, budget)
+        fields[f'{name}.down.small'], fields[f'{name}.down.full'] = down(leg, mtu, budget)
         break
 
 
+def take(inputs: Callable[[], Inputs], taken: Reading) -> int:
+    """Take a reading and print its line, which the step's `timeout` cutting it short does not stop."""
+
+    def cut(_signal: int, _frame: FrameType | None) -> None:
+        # The step's `timeout` ends a reading that is wedged in a wait its own
+        # budget does not bound -- a TLS handshake reads more than once, and
+        # `zerotier-cli` may outlive the `sudo` killed around it -- so the
+        # fields taken so far go out before it does.
+        print(taken.line(cut=True), flush=True)
+        os._exit(0)
+
+    signal.signal(signal.SIGTERM, cut)
+    try:
+        reading(inputs(), taken)
+    except Exception as error:  # noqa: BLE001 -- a reading that breaks says so in one word, with no traceback to leak a value
+        taken.fields['error'] = type(error).__name__.lower()
+    print(taken.line(), flush=True)
+    return 0
+
+
+def _kept(path: Path) -> Inputs:
+    kept = cast('dict[str, object]', json.loads(path.read_text()))
+    return Inputs(
+        network_id=str(kept['network_id']),
+        seconds=float(cast('float', kept['seconds'])),
+        every=str(kept.get('every', '')),
+        any_of=str(kept.get('any_of', '')),
+        routes=str(kept.get('routes', '')),
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
-    match sys.argv[1:] if argv is None else argv:
-        case ['redact']:
+    parser = argparse.ArgumentParser(prog='zt-reading', description=__doc__.splitlines()[0] if __doc__ else None)
+    commands = parser.add_subparsers(dest='command', required=True)
+    commands.add_parser('redact', help='filter standard input to standard output')
+    taking = commands.add_parser('reading', help="take the join's reading")
+    taking.add_argument('network_id')
+    taking.add_argument('seconds', type=float)
+    taking.add_argument('--every', default='', help='the targets every one of which the join waited for')
+    taking.add_argument('--any', default='', help='the targets the first answer among which ended the wait')
+    taking.add_argument('--routes', default='', help="the run's own routes, one `<target> via <next hop>` per line")
+    taking.add_argument('--keep', type=Path, help='where to keep the inputs for `again`')
+    again = commands.add_parser('again', help="take the join's reading again, as a failing job does")
+    again.add_argument('kept', type=Path, help='the file the join kept its inputs in')
+    arguments = parser.parse_args(sys.argv[1:] if argv is None else argv)
+    match cast('str', arguments.command):
+        case 'redact':
             sys.stdout.write(redact(sys.stdin.read()))
             return 0
-        case ['reading', network_id, seconds]:
-            taken = Reading()
-
-            def cut(_signal: int, _frame: FrameType | None) -> None:
-                # The step's `timeout` ends a reading that is wedged in a wait
-                # its own budget does not bound -- a TLS handshake reads more
-                # than once, and `zerotier-cli` may outlive the `sudo` killed
-                # around it -- so the fields taken so far go out before it does.
-                print(taken.line(cut=True), flush=True)
-                os._exit(0)
-
-            signal.signal(signal.SIGTERM, cut)
-            try:
-                reading(network_id, float(seconds), taken)
-            except Exception as error:  # noqa: BLE001 -- a reading that breaks says so in one word, with no traceback to leak a value
-                taken.fields['error'] = type(error).__name__.lower()
-            print(taken.line(), flush=True)
-            return 0
+        case 'reading':
+            inputs = Inputs(
+                network_id=cast('str', arguments.network_id),
+                seconds=cast('float', arguments.seconds),
+                every=cast('str', arguments.every),
+                any_of=cast('str', arguments.any),
+                routes=cast('str', arguments.routes),
+            )
+            kept = cast('Path | None', arguments.keep)
+            if kept is not None:
+                with contextlib.suppress(OSError):
+                    kept.write_text(json.dumps(asdict(inputs)))
+            return take(lambda: inputs, Reading())
         case _:
-            print('usage: zt-reading redact | reading <network id> <seconds>', file=sys.stderr)
-            return 2
+            kept = cast('Path', arguments.kept)
+            return take(lambda: _kept(kept), Reading('zt-reading(at-failure)'))
 
 
 if __name__ == '__main__':
