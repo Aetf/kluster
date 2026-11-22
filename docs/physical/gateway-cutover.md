@@ -1,5 +1,18 @@
 # Gateway Cutover
 
+**Where it stands.** The window ran on 2026-11-05, and every step of
+§8 had run by 2026-11-15 (`kluster-ops#75`). Of §7, the routing
+retirement's targeted apply ran on 2026-11-14 (`kluster-ops#736`), and
+the device deletions on 2026-11-22 (`kluster-ops#935`), so §6's
+rollback of the whole gateway no longer exists (§7). What is left of
+§7 is each absorbed tracker's removal commit, which `kluster-ops#79`
+holds.
+
+So what follows is the procedure as the window and §8 ran it, with
+§7's progress recorded in place. Where it says *yet*, *will* or
+*before the window*, it describes the device at that point of the
+procedure, not the device today, which gateway.md §1 describes.
+
 The one maintenance window that hands the device over: it stops being
 converged by the retiring gw-config repository and starts being converged
 by this program. It is the opening of the bring-up ceremony
@@ -39,29 +52,36 @@ before this window opens (§3).
 
 ## 1. Why there is a window
 
-Nothing this program declares is on the device yet: the `physical` stack
-has no state, so every name it declares is free, and each root filesystem
-is pulled fresh by pin rather than adopted from what is there. The device
-is not free. It runs three machines under the layout gw-config built, and
-two kinds of state under that layout are not re-derivable:
+The window ran on 2026-11-05 (`kluster-ops#75`). It opened on a device
+that held nothing this program declares: the `physical` stack had no
+state, so every name it declares was free, and each root filesystem was
+pulled fresh by pin rather than adopted from what was there. The device
+was not free. It ran three machines under the layout gw-config built,
+and two kinds of state under that layout could not be derived again at
+the window:
 
 -   **Each resolver's live configuration** — `AdGuardHome.yaml` and the
-    data beside it. What this program declares for a resolver is an
-    *initial* state, installed only into a state directory that has never
-    held one (gateway.md §1.1), so a resolver whose state is not in place
-    before the push comes up on factory configuration with the LAN's
-    filters, clients and rewrites gone.
+    data beside it. At the window this program declared for a resolver
+    an *initial* state, installed only into a state directory that had
+    never held one, so a resolver whose state was not in place before
+    the push would have come up on it, with the LAN's filters, clients
+    and rewrites gone. Since Aetf/kluster#935 a resolver machine is given
+    no configuration at all: an instance whose state directory holds no
+    `AdGuardHome.yaml` starts in first run and answers no DNS until the
+    `dns` stack's setup configures it (gateway.md §1, declarative/dns.md
+    §3).
 -   **The proxy's ACME account.** The declared `Caddyfile` names the
     contact the account already carries, which is the key the proxy
-    loads it by; that storage is what the window carries across, and a
-    different address would register a new account and leave the old one
-    behind. The *certificates* in it are for the names the old proxy
-    served, so a fresh issuance at first start is expected — see §5,
-    which checks that the issuance **succeeded**, not that none happened.
+    loads it by; that storage is what the window carried across, and a
+    different address would have registered a new account and left the
+    old one behind. The *certificates* in it were for the names the old
+    proxy served, so a fresh issuance at first start was expected — see
+    §5, which checks that the issuance **succeeded**, not that none
+    happened.
 
-Both are why the window covers all three machines at once: a partial move
-followed by a push would install factory state into whichever machine had
-not moved.
+Both are why the window covered all three machines at once: a partial
+move followed by a push would have left whichever machine had not moved
+without its state.
 
 ## 2. What moves, and what does not
 
@@ -1725,8 +1745,11 @@ steps 2–4) and a `physical` preview over the overlay comes back clean.
 
 ## 6. Rollback
 
-Available while `machines-old` is still on the device and yadm still
-holds the retiring scripts. On the device:
+Available while `machines-old` was on the device and yadm still held
+the retiring scripts. The device no longer has this rollback (§7), and
+what follows is the procedure as the soak held it. A machine's own
+rollback, `machine-rollback` (gateway.md §1.1), is unaffected. On the
+device:
 
 ```sh
 for m in adguard-alice adguard-bob caddy zerotier; do
@@ -1887,13 +1910,20 @@ run (§5).
 
 Every absorbed resource ends with a removal commit in its old tracker
 (cluster/migration.md rule 0.3). These land after the soak, each in its
-own repository, and they are what ends §6.
+own repository, and `kluster-ops#79` holds them, gw-config's pointer
+commit among them.
 
 **On the device**, delete what nothing declares: `/data/custom/machines-old`
 (the old trees and their `.old` copies), `/data/adguard-*` if anything is
 left of them, the rest of `/data/caddy`, `/data/custom/nspawn/`, and
 `/data/on_boot.d/50-authorized-keys.sh`, whose work is now a unit and an
-executable (gateway.md §1.4).
+executable (gateway.md §1.4). **Done on 2026-11-22**, once the operator
+had ruled the soak over (`kluster-ops#935`): `/data/adguard-*` were
+already gone, and the rest was deleted. Deleting `machines-old` is
+what ended §6. After the deletions all four machines were active and
+both resolvers answered.
+
+**The routing retirement below ran on 2026-11-14** (`kluster-ops#736`).
 
 **A device that ran `frr-config.sh` has its `/etc/frr` put back by
 hand, once, before the first apply that declares the site's BGP
@@ -2087,16 +2117,18 @@ this repository, under `kluster-ops#79`:
 -   the homelab-ops pin in yadm's mise configuration moves to the commit
     that carries the change.
 
-**This document retires with the window and §8.** It describes a move
-that happens once and the bring-up steps that follow it once; the layout
-it moves to is described where the device is (gateway.md §1), so the
-change that marks rule 0.3's gw-config row done deletes this file as
-well, once §8 has run. The procedures §8 uses that run again later are
-written where they outlive it, and §8 points at them: replacing CI's
-overlay identities in credentials.md §4.1 (stage 10), re-attaching a
-node volume through the program in declarative/physical.md §6,
-reading etcd's fsync latency in declarative/physical.md §6, and removing
-a DS in declarative/dns.md §1.3.
+**This document retires with the old trackers' removal commits.** It
+describes a move that happens once and the bring-up steps that follow
+it once; the layout it moves to is described where the device is
+(gateway.md §1), so the change that marks rule 0.3's gw-config row done
+deletes this file as well (`kluster-ops#79`). The procedures §8 uses
+that run again later are written where they outlive it, and §8 points
+at them: replacing CI's overlay identities in credentials.md §4.1
+(stage 10), re-attaching a node volume through the program in
+declarative/physical.md §6, reading etcd's fsync latency in
+declarative/physical.md §6, and removing a DS in declarative/dns.md
+§1.3. The procedures written here that outlive it, entering a DS record
+(§8.4) among them, move out first (`kluster-ops#654`).
 
 ## 8. The rest of the bring-up
 

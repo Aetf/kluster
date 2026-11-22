@@ -151,9 +151,10 @@ These run alongside and gate no stage:
 
 *   **The DS records**, gateway-cutover.md §8.4, zone by zone, from
     stage 4 on.
-*   **The gateway's soak and its cleanup.** The soak ends at stage 2's
-    gate. gateway-cutover.md §7 then runs, once its second routing
-    reading has taken a reboot.
+*   **The gateway's soak and its cleanup.** The operator ruled the soak
+    over on 2026-11-22, and gateway-cutover.md §7's device deletions ran
+    then (`kluster-ops#935`); its tracker removals are under
+    `kluster-ops#79`.
 *   **The resolvers' flip**, row R2 of sources-of-truth.md, after stage 4.
     It ran on 2026-11-22: adguardhome-sync stopped, and the merge of the
     declared configuration applied it to both instances, drilled by

@@ -36,8 +36,11 @@ Documents:
     window that hands the device from the retiring tracker to this
     program: what moves, the moves, verification, rollback, and the
     retirement each old tracker owes, and the first milestone's
-    bring-up steps that follow the ceremony. It retires once the window
-    and those steps have run.
+    bring-up steps that follow the ceremony. The window, those steps and
+    the cleanup on the device have run; it retires once each old
+    tracker's removal commit has landed (`kluster-ops#79`) and the
+    procedures it holds that outlive it have moved out
+    (`kluster-ops#654`).
 -   **[bring-up.md](bring-up.md)** — the one sequence from that window
     to a verified, empty cluster: who runs each step, what it waits for,
     its gate, and what a failure costs. It retires when its last stage
