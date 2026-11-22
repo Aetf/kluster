@@ -8,7 +8,7 @@ Claude Code reaches this file through the root `CLAUDE.md`, which
 imports it, so every session reads it, local or cloud. The rest of what
 a session needs is in the repository's `.claude/`: the role definitions
 in `agents/`, and `settings.json`, which holds what every session here
-runs under. Today that is the hooks and the deny rule that hold a
+runs under. Today that is the hooks and the deny rules that hold a
 session to the dispatch protocol
 ([dispatch.md](docs/framework/dispatch.md) §2.2), the hook that installs
 a cloud session's tools, and the exclusion that keeps a workspace's own

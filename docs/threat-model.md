@@ -564,9 +564,10 @@ Renovate's App holds the same and is trusted (§2.5); the configuration on
 > boundary is held by the dispatch protocol alone.
 
 **Two routes merge with nobody present, and both stay**: the
-dispatcher's `gh pr merge --rebase --auto`, and the unattended route,
-which merges a Renovate bump behind its allow-list and its zero-diff proof
-with nobody reading it (framework/ci.md §3).
+dispatcher's `dispatch merge`, which waits for the required checks itself
+and merges only the head it pushed (framework/dispatch.md §2.1), and the
+unattended route, which merges a Renovate bump behind its allow-list and
+its zero-diff proof with nobody reading it (framework/ci.md §3).
 
 **The operator's ruling closes this half with a clearance check**, which
 is not built yet and has a design of its own (Aetf/kluster-ops#488). The

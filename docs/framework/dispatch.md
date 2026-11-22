@@ -129,7 +129,14 @@ something under it:
 -   **`## Sweep`**: the sweep for claims the change made false, with its
     patterns in code spans, the positive control they ran against, and
     the number of files it read ([style/README.md](../style/README.md),
-    "Comments and docs").
+    "Comments and docs"). Each pattern is a list item that opens with
+    it in a code span, and every top-level list item of the section
+    that opens with a code span is read as one, so what the sweep found
+    is written as prose or as items that open otherwise. A pattern's
+    control is in the same item, as `Control:` and the string it fires
+    on, in quotes:
+    ``- `state backend.{0,120}B2`: Control: "state backend exists. Mints
+    the B2 key".`` That is the form `dispatch gates` runs again (§3).
 -   **`## Gate`**: the gate's results, the parts CI does not run
     included.
 
@@ -241,8 +248,9 @@ No workspace outlives the dispatch that created it:
     that works in every case.
 -   An agent that **opened** a pull request leaves the workspace
     standing and names its path in the report. Removing it is the
-    merging dispatcher's closing step, beside the label and the card,
-    because each dispatcher merges only its own pull requests (§2).
+    merging dispatcher's closing step, beside the label, because each
+    dispatcher merges only its own pull requests (§2): `dispatch merge`
+    takes it, with every workspace the claim's records name (§2.1).
 -   An agent that **stops** to ask, for a path outside its brief or a
     ruling, has not finished: it leaves the workspace standing, with
     whatever it holds, and its report opens with `Stopped:` (§2.2). The
@@ -731,7 +739,10 @@ milestone). The rules that keep them out of each other's way:
     push. The legitimate movers are a fix cycle (§3), which ends in a
     fresh report, and the dispatcher's own rebase, which is sequenced
     after the comparison for exactly this reason — so a mismatch at the
-    comparison means someone else moved it.
+    comparison means someone else moved it. `dispatch merge` makes the
+    comparison and the steps after it (§2.1); a fold of the builder's
+    commits is the dispatcher's local rewrite, made before it, which the
+    comparison does not see because it reads the forge.
     Reconstructing who is timestamp work —
     `gh api repos/<o>/<r>/issues/<n>/timeline` carries the
     `head_ref_force_pushed` and `merged` events — because every agent
@@ -789,8 +800,72 @@ retry starts afresh:
     aside), a claim label with no record, a claimed build with no open
     pull request naming its issue, and a `jj` workspace no live record
     names.
+-   **`dispatch gates <pr>`** checks a pull request's content against
+    its dispatch, changes nothing, and exits non-zero on any finding:
+    the dispatch owns every path the change touches, a file owned in a
+    section is changed only in that section's lines at the base, and
+    the description names each new file outside the owned paths (§1.1
+    items 2 and 5); every dotted host name and
+    address the description names occurs in the tree at the head, in a
+    file or a path (§1.1 item 6), so a key path or an attribute chain
+    is written the way the tree spells it, or in words; and the sweep's
+    patterns run again
+    over the tracked files at the head outside `sdks/`, whitespace
+    collapsed and under `re.S | re.I`, where a pattern that finds
+    nothing names a control and every control fires its pattern. The
+    commits are read from the local store, which holds them once the
+    dispatcher has fetched. A host name of one label reads like any
+    other word, and reading for one stays the reviewer's.
+-   **`dispatch merge <pr> <head>`** lands a pull request at the head
+    its builder's latest report names, and ends the dispatch. It
+    refuses, before it changes anything, unless the pull request's
+    branch is the one a live builder record names, that claim is this
+    session's, the title leads with the record's RFC slice, the
+    description holds the form of §1.1, a review dispatched under the
+    claim left a comment naming `<head>` (§3), the forge's head is
+    `<head>` or the dispatcher's own rebase of it (rule 8), and, where
+    the record's `closes` is false, `--remains '<what remains>'` says
+    what is left. A rebase of `<head>` is a commit that leaves the
+    forge's `main` at `<head>`'s fork point or later, and whose tree is
+    exactly what a three-way merge of `<head>`'s change onto its own
+    fork point gives (`git merge-tree`). A fold of the branch's commits
+    is one, and so is a rebase whose hunks `main` already carries; a
+    change to a single byte of what was reported, whitespace included,
+    is not. It then fetches, compares the
+    forge and the fetched branch again, rebases the branch onto the
+    forge's `main` and pushes it, waits for the required checks, and
+    merges with the pushed head as the one the forge must still hold.
+    `jj git push` refuses a branch the forge moved since the fetch, so
+    the push replaces only the head the comparison read, and the
+    bookmark it pushes is `<head>` or a rebase of it, never work the
+    report did not name. A merge the forge refuses is read by its
+    merge state: `BEHIND` is `main` moving under it, which goes round
+    again, for a bounded number of rounds (`merge.ATTEMPTS`); `BLOCKED`
+    while a required context of `main`'s protection is still
+    unreported waits, within the same bound and without spending a
+    round, until every such context is reported, and only then waits on
+    the checks and asks for the merge again; any other state stops it,
+    named. A rebase that conflicts, a required
+    check that fails, and a wait that runs out stop it too, with
+    nothing merged. A wait is bounded, so running out is a stop-loss
+    and never a verdict on the checks, and a read the forge fails
+    inside a wait is read again. A stop after the push leaves the
+    dispatcher's rebase as the forge's head, which the same command
+    takes up again, the review of `<head>` still standing: the routine
+    retry after a check that failed and passed on a re-run of its job.
+    Once merged, it closes every issue the description closes that the
+    merge left open, or comments on the dispatch's own what remains;
+    posts the `end` record; takes the claim labels off; and forgets and
+    removes every workspace the claim's records name that stands under
+    `.claude/workspaces/` and is not the checkout it runs in (§1.2).
+    Each of those steps is skipped where it is done already, and run on
+    a pull request that is already merged it finds the run its `end`
+    ended, so a close-out that stopped part way is finished by running
+    the command again. The commits `main` does not contain are listed
+    before each fetch (§1.2), and rule 5's rebase of the primary's `@`
+    after it stays the dispatcher's.
 
-`claim`, `queue` and `abandon` name the dispatcher by
+`claim`, `queue`, `abandon` and `merge` name the dispatcher by
 `CLAUDE_CODE_SESSION_ID`, which a Claude Code session's commands
 inherit, and refuse without it. The id names a dispatcher session, not
 a role: every agent the session spawns carries the same one, so the id
@@ -830,7 +905,7 @@ pull request must not.
 ### 2.2 The hooks
 
 Claude Code holds a session to this protocol from what `.claude/`
-tracks: hooks and a deny rule in `settings.json`, and the builder's
+tracks: hooks and deny rules in `settings.json`, and the builder's
 agent definition. Each hook runs `dispatch-hook <name>`
 (`src/kluster/scripts/dispatch/hooks.py`) in the checkout the session
 runs in, under `mise x uv -- uv run`, and reads the event Claude Code
@@ -875,9 +950,11 @@ refuses goes on to the session's permissions: no hook allows anything.
     definition, which runs only in that agent (§1.2, §1.3). The
     definition also withholds the `Agent` tool, so a builder spawns
     nothing.
--   **`gh issue create`** is denied by a permission rule, to every
-    session and agent alike, so a task is filed with `dispatch file`
-    (§4).
+-   **`gh issue create` and `gh pr merge`** are denied by permission
+    rules, to every session and agent alike, so a task is filed with
+    `dispatch file` (§4) and a pull request lands through
+    `dispatch merge` (§2.1). The rules hold a command the Bash tool
+    runs, and not the `gh` that `dispatch` itself runs.
 -   **A session's start** carries `dispatch audit`'s findings into its
     context. An audit that cannot run says so there, and the session
     starts regardless.
@@ -886,7 +963,7 @@ In a cloud session, where `CLAUDE_CODE_REMOTE` is `true`, no
 `dispatch-hook` runs, and the `SessionStart` entry that runs the audit
 locally installs the session's tools instead (§1.4): the session is a
 builder in a clone of its own with no dispatcher beside it, and it
-fetches for itself. The deny rule holds there too.
+fetches for itself. The deny rules hold there too.
 
 **Every hook fails closed.** Each entry carries `onFailure: block`, so
 a hook that cannot start, exits with anything but 0 or 2, or times out
@@ -907,8 +984,8 @@ off, and is silent on an agent definition's. A broken builder hook is
 turned off by deleting the `hooks:` block from the primary checkout's
 working copy of `.claude/agents/kluster-builder.md`, which every builder
 spawned after the edit is defined by, and `jj restore` of that file once
-the fix has merged puts it back. The deny rule is a permission, and none
-of these forms turns it off.
+the fix has merged puts it back. The deny rules are permissions, and none
+of these forms turns them off.
 
 **The builder's hook runs only where the folder is trusted.** Claude
 Code runs the hooks of a project agent's front matter once the workspace
@@ -960,6 +1037,32 @@ follow-up brief); a finding the operator must rule on becomes a
 on the pull request thread before merge. Small diffs get small
 reviews — a docs-only change may take a single combined pass — but no
 pull request merges reviewed by nobody but its author.
+
+**A review is a comment on the pull request whose first line is a
+heading opening `Review`** (`## Review (combined)`, `## Review (round
+2)`), and it names the head it read, in full or by its first twelve
+characters or more. `dispatch merge` refuses a head that no comment of
+that form names, or whose claim holds no review dispatch for the pull
+request (§2.1). So the round that ends a fix cycle is itself a review
+of the head that fix cycle reported, the one-line clean review above
+included. **The dispatcher may write that round-closing comment**,
+`## Review (round N)` naming the head, once it has checked that each
+finding is fixed, which is the decision to merge rather than a review
+of its own. A fix round whose change goes beyond what the findings
+asked goes back to a tech lead instead.
+
+What `dispatch merge` reads of a review is its form, and two things it
+does not check stay with the dispatcher. Who wrote the comment is one:
+every session writes as the operator's account (§1), so a review
+dispatch on the claim and a comment of the form are all the forge can
+show. Whether the findings are fixed is the other: a review that names
+the head and carries a blocking finding passes the check, and the
+round-closing comment above is where that is settled.
+
+**`dispatch gates <pr>` runs when the builder reports, before a
+reviewer is commissioned** (§2.1). Its checks are deterministic, so a
+finding is not argued: it goes back to the builder as a fix cycle, and
+a refusal that is wrong is a defect in the check, filed as one.
 
 ### 3.1 Cadence
 
@@ -1046,7 +1149,7 @@ merge can report once:
 -   **Dispatch is visible**: `in-flight` marks a dispatched issue — it
     is the dispatcher's claim as well (§2) — and comes off when the
     pull request merges or the dispatch is abandoned
-    (`dispatch abandon`, §2.1). **`in-flight` and
+    (`dispatch merge` and `dispatch abandon`, §2.1). **`in-flight` and
     `decision/*` answer different questions** — whether somebody is
     dispatched, and who holds the ball — so an issue may carry both,
     and an issue waiting on the operator is still claimed: neither the
@@ -1055,11 +1158,14 @@ merge can report once:
     cloud session, and one not yet taken where `in-flight` is absent
     (§1.4).
 -   **The pull request closes the issue**: its description carries
-    `Closes Aetf/kluster-ops#N` (cross-repository closing works and is
-    the one mechanism that cannot forget), so the merge itself moves
-    the ledger. One pull request may close several issues; an issue
-    only partly addressed is *referenced* without the keyword and kept
-    open with a comment saying what remains.
+    `Closes Aetf/kluster-ops#N` (cross-repository closing works), so
+    the merge itself moves the ledger, and `dispatch merge` closes each
+    issue the description closes wherever the merge left it open, so a
+    keyword that failed to fire still ends with the issue closed (§2.1).
+    One pull request may close several issues; an issue only partly addressed is
+    *referenced* without the keyword and kept open with a comment
+    saying what remains, which `dispatch merge` posts from its
+    `--remains`.
 -   **A builder's report names the head SHA** of the branch it opened,
     read after the push with
     `jj log -r <branch> --no-graph -T commit_id` — in a cloud session's
