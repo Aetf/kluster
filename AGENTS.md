@@ -7,12 +7,15 @@ the work — how it is dispatched, reviewed, and reported — is
 Claude Code reaches this file through the root `CLAUDE.md`, which
 imports it, so every session reads it, local or cloud. The rest of what
 a session needs is in the repository's `.claude/`: the role definitions
-in `agents/` and, in `settings.json`, the hook that installs a cloud
-session's tools and the exclusion that keeps a workspace's own copy of
-these instructions from loading as a second set. Those are the only
-tracked paths under `.claude/`, each named in `.gitignore`; everything
-else there is ignored, and a setting or permission rule of one's own
-goes in the ignored `.claude/settings.local.json` — saved to
+in `agents/`, and `settings.json`, which holds what every session here
+runs under. Today that is the hooks and the deny rule that hold a
+session to the dispatch protocol
+([dispatch.md](docs/framework/dispatch.md) §2.2), the hook that installs
+a cloud session's tools, and the exclusion that keeps a workspace's own
+copy of these instructions from loading as a second set. Those are the
+only tracked paths under `.claude/`, each named in `.gitignore`;
+everything else there is ignored, and a setting or permission rule of
+one's own goes in the ignored `.claude/settings.local.json` — saved to
 `settings.json`, it is an edit to a tracked file, which `jj` snapshots
 into the working copy.
 
@@ -266,7 +269,8 @@ ships with it rather than after it.
   the primary, makes it one, and mise shares the primary's trust with a
   worktree), and **a
   workspace dies with the dispatch that created it** — the agent removes
-  its own when it reports with no pull request, the merging dispatcher
+  its own when it finishes with no pull request (one that stops to ask
+  keeps it, and its report opens with `Stopped:`), the merging dispatcher
   removes it after the merge, each with `jj workspace forget <name>` from
   the primary and then `rm -rf` of the directory, which `forget` leaves
   on disk.

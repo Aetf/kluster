@@ -3,6 +3,11 @@
     "**/.claude/workspaces/**",
     "**/.claude/worktrees/**"
   ],
+  "permissions": {
+    "deny": [
+      "Bash(gh issue create *)"
+    ]
+  },
   "hooks": {
     "SessionStart": [
       {
@@ -10,7 +15,40 @@
         "hooks": [
           {
             "type": "command",
-            "command": "[ \"$CLAUDE_CODE_REMOTE\" != true ] || bash \"$CLAUDE_PROJECT_DIR\"/deploy/cloud-session/toolchain.sh"
+            "command": "if [ \"$CLAUDE_CODE_REMOTE\" = true ]; then bash \"$CLAUDE_PROJECT_DIR\"/deploy/cloud-session/toolchain.sh; else { cd \"$CLAUDE_PROJECT_DIR\" && mise x uv -- uv run --frozen dispatch-hook session-start; } || echo '`dispatch audit` did not start at session start (dispatch.md §2.2)'; fi"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Agent",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "[ \"$CLAUDE_CODE_REMOTE\" = true ] || { cd \"$CLAUDE_PROJECT_DIR\" && mise x uv -- uv run --frozen dispatch-hook agent; }",
+            "onFailure": "block"
+          }
+        ]
+      },
+      {
+        "matcher": "SubagentHandback",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "[ \"$CLAUDE_CODE_REMOTE\" = true ] || { cd \"$CLAUDE_PROJECT_DIR\" && mise x uv -- uv run --frozen dispatch-hook handback; }",
+            "onFailure": "block"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "if": "Bash(gh pr create *)",
+            "command": "[ \"$CLAUDE_CODE_REMOTE\" = true ] || { cd \"$CLAUDE_PROJECT_DIR\" && mise x uv -- uv run --frozen dispatch-hook pr-create; }",
+            "onFailure": "block"
           }
         ]
       }

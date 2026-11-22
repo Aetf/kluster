@@ -85,6 +85,7 @@ checks-scope = 'kluster.scripts.checks_scope:main'
 drill = 'kluster.scripts.drill.cli:main'
 zt-reading = 'kluster.scripts.zt_reading:main'
 dispatch = 'kluster.scripts.dispatch.cli:main'
+dispatch-hook = 'kluster.scripts.dispatch.hooks:main'
 
 [dependency-groups]
 dev = [

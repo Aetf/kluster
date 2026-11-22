@@ -2,7 +2,7 @@
 
 Each check's pair from the gates design (Aetf/kluster-ops#917, D§5) is here: a
 case it must catch, taken from what slipped, and a case it must pass. The
-forge is `MemoryForge`, which keeps issues, comments, milestones and pull
+forge is `memory_forge`'s, which keeps issues, comments, milestones and pull
 requests in memory, so a claim's record is written and read back through the
 same calls `dispatch` makes of GitHub. The serialized set is read from this
 checkout's AGENTS.md, the statement `dispatch` reads.
@@ -13,71 +13,15 @@ from __future__ import annotations
 import dataclasses
 import json
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import pytest
+from memory_forge import MemoryForge
 
 from kluster.scripts.dispatch import audit, brief, claim, filing, ledger, milestones, record, serialized
 from kluster.scripts.dispatch.claim import Precondition
-from kluster.scripts.dispatch.forge import Comment, ForgeError, Issue, Milestone, Pull
+from kluster.scripts.dispatch.forge import Comment, ForgeError, Milestone, Pull
 from kluster.scripts.dispatch.paths import OwnedPath
-
-
-@dataclass
-class _Issue:
-    number: int
-    title: str
-    milestone: str | None
-    labels: set[str] = field(default_factory=set[str])
-    open: bool = True
-    comments: list[Comment] = field(default_factory=list[Comment])
-
-
-@dataclass
-class MemoryForge:
-    """A ledger and a code repository held in memory."""
-
-    issues_: dict[int, _Issue] = field(default_factory=dict[int, _Issue])
-    milestones_: dict[str, Milestone] = field(default_factory=dict[str, Milestone])
-    pulls_: list[Pull] = field(default_factory=list[Pull])
-
-    def add(self, number: int, milestone: str | None, *labels: str, title: str = 'a task', open_: bool = True) -> None:
-        self.issues_[number] = _Issue(number, title, milestone, set(labels), open_)
-
-    def issue(self, number: int) -> Issue:
-        i = self.issues_[number]
-        return Issue(i.number, i.title, i.open, frozenset(i.labels), i.milestone)
-
-    def issues(self, *, label: str | None = None, milestone: str | None = None, closed: bool = False) -> list[Issue]:
-        return [
-            self.issue(i.number)
-            for i in self.issues_.values()
-            if (closed or i.open) and (label is None or label in i.labels) and (milestone in (None, i.milestone))
-        ]
-
-    def milestones(self) -> list[Milestone]:
-        return list(self.milestones_.values())
-
-    def comments(self, number: int) -> list[Comment]:
-        return list(self.issues_[number].comments)
-
-    def comment(self, number: int, body: str) -> None:
-        self.issues_[number].comments.append(Comment(body, mine=True))
-
-    def relabel(self, number: int, *, add: Sequence[str] = (), remove: Sequence[str] = ()) -> None:
-        labels = self.issues_[number].labels
-        assert not set(remove) - labels, 'gh refuses to remove a label the issue does not carry'
-        labels.difference_update(remove)
-        labels.update(add)
-
-    def create(self, *, title: str, body: str, labels: Sequence[str], milestone: str) -> str:
-        number = max(self.issues_, default=0) + 1
-        self.add(number, milestone, *labels, title=title)
-        return f'https://github.com/Aetf/kluster-ops/issues/{number}'
-
-    def pulls(self) -> list[Pull]:
-        return list(self.pulls_)
-
 
 M1 = 'M1 — bring-up'
 M2 = 'M2 — platform'
@@ -486,6 +430,33 @@ def test_a_builder_brief_lacking_a_field_is_refused(missing: str) -> None:
         _ = brief.read(text.encode())
 
 
+@pytest.mark.parametrize(
+    ('written', 'read'),
+    [
+        pytest.param('done: It merges, as #931 and #938 did.', None, id='cut on its line'),
+        pytest.param('done: It merges once\n  ops issue #938 lands.', None, id='cut on a wrapped line'),
+        pytest.param('done:\n  It merges, see #938.', None, id='cut on a line below its key'),
+        pytest.param('done: "It merges, as #931 and #938 did."', 'It merges, as #931 and #938 did.', id='quoted'),
+        pytest.param(
+            'done: It merges, as Aetf/kluster#931 did.', 'It merges, as Aetf/kluster#931 did.', id='a reference'
+        ),
+        pytest.param('done: It merges.\n# a note on the line below', 'It merges.', id='a full-line comment'),
+        pytest.param('done: It merges.\n\n# a note after a blank line', 'It merges.', id='a comment after a blank'),
+    ],
+)
+def test_a_done_a_comment_cuts_short_is_refused(written: str, read: str | None) -> None:
+    """Comments on the other fields, as §1.1's example writes them, are no part of what is refused."""
+    text = (
+        '---\nissue: 17   # the issue\nrole: builder  # builder | design | review\n'
+        f'{written}\nowned: [tests/test_one.py]\ncloses: true\n---\n'
+    )
+    if read is None:
+        with pytest.raises(brief.BriefRefused, match='quote the value'):
+            _ = brief.read(text.encode())
+    else:
+        assert brief.read(text.encode()).front.done == read
+
+
 def test_a_brief_with_no_front_matter_is_refused() -> None:
     with pytest.raises(brief.BriefRefused):
         _ = brief.read(b'# Builder brief\n\nissue: 17\n')
@@ -639,6 +610,20 @@ def test_the_audit_lists_a_pull_request_naming_no_ledger_issue_and_passes_a_bots
     ]
     found = {about for anomaly, about in _found(forge) if anomaly is audit.Anomaly.PULL_WITHOUT_ISSUE}
     assert found == {'pull request #9'}
+
+
+@pytest.mark.parametrize(
+    'line',
+    [
+        'Closes Aetf/kluster-ops#17',
+        'Closes: Aetf/kluster-ops#17',
+        'fixes Aetf/kluster-ops#17',
+        'Resolved: Aetf/kluster-ops#17',
+        'Refs Aetf/kluster-ops#17',
+    ],
+)
+def test_a_pull_request_names_its_issue_in_every_form_github_reads(line: str) -> None:
+    assert ledger.references(f'A change.\n\n{line}\n') == {17}
 
 
 def test_the_audit_names_the_issue_whose_record_does_not_read(forge: MemoryForge) -> None:
