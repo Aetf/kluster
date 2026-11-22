@@ -71,7 +71,9 @@ the instance moves from the homelab host to an **OCI VM.Standard.E2.1.Micro**
     Its operator form, physical/state-backend.md §7.3.1, ran against a
     scratch box on 2026-09-18, on a workstation dump and without step
     1's fetch from B2, and `state-backend restore` ran against the
-    appliance in its first replace-and-restore on 2026-09-25. RPO ≤ 24 h
+    appliance in its first replace-and-restore on 2026-09-25. What the
+    box uploads opens with the kit's escrowed age identity: the newest
+    backup in B2 did on 2026-11-21. RPO ≤ 24 h
     on state is fine — state is re-derivable from reality
     (`pulumi refresh`/import) at worst.
 -   The legacy homelab Postgres backend keeps serving kluster-code
@@ -127,6 +129,67 @@ targets against the resolver census, and every `physical` join, with no
 route, to both shells it dials: the gateway's and the homelab host's,
 each of which has to answer before the join returns.
 
+**Every join ends in a reading, whether it passed or not**, so that a
+run that reached the home and one that did not can be compared on the
+same terms. The action's last step runs `kluster.scripts.zt_reading`
+by path from the checkout, under the runner's own `python3` and its
+standard library, since the runner has no environment of this
+project's at that step. It prints one `zt-reading:` line, shown wrapped
+here:
+
+    zt-reading: member=ci-dns gateway=DIRECT/23ms/ipv4
+      roots=DIRECT/84ms/ipv4,DIRECT/160ms/ipv6 mtu=1280 netconf=1280
+      leg=adguard-alice up.small=ok up.full=ok
+      down.small=ok down.full=ok
+
+`gateway=` is how the gateway's member is reached, `DIRECT` or `RELAY`
+(through a root or ZeroTier's TCP relay), with the latency ZeroTier
+measured and the address family of the physical path. The member is
+found by the gateway's node id in the roster, and `roots=` reads the
+planet roots the same way. `mtu=` is the overlay interface's MTU as
+`ip link` reads it, and `netconf=` the MTU the network's configuration
+handed the daemon: the two agree once Central's value has reached the
+runner.
+
+The size probes ride a leg the run's flow rules already admit, because
+those rules admit a continuous-integration identity to its own TCP legs
+alone. An ICMP echo matches no rule that names a port, so it is dropped
+on the runner itself, and a ping would fail on every run. `leg=` names
+that leg: for `ci-physical`, the gateway; for `ci-dns`, the first
+resolver that acknowledges the small segment, or the last one tried.
+`up.*` is the runner sending towards the home: a small segment, then
+one filling the interface's MTU, with fragmentation forbidden, each
+read as acknowledged from the connection's `TCP_INFO`. `down.*` is the
+home sending to the runner: for `ci-dns`, the resolver's status
+endpoint, which refuses a request with no session in a few hundred
+bytes, and its login page, which it serves to anyone; for
+`ci-physical`, the gateway's SSH identification line and its TLS
+handshake, whose server flight carries the certificate chain.
+
+`small=ok` with `full=stalled` in one direction is a size fault in that
+direction. Both `ok` in both directions rules the MTU out for that run.
+A small probe that fails as well is a path fault and says nothing about
+size. `full=short` is an exchange that completed without a packet of
+the MTU's size in it, which proves nothing either way. The same flow
+rules drop every ICMP message sent to a CI identity, "fragmentation
+needed" among them, so path MTU discovery never reaches the runner: on
+a CI leg, a path narrower than the overlay's MTU is a hard stall of
+every full-size segment, never a slower connection. A connect that
+fails reads `refused`, or `unreachable` when nothing answers for the
+address on the way (no route, or an ARP that goes unanswered), and any
+other failure reads as its `errno` name. The reading is a diagnostic:
+nothing it finds fails the job, and it runs under a bound of its own
+inside the minute the join's deadline leaves before a caller's cap. A
+reading the step's `timeout` ends still prints what it had taken,
+marked `cut=timeout`.
+
+**The repository is public, and so are its logs.** Nothing the join
+prints carries the address or port of a peer's physical path: the
+reading prints only the path's kind, its latency and its family. The
+`zerotier-cli peers` listing the wait prints every ten rounds goes
+through the same filter, which `test_zerotier_action` holds against a
+listing in each form an address and port are written in.
+
 Residual on
 record (audit M6): the AdGuard credential is full-admin (AdGuard has
 no scoped API), so LAN-DNS control rides the `dns` tier — the tier
@@ -171,16 +234,19 @@ dynamic provider the `dns` program declares answers `configure`,
 request runs that joins. It proves the join action, under the `dns`
 identity's inputs, on a change under `.github/` — to the action, the
 release it pins, a runner label, or the inputs a workflow joins with —
-which is the kind of change a pull request's run can prove. `physical`'s
-join, whose wait needs every target to answer, is first exercised by
-`plan-physical` on `main`, and a change to the flow rules or the roster
-is proved by no pull request at all. It runs the checkout and the join
-and nothing else, with `up-dns`'s routes and wait, in the `dns`
-Environment, and only when the change touches `.github/`, by a path
-filter of its own, so that the previews' stack matrix never picks it up.
-It reports like the previews and is no required check.
-`test_workflow_shape` holds both the workflow's trigger and the job's
-filter to match the join action and every workflow that holds a join.
+or to `kluster.scripts.zt_reading`, the one script the action runs from
+the checkout, which is the kind of change a pull request's run can
+prove. `physical`'s join, whose wait needs every target to answer, is
+first exercised by `plan-physical` on `main`, and a change to the flow
+rules or the roster is proved by no pull request at all. It runs the
+checkout and the join and nothing else, with `up-dns`'s routes and
+wait, in the `dns` Environment, and only when the change touches
+`.github/` or that script, by a path filter of its own, so that the
+previews' stack matrix never picks it up. It reports like the previews
+and is no required check. `test_workflow_shape` holds both the
+workflow's trigger and the job's filter to match the join action, every
+file of the checkout the action names in a step's `env:`, and every
+workflow that holds a join.
 
 **Why the `dns` identity stays in the any-branch `dns` Environment.**
 Moving it to an Environment that only protected branches can name would

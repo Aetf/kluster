@@ -3,7 +3,10 @@ description: >
   Join this installation's ZeroTier network as a pre-authorized CI member,
   using an identity generated in Pulumi state rather than a Central API
   token — a leaked join credential is then one confined member, not the
-  ability to enroll more (physical/gateway.md §2.6).
+  ability to enroll more (physical/gateway.md §2.6). Every run, passing or
+  failing, ends in a `zt-reading:` line: the path to the gateway and the
+  roots, the overlay MTU the runner received, and whether full-size packets
+  cross in each direction (`kluster.scripts.zt_reading`; framework/ci.md §2).
 
 inputs:
   network_id:
@@ -45,9 +48,11 @@ runs:
     # `timeout-minutes` and the job's -- and sits a minute inside it, so that
     # what runs once it has passed (one last attempt per target of at most a
     # second each, and the listings, each under its own `timeout`) ends in the
-    # waiting step's own error before the cap ends the step without one.
-    # `test_zerotier_action` holds every caller's cap that far above the
-    # deadline.
+    # waiting step's own error before the cap ends the step without one. The
+    # join's reading, the last step, runs after that error inside the same
+    # minute, under a bound of its own that leaves the wait at least half of
+    # it. `test_zerotier_action` holds every caller's cap that far above the
+    # deadline, and the reading's bound inside the minute.
     - name: Start the join's clock
       id: clock
       shell: bash
@@ -214,6 +219,7 @@ runs:
         TARGETS: ${{ inputs.wait_for }}
         ANY_TARGETS: ${{ inputs.wait_for_any }}
         DEADLINE: ${{ steps.clock.outputs.deadline }}
+        ZT_READING: ${{ github.action_path }}/../../../src/kluster/scripts/zt_reading.py
       run: |
         set -euo pipefail
         # A clock step that was skipped, or wrote its output under another
@@ -256,7 +262,13 @@ runs:
           done
           if [ "${#unmet[@]}" -eq 0 ]; then exit 0; fi
           pending=("${unmet[@]}")
-          if [ $((attempts % 10)) -eq 0 ]; then timeout 5 sudo zerotier-cli peers || true; fi
+          # The listing names each peer's physical path, which a public
+          # repository's log must not carry: the reading's filter keeps the
+          # path's kind, latency and address family and drops the address and
+          # port, and a filter that fails prints nothing.
+          if [ $((attempts % 10)) -eq 0 ]; then
+            timeout 5 sudo zerotier-cli peers | python3 -I -S "$ZT_READING" redact || true
+          fi
           left=$((DEADLINE - $(date +%s)))
           if [ "$left" -le 0 ]; then break; fi
           sleep "$((left < 3 ? left : 3))"
@@ -264,3 +276,25 @@ runs:
         echo "::error::${pending[*]} unreachable over ZeroTier after ${attempts} attempts, $(($(date +%s) - waiting)) s; the join's deadline has passed"
         timeout 5 sudo zerotier-cli listnetworks || true
         exit 1
+
+    # The join's reading, on every run whether the join passed or not, so that
+    # a run that reached the home and one that did not are read side by side:
+    # how the gateway's member and the roots are reached, the MTU the overlay
+    # interface received, and whether a segment filling it crosses in each
+    # direction. `kluster.scripts.zt_reading` says how to read the line it
+    # prints. The runner has no environment of this project's at this step,
+    # so the script runs by path from the checkout this action is part of,
+    # under the runner's own `python3` and its standard library. It is a
+    # diagnostic, so nothing it finds fails the join, and it runs inside the
+    # headroom the clock step leaves: READING_SECONDS is its own deadline, and
+    # the `timeout` a guard against a hang past it.
+    - name: Take the join's reading
+      if: always()
+      shell: bash
+      env:
+        NETWORK_ID: ${{ inputs.network_id }}
+        ZT_READING: ${{ github.action_path }}/../../../src/kluster/scripts/zt_reading.py
+        READING_SECONDS: '20'
+      run: |
+        timeout "$((READING_SECONDS + 5))" \
+          python3 -I -S "$ZT_READING" reading "$NETWORK_ID" "$READING_SECONDS" || true

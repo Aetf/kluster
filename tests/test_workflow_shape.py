@@ -928,13 +928,33 @@ def test_a_path_glob_in_syntax_this_read_does_not_model_is_refused_by_name(
         _ = read()
 
 
+#: How an action's step names a file of the checkout it is part of.
+ACTION_PATH = re.compile(r'^\$\{\{\s*github\.action_path\s*\}\}/(?P<path>\S+)$')
+
+
+def _run_from_the_checkout(action: Path) -> set[Path]:
+    """Every file an action's steps name in their `env:` relative to the action itself, resolved."""
+    runs = mapping(read_workflow(action).get('runs'), f'{github_name(action)} runs:')
+    named: set[Path] = set()
+    for step in cast('list[object]', runs.get('steps', [])):
+        env = mapping(mapping(step, f'{github_name(action)} step').get('env', {}), f'{github_name(action)} step env:')
+        for value in env.values():
+            found = ACTION_PATH.match(str(value))
+            if found:
+                path = (action.parent / found['path']).resolve()
+                assert path.is_file(), f'{github_name(action)} names {found["path"]}, which is no file'
+                named.add(path)
+    return named
+
+
 def test_a_pull_request_that_changes_what_a_join_runs_proves_the_join() -> None:
     """The join is proved before a merge whenever a change could break it.
 
     A pull request's `pulumi` jobs do not join, so the one job that does is the
     proof: it runs whenever the change touches the join action, which carries
-    the pinned release, or a workflow holding a join, which carries the runner
-    label and the inputs it is called with (framework/ci.md §2). Held at both
+    the pinned release, a file of the checkout the action runs, or a workflow
+    holding a join, which carries the runner label and the inputs it is called
+    with (framework/ci.md §2). Held at both
     places a change can be filtered out before the join runs: the path lists
     of the workflow's own pull-request triggers, and the path filter the job's
     condition answers to, each matched against every one of those files.
@@ -947,7 +967,7 @@ def test_a_pull_request_that_changes_what_a_join_runs_proves_the_join() -> None:
     ]
     # `where` names a job as `<file under .github/>: <job>`.
     holding = {GITHUB / join.where.split(': ')[0] for join in _joins()}
-    exercised = sorted(str(path.relative_to(ROOT)) for path in {ZEROTIER, *holding})
+    exercised = sorted(str(path.relative_to(ROOT)) for path in {ZEROTIER, *_run_from_the_checkout(ZEROTIER), *holding})
 
     assert proofs, 'no job a pull request runs joins the overlay'
     for where, job in proofs:

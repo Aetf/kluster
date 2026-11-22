@@ -67,20 +67,17 @@ from ipaddress import IPv4Address
 from typing import final
 
 from kluster import conventions
+from kluster.conventions.gateway import SSH_PORT, UNIFI_API_PORT
 from kluster.lib import templates
 
+#: The gateway's management ports are `conventions.gateway`'s, and the rules
+#: that admit `ci-physical` to them pass them on.
 __all__ = ('SSH_PORT', 'UNIFI_API_PORT', 'FlowRules', 'flow_rules', 'roles')
 
 #: The package `importlib.resources` resolves this module's `templates/`
 #: directory against, so the rules program travels with the code that renders
 #: it (rfc-002 §9.1).
 _TEMPLATE_PACKAGE = 'kluster.components.overlay'
-
-#: The gateway's own management ports, as reached over the overlay: the shell
-#: the desired-state push writes through, and the controller API the firewall
-#: resources call. Both terminate on the gateway itself.
-SSH_PORT = 22
-UNIFI_API_PORT = 443
 
 
 def roles() -> Mapping[str, int]:
