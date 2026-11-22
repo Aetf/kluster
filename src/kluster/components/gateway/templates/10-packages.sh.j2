@@ -51,13 +51,57 @@
 # such a package, an offline boot leaves the members of the set that pin it
 # unpacked and fails, naming them, and the next boot that reaches apt installs
 # the set against the firmware's version. Run from the boot chain, the script
-# exits 0 only when every member of the set is installed. A failure here stops
+# exits 0 only when every member of the set is installed, read back from dpkg
+# after the install that put it there. A failure here stops
 # nothing after it: udm-boot.service hands each file of on_boot.d to
 # `xargs -n 1`, which runs every one whatever an earlier one exited with,
 # unless it exited 255 -- and this script exits 0 or 1.
 #
 # {{ cache }} is this script's alone -- the swap below replaces it whole, so
 # nothing else may keep a file in it.
+#
+# The firmware's package restore ({{ restore_unit }}) runs on the boot after a
+# firmware update, the boot {{ fwupdate }} marks, and when it is done it kills
+# whatever holds dpkg's locks (restore_dpkg_lock in /usr/sbin/ubnt-dpkg-restore,
+# from its EXIT trap). So while it can still kill -- the mark is there, or the
+# unit is activating -- the script starts the restore before it touches dpkg:
+# `systemctl start` joins the start job the boot queued and returns once the
+# oneshot is done, or at once when it is done already (RemainAfterExit=yes). The
+# unit's own 30-minute start timeout counts only once its job runs, after
+# unifi-core.service, and the boot chain's oneshot has no start timeout, so the
+# call is bounded here, by RESTORE_TIMEOUT; a call cut off leaves the job in
+# place and the run goes on behind dpkg's lock. The start cannot wait on the
+# chain itself: nothing the restore is ordered after is ordered after
+# udm-boot.service (read on the device, 2026-11-22, Aetf/kluster-ops#746). A
+# restore that failed is not started again, since that would run it a second
+# time. Any other boot that installs pays one `systemctl is-active`.
+#
+# dpkg's lock, as defence beside that wait, and the record that confirms it:
+# dpkg is never run beside another dpkg. dpkg takes its locks without waiting
+# (modstatdb_lock in dpkg's lib/dpkg/dbmodify.c, FILE_LOCK_NOWAIT), so a second
+# dpkg refuses rather than overlapping, and apt waits for them only when
+# DPkg::Lock::Timeout tells it to (debSystem::Lock in apt's
+# apt-pkg/deb/debsystem.cc; the default is not to wait). So every apt run here
+# waits up to LOCK_TIMEOUT seconds, and before the boot records the base, and
+# before each dpkg it runs itself, it waits the same way, through apt, for
+# whatever holds the lock. A lock still held when the wait ends is not broken:
+# the base is not recorded, the step after it fails, and the boot with it.
+#
+# apt reports a dpkg that ended on a signal rather than exiting as
+# "Sub-process ... exited unexpectedly", or as "received a segmentation fault"
+# for SIGSEGV (pkgDPkgPM::Go in apt-pkg/deb/dpkgpm.cc; neither is translated).
+# Such a dpkg leaves a journal it did not replay, and apt refuses to install
+# until `dpkg --configure -a` replays it (debSystem::Lock, CheckUpdates). On
+# that report the boot waits for the lock, runs `dpkg --configure -a`, and
+# installs through apt once more. A second failure fails the boot, whatever the
+# offline cache then installs.
+#
+# Every boot that goes past finding the set installed keeps what it found at
+# dpkg's lock -- free, or held by which process and for how long -- what the
+# kernel and the firmware's restore said of a dpkg that died, and how its
+# install ended, one line each, in {{ history }}. That file is on /data, so it
+# outlives the boot and the next firmware update, which the journal is not
+# relied on to do.
 #
 # Run with no argument, as the boot chain runs it, it does all of the above.
 # Given one of two arguments instead, it runs for a person or the homelab host:
@@ -115,10 +159,163 @@ RELEASE={{ release }}
 # the partial/ directory it downloads through, but only inside an archives
 # directory that already exists.
 DOWNLOAD=$CACHE.download
-APT=(apt-get -o "Dir::Cache::archives=$DOWNLOAD")
+# How long one wait for dpkg's lock lasts: how long a holder is waited for,
+# which a first bound has to guess at, since nothing yet measures how long the
+# firmware's own restore holds the lock; the record below says how long each
+# wait took. A holder that never lets go costs three waits in a row -- before
+# the base, apt's inside the install, before the offline cache -- about a
+# quarter of an hour before the rest of the boot chain runs. On the boot after a
+# firmware update the rest of the chain also waits for unifi-core.service and
+# then the restore, up to the restore's 30 minutes, with RESTORE_TIMEOUT behind
+# that.
+LOCK_TIMEOUT=300
+# How long the start of the firmware's restore is waited for: its 30-minute
+# start timeout, and ten minutes for what its job waits for first.
+RESTORE_TIMEOUT=2400
+APT=(apt-get -o "Dir::Cache::archives=$DOWNLOAD" -o "DPkg::Lock::Timeout=$LOCK_TIMEOUT")
+# dpkg's frontend lock, beside the live database, and the kernel's table of
+# file locks, which names what holds it.
+FRONTEND_LOCK=${STATUS%/*}/lock-frontend
+LOCKS={{ locks }}
+HISTORY={{ history }}
+# The firmware's package restore, whose journal a dpkg killed under apt keeps
+# a copy of (below).
+RESTORE_UNIT={{ restore_unit }}
+FWUPDATE={{ fwupdate }}
+# The boot path's scratch, removed with the download directory: what apt said
+# during the install, read for its report of a dpkg that did not exit and for
+# its waits on the lock, and the journal cursors a death's record reads on
+# from, so that each death keeps only the lines that came after the last one.
+WORK=
+OUTPUT=
+# When the boot path began, which is where the first death's record starts.
+STARTED=
+
+# Say a line, and keep it in $HISTORY with the time and the firmware's release.
+# A record that cannot be written costs the boot nothing.
+say() {
+    echo "$*"
+    keep "$*"
+}
+
+warn() {
+    echo "$*" >&2
+    keep "$*"
+}
+
+keep() {
+    { echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) $(head -n 1 "$RELEASE") $*" >>"$HISTORY"; } 2>/dev/null
+}
 
 is_installed() {
-    dpkg -s "$1" 2>/dev/null | grep -q '^Status: install ok installed'
+    [ "$(dpkg-query -W -f='${Status}' "$1" 2>/dev/null)" = 'install ok installed' ]
+}
+
+# The members of the set that are not installed, on one line.
+missing_members() {
+    local p missing=()
+    for p in "${PACKAGES[@]}"; do
+        is_installed "$p" || missing+=("$p")
+    done
+    echo "${missing[*]}"
+}
+
+# The command line of process $1, or nothing once it is gone.
+command_line() {
+    local line
+    [ -n "$1" ] || return 0
+    line=$(tr '\0' ' ' <"/proc/$1/cmdline" 2>/dev/null)
+    echo "${line% }"
+}
+
+# What holds dpkg's frontend lock, as the kernel's table of file locks names
+# it: the holder's pid and command line, and its parent's, or nothing while the
+# lock is free. dpkg and apt take it with fcntl, which the table lists as
+# POSIX. The table is searched by inode alone, since it and stat need not agree
+# on the device number under an overlay, and a pid it names counts only when
+# it has the lock file open: a lock on another filesystem's file of the same
+# inode number is not dpkg's.
+lock_holder() {
+    local inode pid parent fd lock
+    inode=$(stat -c %i "$FRONTEND_LOCK" 2>/dev/null) || return 0
+    lock=$(readlink -f "$FRONTEND_LOCK")
+    for pid in $(awk -v inode="$inode" '$2 == "POSIX" { n = split($6, f, ":"); if (f[n] == inode) print $5 }' "$LOCKS"); do
+        for fd in "/proc/$pid/fd/"*; do
+            [ "$(readlink -f "$fd" 2>/dev/null)" = "$lock" ] || continue
+            parent=$(awk '/^PPid:/ { print $2 }' "/proc/$pid/status" 2>/dev/null)
+            echo "pid $pid ($(command_line "$pid")), child of pid ${parent:-unknown} ($(command_line "$parent"))"
+            return 0
+        done
+    done
+}
+
+# Keep what says why a dpkg under apt died and will not outlast the boot: the
+# kernel's lines of out-of-memory kills, and the firmware restore's journal,
+# each since the run began or since the death before this one, whichever is
+# later. journalctl's --cursor-file starts after the cursor it holds, once
+# there is one, and writes the last entry's cursor back.
+keep_death() {
+    local line
+    while IFS= read -r line; do
+        keep "kernel: $line"
+    done < <(journalctl -k -b --no-pager --since "@$STARTED" --cursor-file="$WORK/kernel.cursor" 2>/dev/null \
+        | grep -iE 'out of memory|killed process')
+    while IFS= read -r line; do
+        keep "$RESTORE_UNIT: $line"
+    done < <(journalctl -b --no-pager -u "$RESTORE_UNIT" --since "@$STARTED" --cursor-file="$WORK/restore.cursor" 2>/dev/null)
+}
+
+# Wait for dpkg's lock before $1, the way apt waits for it, and keep what was
+# found: the lock free, or held by what and for how long. `apt-get check` is
+# the wait: it takes the lock as an install does, and lets it go. What it says
+# of the set's dependencies is not this wait's business, and its exit status
+# is not read; the lock is read again instead. Returns 1 when the lock is still
+# held, and the step after it then meets the holder itself.
+wait_for_dpkg() {
+    local holder start
+    holder=$(lock_holder)
+    if [ -z "$holder" ]; then
+        say "packages: dpkg's lock is free before $1"
+        return 0
+    fi
+    say "packages: dpkg's lock is held by $holder; waiting up to ${LOCK_TIMEOUT}s for it before $1"
+    start=$SECONDS
+    apt-get -o "DPkg::Lock::Timeout=$LOCK_TIMEOUT" check >/dev/null 2>&1
+    holder=$(lock_holder)
+    if [ -n "$holder" ]; then
+        warn "packages: dpkg's lock is still held, by $holder, after $((SECONDS - start))s; going on to $1"
+        return 1
+    fi
+    say "packages: dpkg's lock was released after $((SECONDS - start))s"
+}
+
+# Install the set through apt once, and read back from dpkg that every member
+# is installed: apt's exit status alone does not say so. Sets `died` when apt
+# reports that dpkg ended on a signal, and `finding` when apt exited 0 and
+# left a member uninstalled.
+install_through_apt() {
+    local status missing line
+    died=0
+    "${APT[@]}" install -y "${PACKAGES[@]}" 2>&1 | tee "$OUTPUT"
+    status=${PIPESTATUS[0]}
+    # apt's own wait on the lock, which it prints and no line of this script's
+    # covers: the holder it names, once.
+    while IFS= read -r line; do
+        keep "apt: $line"
+    done < <(tr '\r' '\n' <"$OUTPUT" | grep -o 'Waiting for cache lock: .*held by process [0-9]*[^.]*' | sort -u)
+    if grep -Eq 'Sub-process /usr/bin/dpkg (exited unexpectedly|received a segmentation fault)' "$OUTPUT"; then
+        died=1
+        warn "packages: dpkg ended on a signal during apt's install"
+        keep_death
+    fi
+    [ "$status" -eq 0 ] || return 1
+    missing=$(missing_members)
+    if [ -n "$missing" ]; then
+        warn "packages: apt's install exited 0 and left $missing not installed"
+        finding=1
+        return 1
+    fi
+    say "packages: installed ${PACKAGES[*]} through apt"
 }
 
 installed() {
@@ -149,10 +346,7 @@ carried() {
 # The version of package $1 installed on the live system, or nothing when it
 # is not installed -- a record dpkg keeps of a removed package is not one.
 installed_version() {
-    dpkg -s "$1" 2>/dev/null | awk '
-        /^Status: / { ok = ($0 == "Status: install ok installed") }
-        /^Version: / { version = $2 }
-        END { if (ok) print version }'
+    is_installed "$1" && dpkg-query -W -f='${Version}' "$1" 2>/dev/null
 }
 
 # The version the saved firmware base lists package $1 installed at, or nothing
@@ -283,7 +477,7 @@ fi
 # Set before anything is downloaded, so that a run which exits anywhere, or is
 # stopped by a signal, takes the directory with it; one killed outright leaves
 # it for the next run, which empties it before using it.
-trap 'rm -rf "$DOWNLOAD"' EXIT
+trap 'rm -rf "$DOWNLOAD" ${WORK:+"$WORK"}' EXIT
 
 # The swap is two renames. A run stopped between them leaves no cache and the
 # whole new one beside it, which is put in place before anything reads the
@@ -310,17 +504,52 @@ if installed; then
     exit 0
 fi
 
+WORK=$(mktemp -d)
+OUTPUT=$WORK/apt.output
+STARTED=$(date +%s)
+# Set when this run fails whatever the offline cache installs: apt's install
+# exited 0 and left a member uninstalled, or failed again on its one retry.
+finding=0
+say "packages: $(missing_members) not installed: installing ${PACKAGES[*]}"
+
+# The boot after a firmware update: the firmware's restore kills whatever holds
+# dpkg's locks when it is done, so nothing here touches dpkg while it still can.
+if [ -e "$FWUPDATE" ] || [ "$(systemctl is-active "$RESTORE_UNIT" 2>/dev/null)" = activating ]; then
+    if systemctl is-failed --quiet "$RESTORE_UNIT"; then
+        warn "packages: the firmware's package restore $RESTORE_UNIT failed on this boot; not starting it again"
+    else
+        say "packages: the boot after a firmware update: waiting up to ${RESTORE_TIMEOUT}s for the firmware's package restore $RESTORE_UNIT before touching dpkg"
+        restore_start=$SECONDS
+        timeout "$RESTORE_TIMEOUT" systemctl start "$RESTORE_UNIT"
+        restore_status=$?
+        if [ "$restore_status" -eq 0 ]; then
+            say "packages: the firmware's package restore was done after $((SECONDS - restore_start))s"
+        elif [ "$restore_status" -eq 124 ]; then
+            warn "packages: stopped waiting for the firmware's package restore after ${RESTORE_TIMEOUT}s; going on, behind dpkg's lock"
+        else
+            warn "packages: the firmware's package restore did not finish cleanly, after $((SECONDS - restore_start))s; going on, behind dpkg's lock"
+        fi
+    fi
+fi
+lock_free=0
+wait_for_dpkg "recording the firmware base and installing the set" && lock_free=1
+
 # Before anything is installed, which is the one moment the live database is
-# the firmware's alone. The release is written last: it is what marks the
-# record complete, and a run stopped before it leaves the old release in
-# place, so the next boot -- which still finds none of the set, since the
-# install comes after this -- records again.
+# the firmware's alone, and only once dpkg's lock is free, so that what is
+# copied is a database no other dpkg is writing. The release is written last:
+# it is what marks the record complete, and a run stopped before it, or one
+# that found the lock still held, leaves the old release in place, so the next
+# boot that finds none of the set installed records again.
 if none_installed && ! cmp -s "$RELEASE" "$BASE_RELEASE"; then
-    echo "packages: none of ${PACKAGES[*]} is installed on a firmware release the saved base is not from, so this is the firmware's own dpkg database: recording it as the base in $BASE_STATUS"
-    mkdir -p "$BASE"
-    { cp "$STATUS" "$BASE_STATUS.new" && mv "$BASE_STATUS.new" "$BASE_STATUS" \
-        && cp "$RELEASE" "$BASE_RELEASE.new" && mv "$BASE_RELEASE.new" "$BASE_RELEASE"; } \
-        || echo "packages: recording the base failed, the cache stays resolved against the one saved before"
+    if [ "$lock_free" -eq 1 ]; then
+        echo "packages: none of ${PACKAGES[*]} is installed on a firmware release the saved base is not from, so this is the firmware's own dpkg database: recording it as the base in $BASE_STATUS"
+        mkdir -p "$BASE"
+        { cp "$STATUS" "$BASE_STATUS.new" && mv "$BASE_STATUS.new" "$BASE_STATUS" \
+            && cp "$RELEASE" "$BASE_RELEASE.new" && mv "$BASE_RELEASE.new" "$BASE_RELEASE"; } \
+            || echo "packages: recording the base failed, the cache stays resolved against the one saved before"
+    else
+        warn "packages: not recording the firmware base while dpkg's lock is held: another dpkg may be part-way through writing the database"
+    fi
 fi
 
 fresh_download
@@ -331,16 +560,46 @@ echo "packages: installing ${PACKAGES[*]} via apt (post-firmware-update boot)...
 # install will fail and we fall back to the cache.
 apt-get update || echo "packages: apt-get update failed, continuing"
 
+# The update is the stretch of the run that waits on the network, so a holder
+# can take the lock during it; apt's install waits for it, and the record keeps
+# who it was.
+holder=$(lock_holder)
+if [ -n "$holder" ]; then
+    say "packages: dpkg's lock is held by $holder after apt-get update; apt's install waits up to ${LOCK_TIMEOUT}s for it"
+else
+    say "packages: dpkg's lock is free after apt-get update"
+fi
+
 # A refresh that fails keeps the old cache and fails nothing here: the set is
 # installed, and that is what this boot is for.
-if "${APT[@]}" install -y "${PACKAGES[@]}"; then
+if install_through_apt; then
     refresh
     exit 0
 fi
 
-echo "packages: apt failed, falling back to the offline cache $CACHE"
+# A dpkg that ended on a signal is the one failure a second install can
+# answer: what it left is replayed by `dpkg --configure -a`, which apt
+# requires before it installs again. Another failure -- an archive out of
+# reach, a maintainer script that fails -- meets a second install the same way.
+if [ "$died" -eq 1 ]; then
+    say "packages: replaying what the killed dpkg left with dpkg --configure -a and installing through apt once more"
+    wait_for_dpkg "dpkg --configure -a"
+    LC_ALL=C dpkg --configure -a
+    if install_through_apt; then
+        refresh
+        exit 0
+    fi
+    if [ "$died" -eq 1 ]; then
+        warn "packages: apt's install failed again after dpkg --configure -a: dpkg ended on a signal again"
+    else
+        warn "packages: apt's install failed again after dpkg --configure -a, and dpkg did not die this time"
+    fi
+    finding=1
+fi
+
+say "packages: apt failed, falling back to the offline cache $CACHE"
 if ! compgen -G "$CACHE/*.deb" >/dev/null; then
-    echo "packages: FAILED -- neither apt nor the offline cache could install ${PACKAGES[*]}" >&2
+    warn "packages: FAILED -- neither apt nor the offline cache could install ${PACKAGES[*]}"
     exit 1
 fi
 
@@ -385,6 +644,7 @@ done
 # left unconfigured, and dpkg exits non-zero.
 dpkg_status=0
 if [ -n "${debs[*]}" ]; then
+    wait_for_dpkg "installing the offline cache"
     yes | LC_ALL=C dpkg -i "${debs[@]}"
     dpkg_status=${PIPESTATUS[1]}
 fi
@@ -392,17 +652,19 @@ fi
 # The boot succeeds when the set is up, and on nothing else: dpkg's exit status
 # is not enough, since a cache from before the set last grew installs cleanly
 # and still lacks a package of it.
-missing=()
-for p in "${PACKAGES[@]}"; do
-    is_installed "$p" || missing+=("$p")
-done
-if [ "$dpkg_status" -eq 0 ] && [ -z "${missing[*]}" ]; then
+missing=$(missing_members)
+if [ "$dpkg_status" -eq 0 ] && [ -z "$missing" ] && [ "$finding" -eq 1 ]; then
+    warn "packages: FAILED -- the offline cache installed ${PACKAGES[*]}, and the run fails all the same: apt's install did not, as said above"
+    exit 1
+fi
+if [ "$dpkg_status" -eq 0 ] && [ -z "$missing" ]; then
+    say "packages: installed ${PACKAGES[*]} from the offline cache"
     exit 0
 fi
-if [ -n "${missing[*]}" ]; then
-    echo "packages: FAILED -- ${missing[*]} not installed: neither apt nor the offline cache could install them" >&2
+if [ -n "$missing" ]; then
+    warn "packages: FAILED -- $missing not installed: neither apt nor the offline cache could install them"
 else
-    echo "packages: FAILED -- dpkg failed installing the offline cache $CACHE, though ${PACKAGES[*]} are installed" >&2
+    warn "packages: FAILED -- dpkg failed installing the offline cache $CACHE, though ${PACKAGES[*]} are installed"
 fi
 if [ -n "${held[*]}" ]; then
     echo "packages: the firmware's ${held[*]} stay at the versions it ships (held back above), so what the offline cache holds pinned to their older versions stays unconfigured until a boot whose apt install succeeds installs the set against this firmware" >&2
