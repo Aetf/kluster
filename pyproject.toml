@@ -70,6 +70,11 @@ dependencies = [
     # (`kluster.lib.monitoring.selectors`), which the monitoring component's
     # rules and `perf` share: GreptimeDB's PromQL parser.
     "promql-parser>=0.12.0,<0.13",
+    # The Messages API, which `dispatch gates` asks each model gate's question
+    # through (`kluster.scripts.dispatch.gates.model`); the first release on
+    # `httpx2`, whose transport the gates' cases hand the client a recorded
+    # response through.
+    "anthropic>=2.7.0,<3",
 ]
 
 [project.scripts]

@@ -178,13 +178,19 @@ _ORDER = """when to run what:
          stage 11: there is no cluster to seal it to yet.
     9. credentials derived github-dispatch-key record
        credentials derived github-trigger-key record
-         The two GitHub App private keys. Each is generated on its own App
-         page -- shown once, and created by no API -- so the command prints
-         the steps and escrows what they produce. The escrow copy is the
-         permanent store; the delivery is the repository secret the key's
+       credentials derived anthropic-gates-key record
+       credentials derived anthropic-gates-key recover
+         The keys made by hand in a console and escrowed. Each is shown
+         once where it is made and created by no API, so the command prints
+         the steps and escrows what they produce; the escrow copy is the
+         permanent store. The two GitHub App private keys are made on their
+         App pages, and their delivery is the repository secret each key's
          workflow reads, which stage 10 pushes: the ops repository's
          TRIGGER_APP_PRIVATE_KEY for the trigger key, the deployment
-         repository's DISPATCH_APP_PRIVATE_KEY for the dispatch key.
+         repository's DISPATCH_APP_PRIVATE_KEY for the dispatch key. The
+         model gates' key is made in the Claude Console, and its delivery
+         is recover, which puts it in this workstation's secret store, or
+         its slot where there is none, for dispatch gates to read.
    10. credentials derived sync --only <row>
          The GitHub secrets CI reads, for the rows whose value lives
          somewhere else and is copied into a slot, one row per run. Run it

@@ -1,9 +1,14 @@
 """The acquisition chain: where a value the operator hands a run is found.
 
-docs/credentials.md §2 writes the chain down, and it serves two kinds of value:
-the account roots a mint borrows (`kluster.scripts.credentials.masters`), and
-the operator passphrase every run of an operator stack is given
-(`kluster.lib.stack_environment`). Each is looked up in this order, first hit
+docs/credentials.md §2 writes the chain down. It serves every value kept
+under a key of the desktop secret store, which is a value whose reader can
+open a keyring and prompt for itself: each field of an account root a mint
+borrows (`kluster.scripts.credentials.masters`), and each escrowed row whose
+workstation slot names a store key
+(`kluster.scripts.credentials.escrow.WorkstationSlot.store`). Today those rows
+are the operator passphrase, which every run of an operator stack is given
+(`kluster.lib.stack_environment`), and the model gates' API key, which
+`dispatch gates` asks with. Each value is looked up in this order, first hit
 wins:
 
 1.  the **desktop secret store** (the freedesktop Secret Service, or the
@@ -19,10 +24,10 @@ The store is reached here and nowhere else, so there is one secret-store
 mechanism and not one per kind of value: the kit's master password
 (`kluster.scripts.credentials.kdbx`) goes through the same three functions.
 Nothing is written to it as a side effect of a run. Each write is a command
-the operator ran by name -- `credentials kit password remember`, `credentials
-root <name> remember`, and `credentials derived operator-passphrase generate`
-and `recover` -- and a machine where none of them has run behaves as if it had
-no store.
+the operator ran by name: `credentials kit password remember`, `credentials
+root <name> remember`, and the `generate` and `recover` of an escrowed row
+whose slot names a store. A machine where none of them has run behaves as if
+it had no store.
 """
 
 from __future__ import annotations

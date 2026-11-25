@@ -60,6 +60,15 @@ def console_key() -> str:
     return pki.generate_ca_key()
 
 
+#: A value of each shape a console row holds, as its console would hand one out.
+#: A row of a shape missing here fails `_fill` by name rather than filing a
+#: value its row refuses.
+CONSOLE_VALUES: dict[escrow.Shape, Callable[[], str]] = {
+    escrow.PRIVATE_KEY: console_key,
+    escrow.ANTHROPIC_API_KEY: lambda: 'sk-ant-api03-a-console-made-key',
+}
+
+
 def _fill(vault: escrow.Vault, label: str) -> str:
     """One label at its next generation, however that label's value comes about."""
     origin = escrow.register()[label].origin
@@ -67,7 +76,7 @@ def _fill(vault: escrow.Vault, label: str) -> str:
         return escrow.generate(vault, label)
     # A console row has nothing to draw: its value arrives from outside, which
     # is what `adopt` is for.
-    value = console_key()
+    value = CONSOLE_VALUES[escrow.register()[label].shape]()
     _ = escrow.adopt(vault, label, value)
     return value
 
@@ -411,11 +420,21 @@ def console_rows() -> list[str]:
     return [label for label, row in escrow.register().items() if isinstance(row.origin, escrow.Console)]
 
 
-# GitHub makes an App's private key and nothing here can, so both App keys are
-# console rows. At import, because this sizes the parametrizations below: a
-# row missing from it would shrink them and still report green.
-_APP_KEYS_MISSING = {escrow.DISPATCH_KEY, escrow.TRIGGER_KEY} - set(console_rows())
-assert not _APP_KEYS_MISSING, f'console rows lack {sorted(_APP_KEYS_MISSING)}'
+def kit_rows() -> list[str]:
+    """Every console label a kit written while it was a seed may still hold."""
+    return [
+        label
+        for label, row in escrow.register().items()
+        if isinstance(row.origin, escrow.Console) and row.origin.kit is not None
+    ]
+
+
+# GitHub makes an App's private key and nothing here can, so each App key is a
+# console row, and one a kit may still hold. At import, because this sizes the
+# parametrizations below: a row missing from them would shrink them and still
+# report green.
+_APP_KEYS_MISSING = {escrow.DISPATCH_KEY, escrow.TRIGGER_KEY} - set(kit_rows())
+assert not _APP_KEYS_MISSING, f'console rows a kit may hold lack {sorted(_APP_KEYS_MISSING)}'
 
 
 @pytest.mark.parametrize('label', console_rows())
@@ -465,9 +484,9 @@ def test_recording_a_key_the_registry_has_never_seen_is_the_next_generation(vaul
 
 
 @pytest.mark.parametrize('label', console_rows())
-def test_recording_something_that_is_not_a_private_key_is_refused(vault: escrow.Vault, label: str) -> None:
+def test_recording_something_that_is_not_of_the_rows_shape_is_refused(vault: escrow.Vault, label: str) -> None:
     # Nothing here can draw a key a console hands out, and a wrong pipe is
-    # caught at the record rather than on the day a workflow signs with it.
+    # caught at the record rather than on the day its consumer first uses it.
     with pytest.raises(escrow.EscrowRefused) as refused:
         _ = escrow.record(vault, label, 'Iv1.the-client-id')
     assert refused.value.refusal is escrow.Refusal.NOT_ITS_SHAPE
@@ -486,7 +505,7 @@ def test_recording_a_row_that_is_drawn_here_is_refused(vault: escrow.Vault) -> N
     assert vault.registry.generations(escrow.PASSPHRASE) == []
 
 
-@pytest.mark.parametrize('label', console_rows())
+@pytest.mark.parametrize('label', kit_rows())
 def test_a_key_still_in_a_kit_is_read_out_of_it(vault: escrow.Vault, kit: KdbxStore, label: str) -> None:
     # The one path that reaches a kit for a §3 row, and it exists because a kit
     # written while these rows were seeds holds the only copy of each: the
