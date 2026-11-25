@@ -751,9 +751,10 @@ derived from a host inventory, not guessed.
 ### 4.1 Host inventory (measured 2026-08-22, Aetf-Arch-Homelab)
 
 **Hardware**: i9-12900KS (16C/24T) with its UHD 770 iGPU, an Arc A380
-discrete GPU (added 2026-10-18), **32 GB RAM** (the binding
-constraint), and storage on two NVMe disks and the JBOD — this host
-*is* the NAS.
+discrete GPU (added 2026-10-18), **128 GiB RAM** (125 GiB usable;
+from 2026-11-24, four DDR5 memory modules, the most the board takes),
+and storage on two NVMe disks and the JBOD — this host *is*
+the NAS.
 
 **Storage** (read 2026-11-17), with what each is for in the new
 cluster:
@@ -791,7 +792,7 @@ cluster:
 
 | What | Why it stays | RAM budget |
 | --- | --- | --- |
-| ZFS + NFS + Samba serving | the NAS role; the cluster consumes it | ZFS ARC (in-RAM read cache) ≥4 GiB (read 2026-11-17: at its floor, about 1 GiB) |
+| ZFS + NFS + Samba serving | the NAS role; the cluster consumes it | ZFS ARC (in-RAM read cache) ≥4 GiB and at most 32 GiB (`zfs_arc_max`, aconfmgr's `nas` role; Aetf/kluster-ops#948), the share of the host that gives way first (§4.2) |
 | HAOS libvirt VM (2 vCPU / 4 GiB, PCIe USB3 + Wi-Fi/BT passthrough) | home automation must survive cluster outages; architecture.md §6.8 | 4 GiB |
 | AdGuard alice/bob run as nspawn containers **on the UDM**, not here; the `dns` stack writes both instances, and the host runs no synchronizer between them (declarative/dns.md §3) | LAN DNS lives on the gateway and must survive cluster (and this host's) outages | ~0 |
 | The *legacy* Pulumi state-backend Postgres (podman) — serves kluster-code until decommission; the new cluster's backend lives on an OCI micro (framework/ci.md §1) | a state backend cannot live inside the cluster it manages | ~0.2 GiB (until Wave F) |
@@ -823,42 +824,41 @@ migration.md Wave C the window).
 ### 4.2 VM sizing
 
 -   **Worker VM** (pure worker — the control plane lives cloud-side,
-    architecture.md §1.1): **12–16 vCPU**, its RAM grown to fit (below),
-    disk on local NVMe. The host has 31 GiB. Read on 2026-11-05 before
-    the worker started, 12.3 GiB of it was available, with Home
-    Assistant's machine at 4.1, legacy k3s's server at 2.6 and its pods
-    at 5.6; the worker **boots at 10 GiB**, leaving about 2.3. What it
-    can grow by after that is what legacy releases, less a margin of
-    1 GiB. **Two ceilings follow**:
-    -   **Transitional, while the migration waves run: about 16 GiB**,
-        about 14.5 of it allocatable to workloads, reached at Wave C's
-        window with legacy's applications stopped. The legacy server and
-        what stays on it — its system pods and the idle CI runners a
-        neighboring project runs there, about 3.6 GiB together — stay
-        resident. The runners are the assumption: one under load has
-        taken up to 6 GiB, so the ceiling holds only while that
-        project's dispatching stays paused, as the operator has ruled
-        for the waves, or the runners are capped through Wave C's window
-        and soak.
-    -   **End state, after the decommission: about 19 GiB at most**,
-        once legacy releases the rest. That is a ceiling and not a
-        target: the end-state size is the decommission's decision
-        (migration.md §4), against what the host keeps for the
-        operator's own work beside the cluster.
+    architecture.md §1.1): **16 vCPU and 32 GiB**, its end state, and
+    the size it has before the migration waves; disk on local NVMe.
+    The 32 GiB is twice what the workload set the waves bring home comes
+    to with every peak at once, about 15 GiB, against requests of about
+    6.6 GiB (rfc-008 §6.1): requests are sized from what each
+    application runs at and limits from its 30-day peak, so the margin
+    beyond them is room for applications the migration has not yet
+    sized. The 16 vCPU are two thirds of the host's 24 hardware threads,
+    and unpinned: they are host threads like any other, so what the
+    worker leaves idle the host's own work uses.
 
-    **The worker grows to fit, not to absorb**: a drained window grows
-    it by what the next wave's requests and their headroom need, capped
-    by what legacy has released, and whatever legacy releases beyond
-    that stays with the host (migration.md §0 rule 4). One window does
-    it, Wave C's, from 10 GiB to about 16. The workload set fits under
-    the transitional ceiling because requests are sized from what each
-    application runs at, and limits from its 30-day peak (rfc-008 §6.1):
-    the requests take less than half of the allocatable, and every peak
-    at once comes to about the allocatable itself. **A RAM upgrade
-    remains the relief valve** (board verified: ROG Maximus Z690 Hero,
-    DDR5, 4×DIMM up to 128 GB), and the choice between it and tighter
-    limits is the operator's if Wave C's reading departs from that
-    sizing.
+    **The host keeps about 90 GiB beside it**, for Home Assistant's
+    machine, the legacy cluster until the decommission, the host's own
+    services, the builds and test runs of the operator's own work, and
+    the ZFS cache. Typically, Home Assistant's machine, the legacy
+    cluster and the host's services take about 22 GiB, which leaves
+    about 70 GiB: the ZFS cache takes up to its 32 GiB ceiling, and the
+    operator's builds and test runs take the rest, about 40 GiB. The
+    legacy cluster's peak is higher, up to 27 GiB with the CI runners a
+    neighboring project runs on it under load, and where that peak
+    meets the operator's heaviest work, the ZFS cache gives way below
+    its ceiling: it shrinks under memory pressure, which no other
+    tenant can.
+
+    **No wave changes the worker's size**, and none waits on memory
+    the legacy cluster frees (migration.md §0 rule 4). What the legacy
+    cluster releases at the decommission stays with the host. The board
+    is at its maximum, so where the worker's requests or peaks, as
+    monitoring reads them, depart from the sizing above, the answer is
+    tighter limits or a larger worker out of the host's share, and the
+    choice is the operator's.
+    Changing the size is an edit to `HOMELAB_MEMORY_GIB` or
+    `HOMELAB_VCPUS` in `kluster.conventions.homelab` and an apply of
+    `physical`, which replaces the domain: the node restarts, and its
+    disk, a resource of its own, survives.
 -   **Addressing**: the worker sits on the **dedicated cluster VLAN**
     (id 7, `192.168.70.0/24`) rather than the host's untagged server
     LAN, at the static address **`192.168.70.10`** — the network shape
@@ -872,28 +872,28 @@ migration.md Wave C the window).
     the reading a growth is checked against. (No etcd on this VM; its
     disk constraint is ordinary workload I/O.)
 -   **Optional second worker VM** (2–4 vCPU / 8 GB): **not in the
-    initial build**, deferred with criteria in §4.3. RAM is why it
-    waits: the end-state ceiling above is already the whole of what
-    this host can spare. The design must not assume it exists.
+    initial build**, deferred with criteria in §4.3. It waits on a use
+    case (§4.3). The design must not assume it exists.
 
 ### 4.3 One big VM, and the deferred second worker
 
 Decided 2026-08-22 (was an open question): a single large VM. On one
 physical host, multiple VMs add no real fault isolation, but each costs a
-fixed overhead (kubelet + Cilium + OS ≈ 1 GiB per node) from a 32 GB
-budget that has none to spare. That argument settles the shape of the
-initial build — one big VM, not N small ones — and it also sets the
+fixed overhead (kubelet + Cilium + OS ≈ 1 GiB per node). Against the
+host's 125 GiB that overhead is small, and the argument does not rest
+on its size: it is a cost that buys nothing, since a second VM on the
+same machine fails with the first. That argument settles the shape of
+the initial build — one big VM, not N small ones — and it also sets the
 terms on which a second one could ever join, which is the question a
 reader arrives here with.
 
 **The second worker VM is deferred as of 2026-08-22**, at the §4.2
 sizing (2–4 vCPU / 8 GB):
 
--   **Trigger**: the RAM upgrade lands (§4.2's relief valve — ROG
-    Maximus Z690 Hero, 4×DIMM DDR5, up to 128 GB) **and** one of the
-    two use cases below is real. Both, not either: at 32 GB the end-state
-    worker plus the host's own tenants spend the budget (§4.1, §4.2), so
-    a second VM has no memory to run in no matter how good the reason.
+-   **Trigger**: one of the two use cases below is real. Memory does
+    not stand in the way: the 8 GB comes out of the share the host
+    keeps beside the end-state worker (§4.2), and where it squeezes,
+    the ZFS cache is what gives way.
 -   **What it buys** — the two use cases that survive the
     no-fault-isolation argument: **same-site storage replicas**, which
     is the standing precondition for Longhorn replica=2
@@ -915,7 +915,7 @@ answered with `kubectl top` on the legacy cluster (2026-08-22), of
 
 | Infra component | Measured | Fate in the new cluster |
 | --- | --- | --- |
-| k3s server + containerd (host procs) | ~1.7 GiB | CP moved cloud-side; the homelab VM keeps only kubelet+containerd (~0.5 GiB). The CP cost re-appears as ~2–2.5 GiB × 3 on the cloud nodes — paid out of OCI RAM, not out of the 32 GB host |
+| k3s server + containerd (host procs) | ~1.7 GiB | CP moved cloud-side; the homelab VM keeps only kubelet+containerd (~0.5 GiB). The CP cost re-appears as ~2–2.5 GiB × 3 on the cloud nodes — paid out of OCI RAM, not out of the homelab host |
 | Monitoring (prometheus 948 Mi, grafana 428 Mi, exporters/operator/alertmanager ~200 Mi) | ~1.6 GiB | **switch to VictoriaMetrics** (vmsingle + vmagent + vmalert): PromQL-compatible, typically ~1/5 the RAM at this scale; grafana stays. Target ≤0.7 GiB, held as requests, planned at the home site: 0.65 GiB of them (`components/monitoring/memory.py`), against 0.9 GiB of working set measured 2026-11-17 under the charts' defaults. metrics-server, which the monitoring component installs beside it, is charged to the kube-system row below |
 | Monitoring's history store (none on the legacy cluster) | — | **a line of its own**, the second vmsingle that keeps the comparison's series for good (declarative/cluster-infra.md §1 item 6): a 150 Mi request beside monitoring's ≤0.7 GiB, its own line of `components/monitoring/memory.py`. Derived from the recent store's 225 Mi at 171,229 series, read 2026-11-17: the history holds 5,000–6,000 of them, so what it takes is the process's floor rather than its series' |
 | Shared-JuiceFS stack (CSI ×5, redis, 4 mount pods) | ~1.0 GiB | gone by design: no CSI driver, no shared metadata store, and no workload mounts JuiceFS (storage.md §6). A workload admitted later brings its own sidecar mount, **budgeted honestly at 0.5–1 GiB requests** — root cause (b) of the legacy instability was starving exactly this process |
@@ -941,9 +941,8 @@ what the 8 GB A1 nodes absorb, billed at A1's memory rate (§3.2): each still ke
 Envoy, hath (a 30-day peak of 0.5 GiB, §1.1, held to its node by its
 cache's volume) and the pods the scheduler places there, which fit the
 allocatable the control plane leaves (§1.1). Meanwhile, the homelab
-side, though tighter on paper, is the flexible one: workloads can be
-trimmed, ARC squeezed, and RAM added (§4.2) — memory pressure there is
-real but manageable.
+side is the flexible one: its workloads can be trimmed, and the worker
+can grow into the share the host keeps beside it (§4.2).
 
 ## 5. High availability, honestly
 
@@ -971,10 +970,9 @@ by construction; Tier 0 remains the foundation everything else sits on:
     covers total-cloud-loss (tenancy termination included): bootstrap a
     temporary single-node CP on the homelab host (libvirt) from the
     latest etcd snapshot in ~30–60 min, then rebuild the cloud pool at
-    leisure. (The scratch CP VM's ~4 GiB has no standing slack to come
-    from on the 32 GB host — the drill script, unwritten today, is to
-    squeeze ARC / the worker VM for the duration and restore them
-    after.)
+    leisure. (The scratch CP VM's ~4 GiB comes out of the share the
+    host keeps beside the worker, §4.2, so the worker keeps its size
+    through the drill; the drill script is unwritten today.)
 -   **Tier 1 — workload HA**: apps that support replication run
     multi-replica across the pools (CNPG multi-instance, stateless ×2).
     Even under full CP loss, running workloads keep serving — kubelet
