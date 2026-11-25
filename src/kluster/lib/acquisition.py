@@ -8,8 +8,9 @@ workstation slot names a store key
 (`kluster.scripts.credentials.escrow.WorkstationSlot.store`). Today those rows
 are the operator passphrase, which every run of an operator stack is given
 (`kluster.lib.stack_environment`), and the model gates' API key, which
-`dispatch gates` asks with. Each value is looked up in this order, first hit
-wins:
+every `dispatch` command that asks a model gate asks with (today `dispatch
+gates` and `gates calibrate`, and `claim` and `queue` of a brief). Each
+value is looked up in this order, first hit wins:
 
 1.  the **desktop secret store** (the freedesktop Secret Service, or the
     platform's equivalent), one value per key;

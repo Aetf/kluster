@@ -104,7 +104,7 @@ BACKUP = 'backup/age'
 #: (credentials.md §3). One label per App, because they rotate apart.
 DISPATCH_KEY = 'github/dispatch-key'
 TRIGGER_KEY = 'github/trigger-key'
-#: The Console API key `dispatch gates` asks the model gates' questions with
+#: The Console API key the model gates are asked their questions with
 #: (docs/framework/dispatch.md §3), from the organization the Max plan's monthly
 #: API credit is linked to. Escrowed for the App keys' reason: the Console shows
 #: a key once, so a lost slot is a re-recovery rather than a new key.
@@ -651,12 +651,12 @@ def register() -> dict[str, Label]:
             "the Claude Console API key the dispatch protocol's model gates ask their questions with",
             Console(_GATES_KEY_CONSOLE),
             shape=ANTHROPIC_API_KEY,
-            # Found by `dispatch gates` through the acquisition chain on every
-            # run that asks a model gate (credentials.md §4.4), and read by
+            # Found through the acquisition chain by every `dispatch` command
+            # that asks a model gate (credentials.md §4.4), and read by
             # nothing else.
             slot=WorkstationSlot(
                 path=workstation.gates_key_path,
-                read_by='`dispatch gates` finds it there for every model gate it runs',
+                read_by='every `dispatch` command that asks a model gate finds it there',
                 store=workstation.GATES_KEY_ACCOUNT,
             ),
         ),
