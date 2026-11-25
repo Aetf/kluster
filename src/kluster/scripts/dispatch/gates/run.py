@@ -3,15 +3,17 @@
 It runs after `prcheck`'s deterministic checks, on the same pull request
 read from the same local store. A gate runs where the change touches a path
 its trigger matches; its canonical section is read from the tree at the
-head, so a change to the canon is judged by the canon it makes; its status
-is its calibration record's only while that record measured the gate as it
-now runs (`calibration.standing`). A gate whose canonical section does not
-read at the head asks nothing, and its line in the comment says why; so
-does a gate whose extractor raised (`drawn`), which leaves every other gate
-to run, every gate where no model can be asked, for a key this workstation
-does not hold, and every gate of a run whose record would not fit in one
-comment even as verdicts alone (`comment.fits`), which asks nothing and
-spends nothing.
+head, so a change to the canon is judged by the canon it makes. How a gate
+is made ready to ask, and how the gates are asked, is shared with the
+claim, which asks the gates about a brief (`prepare`, `asked`): a gate's
+status is its calibration record's only while that record measured the
+gate as it now runs (`calibration.standing`); a gate whose canonical
+section does not read asks nothing, and its line in the comment says why;
+so does a gate whose extractor raised (`drawn`), which leaves every other
+gate to run, and every gate where no model can be asked, for a key this
+workstation does not hold (`messages`). So does every gate of a run whose
+record would not fit in one comment even as verdicts alone
+(`comment.fits`), which asks nothing and spends nothing.
 
 The comment of a run at the head the pull request already has a comment of
 is edited in place, keeping the appeals that comment records; a run at a new
@@ -32,7 +34,7 @@ from .comment import Entry, Evidence, Ran
 from .extract import Change, Item, change
 from .forge import GateForge, PullComment
 from .gate import Gate, GateUnreadable
-from .model import KeyMissing, Model
+from .model import KeyMissing, Messages, Model, key
 from .verdict import SAMPLES, Answer, Verdict
 
 log = logging.getLogger(__name__)
@@ -84,31 +86,70 @@ def drawn(g: Gate, changed: Change) -> list[Item]:
         raise ExtractorFailed(f'its extractor failed{where}: {type(exc).__name__}: {exc}') from exc
 
 
-#: A gate ready to ask: the gate, its rule link, its status and why, and what it asks.
-Prepared = tuple[Gate, str, Status, str, Asked]
+def messages() -> Model:
+    """The model the gates ask, through the key this workstation holds for them. Raises `KeyMissing`."""
+    return Messages.with_key(key())
+
+
+@dataclass(frozen=True)
+class Prepared:
+    """A gate ready to ask: the gate, the link to its rule, its status and why, and what it asks."""
+
+    gate: Gate
+    rule: str
+    status: Status
+    why: str
+    asked: Asked
 
 
 def _unasked(g: Gate, status: Status, why: str, rule: str = '') -> Ran:
     return Ran(g.name, g.spec.model, status, why, rule, (), asked=False)
 
 
-def _asked(prepared: Sequence[Prepared], model: Callable[[], Model], number: int) -> list[Ran]:
+def prepare(g: Gate, canon: Callable[[str], str | None], changed: Change, at: str | None = None) -> Prepared | Ran:
+    """`g` ready to ask about `changed`, its canonical section read through `canon`; where it cannot ask, why.
+
+    Its status is what its calibration record earns against the gate as it
+    now runs. A gate whose section does not read asks nothing, and stays
+    blocking where its record earned that: a canon moved out from under a
+    gate does not open it. A gate whose extractor raised asks nothing too
+    (`drawn`). `at` is the commit whose tree `canon` reads, which the link
+    to the rule names; a tree that is no commit, a checkout, gives no link.
+    """
+    try:
+        section = g.canon(canon)
+    except GateUnreadable as exc:
+        record = g.record()
+        status = Status.BLOCKING if record is not None and not record.shortfalls() else Status.SHADOW
+        log.error('%s asks nothing: %s', g.name, exc)
+        return _unasked(g, status, f'its canonical section does not read: {exc}')
+    status, why = standing(g.record(), g.hashes(section.text))
+    rule = g.rule(at, section) if at is not None else ''
+    try:
+        items = drawn(g, changed)
+    except ExtractorFailed as exc:
+        log.error('%s asks nothing: %s', g.name, exc)
+        return _unasked(g, status, str(exc), rule)
+    return Prepared(g, rule, status, why, Asked(system=g.system(section.text), model=g.spec.model, items=items))
+
+
+def asked(prepared: Sequence[Prepared], model: Callable[[], Model]) -> list[Ran]:
     """Each prepared gate, asked; each recorded as asking nothing where no model can be asked."""
     try:
-        judged = judge([a for *_, a in prepared], model)
+        judged = judge([p.asked for p in prepared], model)
     except KeyMissing as exc:
-        log.error('#%d: the gates ask nothing: %s', number, exc)
-        return [_unasked(g, status, f'no model could be asked: {exc}', rule) for g, rule, status, _, _ in prepared]
+        log.error('the gates ask nothing: %s', exc)
+        return [_unasked(p.gate, p.status, f'no model could be asked: {exc}', p.rule) for p in prepared]
     return [
         Ran(
-            gate=g.name,
-            model=g.spec.model,
-            status=status,
-            why=why,
-            rule=rule,
+            gate=p.gate.name,
+            model=p.gate.spec.model,
+            status=p.status,
+            why=p.why,
+            rule=p.rule,
             entries=tuple(Entry(j.item.path, j.item.line, j.item.end_line, j.samples) for j in verdicts),
         )
-        for (g, rule, status, why, _), verdicts in zip(prepared, judged, strict=True)
+        for p, verdicts in zip(prepared, judged, strict=True)
     ]
 
 
@@ -125,43 +166,39 @@ def review(forge: GateForge, git: Git, number: int, gates: Sequence[Gate], model
     prepared: list[Prepared] = []
     unread: list[Ran] = []
     for g in triggered:
-        try:
-            section = g.canon(lambda path: git.text(pull.head, path))
-        except GateUnreadable as exc:
-            # A record that earned blocking keeps the gate blocking: a change
-            # that moves the canon out from under it does not open the gate.
-            record = g.record()
-            status = Status.BLOCKING if record is not None and not record.shortfalls() else Status.SHADOW
-            log.error('%s asks nothing: %s', g.name, exc)
-            unread.append(_unasked(g, status, f'its canonical section does not read at the head: {exc}'))
-            continue
-        status, why = standing(g.record(), g.hashes(section.text))
-        try:
-            items = drawn(g, changed)
-        except ExtractorFailed as exc:
-            log.error('%s asks nothing: %s', g.name, exc)
-            unread.append(_unasked(g, status, str(exc), g.rule(pull.head, section)))
-            continue
-        asked = Asked(system=g.system(section.text), model=g.spec.model, items=items)
-        prepared.append((g, g.rule(pull.head, section), status, why, asked))
+        ready = prepare(g, lambda path: git.text(pull.head, path), changed, pull.head)
+        if isinstance(ready, Prepared):
+            prepared.append(ready)
+        else:
+            unread.append(ready)
     skeleton = Evidence(
         pull.head,
         tuple(
             Ran(
-                g.name, g.spec.model, status, why, rule, tuple(Entry(i.path, i.line, i.end_line, _ALL) for i in a.items)
+                p.gate.name,
+                p.gate.spec.model,
+                p.status,
+                p.why,
+                p.rule,
+                tuple(Entry(i.path, i.line, i.end_line, _ALL) for i in p.asked.items),
             )
-            for g, rule, status, why, a in prepared
+            for p in prepared
         )
         + tuple(unread),
     )
     if not comment.fits(skeleton):
         log.error('#%d: the gates ask nothing: their items would not fit in one findings comment', number)
         ran = [
-            _unasked(g, status, f'its {len(a.items)} items would not fit in one comment, with the other gates', rule)
-            for g, rule, status, _, a in prepared
+            _unasked(
+                p.gate,
+                p.status,
+                f'its {len(p.asked.items)} items would not fit in one comment, with the other gates',
+                p.rule,
+            )
+            for p in prepared
         ]
     else:
-        ran = _asked(prepared, model, number)
+        ran = asked(prepared, model)
     held = findings_comment(forge.pull_comments(number), pull.head)
     evidence = Evidence(pull.head, tuple(ran + unread)).appealed(comment.parse(held.body) if held else None)
     body = comment.render(evidence)

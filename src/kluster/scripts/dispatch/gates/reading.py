@@ -8,9 +8,10 @@ the least context that question needs:
     where a `:param` line opens one too; or a run of lines holding nothing
     but a comment. A passage's `within` is the header of the function or
     class it sits in.
--   in markdown, a paragraph outside a fenced block, where a list joins the
-    paragraph that leads into it with a colon, and a list's items, loose or
-    tight, are one passage.
+-   in markdown, a paragraph outside code and front matter, which are what
+    the prose reader says they are (`prose.literal`), where a list joins
+    the paragraph that leads into it with a colon, and a list's items,
+    loose or tight, are one passage. A run of code is a code passage.
 -   in a brief, a sentence of its prose below the front matter, with its
     paragraph as context.
 
@@ -38,6 +39,7 @@ from dataclasses import dataclass
 from typing import cast
 
 from ..paths import OwnedPath
+from .prose import literal
 
 #: The directory a brief is presented under as a change (`brief_path`).
 BRIEFS = ':brief'
@@ -49,8 +51,6 @@ CONTEXT_CAP = 1500
 _ITEM = re.compile(r'^\s*(?:[-*+•]|\d+[.)])\s+\S')
 #: A docstring line that opens a field of its own.
 _FIELD = re.compile(r'^\s*:(?:param|raises?|returns?|yields?|type|rtype)\b')
-#: A markdown fence.
-_FENCE = re.compile(r'^\s*(?:```|~~~)')
 #: A brief's front matter: a `---` line opening the file, and the next one.
 _FRONT_MATTER = re.compile(r'\A---\n.*?\n---\n', re.S)
 #: Where one sentence ends and the next begins.
@@ -136,33 +136,37 @@ def _span(lines: Sequence[str], first: int, last: int) -> str:
 
 
 def markdown(text: str, start: int = 1) -> list[Passage]:
-    """The paragraphs of markdown `text`, whose first line is line `start`; a fenced block is a code passage."""
+    """The paragraphs of markdown `text`, whose first line is line `start`; each run of code is a code passage."""
     lines = text.split('\n')
+    held = literal(lines)
     passages: list[Passage] = []
     prose: list[str] = []
     prose_start = start
-    fenced_from: int | None = None
+    code_from: int | None = None
 
     def flush() -> None:
         for first, last in _blocks(prose, prose_start):
             passages.append(Passage(first, last, _span(lines, first - start + 1, last - start + 1), prose=True))
         prose.clear()
 
+    def close(last: int) -> None:
+        if code_from is not None:
+            code = _span(lines, code_from - start + 1, last - start + 1)
+            passages.append(Passage(code_from, last, code, prose=False))
+
     for index, line in enumerate(lines):
         number = start + index
-        if _FENCE.match(line):
-            if fenced_from is None:
+        if index + 1 in held:
+            if code_from is None:
                 flush()
-                fenced_from = number
-            else:
-                code = _span(lines, fenced_from - start + 1, index + 1)
-                passages.append(Passage(fenced_from, number, code, prose=False))
-                fenced_from = None
+                code_from = number
             continue
-        if fenced_from is None:
-            if not prose:
-                prose_start = number
-            prose.append(line)
+        close(number - 1)
+        code_from = None
+        if not prose:
+            prose_start = number
+        prose.append(line)
+    close(start + len(lines) - 1)
     flush()
     return sorted(passages, key=lambda p: p.first)
 

@@ -25,8 +25,8 @@ from gate_stub import (
     stub_gate,
 )
 
-from kluster.scripts.dispatch.gates import run
-from kluster.scripts.dispatch.gates.extract import Change, Item
+from kluster.scripts.dispatch.gates import narration, run
+from kluster.scripts.dispatch.gates.extract import Change, Item, message_path
 from kluster.scripts.dispatch.gates.harvest import HarvestGit, harvest
 from kluster.scripts.dispatch.gates.verdict import Verdict
 
@@ -183,3 +183,19 @@ def test_a_tag_on_an_item_the_gate_left_undecided_is_reported_as_no_verdict(tmp_
     (url,) = {c.source for c in stub.cases()}
     assert f'{url}: stub gave no verdict at {NOTE}:2, which the review tags finding' in harvested.notes
     assert not any('disagrees' in note for note in harvested.notes)
+
+
+def test_a_tag_on_a_place_in_a_commits_message_binds_to_the_commit_it_names(tmp_path: Path, repository: Path) -> None:
+    base = commit(repository, {RULE_DOCUMENT: RULE})
+    head = commit(repository, {OTHER: 'A note.\n'}, 'docs: a note\n\nIt was rewritten after the review.\n')
+    forge = GateMemoryForge()
+    pull_request(forge, base, head)
+    _ = forge.say(PULL, f'## Review\n\nRead at {head[:12]}.\n\n1. `:commit/{head[:12]}:3` narrates. [gate:stub]\n')
+    stub = stub_gate(tmp_path)
+    reading = replace(stub, spec=replace(stub.spec, extract=narration.extract))
+
+    _ = harvest(forge, HarvestGit(repository), [PULL], [reading])
+
+    assert [(c.path, c.line, c.verdict, c.text) for c in stub.cases()] == [
+        (message_path(head), 3, Verdict.FINDING, 'It was rewritten after the review.')
+    ]

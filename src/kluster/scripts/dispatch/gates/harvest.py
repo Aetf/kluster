@@ -17,7 +17,10 @@ a list item and the indented paragraphs under it being one paragraph, by a
 path the change touches, or the one changed path that ends with it; failing
 both, by a path the head tracks, or the one tracked path that ends with it,
 since a passage a change made false can sit in a file the change never
-touched. So the reviewer puts the tag in the paragraph that names the place,
+touched. A place in a commit's message, `:commit/<sha>:<line>`
+(`extract.message_path`), binds to the one commit of the change whose SHA
+opens with the one it names, by seven characters or more. So the reviewer
+puts the tag in the paragraph that names the place,
 and keeps out of it the place of a rule it cites. A tag in a paragraph that names no
 place binds to nothing, and is reported.
 
@@ -46,7 +49,7 @@ from . import comment, run
 from .cases import Case
 from .cases import append as append_cases
 from .comment import Evidence
-from .extract import Change, Item, change
+from .extract import COMMITS, Change, Item, change, is_message, message_path
 from .forge import GateForge, PullComment
 from .gate import CASES, Gate
 from .run import ExtractorFailed, findings_comment
@@ -60,8 +63,12 @@ REVIEW = re.compile(r'\A#{1,6}[ \t]+Review\b')
 SHA = re.compile(r'(?<![0-9a-f])[0-9a-f]{12,40}(?![0-9a-f])')
 #: A review's tag: the gate, and whether it holds the place clean.
 TAG = re.compile(r'\[gate:(?P<gate>[a-z0-9-]+)(?P<clean> clean)?\]')
-#: A place a review names: a path with an extension, a line, and a last line after a dash.
-PLACE = re.compile(r'(?<![\w/.-])(?P<path>[\w.-][\w./-]*\.[A-Za-z0-9]+):(?P<line>\d+)(?:[ \t]*[–-][ \t]*(?P<end>\d+))?')
+#: A place a review names: a path with an extension, or a commit's message by its SHA; a line; and a last
+#: line after a dash.
+PLACE = re.compile(
+    rf'(?<![\w/.-])(?P<path>{COMMITS}/[0-9a-f]{{7,40}}|[\w.-][\w./-]*\.[A-Za-z0-9]+)'
+    r':(?P<line>\d+)(?:[ \t]*[–-][ \t]*(?P<end>\d+))?'
+)
 #: Where a paragraph or a top-level list item opens.
 _OPENS = re.compile(r'^ {0,1}(?:[-*+]|\d+[.)])[ \t]|^#{1,6}[ \t]')
 
@@ -134,6 +141,13 @@ def _path(named: str, paths: Sequence[str]) -> str | None:
     return ending[0] if len(ending) == 1 else None
 
 
+def _message(named: str, changed: Change) -> str | None:
+    """The place of the message of the one commit of `changed` whose SHA opens with the one `named` gives."""
+    prefix = named.removeprefix(f'{COMMITS}/')
+    found = [message_path(c.sha) for c in changed.commits if c.sha.startswith(prefix)]
+    return found[0] if len(found) == 1 else None
+
+
 def _pair(tagged: Case, gate: str, evidence: Evidence | None) -> str | None:
     """The disagreement between a review's case and the gate's verdict at the same head; None where none.
 
@@ -188,9 +202,14 @@ def _review(
             )
             continue
         for named, line, end_line in tagged.places:
-            path = _path(named, changed.paths) or _path(named, changed.tree())
+            if is_message(named):
+                path = _message(named, changed)
+                missing = f'{named} names no commit of the change, or several'
+            else:
+                path = _path(named, changed.paths) or _path(named, changed.tree())
+                missing = f'{named} is no path the tree at {head[:12]} holds, or names several'
             if path is None:
-                notes.append(f'{review.url}: {named} is no path the tree at {head[:12]} holds, or names several')
+                notes.append(f'{review.url}: {missing}')
                 continue
             if gate.name not in extracted:
                 try:

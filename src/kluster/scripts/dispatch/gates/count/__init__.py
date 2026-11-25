@@ -3,8 +3,8 @@
 The canon is style/README.md's "Comments and docs", where the count rules
 sit beside the rest of what a comment or a document may say. The extractor
 (`extract`) reads the prose a change writes into a file this repository
-writes (`extract.written_here`), which is markdown outside fenced code,
-comments and Python docstrings (`prose`), and draws each place
+writes (`extract.written_here`), which is markdown outside code,
+comments and Python docstrings (`gates.prose`), and draws each place
 where a number is used as a count (`COUNT`). It hands the model the count's
 lines, and as context the paragraph they sit in with what follows it, which
 is where the rule allows the members to be.
@@ -17,7 +17,7 @@ from collections.abc import Iterator
 
 from ..extract import Change, Item, written_here
 from ..gate import Canon, Spec
-from .prose import TRIGGER, Block, blocks
+from ..prose import TRIGGER, Block, blocks
 
 #: A number word. A count written in words is the common form in prose, and
 #: `one` is left out, since it is far more often a pronoun than a count.

@@ -1,0 +1,22 @@
+{
+  "pr": 350,
+  "head": "384945e6c0484c456b0347fc9cfbc5e78d5144b5",
+  "commits": [
+    {
+      "sha": "f200bfff8f979c15577c27c71b25c3c9520f895f",
+      "message": "docs, tests: the drill and pin prose says what the tree does; one drill recipient redirect\n\noperations.md: the state-backend pins row names what is pinned —\n`settings.POSTGRES_IMAGE` and `settings.AGE_VERSION`, each moved by a\nrenovate custom manager on the settings file — what an age bump still\nneeds by hand, and cites the sections that describe the pins. The two\nsentences that said the ops repository carries no workflow now say what\nit carries (`lint.yml`, `probes.yml`), why neither reads the drill key,\nthat no job there starts until the repository's Actions billing is\nrestored (kluster-ops#393), and, per drill, why the rest do not run.\n\ncluster-infra.md: `update_crds/pins.py` is not the stack's chart pin\nregister; the stack reads `versions:chart-<name>` from `Pulumi.yaml`,\nnothing holds the two equal, and a chart bump is a Renovate-opened pin\nedit plus a hand edit to `pins.py` and a regeneration. Neither the pins\nnor their manager exist yet (kluster-ops#249).\n\ntests: `drill_recipient_redirect.redirect` holds the one body both\n`drill_recipient_file` fixtures used to repeat; each fixture calls it.\n\nCo-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>\nClaude-Session: https://claude.ai/code/session_01KP8SoeYJnEdAuVNJpHFvQa"
+    },
+    {
+      "sha": "446302812ebd60f632be9fd9303bea938755872d",
+      "message": "docs, tests: the drill's status says why it has not run; the orphan audit is in-cluster\n\nstate-backend.md §1 and §7.3 gave \"the ops repository carries no\nworkflows\" as why no drill pass has happened. The drill's workflow is\nnot written (kluster-ops#57), and no job in that repository starts until\nits Actions billing is restored (kluster-ops#393).\n\ndeploy/state-backend/README.md: the §7.3.1 rehearsal ran on 2026-09-18\n(kluster-ops#281) and the first production replace-and-restore on\n2026-09-25 (kluster-ops#385). What stays unproven is opening, with the\nkit, an object the appliance uploaded itself, and the drill key's\n`--identity-file` restore.\n\noperations.md: the orphan-volume audit is an in-cluster drill, per the\nruling recorded on kluster-ops#57 — it compares each node's on-disk\nvolume directories against the live volumes — so its row and the\nexceptions list say so.\n\ntests/test_dump_and_restore.py: \"artefact\" is spelled \"artifact\".\n\nCo-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>\nClaude-Session: https://claude.ai/code/session_01KP8SoeYJnEdAuVNJpHFvQa"
+    },
+    {
+      "sha": "1e7a7869b3758678d8beb89303905e9843afc045",
+      "message": "docs: the restore path's status says what ran and what is unproven\n\nstate-backend.md's introduction and §7.3.1, and credentials.md's\nrecovery-chain bullet, said `state-backend restore` had never run\nagainst a live box. The §7.3.1 rehearsal ran steps 2 to 9 on\n2026-09-18 against a scratch box, on a workstation dump\n(kluster-ops#281), and the appliance's first replace-and-restore ran\nthe restore against production on 2026-09-25 (kluster-ops#385). What\nneither proved is opening, with the kit, an object the appliance\nuploaded itself, and so step 1 as written. No drill has run.\n\nCo-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>\nClaude-Session: https://claude.ai/code/session_01KP8SoeYJnEdAuVNJpHFvQa"
+    },
+    {
+      "sha": "384945e6c0484c456b0347fc9cfbc5e78d5144b5",
+      "message": "docs: ci.md says which form of the state-backend rebuild has run\n\nThe rebuild playbook was \"written down, never run\". Its scheduled drill\n(physical/state-backend.md §7.3) has never run; its operator form\n(§7.3.1) ran against a scratch box on 2026-09-18, and `state-backend\nrestore` ran against the appliance in its first replace-and-restore on\n2026-09-25.\n\nCo-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>\nClaude-Session: https://claude.ai/code/session_01KP8SoeYJnEdAuVNJpHFvQa"
+    }
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "pr": 439,
+  "head": "57cd0ef52d7af1743e451f8b31d42910ead94d90",
+  "commits": [
+    {
+      "sha": "7e1668bbf078a59610ca05738f9d31e3f7619d99",
+      "message": "threat model: docs/threat-model.md, and the documents that point at it\n\nThe installation's threat model gets its own page at the root of docs/:\nthe stance, who can act class by class, what is defended, and the test a\nsecurity finding must pass. It carries rfc-005 §3 to §6 as built: the\nfirst half of the merge boundary as the partition made it, with the\nre-issue of physical's earlier credentials as the condition it holds\nunder; the second half as unenforced today, with the clearance check the\noperator ruled for and the residuals it leaves; the workstation's\naccepted residual; and the pins by class, each class defined and its\ninstances named from the versions: block, with the pins that name a\nversion alone and the cluster's unaged images and charts as accepted\nresiduals.\n\narchitecture.md §4.1 becomes the cluster's controls and residuals under\nthe page, records the host-network residual of the metadata deny, and\naccepts the controller-door residual for a dial over the server LAN\nrather than naming a certificate pin as its retirement. The fence's\nsentence in §4.3 and the dispatch App's register row say what the forge\nenforces: a token with contents:write merges a green pull request that\nchanges no workflow file. The findings register reads its grades against\nthe page. The dispatch protocol gains the rule on forge text (§1) and\nthe rule on security findings (§3). README links the page, and rfc-005\nmoves to Implemented.\n\nCloses Aetf/kluster-ops#496.\n\nCo-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>\nClaude-Session: https://claude.ai/code/session_01KP8SoeYJnEdAuVNJpHFvQa"
+    },
+    {
+      "sha": "57cd0ef52d7af1743e451f8b31d42910ead94d90",
+      "message": "threat model: ci.md's dispatch-token residual and unifi.py's controller-door comment match what the forge and the model say\n\nframework/ci.md §3 said the dispatch App's token pushes never to\nkluster's main and called that the boundary anyone who can push a branch\nalready has; main requires checks and restricts nobody, so the token's\ncontents:write merges a green pull request that changes no workflow\nfile. The comment on ALLOW_INSECURE named a certificate pin as what\nwould retire the controller-door residual; architecture.md §4.1 accepts\nit for a dial over the server LAN and leaves a dial over the cluster\nVLAN uncovered. The page's residual for images a chart names by tag\npoints at Aetf/kluster-ops#503.\n\nCo-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>\nClaude-Session: https://claude.ai/code/session_01KP8SoeYJnEdAuVNJpHFvQa"
+    }
+  ]
+}

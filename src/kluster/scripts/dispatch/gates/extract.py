@@ -5,7 +5,11 @@ and narrow: it picks the lines its gate's question is about and the least
 context that question needs, so a gate never reads the whole repository and
 a large change makes more items, not a longer prompt. Every item names a
 place at the head under review, which is where its finding is posted and
-where a review's tag pairs with it (`harvest`).
+where a review's tag pairs with it (`harvest`). A place in a file is its
+path and lines. A place in the message of one of the change's commits
+(`Change.commits`) is a pseudo-path that names the commit, under `COMMITS`,
+and lines of the message, the subject being line 1 (`message_path`): no
+path of this repository starts with `:`, so no file is read as a message.
 
 Most questions are about the lines a change writes, and read the head
 alone. A question about what the change leaves behind it, a passage
@@ -21,12 +25,26 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from ..paths import OwnedPath
-from ..prcheck import Hunk, Status
+from ..prcheck import Commit, Hunk, Status
 
 #: Where the text is held here but written elsewhere, so that no passage of it is this repository's
 #: prose: generated (the SDKs, the CRD package, mise's lockfiles), vendored, or recorded as test data.
 #: Today's instances.
 NOT_WRITTEN_HERE = ('sdks/', 'packages/crds/', 'mise.lock', 'mise.ci.lock', 'tests/vendor/', 'tests/data/')
+
+
+#: The directory a commit's message is presented under as a place (`message_path`).
+COMMITS = ':commit'
+
+
+def message_path(sha: str) -> str:
+    """The pseudo-path that names the message of commit `sha` as a place."""
+    return f'{COMMITS}/{sha}'
+
+
+def is_message(path: str) -> bool:
+    """Whether `path` names a commit's message (`message_path`)."""
+    return path.startswith(f'{COMMITS}/')
 
 
 def written_here(path: str) -> bool:
@@ -91,6 +109,9 @@ class Change:
     tree: Callable[[], Sequence[str]] = _empty
     #: The pull request's description.
     body: str = ''
+    #: The commits the change holds, oldest first. `change` reads them from
+    #: the store; a change built by hand holds none.
+    commits: tuple[Commit, ...] = ()
 
     @property
     def paths(self) -> list[str]:
@@ -124,6 +145,8 @@ class Store(Protocol):
 
     def paths(self, commit: str) -> list[str]: ...
 
+    def commits(self, base: str, head: str) -> list[Commit]: ...
+
 
 def change(store: Store, base: str, head: str, body: str) -> Change:
     """The change from `base` to `head`, read from the local store, with `body` its pull request's description."""
@@ -141,4 +164,5 @@ def change(store: Store, base: str, head: str, body: str) -> Change:
         base_text=lambda path: store.text(base, path),
         tree=lambda: store.paths(head),
         body=body,
+        commits=tuple(store.commits(base, head)),
     )

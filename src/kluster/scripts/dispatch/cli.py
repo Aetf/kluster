@@ -160,10 +160,6 @@ def _workspaces() -> list[str]:
     return listed.stdout.split()
 
 
-def _messages() -> model.Model:
-    return model.Messages.with_key(model.key())
-
-
 def _gates(number: int) -> int:
     forge = GateGh()
     git = prcheck.Git(workstation.repo_root())
@@ -173,7 +169,7 @@ def _gates(number: int) -> int:
     for check, finding in report.findings:
         log.error('%s: %s', check.value, finding)
     log.info('#%d: %d findings', number, len(report.findings))
-    posted = run.review(forge, git, number, gate.discover(), _messages)
+    posted = run.review(forge, git, number, gate.discover(), run.messages)
     for ran in posted.evidence.gates if posted is not None else ():
         if ran.unheard:
             log.warning('%s, %s, gave no verdict: %s', ran.gate, ran.status, ran.why)
@@ -190,7 +186,7 @@ def _gate_step(args: argparse.Namespace) -> int:
     if args.step == RUN:
         return _gates(args.pr)
     if args.step == 'calibrate':
-        measured = calibrate.calibrate(gate.named(args.gate), workstation.repo_root(), _messages)
+        measured = calibrate.calibrate(gate.named(args.gate), workstation.repo_root(), run.messages)
         log.info('%s: %s', args.gate, measured.status)
         for shortfall in measured.shortfalls():
             log.warning('%s: %s', args.gate, shortfall)

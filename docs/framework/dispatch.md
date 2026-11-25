@@ -1156,7 +1156,10 @@ says what else). It runs where the change touches a path its trigger
 matches, and on a brief when its trigger names one and the brief is
 claimed (§2.1). Its extractor, which is deterministic, narrows the change to
 the items its question is about, and the model is asked about those
-items alone. They go in batches up to a fixed size, and each batch is
+items alone. An item's place is a path and its lines, or, for a
+paragraph of the message of one of the change's commits,
+`:commit/<sha>` and lines of that message, the subject being line 1.
+They go in batches up to a fixed size, and each batch is
 asked three times. The reply is held to a schema by the API's
 structured outputs, and answers each item by the id it was given. A
 finding stands on two samples of the three. The rule the prompt quotes
@@ -1174,6 +1177,20 @@ An item whose unanswered samples could still have made a finding stand
 is left undecided: a shadow gate passes it, and a blocking gate holds it
 against the change as it holds a finding, until it is asked again or
 appealed.
+
+**A gate asks nothing wherever the run cannot put its question to the
+model as the gate declares it, or could not record the answer**: a part
+the question is made of does not come to hand, the model cannot be
+reached, or what it answered would not fit where the run records it.
+Its line in the comment, or the claim's log, says which. Today's
+instances are a canonical section that does not read, an extractor that
+raised on the change, a workstation without the key, and a run whose
+items would not fit in one comment, the last only on a pull request,
+since a brief's run is recorded in the claim's log. An extractor is
+the gate's own code over a change nothing vetted, so a file it was not
+written for, a Python file that does not parse among them, can make it
+raise; that stops the one gate, and the others ask. A shadow gate that
+asks nothing passes, and a blocking one refuses (§2.1).
 
 **The run leaves one comment**, headed
 `## Gate findings (head <sha>)`. A run at the same head edits it in
@@ -1217,15 +1234,19 @@ own.
 **A blocking finding goes back to the builder as a fix cycle before any
 reviewer is commissioned.** The builder fixes it, and the gates run
 again at the new head, or appeals it in its report, one line each:
-`Gate appeal: <gate> <path>:<line>: <reason>`. `dispatch gates appeal`
+`Gate appeal: <gate> <path>:<line>: <reason>`, where a finding in a
+commit's message is appealed at `:commit/<sha>:<line>`, the SHA in full
+as the findings comment gives it. `dispatch gates appeal`
 writes each appeal beside its finding, or beside an item a blocking
 gate left undecided, and refuses an appeal that names neither. **The reviewer rules on each appeal,
 and on a gate's family of findings, with a tag beside the place**:
 `[gate:<name>]` where the place breaks the rule, a rejected appeal
 included, and `[gate:<name> clean]` where the review holds it to the
 rule in so many words, an accepted appeal included. A tag binds to
-every `path:line` its paragraph names, a list item and the indented
-paragraphs under it being one paragraph. So the tag goes in the
+every place its paragraph names, a list item and the indented
+paragraphs under it being one paragraph: a `path:line`, or a
+`:commit/<sha>:<line>` whose SHA, seven characters of it or more, opens
+the SHA of one commit of the change. So the tag goes in the
 paragraph that names the place, and the place of a rule the finding
 cites stays out of that paragraph; a tag whose paragraph names no place
 binds to nothing, and harvest reports it. `dispatch gates

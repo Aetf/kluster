@@ -21,9 +21,9 @@ from kluster.lib import workstation
 from kluster.scripts.dispatch.gates import run
 from kluster.scripts.dispatch.gates.calibration import Status
 from kluster.scripts.dispatch.gates.count import GATE
-from kluster.scripts.dispatch.gates.count.prose import blocks
 from kluster.scripts.dispatch.gates.extract import Item, change
 from kluster.scripts.dispatch.gates.gate import named
+from kluster.scripts.dispatch.gates.prose import blocks
 from kluster.scripts.dispatch.prcheck import Git
 
 DATA = Path(__file__).parent / 'data' / 'gates' / 'count'

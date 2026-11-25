@@ -1,0 +1,14 @@
+{
+  "pr": 410,
+  "head": "614c46ab395b76cd6ed13ef914d0f21aff8ffc16",
+  "commits": [
+    {
+      "sha": "4713b5a5c21ac1282f68e40800172392c81bf8d5",
+      "message": "credentials: the github stack's passphrase is the operator passphrase, found through the roots' chain\n\nThe passphrase every operator stack is encrypted under, and no CI job\nholds, is the operator passphrase: escrow label operator/passphrase,\nslot .credentials/operator.passphrase, variable\nKLUSTER_OPERATOR_PASSPHRASE, commands `credentials derived\noperator-passphrase generate|recover`. The escrowed ciphertext moves\nwith its label; nothing is re-encrypted.\n\nThe operator-stack driver finds it through the account roots'\nacquisition chain, now kluster.lib.acquisition: the desktop secret\nstore, the slot, the variable, then a prompt where stdin is a terminal,\nrefusing by name where nothing answers. The masters chain and the kit\npassword read the store through the same module. generate and recover\nkeep it in the store, and in the slot only on a machine with no store;\nthe desktop secret store joins rule 6's closed set of channels\n(credentials.md §1), as a SecretStore channel in the slot map.\n\nThe slot's name is written once, in kluster.lib.stack_environment, and\nthe credentials package takes it from there.\n\nCo-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>\nClaude-Session: https://claude.ai/code/session_01KP8SoeYJnEdAuVNJpHFvQa"
+    },
+    {
+      "sha": "614c46ab395b76cd6ed13ef914d0f21aff8ffc16",
+      "message": "credentials: the credentials commands find the operator passphrase through the chain\n\nlifecycle.environment no longer recovers the operator passphrase from\nthe escrow. BackendEnvironment carries the chain as a finder\n(stack_environment.operator_passphrase, for the checkout whose slots the\ncredentials package writes), called only when an operator stack is\nasked for, so a command that never points at one never looks. Where the\nchain holds nothing the refusal names `credentials derived\noperator-passphrase recover`, the escrow being the recovery path.\n\nframework/pulumi.md §3.3, the operator-stack help and docstring,\nPulumi.github.yaml's header, github_secrets and test_mise_env use the\noperator passphrase's name and say where it is found.\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\nClaude-Session: https://claude.ai/code/session_01KP8SoeYJnEdAuVNJpHFvQa"
+    }
+  ]
+}

@@ -7,8 +7,10 @@ shadow: its finding lands in the dispatcher's log and the claim goes ahead.
 A gate whose record earns `blocking`, written here against a copy of the
 gate, refuses the claim on the same finding, on an item its samples left
 undecided, wherever it asks nothing, and where its canonical section does
-not read, with nothing on the forge changed. A gate whose trigger names no
-brief, as a trigger of every path does not, asks nothing about one. The
+not read, with nothing on the forge changed. A gate whose extractor raises
+on the brief asks nothing, and the other gates ask. A gate whose trigger
+names no brief, as a trigger of every path does not, asks nothing about
+one. The
 command line hands the claim the brief's file, so `dispatch claim` asks the
 gates as the step does. The rest of the claim's preconditions are
 `test_dispatch_ledger.py`'s.
@@ -94,6 +96,17 @@ def _caught_all(tmp_path: Path) -> Gate:
     copy = tmp_path / 'everything'
     _ = shutil.copytree(Path(enumeration.__file__).parent, copy, ignore=shutil.ignore_patterns('__pycache__'))
     return Gate.load(copy, replace(enumeration.GATE, trigger=('**',)))
+
+
+def _raising(tmp_path: Path) -> Gate:
+    """A copy of `enumeration` whose extractor raises on whatever it reads."""
+
+    def extract(_: object) -> list[Any]:
+        raise SyntaxError('invalid syntax')
+
+    copy = tmp_path / 'raising'
+    _ = shutil.copytree(Path(enumeration.__file__).parent, copy, ignore=shutil.ignore_patterns('__pycache__'))
+    return Gate.load(copy, replace(enumeration.GATE, extract=extract))
 
 
 def _silent(reply: dict[str, Any]) -> dict[str, Any]:
@@ -216,3 +229,18 @@ def test_a_blocking_gate_whose_canon_does_not_read_refuses_the_claim(tmp_path: P
 
     assert [r.precondition for r in refused.value.refusals] == [Precondition.BRIEF_GATE]
     assert forge.issues_[ISSUE].comments == []
+
+
+def test_a_gate_whose_extractor_raises_on_the_brief_asks_nothing_and_leaves_the_others_to_ask(tmp_path: Path) -> None:
+    forge = _forge()
+
+    verdict = claim.claim(
+        forge, _dispatch(), ISSUE, serialized.read(), _asking(named('conclusion'), _raising(tmp_path))
+    )
+
+    assert verdict.brief_evidence is not None
+    ran = {r.gate: r for r in verdict.brief_evidence.gates}
+    assert (ran['raising'].asked, ran['raising'].status) == (False, Status.SHADOW)
+    assert 'its extractor failed' in ran['raising'].why
+    assert ran['conclusion'].asked
+    assert ledger.CLAIMED in forge.issues_[ISSUE].labels

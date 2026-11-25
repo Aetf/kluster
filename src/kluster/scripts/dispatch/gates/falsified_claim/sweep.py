@@ -2,7 +2,7 @@
 
 A claim is a sentence of a hunk, on either side of it: what the base said
 before the change, and what the head says after. A passage is a block of
-prose at the head (`count.prose`). A claim reaches a passage that holds two
+prose at the head (`gates.prose`). A claim reaches a passage that holds two
 of its terms within `WINDOW` characters of each other, in either order,
 which is the proximity pattern `a.{0,120}b` of style/README.md, "Comments
 and docs", over whitespace-collapsed text, run for every pair of the claim's
@@ -37,8 +37,8 @@ from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field
 
 from ...prcheck import patterns
-from ..count.prose import Block, blocks, readable
 from ..extract import Change, Item, written_here
+from ..prose import Block, blocks, readable
 
 log = logging.getLogger(__name__)
 
