@@ -4,8 +4,9 @@
 refused merge reports all of them at once and has changed nothing: the pull
 request belongs to a live builder dispatch this session holds; its title
 leads with the record's RFC slice; its description holds the form of
-dispatch.md §1.1 for the record's `closes`; a record that closes its issue
-leaves no other dispatch live on it; a review dispatched for the pull request
+dispatch.md §1.1 for the record's `closes`; no issue the merge closes
+carries a live dispatch the merge does not end, or records that do not read;
+a review dispatched for the pull request
 left a comment naming the head the builder reported; and the forge's head is
 that reported head, or the dispatcher's own rebase of it (§2 rule 8),
 compared before anything rewrites the branch.
@@ -19,9 +20,10 @@ comparison read. A conflict, a red check, a merge state other than `main`
 moving, or a wait that runs out stops it with nothing merged; a stop after the
 push leaves the forge's head as the dispatcher's own rebase, which a second
 run takes up. Once merged it ends the pull request's dispatches, which are
-every dispatch on its branch and each whose `pr` it is, and nothing else on
-the issue: each issue the description closes and the merge left open
-closed, or, where the record leaves its issue open, a comment saying what
+every dispatch on its branch and each on its issue whose `pr` it is, and nothing else on
+the issue: each issue the merge closes and left open closed, unless a
+live dispatch the merge does not end stands on it or its records do not
+read, or, where the record leaves its issue open, a comment saying what
 remains; an `end` record naming those dispatches; the claim labels off once
 no dispatch on the issue is live; and each workspace those dispatches name,
 and no live one does, forgotten and removed. Each of those steps is skipped
@@ -46,11 +48,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol, cast
 
-from . import ledger, prbody
+from . import ledger, prbody, record
 from .brief import Role
 from .forge import CODE, LEDGER, TIMEOUT, ForgeError
 from .prcheck import Dispatched, PullForge, PullGh, PullRequest, dispatched
-from .record import Event, Record
+from .record import Event, Record, RecordUnreadable
 
 log = logging.getLogger(__name__)
 
@@ -84,8 +86,13 @@ class Precondition(enum.StrEnum):
     CLOSED = 'closed'
     #: A live dispatch another dispatcher session holds (§2 rule 4).
     NOT_HELD = 'not-held'
-    #: A record that closes its issue while another dispatch on it is live.
+    #: An issue the merge closes carries a live dispatch the merge does not
+    #: end: on the dispatch's own issue, one beside the dispatches of the pull
+    #: request; on any other issue the description closes, any at all.
     OTHERS_LIVE = 'others-live'
+    #: An issue the merge closes carries a claim label and records that do
+    #: not read, so nothing says no dispatch on it is live (§2.1).
+    RECORD_UNREADABLE = 'record-unreadable'
     #: The title does not lead with the record's RFC slice (rfc.md §3.4).
     RFC_TITLE = 'rfc-title'
     #: The description does not hold its form (§1.1).
@@ -361,6 +368,78 @@ def _review(dispatch: Dispatched, pull: PullRequest, head: str) -> Refusal | Non
     return None
 
 
+def _closing(pull: PullRequest, dispatch: Dispatched) -> set[int]:
+    """The issues the merge closes: each the description closes, and the dispatch's own where its record says so."""
+    own = {dispatch.issue.number} if dispatch.closes else set[int]()
+    return {int(n) for n in ledger.CLOSES.findall(pull.body)} | own
+
+
+@dataclass(frozen=True)
+class Standing:
+    """An issue the merge closes, and what on it the merge does not end."""
+
+    issue: int
+    #: Its live dispatches the merge does not end.
+    live: tuple[record.Dispatch, ...] = ()
+    #: Why its records do not read, where they do not.
+    unreadable: RecordUnreadable | None = None
+
+
+def _standing(forge: MergeForge, pull: PullRequest, dispatch: Dispatched) -> list[Standing]:
+    """Each issue the merge closes that carries a live dispatch the merge does not end, or records that do not read.
+
+    The merge ends dispatches on its own issue only, so on its own issue the
+    ones it does not end are those beside the pull request's, and on any
+    other issue every live one. A dispatch is live only while its issue
+    carries a claim label, so an issue without one is not read further.
+    """
+    number = dispatch.issue.number
+    found: list[Standing] = []
+    for issue in sorted(_closing(pull, dispatch)):
+        if issue == number:
+            if dispatch.others:
+                found.append(Standing(issue, live=dispatch.others))
+            continue
+        if not ledger.claimed(forge.issue(issue)):
+            continue
+        try:
+            live = record.dispatches(issue, forge.comments(issue))
+        except RecordUnreadable as exc:
+            found.append(Standing(issue, unreadable=exc))
+            continue
+        if live:
+            found.append(Standing(issue, live=live))
+    return found
+
+
+def _refusal(pull: PullRequest, dispatch: Dispatched, standing: Standing) -> Refusal:
+    """The refusal of a merge that would close `standing`'s issue, with its remedy."""
+    issue = standing.issue
+    if standing.unreadable is not None:
+        return Refusal(
+            Precondition.RECORD_UNREADABLE,
+            f'the description closes #{issue}, which carries a claim label and records that do not read, so '
+            f'nothing says no dispatch on it is live: {standing.unreadable}. End its claim with '
+            f"`dispatch abandon {issue}` on the operator's word, or name #{issue} with `Refs` instead",
+        )
+    names = '; '.join(str(d.name) for d in standing.live)
+    abandon = (
+        f'End each that has no pull request to merge with `dispatch abandon {issue} --dispatch <workspace or branch>`, '
+        'merge the others first, or '
+    )
+    if issue == dispatch.issue.number and dispatch.closes:
+        return Refusal(
+            Precondition.OTHERS_LIVE,
+            f'the record closes #{issue}, and these dispatches on it are live: {names}. '
+            f'{abandon}brief this one to leave the issue open',
+        )
+    return Refusal(
+        Precondition.OTHERS_LIVE,
+        f'the description closes #{issue}, and these dispatches on it are live, which merging #{pull.number} does '
+        f'not end: {names}. {abandon}name #{issue} with `Refs` instead',
+    )
+
+
 @dataclass(frozen=True)
 class Checked:
     """What `check` read: the pull request, its dispatch, the head the forge holds that may land, the refusals."""
@@ -403,16 +482,7 @@ def check(
         )
     if merged:
         return Checked(pull, dispatch, pull.head, tuple(refusals))
-    if closes and dispatch.others:
-        refusals.append(
-            Refusal(
-                Precondition.OTHERS_LIVE,
-                f'the record closes #{dispatch.issue.number}, and these dispatches on it are live: '
-                f'{"; ".join(str(d.name) for d in dispatch.others)}. End each that has no pull request to '
-                f'merge with `dispatch abandon {dispatch.issue.number} --dispatch <workspace or branch>`, '
-                'merge the others first, or brief this one to leave the issue open',
-            )
-        )
+    refusals += [_refusal(pull, dispatch, standing) for standing in _standing(forge, pull, dispatch)]
     rfc = dispatch.front.fields.get('rfc')
     if isinstance(rfc, str) and not pull.title.startswith(f'{rfc}:'):
         refusals.append(Refusal(Precondition.RFC_TITLE, f'the title of #{number} does not lead with `{rfc}:`'))
@@ -618,19 +688,20 @@ def close_out(
 ) -> None:
     """End the dispatches of a merged pull request, skipping each step that is done already.
 
-    The steps: each issue the description closes, the dispatch's own among
-    them where its record says so and no other dispatch on it is live,
-    closed where the merge left it open; or the comment on what remains; the
+    The steps: each issue the merge closes (`_closing`) closed where the
+    merge left it open, unless a live dispatch the merge does not end stands
+    on it or its records do not read (`_standing`); or the comment on what remains; the
     `end` record naming the dispatches it ends; the claim labels, once no
     dispatch on the issue is live; the workspaces of the dispatches it ends
     that no live dispatch names.
     """
     number = dispatch.issue.number
     others = dispatch.others
-    closing = {int(n) for n in ledger.CLOSES.findall(pull.body)} | ({number} if dispatch.closes else set[int]())
-    if others and number in closing:
-        log.warning('leaving #%d open: %s', number, '; '.join(f'{d.name} is live on it' for d in others))
-        closing.discard(number)
+    closing = _closing(pull, dispatch)
+    for standing in _standing(forge, pull, dispatch):
+        live = '; '.join(f'{d.name} is live on it' for d in standing.live)
+        log.warning('not closing #%d: %s', standing.issue, live or f'its records do not read: {standing.unreadable}')
+        closing.discard(standing.issue)
     for issue in sorted(closing):
         if forge.issue(issue).open:
             log.info('closing #%d, which the merge left open', issue)

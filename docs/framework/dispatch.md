@@ -865,17 +865,16 @@ retry starts afresh:
 -   **`dispatch merge <pr> <head>`** lands a pull request at the head
     its builder's latest report names, and ends the pull request's
     dispatches: every dispatch on its branch, which merges once, and
-    each dispatch whose `pr` it is. It
+    each dispatch on its issue whose `pr` it is. It
     refuses, before it changes anything, unless the pull request's
     branch is the one a live builder dispatch names, that dispatch is
     this session's, the title leads with the record's RFC slice, the
     description holds the form of §1.1, a review dispatched for the
     pull request left a comment naming `<head>` (§3), the forge's head is
-    `<head>` or the dispatcher's own rebase of it (rule 8), where the
-    record's `closes` is true no other dispatch on the issue is live,
-    since the description's keyword would close the issue under it (a
-    live dispatch with nothing to merge is ended first with
-    `dispatch abandon <issue> --dispatch <name>`), and, where the
+    `<head>` or the dispatcher's own rebase of it (rule 8), no issue
+    the merge closes carries records that do not read, or a live
+    dispatch the merge does not end, since the keyword would close the
+    issue under it, and, where the
     record's `closes` is false,
     `--remains '<what remains>'` says what is left. A rebase of `<head>` is a commit that leaves the
     forge's `main` at `<head>`'s fork point or later, and whose tree is
@@ -883,7 +882,19 @@ retry starts afresh:
     fork point gives (`git merge-tree`). A fold of the branch's commits
     is one, and so is a rebase whose hunks `main` already carries; a
     change to a single byte of what was reported, whitespace included,
-    is not. It then fetches, compares the
+    is not. The issues the merge closes are each one the description
+    closes and the dispatch's own where its record's `closes` is true.
+    The merge ends dispatches on its own issue only, so on another
+    issue every live dispatch is one it does not end. An issue that
+    carries a claim label and records that do not read is refused
+    under `record-unreadable`, the name `claim` and `audit` give it:
+    nothing then says no dispatch on it is live, and its claim is ended
+    with `dispatch abandon <issue>` on the operator's word. The refusal
+    names each such issue and its dispatches; a live dispatch with
+    nothing to merge is ended first with
+    `dispatch abandon <issue> --dispatch <name>`, and an issue the pull
+    request only partly addresses is named with `Refs` instead. It then
+    fetches, compares the
     forge and the fetched branch again, rebases the branch onto the
     forge's `main` and pushes it, waits for the required checks, and
     merges with the pushed head as the one the forge must still hold.
@@ -905,8 +916,11 @@ retry starts afresh:
     dispatcher's rebase as the forge's head, which the same command
     takes up again, the review of `<head>` still standing: the routine
     retry after a check that failed and passed on a re-run of its job.
-    Once merged, it closes every issue the description closes that the
-    merge left open, or comments on the dispatch's own what remains;
+    Once merged, it closes every issue the merge closes that the merge
+    left open, except one that carries a live dispatch the merge does
+    not end or records that do not read, which it leaves open with a
+    warning naming its dispatches; or it comments on the dispatch's own
+    what remains;
     posts an `end` record naming the dispatches it ends; takes the claim
     labels off once no dispatch on the issue is live; and forgets and
     removes each workspace a dispatch it ends names and no live dispatch
@@ -1324,9 +1338,10 @@ merge can report once:
     `Closes Aetf/kluster-ops#N` (cross-repository closing works), so
     the merge itself moves the ledger, and `dispatch merge` closes each
     issue the description closes wherever the merge left it open, so a
-    keyword that failed to fire still ends with the issue closed, except
-    the dispatch's own issue while another dispatch on it is live
-    (§2.1).
+    keyword that failed to fire still ends with the issue closed. It
+    refuses a description that closes an issue on which a dispatch it
+    does not end is still live, and its close-out leaves such an issue
+    open (§2.1).
     One pull request may close several issues; an issue only partly addressed is
     *referenced* without the keyword and kept open with a comment
     saying what remains, which `dispatch merge` posts from its

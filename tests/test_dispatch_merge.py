@@ -399,6 +399,13 @@ def _reviewed_earlier(world: World) -> None:
     world.review('0123456789ab' + world.reported[12:])
 
 
+def _closing_under_records_that_do_not_read(world: World) -> None:
+    # The description closes #918 too, which is claimed and whose record has no block to read.
+    world.forge.relabel(OTHER, add=[ledger.CLAIMED])
+    world.forge.comment(OTHER, f'{record.HEADING}\n\nA record with no block.')
+    world.review(world.reported)
+
+
 def _closing_beside_a_sibling(world: World) -> None:
     # The merge would close the issue another slice is still building under.
     _ = world.sibling()
@@ -416,8 +423,16 @@ def _closing_beside_a_sibling(world: World) -> None:
         (_moved_and_fetched('    the work\n'), Precondition.HEAD),
         (_reviewed_earlier, Precondition.REVIEW),
         (_closing_beside_a_sibling, Precondition.OTHERS_LIVE),
+        (_closing_under_records_that_do_not_read, Precondition.RECORD_UNREADABLE),
     ],
-    ids=['moved-head', 'moved-head-without-a-space', 'moved-head-indented', 'unreviewed-head', 'closes-beside-another'],
+    ids=[
+        'moved-head',
+        'moved-head-without-a-space',
+        'moved-head-indented',
+        'unreviewed-head',
+        'closes-beside-another',
+        'closes-unreadable',
+    ],
 )
 def test_a_merge_is_refused_before_it_changes_anything(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, arrange: Callable[[World], None], precondition: Precondition
@@ -435,6 +450,52 @@ def test_a_merge_is_refused_before_it_changes_anything(
     assert _run(world.checkout, 'jj', 'log', '-r', BRANCH, '--no-graph', '-T', 'commit_id') == local
     assert world.forge.requests[PULL].state == 'OPEN'
     assert world.dispatches()
+
+
+def _claim_other(world: World) -> None:
+    """A builder dispatch on #918, which the description closes beside the dispatch's own issue."""
+    front = f'issue: {OTHER}\nrole: builder\ndone: Its work lands.\nowned: [other.txt]\ncloses: true\n'
+    other = _brief(world.checkout.parent, f'---\n{front}workspace: b-918\nbranch: b-918-work\n---\n')
+    _ = claim.claim(world.forge, claim.Dispatch(other, SESSION), OTHER, frozenset({'AGENTS.md'}))
+
+
+def test_the_close_out_of_a_merged_pull_request_leaves_another_issue_open_under_its_live_dispatch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Merged outside `dispatch merge`, its keywords not fired: the close-out closes its own issue and not #918."""
+    world = _world(tmp_path, monkeypatch)
+    _claim_other(world)
+    world.forge.requests[PULL] = replace(world.forge.requests[PULL], state='MERGED')
+
+    _ = world.merge()
+
+    assert not world.forge.issue(ISSUE).open
+    assert world.forge.issue(OTHER).open
+    assert [d.name.workspace for d in record.dispatches(OTHER, world.forge.comments(OTHER))] == ['b-918']
+
+
+def test_a_merge_does_not_close_another_issue_under_its_live_dispatch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Aetf/kluster-ops#950: the description closes #918 too, where another builder is still at work."""
+    world = _world(tmp_path, monkeypatch)
+    _claim_other(world)
+    world.review(world.reported)
+    main = world.remote.ref('main')
+
+    with pytest.raises(Refused) as refused:
+        _ = world.merge()
+
+    assert [r.precondition for r in refused.value.refusals] == [Precondition.OTHERS_LIVE]
+    assert f'#{OTHER}' in refused.value.refusals[0].detail
+    assert world.remote.ref('main') == main
+    assert world.forge.issue(OTHER).open
+
+    _ = claim.abandon(world.forge, OTHER, SESSION, None, dispatch='b-918')
+    _ = world.merge()
+
+    world.landed()
+    assert not world.forge.issue(OTHER).open
 
 
 def test_a_merge_ends_its_own_dispatch_and_leaves_the_issues_other_one_live(
