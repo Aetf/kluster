@@ -324,7 +324,49 @@ contents, so nothing is discovered mid-bootstrap:
     no IPv6 prefix, and the client holds assigned addresses to it as
     well as routes, so the host keeps no IPv6 address on the overlay,
     and the converge takes the two the network derives from every member
-    anyway (gateway.md §2.2).
+    anyway (gateway.md §2.2);
+-   the overlay daemon's **ports and its port mapping**: the daemon
+    binds its primary port, 9993, and a third port,
+    `conventions.overlay.HOMELAB_PORT`, 9994, which it asks the
+    gateway's NAT-PMP or UPnP service on the server LAN to map, the same
+    number outside (gateway.md §4.2 rule 8 is the other half). The
+    setting is the daemon's own `/var/lib/zerotier-one/local.conf`,
+    which the change-set's `kluster-host` role writes through a
+    `tmpfiles.d` line, since the change-set does not track `/var`:
+
+    ```
+    f+ /var/lib/zerotier-one/local.conf 0644 root root - {"settings":{"primaryPort":9993,"secondaryPort":9993,"allowSecondaryPort":false,"portMappingEnabled":true,"tertiaryPort":9994}}
+    ```
+
+    -   **`portMappingEnabled`** on binds a third UDP port and asks the
+        gateway to map that one, never the primary or the secondary
+        port. The daemon pushes the mapped address to its peers on each
+        bind refresh, beside its bound addresses.
+    -   **`tertiaryPort`** fixes the third port at `HOMELAB_PORT`.
+        Unset, it is random and chosen again at each start, so no
+        reading could name it.
+    -   **`primaryPort`** is the daemon's default, stated, so the file
+        names every port the daemon binds. It is the port the daemon
+        binds first, and exits on rather than hunting for another. The
+        gateway's own daemon holds the WAN address at 9993 toward the
+        same roots, so the masquerade maps the host's primary flows to a
+        port of its own choosing. That address is pushed to peers too,
+        and no runner uses it.
+    -   **`secondaryPort`**, equal to the primary, with
+        **`allowSecondaryPort`** off, as on the gateway
+        (gateway.md §1): no secondary port is bound at start, and the
+        set value, never bound, keeps the daemon from binding a random
+        one when it rebinds after an outage, a path that asks only
+        whether that key is set.
+
+    `f+` rewrites the file at every boot, ahead of `zerotier-one`, and
+    the daemon reads it only at start, so a change takes a restart of
+    the service, which drops the host's overlay for a few seconds and
+    with it the libvirt session's path. Nothing on the host writes the
+    file through the daemon's control API. The line's comment names
+    `conventions.overlay.HOMELAB_PORT` and gateway.md §4.2 rule 8 as the
+    other half, and a change to the port lands here first and in that
+    constant second.
 
 The A380's vfio-pci host binding is deliberately *not* here — it lands
 in the Wave C cutover (§3, migration.md).

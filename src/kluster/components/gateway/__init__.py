@@ -68,7 +68,7 @@ from kluster.components.gateway.persistence import (
 )
 from kluster.components.gateway.prefix import WAN_INTERFACE, SubnetNotHeld, held_prefix
 from kluster.components.gateway.routing import RoutingSession, SiteRouting
-from kluster.components.gateway.unifi import SiteFirewall
+from kluster.components.gateway.unifi import SiteFirewall, port_mapping
 from kluster.lib import templates
 from kluster.providers import pd_lease
 from kluster.providers.device_files.provider import Connection, DeviceFile
@@ -122,6 +122,22 @@ HEALTH_PROGRAM = 'gateway-health'
 #: and missing here is one nothing reads, which the gateway suite catches by
 #: comparing this reading against every unit source the program declares.
 DELIVERED_UNITS: tuple[str, ...] = (UDM_BOOT_UNIT, WATCHDOG_UNIT, access.CONVERGER_UNIT)
+
+#: The controller's database as its own client on the device reaches it: the
+#: client, the port the controller's MongoDB answers on, and the database that
+#: holds the site's configuration. Read-only, as physical/gateway.md §3 reads
+#: the controller's statistics with the same client.
+MONGO = 'mongo'
+CONTROLLER_DB_PORT = 27117
+CONTROLLER_DB = 'ace'
+
+#: What the health reading asks the controller's database for: each network
+#: object that opts in to the controller's UPnP and NAT-PMP service, as its
+#: subnet in the controller's spelling (the gateway's address and the prefix)
+#: and its name, a tab between them. It reads and writes nothing else.
+UPNP_QUERY = (
+    'db.networkconf.find({upnp_lan_enabled: true}).forEach(function (n) { print((n.ip_subnet || "") + "\t" + n.name) })'
+)
 
 #: The address families whose policy rules the health reading holds to a rule
 #: that looks up the main table: the rule the gateway's own packets are routed
@@ -236,6 +252,7 @@ class Playbooks:
     networkd: str = "The firmware's policy rules exposed to removal"
     prefix: str = "The site's delegated prefix rotated"
     lease: str = 'The PD lease no longer reads as declared'
+    upnp: str = 'UPnP answers other networks than rule 8 names'
 
 
 PLAYBOOKS = Playbooks()
@@ -280,6 +297,12 @@ class _HealthParams:
     delegations: tuple[str, ...]
     pd_leases: str
     pd_wan: str
+    #: The subnets the controller's UPnP service answers, zero-based, from the
+    #: census's port-mapping row: one word each, and all of them as one.
+    upnp_subnets: tuple[str, ...]
+    upnp_wanted: str
+    #: The command that answers which networks opt in to it.
+    upnp_read: str
     playbooks: Mapping[str, str]
 
 
@@ -324,6 +347,15 @@ def health_program(
     while it holds it, the PD lease's line for the bridge is read for the same
     /64 under `root`, which is the reading of the lease's format and part of
     the lease read's layer (`kluster.providers.pd_lease`).
+
+    The networks the controller's UPnP service answers are read off the
+    controller's database (`UPNP_QUERY`) against the networks the census's
+    port-mapping row names (`port_mapping`). The server LAN's opt-in is set in
+    the console, and this reading is what holds it to the row. It and the
+    console setting are one layer, which physical/gateway.md §4.2 rule 8
+    lists, removed whole once the pinned provider writes a network's update
+    without the fields it does not model at zero, when the census declares
+    the opt-in.
 
     `--certificates` lists one name per site block of the proxy's `Caddyfile`,
     each block being one wildcard certificate: the controller's vhost, and the
@@ -379,6 +411,12 @@ def health_program(
             ),
             pd_leases=shlex.quote(f'{root}{pd_lease.LEASES}'),
             pd_wan=shlex.quote(WAN_INTERFACE),
+            upnp_subnets=tuple(shlex.quote(str(network.v4)) for network in port_mapping().networks),
+            upnp_wanted=shlex.quote(' '.join(str(network.v4) for network in port_mapping().networks)),
+            upnp_read=' '.join(
+                shlex.quote(word)
+                for word in (MONGO, '--quiet', '--port', str(CONTROLLER_DB_PORT), CONTROLLER_DB, '--eval', UPNP_QUERY)
+            ),
             playbooks={field: shlex.quote(title) for field, title in asdict(PLAYBOOKS).items()},
         ),
     )

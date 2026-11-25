@@ -351,8 +351,9 @@ repository, where any account can comment on an issue or a pull request
 and open a pull request from a fork. **In scope for opportunistic
 attacks.** The controls:
 
--   every exposed port either authenticates before it acts, or is a public
-    service by design that runs contained (cluster/architecture.md §4.1);
+-   every port this repository exposes either authenticates before it
+    acts, or is a public service by design that runs contained
+    (cluster/architecture.md §4.1);
 -   every exposed port runs a maintained release;
 -   at the gateway's WAN side, a connection the internet opens toward the
     gateway itself or toward an overlay address is dropped and only
@@ -362,31 +363,40 @@ attacks.** The controls:
     reading behind each direction and the ones not read), except
     ZeroTier's UDP to the gateway's overlay member, which a census row
     admits (physical/gateway.md §4.2 rule 7);
+-   a port a device on the server LAN maps for itself, through the
+    gateway's UPnP or NAT-PMP ([physical/gateway.md](physical/gateway.md)
+    §4.2 rule 8), is that device's to open, and it is held to none of
+    the controls above. That is accepted under §2.10's trust of the
+    server LAN, on the third clause of §4. The actor is this section's;
 -   a fork's run receives no secret (framework/ci.md §3);
 -   text an outsider writes on the forge is data to every session
     (framework/dispatch.md §1).
 
-**The gateway's ZeroTier port passes these controls as they stand.**
-ZeroTier authenticates every packet against its sender's identity before
+**Both ZeroTier ports pass these controls**: the gateway's, and the one
+the homelab host's member maps. ZeroTier authenticates every packet against its sender's identity before
 it acts on it, and a sender reaches a network's traffic only as a member
-Central has authorized. The gateway runs a maintained release, the one
-its digest-pinned image carries. What a sender who knows the port gains
+Central has authorized. Each member runs a maintained release: the
+gateway's, the one its digest-pinned image carries; the homelab host's,
+its distribution's packaged one. What a sender who knows a port gains
 is ZeroTier's own surface at that release, the daemon's handling of packets
 from an identity it does not know, and nothing more. Weighed as a
 finding, that fails the second clause of §4, because the surface is
 reachable without the port:
 
 -   anyone can mint an identity for free and send to a member by its
-    node id through the roots' relay, and the gateway's node id is in
+    node id through the roots' relay, and both members' node ids are in
     the public roster;
 -   every direct path a member opens already admits its peer's packets
     as replies;
 -   a flood costs the daemon one authentication check per packet, and
     the uplink is floodable either way.
 
-The allow is UDP alone, so the daemon's control API, TCP on the same
-number, stays behind the drop. The port is ZeroTier's default, and
-deliberately so.
+Both ports are open to UDP alone, so neither daemon's control API, TCP
+on its primary port, is reached from the internet: the gateway's stays
+behind the drop, and nothing maps the host's. The gateway's port is
+ZeroTier's default, and deliberately so; the homelab host's is its third
+port, the one its daemon asks to be mapped (physical/gateway.md §4.2
+rule 8).
 
 A port moved to an unusual number quiets a log. It is not a control.
 
@@ -394,15 +404,19 @@ A port moved to an unusual number quiets a log. It is not a control.
 
 Grouped by who controls their software:
 
--   **The server LAN, the container VLAN and the personal overlay
-    members**: hosts whose software the operator chose, which are the
-    household's computers and phones, the homelab host, and the gateway's
-    own container services, the resolvers among them. **Trusted at the
-    network layer**: an address one of them spoofs, or a reply one of them
-    forges, is accepted. The gateway is an exit for the personal overlay
-    members: a device that opens the overlay's tunnel reaches the home
-    and the internet through it as a home client does, so its parity with
-    sitting on the LAN is literal. The zone policy sees one direction of
+-   **The server LAN**, the controller's `Default` network: every device
+    on it, whatever its software and whoever controls it. **Trusted at
+    the network layer**, and the model takes no further account of what
+    is on it. The trust includes the inbound ports a device on it maps
+    for itself (§2.9).
+-   **The container VLAN and the personal overlay members**: hosts whose
+    software the operator chose, which are the gateway's own container
+    services, the resolvers among them, and the household's devices on
+    the overlay. **Trusted at the network layer**: an address one of
+    them spoofs, or a reply one of them forges, is accepted. The gateway
+    is an exit for the personal overlay members: a device that opens the
+    overlay's tunnel reaches the home and the internet through it as a
+    home client does, so its parity with sitting on the LAN is literal. The zone policy sees one direction of
     that traffic and not the other. What a member sends into the gateway
     meets no zone policy, the overlay's flow rules being the only policy
     on it. What the gateway forwards to a member's address meets the zone

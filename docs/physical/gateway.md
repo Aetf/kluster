@@ -280,8 +280,9 @@ declarative/physical.md §4.
     what it starts with. Its own settings, `local.conf` at the root of
     that directory (`container.OVERLAY_DAEMON_SETTINGS`), are a mounted
     file on the same terms. They pin the daemon to one UDP port,
-    `conventions.overlay.UDM_PORT`, the port the census admits from the
-    internet (§4.2 rule 7), with no UPnP or NAT-PMP mapping and no
+    `conventions.overlay.UDM_PORT`, the port the census admits to the
+    device from the internet (§4.2 rule 7), with no UPnP or NAT-PMP
+    mapping and no
     secondary port: `allowSecondaryPort` off binds none at start, and
     `secondaryPort`, set to that same port and never bound, is what
     keeps the daemon from binding a random one after an outage, a path
@@ -1259,7 +1260,7 @@ each sits where the fact it compares against is declared:
 
 | Piece | Lives in | Runs | Compares the device against |
 | --- | --- | --- | --- |
-| `gateway-health` | this repository, rendered onto the device as `/data/custom/bin/gateway-health` | on demand, over the homelab host's SSH | what `Gateway` declares: its machines and the bridge each attaches to, the units the persistence layer delivers, the BGP daemon's hold on the declared peer, each declared network's /64 of the delegated prefix and the PD lease's line for it, the offline package cache, the base the program is written for, and what `networkd` is told |
+| `gateway-health` | this repository, rendered onto the device as `/data/custom/bin/gateway-health` | on demand, over the homelab host's SSH | what `Gateway` declares: its machines and the bridge each attaches to, the units the persistence layer delivers, the BGP daemon's hold on the declared peer, each declared network's /64 of the delegated prefix and the PD lease's line for it, the networks the controller's UPnP answers, the offline package cache, the base the program is written for, and what `networkd` is told |
 | `check-gateway` | homelab-ops, behind a yadm timer on the homelab host | daily | `gateway-health`'s verdict, the proxy's certificates as a LAN host sees them, and how fresh the copies of the backups are; it mails each finding with its playbook, and checks in to a Home Assistant timer of its own after every run that delivered its findings or had none |
 | `gateway-backup-pull` | homelab-ops, behind a yadm timer on the homelab host | weekly | nothing: it copies the controller's autobackups into `~/.config/gw-backups` |
 
@@ -1438,6 +1439,25 @@ What it reads:
         /64 are each the finding "The PD lease no longer reads as
         declared", quoting the line. This reading belongs to the lease
         read's layer (§4.2) and leaves with it.
+10. **UPnP answers the networks §4.2 rule 8 names, and no other**: the
+    controller's database, read with the device's own client, lists the
+    network objects that opt in to the controller's UPnP and NAT-PMP
+    service, read-only:
+
+        mongo --quiet --port 27117 ace --eval 'db.networkconf.find({upnp_lan_enabled: true}).forEach(function (n) { print((n.ip_subnet || "") + "\t" + n.name) })'
+
+    Each network is compared by its subnet, taken to its network address
+    (the controller spells it as the gateway's address and the prefix),
+    against the subnets of the networks the census's port-mapping row
+    names, today the server LAN's. A named network that does not opt in,
+    and a network that opts in and is not named, are each one finding,
+    "UPnP answers other networks than rule 8 names", naming the subnet.
+    The client's standard output alone is parsed. A client that exits
+    other than 0 is one more finding, quoting both its streams and its
+    exit status. The server LAN's opt-in is set in the console, and this
+    reading is what holds it to the census: it belongs to the layer
+    §4.2 rule 8 removes once the census declares that opt-in, and leaves
+    with it.
 
 `gateway-health --certificates` reads nothing, and prints one line per
 certificate the declared proxy obtains: the proxy's address and one
@@ -3045,8 +3065,15 @@ Facts that shape it (decided 2026-08-24):
     fails its job, as one did on 2026-11-19 (run 44657773238, the
     gateway's peer listed as `RELAY`). The same day, run 44639021122's
     dial to the homelab host timed out after its join. Each passed when
-    rerun. The readings that tell whether the allow answers the first,
-    and what the second still needs, are
+    rerun. The homelab host is a NATed member, the one a run dials for
+    the libvirt session. Its daemon asks the gateway, through §4.2 rule
+    8's UPnP and NAT-PMP service, for a mapping of WAN UDP
+    `conventions.overlay.HOMELAB_PORT` to the same port on the host, and
+    pushes the mapped address to its peers, so a runner's first packet
+    reaches it on that port. While the mapping is lapsed (§4.2 rule 8)
+    the member is relayed until hole punching succeeds, and §3's "The
+    homelab member reads `RELAY`" tells which. The readings that tell
+    whether each path answers its member are
     [Aetf/kluster-ops#881](https://github.com/Aetf/kluster-ops/issues/881).
 
 ### 2.7 Managed DNS: the tunnel's resolver
@@ -3612,6 +3639,71 @@ unless the entry says otherwise.
     starts at 2026-11-21T08:00Z. The first event lasts 35 s, which puts
     8 s in the 04:35 bucket, and that bucket reads 9: `timestamp` is the
     outage's start, not its end.
+-   **UPnP answers other networks than rule 8 names** — trigger:
+    `gateway-health` reports a subnet whose network does not opt in to
+    UPnP, a network that opts in and §4.2 rule 8 does not name, or the
+    controller's database not answering the query (§1.6 reading 10).
+    The opt-in is each network's own setting, `upnp_lan_enabled` on its
+    network object, and the server LAN's is held in the console (§4.2
+    rule 8):
+    -   **The server LAN does not opt in**: in the console, turn on the
+        `Default` network's own UPnP setting, `upnp_lan_enabled` on its
+        network object. Where the console shows it has not been read:
+        it is a setting of the network itself, not of the WAN's UPnP
+        panel, whose save writes the site's UPnP settings, which are the
+        census's. Those are left as they are. The weekly drift run's
+        refreshed preview shows a console change to them, and
+        `pulumi up --refresh` puts them back (framework/ci.md §3.2).
+    -   **Another network opts in**: turn that network's own UPnP setting
+        off the same way. On the cluster network the weekly drift run's
+        refreshed preview shows the change as well, and it is put back in
+        the console: `up --refresh` would update the network, which the
+        pinned provider writes whole, sending the fields it does not
+        model at zero (§4.2, the adoption rules).
+    -   **The database does not answer**: the finding quotes what the
+        client said. A controller that is restarting answers again
+        within minutes, and the next run reads it; one that stays
+        silent is a fault of the controller itself, which its console
+        shows.
+
+    Then run `gateway-health` again; it reports nothing once the
+    networks that opt in are rule 8's.
+-   **The homelab member reads `RELAY`** — trigger: `ci-physical`'s
+    join or at-failure reading lists `Aetf-Arch-Homelab=RELAY`. The
+    member's direct path is §4.2 rule 8's mapping, and the readings
+    tell where it broke, in order:
+    -   **No mapping.** Neither the console's UPnP leases nor
+        `iptables -t nat -S MINIUPNPD` on the device hold a DNAT of UDP
+        `conventions.overlay.HOMELAB_PORT` to `HOMELAB_HOST`'s address
+        and port, and `conntrack` holds no entry from the runner's
+        address to the WAN address at that port. The mapping had
+        lapsed, and the host's daemon still pushed its address, so the
+        runner's packet met the WAN drop. A lapse heals within a
+        renewal period, 300 s; one that outlasts it is a refusal or a
+        service that stopped. A `miniupnpd` that does not run is the
+        controller's provisioning log's to explain, an opted-in network
+        or the WAN missing. One that runs logs the request it refused,
+        on secure mode or its access list's port bounds. A diff on the
+        UPnP block in the weekly drift run's refreshed preview is a
+        console change to the site's switches, which `pulumi up
+        --refresh` puts back (framework/ci.md §3.2), and a server LAN that
+        no longer opts in is `gateway-health`'s finding, "UPnP answers
+        other networks than rule 8 names". A
+        daemon that answers points at the host: `ss -lunp` there shows
+        `zerotier-one` on both its ports, `HOMELAB_PORT` among them.
+    -   **A mapping on another port.** Another device on the server LAN
+        held `HOMELAB_PORT` at the WAN address, and the lease list names
+        it. The mapping works on a port no reader names, so the finding
+        is against `HOMELAB_PORT`'s value.
+    -   **The mapping held, and `conntrack` holds the runner's entry**, to
+        the WAN address at `HOMELAB_PORT` and translated to the host. The
+        mapping admitted the packet and the direct path was still not
+        chosen: the cause is past the NAT, in the filter's admission of
+        the mapped packet, the uplink or the daemon.
+    -   **The mapping held, and no entry from the runner.** The runner
+        never learned the mapped address. The host's daemon pushes it on
+        its 30 s bind refresh, so a join in the first seconds after the
+        daemon started can miss it.
 
 ## 4. Firewall target state
 
@@ -3708,14 +3800,26 @@ Each item names when it was read.
     both families. The device runs no UPnP or NAT-PMP service, and its
     `nat` table holds no DNAT but the DNS redirects. Read on 2026-11-22
     ([Aetf/kluster-ops#881](https://github.com/Aetf/kluster-ops/issues/881#issuecomment-7071914936)).
+    §4.2 rule 8 turns the controller's UPnP and NAT-PMP service on,
+    answering the server LAN, whose opt-in is held in the console, and
+    with it the device's port-mapping daemon,
+    `miniupnpd`, which listens on `br0` and adds, for each mapping a
+    device there asks for, a DNAT, a masquerade of the device's flows
+    from the mapped port, and a filter admission, in `MINIUPNPD` chains
+    of its own. That it listens on `br0` alone, where the jumps to its
+    chains sit, the filter rule a mapped packet from `eth8` meets, and
+    whether an IPv6 chain is hooked are the first apply's that declares
+    the service to read.
     The gateway's ZeroTier member runs in the device's own network
     namespace and holds the WAN address itself, and §4.2 rule 7 is the
     `External → Gateway` allow of UDP to the one port its daemon binds,
     ahead of that drop. So it takes unsolicited ZeroTier packets on that
     port, and the drop answers everything else, the daemon's control API
-    on TCP at the same number included. The allow's place in the chain
-    is the first apply's to read
-    ([Aetf/kluster-ops#881](https://github.com/Aetf/kluster-ops/issues/881)).
+    on TCP at the same number included. The allow lands first in
+    `UBIOS_WAN_LOCAL_USER` in both families, ahead of the
+    `RELATED,ESTABLISHED` accept, as a `-p udp` match on a port set whose
+    one member is `UDM_PORT`. Read on 2026-11-25
+    ([Aetf/kluster-ops#881](https://github.com/Aetf/kluster-ops/issues/881#issuecomment-7169872306)).
 -   **From the cluster zone to the gateway itself, the zone policy
     admits every packet.** `INPUT` first passes every packet through two
     firmware chains that are no zone policy: `ALIEN`, which drops a
@@ -3854,6 +3958,61 @@ created; an edit to the declared one on the
 console's BGP page is drift, which a preview reports without a refresh
 and an apply writes back.
 
+**A census row that adopts a whole controller object declares the
+fields it owns, and ignores every other input of the resource.** The
+bridged resources are wholes: each write is a PUT of the whole
+document, so a field left undeclared is not left alone but sent at
+whatever the plan holds. The ignored list is the SDK's own input set
+for the resource less the owned fields (`adopt` in
+`components/gateway/unifi.py`), never written out by hand, so a field a
+regenerated SDK adds is the console's from the start rather than a
+field the next write zeroes. The owned fields include what the resource
+requires to be stated, at the controller's value.
+
+An input the provider refuses on the controller's version is neither
+owned nor ignored. An ignored input reaches the provider as
+configuration, at the value the import recorded, and the provider
+fails the plan of a resource configured with an input it gates on a
+version the controller is past. So each such input is named at its
+adoption with its reason (`adopt`'s `refused`), and a new input a
+regenerated SDK adds that the provider gates that way fails the plan by
+name until it is named there. Today's is the settings'
+`multicast_dns_enabled`, refused above controller 7.0, where the site
+runs UniFi Network 10.
+
+What the census does not own stays the console's (sources-of-truth.md
+R6), and an update of the object writes it back at the values the
+stack last read, since `physical`'s deploy runs without `--refresh`: a
+console change to it since then is overwritten. The write is a PUT of
+the whole object as the provider's client library models it. A key
+the document holds that the library does not model is omitted, and a
+key the library marshals without `omitempty` that no input sets goes
+at its zero value, whatever the document holds. On the site's
+settings every such key is absent from the document, and the write
+adds it at zero. On the server LAN's network object five of them are
+on, which is why rule 8 holds that object's one field in the console
+instead. Rule 8's settings are the adopting row.
+
+**A change that updates an adopted object is applied with a dump of
+the object's controller document before and a diff after**, read-only
+from the device's database, against an expected difference the pull
+request states in its `## Live`: the difference between the document
+and the body the pinned provider sends it, taken from a run of the
+pinned engine and provider against a stand-in controller serving the
+recorded document. Only the document shows what the whole-object write
+changed beside the owned fields. Rule 8's document:
+
+```sh
+mongo --port 27117 ace --quiet --eval 'printjson(db.setting.findOne({key:"usg"}))'
+```
+
+A difference beyond the expected one is a key the write clobbered: it
+is restored from the dump, in the console where the console shows the
+key, and otherwise by a PUT of that key alone to the object's
+endpoint, which the controller merges into the document. The adoption
+is repaired before anything else lands. Nothing in the census is
+removed to undo it, since a dropped row of rule 8 writes nothing.
+
 **A policy names a subnet through an address group, and a single
 host as a literal.** A zone
 policy's `ips` field holds single addresses: the pinned provider
@@ -3890,10 +4049,9 @@ either. Its reply is the device's own traffic toward the WAN, the chain
 families (§4.1, read 2026-11-22): that is the controller's predefined
 accept on Gateway → External, the reverse of the one pair the census
 declares toward Gateway. An allow to Gateway from another zone would
-need its own reverse pair read first. Whether the controller takes an
-unflagged allow on External → Gateway is read by the first apply that
-declares it, which fails by name on a refusal before the overlay
-machine is touched, the machine depending on the firewall. The return
+need its own reverse pair read first. The controller took the
+unflagged allow on External → Gateway as declared, with no address on
+either side (read 2026-11-25, Aetf/kluster-ops#881). The return
 leg of all those allows therefore rests on policies the census does not
 declare. Nothing in the program would notice one going away, since the
 program neither declares nor reads them and a refresh compares only
@@ -4052,18 +4210,19 @@ leg itself, and the controller stores the shape with the flag off (read
     order (§3, "The site's delegated prefix rotated").
 6.  **qbittorrent v4 peer-port forward** — target the worker at
     `192.168.70.10`, on the same row's port and transports as the
-    pinhole, and **the only port forward on the device**. No
-    management inbound exists: cluster and Talos management ride the
-    NLB, home-side management rides the overlay.
+    pinhole, and **the only port forward the census declares**. No
+    management inbound is declared: cluster and Talos management ride
+    the NLB, home-side management rides the overlay.
 
     **Declared only once qbittorrent runs on the worker**, which the
     optional `qbittorrentOnWorker` key says. Until qbittorrent's own
     migration wave the legacy qbittorrent on the homelab host holds
-    the peer port's WAN side, by whatever holds it today — a UPnP
-    lease or a hand-kept forward. A forward declared beside that
-    either collides with the hand-kept rule, a failed resource inside
-    whichever apply declares it, or wins over the lease and takes the
-    legacy host's inbound v4 away with nothing reporting it. So with
+    the peer port's WAN side, by the UPnP lease the legacy qbittorrent
+    asks for (rule 8). A forward declared beside the lease stands with
+    it, since the gateway's port-mapping daemon does not refuse a
+    mapping on a forward's port (rule 7), so which of the two answers
+    the port is the order of their chains, and nothing reports it. So
+    with
     the key unset — every apply before that wave, the gateway cutover
     window's included — no forward is declared, and the port is left
     to its holder. Moving it is a step of Wave D
@@ -4083,14 +4242,159 @@ leg itself, and the controller stores the shape with the flag off (read
     and why that passes is threat-model.md §2.9.
 
     **No two rows open the same port and transport at the WAN
-    address**, the forwards and the allows to Gateway being the rows
-    that do. A forward on this port would rewrite the packets meant for
-    the gateway's own daemon toward another host, the allow reading as
-    in force while the member is relayed, and `tests/test_unifi.py`
-    holds the relation over the census.
+    address**, the forwards, the allows to Gateway and the mapping rule
+    8 asks for being the rows that do. A forward on this port would
+    rewrite the packets meant for the gateway's own daemon toward
+    another host, the allow reading as in force while the member is
+    relayed, and `tests/test_unifi.py` holds the relation over the
+    census. The mapping is held to it because the gateway's
+    port-mapping daemon does not catch the collision: its in-use check
+    reads the device's own sockets and the rules at the top of
+    `PREROUTING`, and the controller's forwards sit in chains of their
+    own. So a mapping on a forward's port would stand beside the forward
+    with nothing refusing it, and one on this port would be refused, the
+    host's daemon taking the next port up, a working mapping on a port
+    no reader names.
+8.  **UPnP and NAT-PMP for the server LAN alone, and the reservation
+    that holds the homelab host's address.** The service is on when the
+    site's switch is on and answers each network whose own opt-in is on:
 
-Nothing else. A custom policy on a pair this census orders that is not
-a row of it is drift.
+    -   the site's gateway settings, `unifi.SettingUsg`, adopted by
+        `conventions.gateway.UNIFI_SETTING_USG_ID`, of which the census
+        owns the UPnP block: on, in secure mode, NAT-PMP beside UPnP,
+        toward the primary WAN, `WAN`. Every other input is ignored but
+        the one the provider refuses on this controller, and an update is
+        applied with the dump and the diff above;
+    -   the cluster network's opt-in, declared off on the network the
+        census declares;
+    -   the server LAN's opt-in, on, **held in the console**.
+
+    **The server LAN's opt-in is the console's, and `gateway-health`
+    holds it.** Its network object, the controller's `Default`, is not
+    the census's: the pinned provider's update of a network is a PUT of
+    the whole object built from its schema, which reads nothing first,
+    so a field its client library marshals without `omitempty` and no
+    input sets goes at its zero value whatever the document holds. On
+    the server LAN that is `is_nat`, `dhcpdv6_allow_slaac`,
+    `ipv6_pd_auto_prefixid_enabled`, `dhcpd_conflict_checking` and
+    `lte_lan_enabled`, all on today. Upstream's own record of it is
+    [filipowm/terraform-provider-unifi#201](https://github.com/filipowm/terraform-provider-unifi/issues/201).
+    So the opt-in is set by hand in the console, once, and
+    `gateway-health` reads that the networks the service answers are
+    the ones this rule names, the server LAN and no other (§1.6). A
+    mismatch is a finding the daily check mails, naming §3's "UPnP
+    answers other networks than rule 8 names".
+
+    **The console-held setting and its reading are one layer**, made of:
+
+    -   this paragraph and the one above it;
+    -   `CONSOLE_HELD` in `components/gateway/unifi.py`, the networks
+        whose opt-in is held in the console, which `PortMapping`
+        accepts in its networks beside the cluster VLAN;
+    -   `gateway-health`'s reading: `MONGO`, `CONTROLLER_DB_PORT`,
+        `CONTROLLER_DB`, `UPNP_QUERY`, the `upnp_*` fields of
+        `_HealthParams` and `Playbooks.upnp` in
+        `components/gateway/__init__.py`, the template's block that reads
+        the opted-in networks, and §1.6's reading 10;
+    -   §3's "UPnP answers other networks than rule 8 names";
+    -   the reading's cases and their `mongo` stand-in in
+        `tests/test_gateway_health.py`;
+    -   the tripwire, `test_the_console_held_opt_in_stands_on_the_provider_release_it_was_read_at`
+        in `tests/test_unifi.py`, red once the `filipowm/unifi` pin in
+        `Pulumi.yaml` moves off 1.1.0, the release the zeroing was read
+        at;
+    -   the sentence on it in operations.md's provider row.
+
+    **It comes out** once the pin reaches a provider release whose
+    network update keeps the fields it does not model. The tripwire's
+    first step is to read again the body an update of `Default` sends
+    at the new pin, with a run of the pinned engine and provider against
+    a stand-in controller serving the recorded document. Where the
+    zeroing is gone, the census adopts the server LAN's network object,
+    declaring its opt-in with this rule's other owned fields, the
+    adopted networks take `CONSOLE_HELD`'s place in `PortMapping`, and
+    the rest of the list is deleted.
+
+    The IoT and container VLANs' network objects are the console's,
+    opted in nowhere, and the same reading answers for them. The controller writes the opted-in networks' subnets
+    into the port-mapping daemon's access list, which is where an
+    opt-in there would show. **Secure mode** holds every UPnP request
+    to the requester's own address, and NAT-PMP maps only to its sender
+    in any mode. **NAT-PMP is on because its mappings lapse**: ZeroTier
+    asks NAT-PMP first, for a 600 s lifetime renewed every 300 s, so a
+    mapping nothing holds is gone within ten minutes, while a UPnP
+    request with lease 0 gets the daemon's clamp of seven days. The
+    controller sets no limit on how many mappings there are or how long
+    they last.
+
+    **The one mapping this repository asks for** is the homelab
+    member's: UDP `conventions.overlay.HOMELAB_PORT` at the WAN address
+    to the same port on `conventions.homelab.HOMELAB_HOST`. The host's
+    daemon binds that port as its third and asks for the same number
+    outside (homelab-host.md §4). On a refusal it walks up from it, and
+    it takes whatever external port a NAT-PMP answer names, so the
+    mapped port is `HOMELAB_PORT` unless another device on the server
+    LAN already holds that port at the WAN address. It pushes the mapped
+    address to its peers on each bind refresh, every 30 s, so a
+    runner's first packet reaches the member (§2.6). The DNAT, its
+    filter admission and the masquerade that keeps the host's
+    third-port flows on that port are what the gateway's daemon renders
+    for the mapping. The mapping is no controller object, and the row
+    names it (`PortMapping` in `components/gateway/unifi.py`) because
+    it holds a port at the WAN address, which rule 7's relation reads.
+    Every other device on the server LAN may map ports for itself as
+    well. What it opens is its own, and why that exposure is accepted is
+    threat-model.md §2.9–§2.10.
+
+    **A lapsed mapping** goes unreported by the host: its daemon keeps
+    pushing the last mapped address after the gateway stops holding it,
+    and a runner's packet to that address meets the WAN drop. A lapse
+    inside one renewal period heals at the next. One that outlasts it
+    means the gateway refuses the renewal, or no longer serves port
+    mapping on the server LAN: a console change to the site's UPnP
+    block, which the drift run's preview shows since it is owned, or to
+    the server LAN's opt-in, which `gateway-health` reports; a
+    provisioning that did not start the daemon; or a firmware upgrade
+    that changed how the service is rendered. §3's "The homelab member
+    reads `RELAY`" is the reading.
+
+    **Removal** is the block declared absent, the row's `networks`
+    emptied, and applied, never the row dropped: the settings resource
+    has no delete, so a dropped row writes nothing and leaves the
+    service on. The server LAN's opt-in is turned off in the console with
+    it, which `gateway-health` then reports until the row's `networks`
+    no longer names the server LAN.
+
+    **The reservation** keys the host's MAC, on the server LAN's network
+    object, to `HOMELAB_HOST`'s address, so the DHCP server hands the host that
+    address and no other: a `unifi.User` with a fixed IP. A secure-mode
+    mapping goes to whatever address the host holds. Were a lease to
+    move it, the old mapping would hold the port until it lapsed and the
+    host's daemon would take the next port up, an endpoint no reader
+    names. The address is the one the host's lease holds, so the
+    reservation moves nothing. It takes over the client the controller
+    already knows by the MAC. A destroy calls nothing on the controller
+    (`skip_forget_on_destroy`): the client keeps its name, note and
+    fixed IP. So removing the row, or a MAC change that replaces it,
+    leaves the reservation in force until it is cleared in the console,
+    which is the step that goes with the row's removal. The console
+    shows the client by the first label of
+    `conventions.homelab.HOMELAB_HOST_NAME`, the name the device plane
+    answers for the host. A reservation is keyed on the network object
+    whose id the census records (`CONTROLLER_NETWORKS` in
+    `components/gateway/unifi.py`, from
+    `conventions.gateway.UNIFI_NETWORK_SERVER_LAN_ID`), looked up by that
+    id, so a site that holds no such object fails the preview by name,
+    and a reservation on another site network is refused when the row is
+    built.
+    Home Assistant's reservation is the console's and no row (rule 1).
+
+Nothing else is declared. The WAN address also answers on whatever a
+device on the server LAN maps for itself through rule 8, for as long as
+the device renews the mapping. Those mappings are run-time state of the
+device's port-mapping daemon, not controller objects: no preview shows
+them, and the census does not list them. A custom policy on a pair this
+census orders that is not a row of it is drift.
 
 ### 4.3 Zone-matrix target state — two phases
 

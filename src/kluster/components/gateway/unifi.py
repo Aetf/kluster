@@ -16,11 +16,18 @@ holds.
 
 **The rule census**, which is exactly the design's and nothing more: a pair
 the census orders belongs to it whole, so a custom policy there that is not
-declared here is drift. It is `CENSUS`, one row per zone pair carrying policies
-and one for the port forward, each with the reason it exists beside it, and
+declared here is drift. It is `CENSUS`, one row per zone pair carrying policies,
+one per port forward, one for the gateway's UPnP and NAT-PMP service and one
+per fixed-IP reservation, each with the reason it exists beside it, and
 `SiteFirewall` declares what the rows say and nothing else. So a rule added or
 removed is a line in that structure's diff, and so are the address groups a
 rule names, which exist because a row names them.
+
+One of the objects the rows render is the controller's own, which the census
+adopts rather than creates: the site's gateway settings (`PortMapping`). The
+bridged resources are wholes, each write a PUT of the whole document, so an
+adopting declaration states the fields the census owns and ignores every other
+input of the resource, the console's (`adopt`).
 
 Every zone pair that carries a policy also carries a `ZonePolicyOrder`, and
 the order is the row's: a policy declared without one takes whatever position
@@ -73,15 +80,17 @@ that costs.
 from __future__ import annotations
 
 import enum
-from collections.abc import Mapping, Sequence
+import inspect
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from ipaddress import IPv4Address, IPv4Network, IPv6Address, IPv6Network
-from typing import Literal
+from typing import Any, Literal
 
 import pulumi
 import pulumi_unifi as unifi
 
 from kluster import conventions
+from kluster.conventions.homelab import HOMELAB_HOST, HOMELAB_HOST_NAME
 from kluster.providers.unifi_bgp import BgpConfiguration
 from kluster.providers.unifi_zone_policy_order import ZonePolicyOrder
 from putils import Component, own_provider_opts, with_provider
@@ -119,6 +128,12 @@ CLUSTER_SUBNET = f'{conventions.CLUSTER_VLAN.require_gateway()}/{conventions.CLU
 #: nothing here leases from it: the cluster VLAN has no DHCPv6 server, and
 #: these are the bounds the controller gives every network on the site.
 DELEGATED_RANGE = ('::2', '::7d1')
+
+#: The WAN the gateway's UPnP and NAT-PMP service maps ports on, by the
+#: controller's name for it: the primary WAN, `WAN`, "Internet 1", which
+#: carries the uplink. The second port, `WAN2`, carries none
+#: (physical/gateway.md §3, "The uplink's own record of a window").
+UPNP_WAN = 'WAN'
 
 #: How many times the provider may re-attempt a request the controller failed
 #: transiently: three at most, and two is enough. The bound is there for the
@@ -254,6 +269,58 @@ def site_bgp(
         description=description,
         file_name=file_name,
         opts=opts,
+    )
+
+
+def adopt[R: pulumi.CustomResource](
+    resource: Callable[..., R],
+    args: type,
+    name: str,
+    *,
+    import_id: str,
+    owned: Mapping[str, Any],
+    refused: Mapping[str, str],
+    opts: pulumi.ResourceOptions,
+) -> R:
+    """`resource`, adopted from the controller's object `import_id`: the inputs in `owned` declared, every other input of `args` ignored.
+
+    The bridged resources are wholes. Each write is a PUT of the whole
+    document, so an input left undeclared is not left alone: it is sent at
+    whatever the plan holds. So an adopting declaration states the fields the
+    census owns, and every other input goes into `ignore_changes`, where the
+    engine takes it from the inputs the stack last recorded, the console's
+    values. The ignored list is the inputs of `args`, the resource's own
+    input type in the SDK, less `owned`, and is never written out: a field a
+    regenerated SDK adds is the console's from the start rather than a field
+    the next write zeroes. `owned` holds what the resource requires stated as
+    well, at the value the controller holds.
+
+    `refused` is the inputs the provider refuses to be handed on this
+    controller, each with its reason, and they are neither owned nor
+    ignored. An ignored input reaches the provider as configuration, at the
+    value the import recorded, and the provider fails the plan of a resource
+    configured with an input it gates on a controller version the site is
+    past. So the other half of a regenerated SDK's new field: one the
+    provider gates that way fails the plan by name until it is listed here.
+
+    One function because the construction is the rule: every adopting row of
+    the census goes through it, so no adoption owns a field it does not state
+    (physical/gateway.md §4.2).
+    """
+    inputs = [
+        parameter.name
+        for parameter in inspect.signature(args).parameters.values()
+        if parameter.kind is inspect.Parameter.KEYWORD_ONLY
+    ]
+    if unknown := sorted(set(refused) - set(inputs)):
+        raise ValueError(f'{args.__name__} has no input {unknown}, so nothing refuses it')
+    if both := sorted(set(refused) & set(owned)):
+        raise ValueError(f'{both} is owned and refused at once')
+    ignored = [field for field in inputs if field not in owned and field not in refused]
+    return resource(
+        name,
+        **owned,
+        opts=pulumi.ResourceOptions.merge(opts, pulumi.ResourceOptions(import_=import_id, ignore_changes=ignored)),
     )
 
 
@@ -476,10 +543,118 @@ class Forward:
     needs: Needs | None = None
 
 
+#: The site networks whose UPnP opt-in is held in the console rather than
+#: declared: the pinned provider's update of a network writes the fields it
+#: does not model at zero, so the census takes none of these network objects
+#: over, and `gateway-health` reads their opt-in instead. Part of the layer
+#: physical/gateway.md §4.2 rule 8 lists, and replaced by the networks the
+#: census adopts once that layer comes out.
+CONSOLE_HELD: frozenset[conventions.SiteNetwork] = frozenset({conventions.SERVER_LAN})
+
+
+#: The site networks a reservation can be keyed on, by the id of the
+#: controller's network object for each (`conventions.gateway`), which the
+#: component looks up by that id, so a site that holds no such network fails
+#: the preview by name. A reservation on another network is refused until its
+#: network's id is recorded.
+CONTROLLER_NETWORKS: Mapping[conventions.SiteNetwork, str] = {
+    conventions.SERVER_LAN: conventions.gateway.UNIFI_NETWORK_SERVER_LAN_ID,
+}
+
+
+@dataclass(frozen=True)
+class RequestedMapping:
+    """A port a host of this repository asks the gateway to map for itself, the same number outside as on the host."""
+
+    key: str
+    protocol: Literal['tcp', 'udp', 'tcp_udp']
+    port: int
+    host: conventions.SiteHost
+
+
+@dataclass(frozen=True)
+class PortMapping:
+    """The gateway's UPnP and NAT-PMP service, for the devices of `networks` alone.
+
+    It renders the site's gateway settings, adopted, of which it owns the UPnP
+    block: on, in secure mode, NAT-PMP beside UPnP, toward `UPNP_WAN`, while
+    `networks` names any network, and declared absent, which turns the
+    service off, while it names none. The settings have no delete, so a
+    dropped row writes nothing and leaves the service as it was; the row
+    emptied, and applied, is what turns it off.
+
+    Which networks the service answers is each network's own opt-in, and
+    `networks` names only networks whose opt-in something holds: the
+    network the census declares, the cluster VLAN, whose opt-in it declares
+    on exactly when `networks` names it, and the networks of
+    `CONSOLE_HELD`, whose opt-in is set in the console and read by
+    `gateway-health` against `networks` (physical/gateway.md §4.2 rule 8).
+    A row naming any other network is refused here, since nothing would
+    render or read its opt-in.
+
+    `requested` is the mappings this repository's own hosts ask for. A
+    mapping is run-time state of the device's port-mapping daemon rather
+    than a controller object, so nothing declares one; they are named here
+    because they hold ports at the WAN address beside the census's forwards.
+    `key` is the settings resource's name after the component's, part of its
+    URN.
+    """
+
+    key: str
+    networks: tuple[conventions.SiteNetwork, ...]
+    requested: tuple[RequestedMapping, ...] = ()
+
+    def __post_init__(self) -> None:
+        held = {conventions.CLUSTER_VLAN, *CONSOLE_HELD}
+        for network in self.networks:
+            if network not in held:
+                raise ValueError(
+                    f'the port mapping {self.key!r} opts in the {network.name} network, '
+                    'whose opt-in the census neither declares nor holds in the console'
+                )
+        for mapping in self.requested:
+            if mapping.host.network not in self.networks:
+                raise ValueError(
+                    f'the mapping {mapping.key!r} is asked for on the {mapping.host.network.name} network, '
+                    f'which {self.key!r} does not opt in'
+                )
+
+
+@dataclass(frozen=True)
+class Reservation:
+    """A fixed-IP reservation: the DHCP server of the host's network hands the host its address and no other.
+
+    Keyed on the host's MAC, on the controller's network object for the
+    host's network (`CONTROLLER_NETWORKS`); a reservation on a network whose
+    object's id is not recorded is refused here. The controller already
+    knows a client that has taken a lease, so the reservation takes the
+    client over rather than creating it. A destroy calls nothing on the controller: the client keeps
+    its name, note and fixed IP. So removing the row, or a MAC change that
+    replaces it, leaves the reservation in force until it is cleared in the
+    console, which is the step that goes with the row's removal. `key` is the
+    resource's name after the component's, part of its URN.
+    """
+
+    key: str
+    #: What the console shows the client as.
+    name: str
+    #: The console's note on the client, which is the row's reason.
+    note: str
+    host: conventions.SiteHost
+
+    def __post_init__(self) -> None:
+        if self.host.network not in CONTROLLER_NETWORKS:
+            raise ValueError(
+                f'the reservation {self.key!r} is on the {self.host.network.name} network, '
+                "whose controller object's id this program does not record"
+            )
+
+
 #: Everything this program declares on the controller's firewall, row by row,
-#: each with its reason. The pairs come first and the forward last; within a
-#: pair, the order is the rule.
-CENSUS: tuple[Pair | Forward, ...] = (
+#: each with its reason. The pairs come first, then the forward, then the
+#: gateway's port-mapping service with the reservation that holds its one
+#: requested mapping's address; within a pair, the order is the rule.
+CENSUS: tuple[Pair | Forward | PortMapping | Reservation, ...] = (
     # IoT → the `lan` pool: one enumerated allow for the VLAN, then a drop. The
     # allow is the media Gateway's VIP on 443, which is what the IoT VLAN's clients
     # consume, the televisions and streamers among them; the drop is the rest
@@ -731,8 +906,8 @@ CENSUS: tuple[Pair | Forward, ...] = (
             ),
         ),
     ),
-    # The IPv4 half of the bulk-transfer flow, and the only port forward on
-    # the device. No management is published inbound: cluster and node
+    # The IPv4 half of the bulk-transfer flow, and the only port forward the
+    # census declares. No management inbound is declared: cluster and node
     # management arrive over the cloud load balancer, home-side management
     # over ZeroTier. Both halves take the port and its transports from the
     # census row they open (`PEER`), because two rules that disagree on it
@@ -747,11 +922,12 @@ CENSUS: tuple[Pair | Forward, ...] = (
     #
     # What it waits for is the application. A WAN port forwards to one host at
     # a time, and until the application moves onto the worker its legacy copy
-    # on the host holds this one by whatever mechanism it uses today, a UPnP
-    # lease or a rule kept by hand. A forward declared then either collides
-    # with that rule or wins over the lease and takes the legacy copy's
-    # inbound IPv4 away, and nothing reports either. Moving the port is a step
-    # of the application's own migration (cluster/migration.md, Wave D).
+    # on the host holds this one by the UPnP lease it asks for (the
+    # port-mapping row below). The gateway's port-mapping daemon does not see
+    # the controller's forwards, so a forward declared then stands beside
+    # the lease, and which of the two answers the port is the order of their
+    # chains, with nothing reporting it. Moving the port is a step of the
+    # application's own migration (cluster/migration.md, Wave D).
     Forward(
         key='peer-v4',
         title='inbound peer port (v4)',
@@ -759,6 +935,49 @@ CENSUS: tuple[Pair | Forward, ...] = (
         port=PEER.port,
         to=conventions.HOMELAB_NODE_IPV4,
         needs=Needs.PEER_ON_WORKER,
+    ),
+    # UPnP and NAT-PMP, for the server LAN alone. The homelab host's overlay
+    # member sits behind the gateway's masquerade, so without a mapping a peer
+    # reaches it directly only by hole punching from both ends, relayed until
+    # then (physical/gateway.md §2.6). Its daemon asks the gateway for a
+    # mapping of its third port, the same number outside
+    # (`conventions.overlay.HOMELAB_PORT`), NAT-PMP first and UPnP second, and
+    # pushes the mapped address to its peers, so a runner's first packet
+    # reaches it. The mapping renews itself, and the address translation is
+    # what the port-mapping daemon renders for it.
+    #
+    # Every device on the server LAN may map ports for itself: that network is
+    # trusted at the network layer, and what such a device opens is its own
+    # (threat-model.md §2.9, §2.10). Secure mode holds each UPnP request to
+    # the requester's own address, as NAT-PMP always is. The IoT VLAN, the
+    # container VLAN and the cluster VLAN stay out: the cluster network is the
+    # census's and declares its opt-in off, and the other two are the
+    # console's objects, opted in nowhere.
+    PortMapping(
+        key='port-mapping',
+        networks=(conventions.SERVER_LAN,),
+        requested=(
+            RequestedMapping(
+                key='homelab-overlay-member',
+                protocol='udp',
+                port=conventions.overlay.HOMELAB_PORT,
+                host=HOMELAB_HOST,
+            ),
+        ),
+    ),
+    # The homelab member's mapping's address, held. The host's address on the
+    # server LAN is otherwise a lease, which the DHCP server may move. A
+    # secure-mode mapping goes to whatever address the host holds, and after a
+    # move the old mapping holds the port until it lapses, so the host's
+    # daemon would take the next port up: an endpoint no reader names.
+    #
+    # The console shows the client by the name the device plane answers for
+    # the host, so the reservation renames nothing a resolver could answer by.
+    Reservation(
+        key='homelab-host',
+        name=HOMELAB_HOST_NAME.partition('.')[0],
+        note="kluster: the homelab overlay member's port mapping lands on this address.",
+        host=HOMELAB_HOST,
     ),
 )
 
@@ -774,8 +993,9 @@ class SiteFirewall(Component, pulumi_type='kluster:gateway:SiteFirewall'):
     each, and each pair's policies are followed by the one `ZonePolicyOrder`
     that ranks them.
 
-    `policies`, `orders`, `groups` and `forwards` hold what was declared, by
-    the key the row gives it.
+    `policies`, `orders`, `groups`, `forwards` and `reservations` hold what
+    was declared, by the key the row gives it, and `settings` the
+    site's gateway settings.
 
     `static_hosts` is the roll of names the device's own resolver answers for
     literally, and it arrives from the caller: which names have no lease behind
@@ -851,6 +1071,8 @@ class SiteFirewall(Component, pulumi_type='kluster:gateway:SiteFirewall'):
         # applies, `/data/udapi-config/udapi-net-cfg.json`, holds no prefix-id
         # field for any bridge, and the gateway allocates each bridge's /64
         # itself (physical/gateway.md §1).
+        # The site has one gateway settings object, so one row renders it.
+        mapping = port_mapping()
         self.network = unifi.Network(
             f'{name}-network',
             name=conventions.gateway.UNIFI_NETWORK_CLUSTER,
@@ -865,8 +1087,30 @@ class SiteFirewall(Component, pulumi_type='kluster:gateway:SiteFirewall'):
             ipv6_pd_stop=DELEGATED_RANGE[1],
             ipv6_ra_enable=True,
             multicast_dns=True,
+            upnp_lan_enabled=conventions.CLUSTER_VLAN in mapping.networks,
             firewall_zone_id=self.zone.id,
             site=site,
+            opts=child,
+        )
+
+        # The site's gateway settings, adopted, owning the UPnP block. The
+        # settings resource takes an import id with the site in front of it.
+        self.settings = adopt(
+            unifi.SettingUsg,
+            unifi.SettingUsgArgs,
+            f'{name}-{mapping.key}',
+            import_id=f'{site}:{conventions.gateway.UNIFI_SETTING_USG_ID}',
+            owned={
+                'upnp': unifi.SettingUsgUpnpArgs(nat_pmp_enabled=True, secure_mode=True, wan_interface=UPNP_WAN)
+                if mapping.networks
+                else None,
+                'site': site,
+            },
+            refused={
+                'multicast_dns_enabled': (
+                    'the provider refuses it on a controller above 7.0, and the site runs UniFi Network 10'
+                ),
+            },
             opts=child,
         )
 
@@ -874,7 +1118,7 @@ class SiteFirewall(Component, pulumi_type='kluster:gateway:SiteFirewall'):
         # holds.
         handed_in: dict[Worker, pulumi.Input[str]] = {Worker.GUA: worker_gua}
         met = {Needs.PEER_ON_WORKER: peer_on_worker}
-        rows = [row for row in CENSUS if row.needs is None or met[row.needs]]
+        rows = [row for row in CENSUS if not isinstance(row, Pair | Forward) or row.needs is None or met[row.needs]]
         pairs = [row for row in rows if isinstance(row, Pair)]
 
         self.groups: dict[str, unifi.FirewallGroup] = {}
@@ -967,6 +1211,34 @@ class SiteFirewall(Component, pulumi_type='kluster:gateway:SiteFirewall'):
             if isinstance(row, Forward)
         }
 
+        # Each network a reservation is keyed on, looked up once by the id of
+        # its controller object. `allow_existing` takes over the client the
+        # controller already knows by the MAC, which it does once the host has
+        # taken a lease; `skip_forget_on_destroy` makes a destroy call
+        # nothing, since the provider otherwise has the controller forget the
+        # client, its history with it, and so the reservation outlives its
+        # row.
+        reservations = [row for row in rows if isinstance(row, Reservation)]
+        networks = {
+            network: unifi.get_network_output(id=CONTROLLER_NETWORKS[network], site=site, opts=invoke).id
+            for network in dict.fromkeys(row.host.network for row in reservations)
+        }
+        self.reservations: dict[str, unifi.User] = {
+            row.key: unifi.User(
+                f'{name}-{row.key}',
+                mac=row.host.mac,
+                name=row.name,
+                note=row.note,
+                fixed_ip=str(row.host.v4),
+                network_id=networks[row.host.network],
+                allow_existing=True,
+                skip_forget_on_destroy=True,
+                site=site,
+                opts=child,
+            )
+            for row in reservations
+        }
+
         self.static_hosts = {
             host: unifi.DnsRecord(
                 f'{name}-host-{host}',
@@ -981,3 +1253,11 @@ class SiteFirewall(Component, pulumi_type='kluster:gateway:SiteFirewall'):
         }
 
         self.register_outputs({})
+
+
+def port_mapping(census: Sequence[object] = CENSUS) -> PortMapping:
+    """The census's one `PortMapping` row: the site has one gateway settings object, which one row renders."""
+    rows = [row for row in census if isinstance(row, PortMapping)]
+    if len(rows) != 1:
+        raise ValueError(f'the site has one gateway settings object, and the census has {len(rows)} rows for it')
+    return rows[0]

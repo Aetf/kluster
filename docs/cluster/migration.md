@@ -369,9 +369,18 @@ spends its way back (rfc-008 §5.9).
     the port's WAN side and `physical` declares no forward for it
     (physical/gateway.md §4.2), so the move is: read the console for
     what holds the port (the port-forward list, and the UPnP lease
-    table); stop the legacy qbittorrent and delete a hand-kept forward
-    if one exists; turn UPnP off in the copied profile, since the
-    declared forward is the mechanism from here on; then
+    table, which holds the legacy qbittorrent's lease); stop the legacy qbittorrent and delete a hand-kept
+    forward if one exists; confirm the lease table no longer lists the
+    peer port. A stopped client's NAT-PMP mapping lapses within its
+    lifetime, and its UPnP lease can last seven days. A lease left on
+    the port stands beside the declared forward, since the gateway's
+    port-mapping daemon does not see the controller's forwards, so one
+    that outlives its client is deleted from the host it maps to
+    (`upnpc -d <port> <protocol>`), secure mode letting a host delete
+    its own mapping. Turn UPnP off in the copied profile, since the
+    declared forward is the mechanism from here on; the cluster network
+    is not opted in to the gateway's UPnP (physical/gateway.md §4.2
+    rule 8), so a profile left on would map nothing there. Then
     `physical config set qbittorrentOnWorker true`, through the
     `physical()` shell function physical/gateway-cutover.md defines,
     which runs `pulumi` under that stack's own passphrase

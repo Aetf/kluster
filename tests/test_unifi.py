@@ -34,25 +34,34 @@ visible in a rendered resource. So the suite asserts them directly:
     a drop never asks for one, and neither does an allow that is a return leg
     itself;
 -   no two rows open the same port and transport at the device's WAN
-    address, so a forward never takes the gateway's own overlay member off
-    its port.
+    address, so neither a forward nor the mapping this repository asks the
+    gateway for takes the gateway's own overlay member off its port, or the
+    other's;
+-   the site's gateway settings, adopted, never hand the provider an input
+    it refuses on this controller, and every other input is owned or
+    ignored;
+-   the provider release the console-held UPnP opt-in answers is the one
+    pinned, the tripwire of that layer.
 
 No controller is contacted: the boundary is Pulumi's mock monitor, which
-answers the zone lookups and hands back the inputs each resource was given.
+answers the zone and network lookups and hands back the inputs each resource
+was given.
 """
 
 import inspect
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from ipaddress import IPv4Address, IPv4Interface, IPv6Address, ip_address, ip_network
+from pathlib import Path
 from typing import Any, Literal
 
 import pulumi
 import pulumi_unifi as unifi_provider
 import pytest
 import pytest_asyncio
+import yaml
 from mock_monitor import declaring, run_with
-from unifi_controller import ZONE_LOOKUP, Controller, zone_id
+from unifi_controller import NETWORK_LOOKUP, ZONE_LOOKUP, Controller, zone_id
 
 from kluster import conventions
 from kluster.components import talos
@@ -74,6 +83,9 @@ async def mocks() -> Controller:
 
 POLICY = 'unifi:index/firewallZonePolicy:FirewallZonePolicy'
 ORDER = 'pulumi-python:dynamic/unifi_zone_policy_order:ZonePolicyOrder'
+FORWARD = 'unifi:index/portForward:PortForward'
+RESERVATION = 'unifi:index/user:User'
+SETTINGS = 'unifi:index/settingUsg:SettingUsg'
 
 
 def _policy_pairs(mocks: Controller) -> dict[str, tuple[str, str]]:
@@ -145,8 +157,19 @@ async def test_the_census_is_exactly_the_designed_set(mocks: Controller) -> None
     # neither, and no other network on the site is this program's to declare.
     assert len(by_type['unifi:index/network:Network']) == 1
     assert len(by_type['unifi:index/firewallZone:FirewallZone']) == 1
-    # The only port forward on the device.
-    assert len(by_type['unifi:index/portForward:PortForward']) == 1
+    # A forward per forward row, the conditional forward's condition met, the
+    # site's settings once for the port-mapping row, and a client per
+    # reservation row: the device's forwards, settings and reservations are
+    # the census's, and nothing else.
+    assert by_type.get(FORWARD, []) == sorted(
+        f'{NAME}-{row.key}' for row in unifi.CENSUS if isinstance(row, unifi.Forward)
+    )
+    assert by_type.get(SETTINGS, []) == [
+        f'{NAME}-{row.key}' for row in unifi.CENSUS if isinstance(row, unifi.PortMapping)
+    ]
+    assert by_type.get(RESERVATION, []) == sorted(
+        f'{NAME}-{row.key}' for row in unifi.CENSUS if isinstance(row, unifi.Reservation)
+    )
     assert 'unifi:index/dnsRecord:DnsRecord' not in by_type
 
 
@@ -819,20 +842,29 @@ TRANSPORTS: Mapping[str, tuple[str, ...]] = {
 }
 
 
-def _wan_openings(census: Sequence[unifi.Pair | unifi.Forward]) -> list[tuple[str, str, int | None]]:
-    """Each port a row opens at the device's own WAN address: the row's key, the transport and the port.
+def _wan_openings(
+    census: Sequence[unifi.Pair | unifi.Forward | unifi.PortMapping | unifi.Reservation],
+) -> list[tuple[str, str, int | None]]:
+    """Each port a row opens at the device's own WAN address: the key that opens it, the transport and the port.
 
-    Those rows are the forwards, which take a port of that address and send
-    it elsewhere, and the allows from `External` to `Gateway`, which admit it
-    to the device itself. A port of `None` is every port. Every row is read,
-    a conditional one included, since a condition met later is the same
-    collision arriving then.
+    Those are the forwards, which take a port of that address and send it
+    elsewhere; the mappings this repository asks the gateway's port-mapping
+    service for, which do the same; and the allows from `External` to
+    `Gateway`, which admit it to the device itself. A port of `None` is every
+    port. Every row is read, a conditional one included, since a condition
+    met later is the same collision arriving then.
     """
     openings: list[tuple[str, str, int | None]] = []
     for row in census:
         if isinstance(row, unifi.Forward):
             openings += [(row.key, transport, row.port) for transport in TRANSPORTS[row.protocol]]
-        elif (row.source, row.destination) == (unifi.Zone.EXTERNAL, unifi.Zone.GATEWAY):
+        elif isinstance(row, unifi.PortMapping):
+            openings += [
+                (mapping.key, transport, mapping.port)
+                for mapping in row.requested
+                for transport in TRANSPORTS[mapping.protocol]
+            ]
+        elif isinstance(row, unifi.Pair) and (row.source, row.destination) == (unifi.Zone.EXTERNAL, unifi.Zone.GATEWAY):
             openings += [
                 (policy.key, transport, policy.port)
                 for policy in row.policies
@@ -843,7 +875,7 @@ def _wan_openings(census: Sequence[unifi.Pair | unifi.Forward]) -> list[tuple[st
 
 
 def test_no_two_rows_open_the_same_port_at_the_wan_address() -> None:
-    """A port of the WAN address answers one row, so a forward never takes the gateway's overlay member off its port.
+    """A port of the WAN address answers one row, so nothing sent elsewhere takes the gateway's overlay member off its port.
 
     The gateway's daemon holds the WAN address itself and binds the one port
     the WAN-local allow admits (`conventions.overlay.UDM_PORT`). A forward on
@@ -851,15 +883,28 @@ def test_no_two_rows_open_the_same_port_at_the_wan_address() -> None:
     toward another host before the device's own socket saw it, and nothing
     would report it: the allow would read as in force while the member was
     relayed. Two forwards on one port is the same collision between hosts.
+
+    The homelab host's mapping is held to it as well
+    (`conventions.overlay.HOMELAB_PORT`), because the gateway's port-mapping
+    daemon does not catch the collision: its in-use check reads the device's
+    own sockets and the rules at the top of `PREROUTING`, and the
+    controller's forwards sit in chains of their own. So a mapping on a
+    forward's port would stand beside the forward with nothing refusing it.
+    On the gateway's own port it would be refused, and the host's daemon
+    would take the next port up, a working mapping on a port no reader
+    names.
     """
     openings = _wan_openings(unifi.CENSUS)
-    # A loop is only a claim about what it visits: the collision this case
-    # exists for is between a forward and an allow, so both must be here.
-    keys = {key for key, _, _ in openings}
-    assert keys & {row.key for row in unifi.CENSUS if isinstance(row, unifi.Forward)}, 'the census opens no forward'
-    assert keys - {row.key for row in unifi.CENSUS if isinstance(row, unifi.Forward)}, (
-        'the census admits nothing to the gateway'
-    )
+    # A loop is only a claim about what it visits: the collisions this case
+    # exists for are between an allow and what sends a port elsewhere, on one
+    # transport, so both must be here, sharing one, the mapping among them.
+    elsewhere = {row.key for row in unifi.CENSUS if isinstance(row, unifi.Forward)} | {
+        mapping.key for row in unifi.CENSUS if isinstance(row, unifi.PortMapping) for mapping in row.requested
+    }
+    assert {key for key, _, _ in openings} >= elsewhere, 'a forward or a mapping opens nothing'
+    assert {transport for key, transport, _ in openings if key in elsewhere} & {
+        transport for key, transport, _ in openings if key not in elsewhere
+    }, 'nothing sent elsewhere shares a transport with an allow to the gateway'
 
     for index, (key, transport, port) in enumerate(openings):
         for other, other_transport, other_port in openings[index + 1 :]:
@@ -874,18 +919,85 @@ def test_no_two_rows_open_the_same_port_at_the_wan_address() -> None:
 async def test_no_port_forward_exists_until_the_application_runs_on_the_worker(mocks: Controller) -> None:
     """Before its move, the application's legacy copy holds the WAN port.
 
-    Whatever holds it — a UPnP lease or a rule kept by hand — a forward declared
-    beside it either collides with it or takes the legacy copy's inbound IPv4
-    away, so the component declares none and leaves the port to its holder.
-    The pinhole is untouched by the flag: it names the worker's own address,
-    which nothing else holds.
+    It holds it by the UPnP lease it asks for, and a forward declared beside
+    the lease stands with it, the gateway's port-mapping daemon not seeing
+    the controller's forwards, so which one answers the port is the order of
+    their chains. The component declares none and leaves the port to its
+    holder. The pinhole is untouched by the flag: it names the worker's own
+    address, which nothing else holds.
     """
     async with declaring():
         firewall = build(peer_on_worker=False)
 
     assert 'peer-v4' not in firewall.forwards
-    assert 'unifi:index/portForward:PortForward' not in mocks.types
+    assert FORWARD not in mocks.types
     assert 'peer-v6' in firewall.policies
+
+
+#: The input of the site's gateway settings the pinned provider refuses on a
+#: controller above 7.0 wherever it is configured (`ModifyPlan` of
+#: `unifi_setting_usg`, filipowm/terraform-provider-unifi v1.1.0), which the
+#: site's UniFi Network 10 is.
+GATED = 'multicastDnsEnabled'
+
+
+@pytest.mark.asyncio
+async def test_the_adopted_settings_never_hand_the_provider_an_input_it_refuses(mocks: Controller) -> None:
+    """An adopted object's inputs are owned or ignored, and one the provider refuses is neither.
+
+    An ignored input reaches the provider as configuration, at the value the
+    import recorded, so the gated one would fail the settings' plan, and with
+    it the whole `physical` plan. Every other input of the resource is the
+    console's, ignored, or the census's, declared: one in neither is a field
+    the next write sends at whatever the plan holds.
+    """
+    async with declaring():
+        build()
+
+    (settings,) = mocks.of_type(SETTINGS)
+    ignored = set(mocks.options_of(settings.name, SETTINGS).ignoreChanges)
+    declared = {key for key, value in settings.inputs.items() if value is not None}
+    # Every input of the SDK's input type, by the name the engine knows it by.
+    inputs = {
+        str(vars(member.fget)['_pulumi_name'])
+        for member in vars(unifi_provider.SettingUsgArgs).values()
+        if isinstance(member, property)
+    }
+    assert GATED in inputs, 'the SDK no longer has the input, so nothing gates it'
+    assert GATED not in ignored | declared
+    assert ignored & declared == set()
+    assert inputs - {GATED} == ignored | declared
+
+
+#: The project file whose `packages:` block pins the bridged providers.
+PROJECT_FILE = Path(__file__).parent.parent / 'Pulumi.yaml'
+
+#: The `filipowm/unifi` release at which the provider's update of a network
+#: was read to write the fields it does not model at zero: the reason the
+#: server LAN's UPnP opt-in is held in the console (physical/gateway.md §4.2
+#: rule 8).
+ZEROING_READ_AT = ('filipowm/unifi', '1.1.0')
+
+
+def test_the_console_held_opt_in_stands_on_the_provider_release_it_was_read_at() -> None:
+    """The console-held layer's tripwire: a pin that moves off the release the zeroing was read at turns this red.
+
+    The layer answers a defect of the provider, which a release may fix,
+    and a bump that touches only the pin and its SDK previews empty, since
+    nothing in the census updates a network. So the bump is held here
+    until someone has read what an update of the server LAN's network sends
+    at the new pin.
+    """
+    parameters = yaml.safe_load(PROJECT_FILE.read_text())['packages']['unifi']['parameters']
+
+    assert tuple(parameters) == ZEROING_READ_AT, (
+        f"the unifi provider is pinned at {parameters}, and the server LAN's UPnP opt-in is held in the "
+        f'console because {ZEROING_READ_AT} writes the fields a network update does not model at zero. '
+        'First read again the body an update of the Default network sends at the new pin (a run of the '
+        'pinned engine and provider against a stand-in controller serving its recorded document): if it '
+        'still zeroes them, move ZEROING_READ_AT; if it does not, remove the layer physical/gateway.md '
+        '§4.2 rule 8 lists and declare the opt-in.'
+    )
 
 
 @pytest.mark.asyncio
@@ -993,9 +1105,10 @@ async def test_whether_the_controller_is_verified_is_the_programs_decision(mocks
 async def test_every_controller_resource_and_lookup_is_signed_by_it(mocks: Controller) -> None:
     """One provider, inherited by the whole subtree and by the zone lookups.
 
-    The zone, the network, the address groups, the policies and the port
-    forward are children of the component that built the provider, so each
-    takes it from its parent rather than naming it. The zone lookups are
+    The zone, the networks, the site's settings, the address groups, the
+    policies, the port forward and the reservation are children of the
+    component that built the provider, so each takes it from its parent
+    rather than naming it. The zone lookups are
     invokes, which inherit only through a parent -- so they name one, and the
     provider they end up signing with is the same one.
     """
@@ -1007,6 +1120,7 @@ async def test_every_controller_resource_and_lookup_is_signed_by_it(mocks: Contr
     for declaration in controller:
         assert f'{NAME}-unifi' in declaration.provider, f'{declaration.name} is not signed by the provider'
     assert f'{NAME}-unifi' in mocks.called_through(ZONE_LOOKUP)
+    assert f'{NAME}-unifi' in mocks.called_through(NETWORK_LOOKUP)
 
 
 @pytest.mark.asyncio

@@ -398,20 +398,30 @@ def test_the_overlay_carries_rules_composed_from_the_roster_and_the_resolvers(ra
         assert f'drop ztdest {node};' in rendered
 
 
-def test_the_overlay_network_is_adopted_by_the_conventions_id_and_is_the_runs_only_adoption(ran: Run) -> None:
-    """One import in the whole program, and it is the network, by the id `conventions` states.
+def test_every_adoption_is_by_the_conventions_id_and_one_the_design_accounts_for(ran: Run) -> None:
+    """The program's imports are the overlay network and the site's gateway settings, by the ids `conventions` states.
 
-    The network is the one resource this stack adopts rather than creates: it
-    predates the program, and every member is an upsert on its node id that
-    needs no adoption. An `importId` on anything else would be a resource the
-    first run reads from a provider instead of creating, which is a shape no
-    other declaration here has and one the ceremony (physical/gateway.md
-    §2.5) does not account for. The id is the convention's, not a literal
-    here: the stack hands on what `conventions` says the network is.
+    The overlay network predates the program, and every member is an upsert
+    on its node id that needs no adoption (physical/gateway.md §2.5). The
+    site's gateway settings are the controller's own, made with the site,
+    and the census owns their UPnP block (physical/gateway.md §4.2 rule 8).
+    An `importId` on anything else
+    would be a resource the first run reads from a provider instead of
+    creating, which is a shape no other declaration here has. The ids are the
+    conventions', not literals here: the stack hands on what `conventions`
+    says each object is.
     """
-    adopted = [request for request in ran.recorded.requested if request.importId]
+    adopted = sorted((request.type, request.importId) for request in ran.recorded.requested if request.importId)
 
-    assert [request.type for request in adopted] == ['zerotier:index/network:Network']
+    assert adopted == sorted(
+        [
+            ('zerotier:index/network:Network', conventions.overlay.NETWORK_ID),
+            (
+                'unifi:index/settingUsg:SettingUsg',
+                f'{conventions.gateway.UNIFI_SITE}:{conventions.gateway.UNIFI_SETTING_USG_ID}',
+            ),
+        ]
+    )
 
 
 #: The cutover runbook, whose window applies this stack under `--target`.
@@ -709,13 +719,13 @@ async def test_the_peer_forward_waits_for_qbittorrent_to_run_on_the_worker(setup
     """Until its own wave, the legacy qbittorrent holds the peer port's WAN side.
 
     The window that brings the gateway under this program applies the whole
-    firewall component, and qbittorrent moves onto the worker waves later. A
-    forward declared in between either collides with whatever holds the port
-    today, a rule kept by hand, or wins over a UPnP lease and takes the legacy
-    host's inbound IPv4 away with nothing reporting it. So with
-    `qbittorrentOnWorker` absent — the state of every apply before that wave —
-    the forward is not declared, and nothing else goes with it: the pinhole
-    names the worker's own address, which nothing else holds.
+    firewall component, and qbittorrent moves onto the worker waves later.
+    Until then the legacy copy holds the port by the UPnP lease it asks for,
+    and a forward declared beside the lease stands with it, so which of the
+    two answers the port is the order of their chains, with nothing reporting
+    it. So with `qbittorrentOnWorker` absent — the state of every apply before
+    that wave — the forward is not declared, and nothing else goes with it:
+    the pinhole names the worker's own address, which nothing else holds.
     """
     pulumi.runtime.set_all_config(
         {key: value for key, value in STACK_CONFIG.items() if key != f'kluster:{physical.QBITTORRENT_ON_WORKER}'}

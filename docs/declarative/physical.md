@@ -1018,9 +1018,19 @@ census's one row through the site's forward
 (`conventions.routes.SiteForward`) — declared on every apply, naming the
 worker's GUA as the run derives it from the prefix it read
 (physical/gateway.md §4.2) — and its v4 peer-port
-forward to `192.168.70.10` (**the only port forward**; no management
-inbound exists), declared only once `qbittorrentOnWorker` says
-qbittorrent runs on the worker, and any static LAN host entries (dns.md §4). The
+forward to `192.168.70.10` (**the only port forward the census
+declares**; no management inbound is declared), declared only once
+`qbittorrentOnWorker` says qbittorrent runs on the worker, the
+**site's UPnP settings**, an adopted controller object of which the
+census owns that block alone, with the cluster network's opt-in
+declared off and the server LAN's held in the console, which
+`gateway-health` reads (physical/gateway.md §4.2 rule 8), and the
+**fixed-IP reservation** that holds the homelab
+host's address, `conventions.homelab.HOMELAB_HOST`, which its overlay
+member maps `conventions.overlay.HOMELAB_PORT` to, no two of the
+forward, that mapping and the allow to the Gateway zone opening one
+port and transport at the WAN address — and any static LAN host
+entries (dns.md §4). The
 **`lan` pool is not in this census as an object at all**: it is
 deliberately no network object and therefore in no zone, so the rules
 naming it are address-group rules on the internal→external pair, not

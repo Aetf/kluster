@@ -177,6 +177,19 @@ UNIFI_SITE = 'default'
 UNIFI_NETWORK_CLUSTER = CLUSTER_NAME
 UNIFI_ZONE_CLUSTER = CLUSTER_NAME
 
+#: The controller's own objects the census names by id, as the controller
+#: gave each (physical/gateway.md §4.2 rule 8). An adoption names its object
+#: by id, as a plain value when it is declared, and a lookup by id fails the
+#: preview by name where the site holds no such object, so the id is recorded
+#: here, as `conventions.overlay.NETWORK_ID` records the overlay's: it is what
+#: the object is, and another id is another object. The site's gateway
+#: settings, the `setting` document of key `usg`, which the census adopts. The
+#: server LAN's network object, the untagged network every site starts with,
+#: which a reservation on the server LAN is keyed on. Both read off the
+#: controller's database on 2026-11-26.
+UNIFI_SETTING_USG_ID = '6596c2b69fc3510dc8295ddd'
+UNIFI_NETWORK_SERVER_LAN_ID = '6596c2b69fc3510dc8295de7'
+
 
 @dataclass(frozen=True)
 class BridgedService:

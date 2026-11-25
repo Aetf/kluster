@@ -218,9 +218,10 @@ OVERLAY_DAEMON_CONF = 'local.conf'
 #:   and/or tertiary ports. This can cause NAT issues.` each time it reads
 #:   the file, which is expected here.
 #: - `portMappingEnabled` off: no UPnP or NAT-PMP mapping, and with it no
-#:   tertiary port, which exists only for that mapping. The device runs no
-#:   such service, so the port mapped nothing. No tertiary port is named,
-#:   since nothing binds one while the mapping is off.
+#:   tertiary port, which exists only for that mapping. The gateway's daemon
+#:   holds the WAN address itself, so a mapping would map nothing. No
+#:   tertiary port is named, since nothing binds one while the mapping is
+#:   off.
 OVERLAY_DAEMON_SETTINGS: Mapping[str, int | bool] = MappingProxyType(
     {
         'primaryPort': conventions.overlay.UDM_PORT,
