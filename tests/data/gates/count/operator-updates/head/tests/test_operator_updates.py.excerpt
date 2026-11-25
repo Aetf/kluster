@@ -1,0 +1,8 @@
+#: The namespace the operator watches, and every resource here is in.
+WATCHED = 'monitoring'
+
+#: The bound on a tripwire case, past the suite's own: the first a worker
+#: runs starts the server and the controllers behind the pulls of four
+#: images, and each case waits for two reconciles.
+TRIPWIRE_TIMEOUT = 4 * pinned_image.PULL_TIMEOUT + 4 * READY_TIMEOUT
+

@@ -1,0 +1,60 @@
+#: whose stack has a checkpoint and none in the copy's format: never a
+#: checkpoint, never a key that is no copy, and never a copy in a format its
+#: stack is stored in, whatever the list says and whatever a writer
+#: committed since the list was read.
+PRUNE_STATEMENT = f"""
+WITH asked AS (
+    SELECT listed.key, substr(listed.key, length(:'layout') + 1) AS path
+    FROM json_array_elements_text(:'keys'::json) AS listed (key)
+    WHERE starts_with(listed.key, :'layout')
+),
+copies AS (
+    SELECT asked.key,
+           :'layout' || :'stacks' || parsed.parts[1] || '.json' AS checkpoint,
+           coalesce(parsed.parts[cardinality(parsed.parts)], '') AS format
+    FROM asked
+    CROSS JOIN LATERAL (
+        SELECT matched.parts
+        FROM json_array_elements_text(:'copies'::json) AS copy (pattern),
+             regexp_match(asked.path, '^(?:' || copy.pattern || ')$') AS matched (parts)
+        WHERE matched.parts IS NOT NULL
+        LIMIT 1
+    ) AS parsed
+),
+gone AS (
+    DELETE FROM {STATE_TABLE} AS stale
+    USING copies
+    WHERE stale.key = copies.key
+      AND EXISTS (
+          SELECT 1
+          FROM {STATE_TABLE} AS live, json_array_elements_text(:'formats'::json) AS stored (format)
+          WHERE live.key = copies.checkpoint || stored.format
+      )
+      AND NOT EXISTS (SELECT 1 FROM {STATE_TABLE} AS live WHERE live.key = copies.checkpoint || copies.format)
+    RETURNING stale.key
+)
+SELECT coalesce(json_agg(key ORDER BY key), '[]') FROM gone;
+"""
+
+
+def prune(target: Target, keys: Sequence[str], *, database: str) -> list[str]:
+    """Delete the superseded copies named, under `database`'s prefix, returning the keys deleted.
+
+    A key is deleted only where it is a copy of a checkpoint superseded as
+    of the statement's snapshot (`PRUNE_STATEMENT`), so a key the statement
+    passes over is a row a writer has made current again, one whose stack
+    has gone, one already gone, or no copy at all; the caller compares what
+    it asked for with what came back.
+    """
+    if not keys:
+        return []
+    log.info('deleting %d superseded row(s) from %s', len(keys), endpoint(target.url))
+    variables = {
+        'keys': json.dumps(list(keys)),
+        'layout': f'{database}/{BOOKKEEPING}',
+        'stacks': STACKS.removeprefix(BOOKKEEPING),
+        'copies': json.dumps(list(COPIES.values())),
+        'formats': json.dumps(['', *COMPRESSED]),
+    }
+    what = f'the prune of {STATE_TABLE}'
+    return _keys_answered(query(target, PRUNE_STATEMENT, what=what, variables=variables), what)
