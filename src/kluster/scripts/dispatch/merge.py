@@ -2,12 +2,13 @@
 
 `check` reads the forge and returns every precondition the merge fails, so a
 refused merge reports all of them at once and has changed nothing: the pull
-request belongs to a live builder record this session holds; its title leads
-with the record's RFC slice; its description holds the form of dispatch.md
-§1.1 for the record's `closes`; a review dispatched under the claim left a
-comment naming the head the builder reported; and the forge's head is that
-reported head, or the dispatcher's own rebase of it (§2 rule 8), compared
-before anything rewrites the branch.
+request belongs to a live builder dispatch this session holds; its title
+leads with the record's RFC slice; its description holds the form of
+dispatch.md §1.1 for the record's `closes`; a record that closes its issue
+leaves no other dispatch live on it; a review dispatched for the pull request
+left a comment naming the head the builder reported; and the forge's head is
+that reported head, or the dispatcher's own rebase of it (§2 rule 8),
+compared before anything rewrites the branch.
 
 `merge` then lands it as §2 rule 4 and github.md §3 have it, at most
 `ATTEMPTS` times while `main` moves under it: fetch, compare again, rebase
@@ -17,12 +18,15 @@ branch the forge moved since the fetch, so the push replaces only the head the
 comparison read. A conflict, a red check, a merge state other than `main`
 moving, or a wait that runs out stops it with nothing merged; a stop after the
 push leaves the forge's head as the dispatcher's own rebase, which a second
-run takes up. Once merged it ends the dispatch: each issue the description
-closes and the merge left open closed, or, where the record leaves its issue
-open, a comment saying what remains; the `end` record; the claim labels off;
-every workspace the claim's records name forgotten and removed. Each of those
-steps is skipped where it is done already, so a close-out that stopped part
-way is finished by running `merge` again.
+run takes up. Once merged it ends the pull request's dispatches, which are
+every dispatch on its branch and each whose `pr` it is, and nothing else on
+the issue: each issue the description closes and the merge left open
+closed, or, where the record leaves its issue open, a comment saying what
+remains; an `end` record naming those dispatches; the claim labels off once
+no dispatch on the issue is live; and each workspace those dispatches name,
+and no live one does, forgotten and removed. Each of those steps is skipped
+where it is done already, so a close-out that stopped part way is finished by
+running `merge` again.
 
 The waits are bounded (`Wait`), and a wait that runs out is a stop-loss,
 never a verdict on the checks.
@@ -78,8 +82,10 @@ class Precondition(enum.StrEnum):
 
     #: The pull request is closed without a merge.
     CLOSED = 'closed'
-    #: A live claim another dispatcher session holds (§2 rule 4).
+    #: A live dispatch another dispatcher session holds (§2 rule 4).
     NOT_HELD = 'not-held'
+    #: A record that closes its issue while another dispatch on it is live.
+    OTHERS_LIVE = 'others-live'
     #: The title does not lead with the record's RFC slice (rfc.md §3.4).
     RFC_TITLE = 'rfc-title'
     #: The description does not hold its form (§1.1).
@@ -87,7 +93,7 @@ class Precondition(enum.StrEnum):
     #: The reported head is not a full SHA, or the forge's head is neither it
     #: nor the dispatcher's own rebase of it (§2 rule 8).
     HEAD = 'head'
-    #: No review dispatched under the claim names the reported head (§3).
+    #: No review dispatched for the pull request names the reported head (§3).
     REVIEW = 'review'
     #: A record that leaves its issue open, and no word of what remains (§4).
     REMAINS = 'remains'
@@ -328,16 +334,17 @@ class Wait:
 
 
 def _review(dispatch: Dispatched, pull: PullRequest, head: str) -> Refusal | None:
-    """The refusal when no review dispatched under the claim names `head` on the pull request."""
+    """The refusal when no review dispatched for the pull request names `head` on it."""
     reviews = [
         r
-        for r in dispatch.claim.records
+        for d in dispatch.ending
+        for r in d.records
         if r.front is not None and r.front.role is Role.REVIEW and r.front.fields.get('pr') == pull.number
     ]
     if not reviews:
         return Refusal(
             Precondition.REVIEW,
-            f'no review of #{pull.number} is dispatched under the claim of #{dispatch.issue.number} (§3)',
+            f'no review of #{pull.number} is dispatched on #{dispatch.issue.number} (§3)',
         )
     named = any(
         _REVIEW_HEADING.match(comment.body.lstrip())
@@ -376,7 +383,7 @@ def check(
     refusals: list[Refusal] = []
     if pull.state == 'CLOSED':
         refusals.append(Refusal(Precondition.CLOSED, f'#{number} is closed without a merge'))
-    live = dispatch.claim.live
+    live = dispatch.builder.live
     if live.session != session:
         refusals.append(
             Refusal(Precondition.NOT_HELD, f'#{dispatch.issue.number} is claimed by dispatcher session {live.session}')
@@ -396,6 +403,16 @@ def check(
         )
     if merged:
         return Checked(pull, dispatch, pull.head, tuple(refusals))
+    if closes and dispatch.others:
+        refusals.append(
+            Refusal(
+                Precondition.OTHERS_LIVE,
+                f'the record closes #{dispatch.issue.number}, and these dispatches on it are live: '
+                f'{"; ".join(str(d.name) for d in dispatch.others)}. End each that has no pull request to '
+                f'merge with `dispatch abandon {dispatch.issue.number} --dispatch <workspace or branch>`, '
+                'merge the others first, or brief this one to leave the issue open',
+            )
+        )
     rfc = dispatch.front.fields.get('rfc')
     if isinstance(rfc, str) and not pull.title.startswith(f'{rfc}:'):
         refusals.append(Refusal(Precondition.RFC_TITLE, f'the title of #{number} does not lead with `{rfc}:`'))
@@ -599,15 +616,21 @@ def close_out(
     session: str,
     remains: str | None,
 ) -> None:
-    """End the dispatch of a merged pull request, skipping each step that is done already.
+    """End the dispatches of a merged pull request, skipping each step that is done already.
 
     The steps: each issue the description closes, the dispatch's own among
-    them where its record says so, closed where the merge left it open; or
-    the comment on what remains; the `end` record; the claim labels; the
-    workspaces.
+    them where its record says so and no other dispatch on it is live,
+    closed where the merge left it open; or the comment on what remains; the
+    `end` record naming the dispatches it ends; the claim labels, once no
+    dispatch on the issue is live; the workspaces of the dispatches it ends
+    that no live dispatch names.
     """
     number = dispatch.issue.number
+    others = dispatch.others
     closing = {int(n) for n in ledger.CLOSES.findall(pull.body)} | ({number} if dispatch.closes else set[int]())
+    if others and number in closing:
+        log.warning('leaving #%d open: %s', number, '; '.join(f'{d.name} is live on it' for d in others))
+        closing.discard(number)
     for issue in sorted(closing):
         if forge.issue(issue).open:
             log.info('closing #%d, which the merge left open', issue)
@@ -617,16 +640,22 @@ def close_out(
         if not said:
             log.info('commenting on #%d what remains', number)
             forge.comment(number, f'{pull.url} merged, and leaves this issue open. {REMAINS} {remains}')
-    if not dispatch.ended:
-        log.info('posting the end record on #%d', number)
-        forge.comment(number, Record(event=Event.END, session=session).render())
-    labels = forge.issue(number).labels
-    held = [label for label in ledger.CLAIMS if label in labels]
-    if held:
-        forge.relabel(number, remove=held)
+    live = {d.name for d in dispatch.live}
+    ending = tuple(d.name for d in dispatch.ending if d.name in live)
+    if ending:
+        log.info('posting the end record on #%d for %s', number, '; '.join(map(str, ending)))
+        forge.comment(number, Record(event=Event.END, session=session, ends=ending).render())
+    if others:
+        log.info('leaving the claim labels on #%d, where %d dispatches stay live', number, len(others))
+    else:
+        labels = forge.issue(number).labels
+        held = [label for label in ledger.CLAIMS if label in labels]
+        if held:
+            forge.relabel(number, remove=held)
     standing = repository.workspaces()
+    kept = {d.name.workspace for d in others}
     names = dict.fromkeys(
-        r.front.workspace for r in dispatch.claim.records if r.front is not None and r.front.workspace is not None
+        d.name.workspace for d in dispatch.ending if d.name.workspace is not None and d.name.workspace not in kept
     )
     for name in names:
         if name not in standing:

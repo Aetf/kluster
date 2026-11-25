@@ -26,7 +26,7 @@ import process_sessions
 import pytest
 from memory_forge import MemoryForge
 
-from kluster.scripts.dispatch import brief, claim, ledger, record
+from kluster.scripts.dispatch import audit, brief, claim, hooks, ledger, prcheck, record
 from kluster.scripts.dispatch.forge import Comment, ForgeError, Milestone
 from kluster.scripts.dispatch.merge import ATTEMPTS, Bucket, Check, Jj, Precondition, Refused, Stopped, Wait, merge
 from kluster.scripts.dispatch.prcheck import PullRequest
@@ -40,6 +40,9 @@ PULL = 4917
 WORKSPACE = 'b-917'
 BRANCH = 'b-917-merge'
 SESSION = 'session-of-the-dispatcher'
+#: Another slice of the issue, dispatched beside the one that merges.
+SIBLING = 'b-917-m2'
+SIBLING_BRANCH = 'b-917-m2-work'
 #: Another issue the description closes, beside the dispatch's own.
 OTHER = 918
 #: The contexts `main`'s protection requires.
@@ -253,17 +256,25 @@ class World:
         main = self.remote.ref('main')
         assert _run(self.remote.bare, 'git', 'show', f'{main}:work.txt') == 'the work\n'
         assert _run(self.remote.bare, 'git', 'show', f'{main}:base.txt') == 'base.txt once main moved\n'
-        assert self.claim() is None
+        assert not self.dispatches()
         assert not ledger.claimed(self.forge.issue(ISSUE))
         assert WORKSPACE not in _workspaces(self)
         assert not (self.checkout / '.claude' / 'workspaces' / WORKSPACE).exists()
 
     def unmerged(self) -> None:
         assert self.forge.requests[PULL].state == 'OPEN'
-        assert self.claim() is not None
+        assert self.dispatches()
 
-    def claim(self) -> record.Claim | None:
-        return record.claim(ISSUE, self.forge.comments(ISSUE))
+    def dispatches(self) -> tuple[record.Dispatch, ...]:
+        return record.dispatches(ISSUE, self.forge.comments(ISSUE))
+
+    def sibling(self) -> brief.Brief:
+        """Another slice of the issue claimed beside the merging one, with a workspace of its own; its brief."""
+        _ = _run(self.checkout, 'jj', 'workspace', 'add', '-r', 'main', f'.claude/workspaces/{SIBLING}')
+        front = f'issue: {ISSUE}\nrole: builder\ndone: Its slice lands.\nowned: [other.txt]\ncloses: false\n'
+        sibling = _brief(self.checkout.parent, f'---\n{front}workspace: {SIBLING}\nbranch: {SIBLING_BRANCH}\n---\n')
+        _ = claim.claim(self.forge, claim.Dispatch(sibling, SESSION), ISSUE, frozenset({'AGENTS.md'}))
+        return sibling
 
 
 def _brief(directory: Path, text: str) -> brief.Brief:
@@ -388,6 +399,12 @@ def _reviewed_earlier(world: World) -> None:
     world.review('0123456789ab' + world.reported[12:])
 
 
+def _closing_beside_a_sibling(world: World) -> None:
+    # The merge would close the issue another slice is still building under.
+    _ = world.sibling()
+    world.review(world.reported)
+
+
 @pytest.mark.parametrize(
     ('arrange', 'precondition'),
     [
@@ -398,8 +415,9 @@ def _reviewed_earlier(world: World) -> None:
         (_moved_and_fetched('thework\n'), Precondition.HEAD),
         (_moved_and_fetched('    the work\n'), Precondition.HEAD),
         (_reviewed_earlier, Precondition.REVIEW),
+        (_closing_beside_a_sibling, Precondition.OTHERS_LIVE),
     ],
-    ids=['moved-head', 'moved-head-without-a-space', 'moved-head-indented', 'unreviewed-head'],
+    ids=['moved-head', 'moved-head-without-a-space', 'moved-head-indented', 'unreviewed-head', 'closes-beside-another'],
 )
 def test_a_merge_is_refused_before_it_changes_anything(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, arrange: Callable[[World], None], precondition: Precondition
@@ -416,7 +434,74 @@ def test_a_merge_is_refused_before_it_changes_anything(
     assert (world.remote.ref(BRANCH), world.remote.ref('main')) == (branch, main)
     assert _run(world.checkout, 'jj', 'log', '-r', BRANCH, '--no-graph', '-T', 'commit_id') == local
     assert world.forge.requests[PULL].state == 'OPEN'
-    assert world.claim() is not None
+    assert world.dispatches()
+
+
+def test_a_merge_ends_its_own_dispatch_and_leaves_the_issues_other_one_live(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Aetf/kluster-ops#949: one slice of #917 merged, and the close-out ended every slice and removed its workspace."""
+    world = _world(tmp_path, monkeypatch, closes=False)
+    sibling = world.sibling()
+    world.review(world.reported)
+
+    _ = world.merge(remains='the other slices')
+
+    assert [d.name.workspace for d in world.dispatches()] == [SIBLING]
+    assert ledger.CLAIMED in world.forge.issue(ISSUE).labels
+    assert WORKSPACE not in _workspaces(world) and SIBLING in _workspaces(world)
+    assert (world.checkout / '.claude' / 'workspaces' / SIBLING).is_dir()
+    # Every reader of the ledger still holds the other slice live: the claim
+    # amends it, the hooks pass its spawn, report and pull request, the gates
+    # find its dispatch, and the audit finds its workspace named.
+    assert not claim.check(world.forge, claim.Dispatch(sibling, SESSION), ISSUE, frozenset({'AGENTS.md'})).refusals
+    assert isinstance(hooks.dispatch_record(world.forge, sibling), record.Record)
+    body = tmp_path / 'sibling.md'
+    _ = body.write_text(BODY.format(line=f'Refs Aetf/kluster-ops#{ISSUE}'))
+    opening = f'gh pr create --repo Aetf/kluster --head {SIBLING_BRANCH} --title "the slice" --body-file {body}'
+    assert hooks.pr_create(hooks.Event({'command': opening}, agent_type=hooks.BUILDER), world.forge) is None
+    pull = PullRequest(PULL + 1, 'the slice', body.read_text(), 'OPEN', SIBLING_BRANCH, '', '', ())
+    assert prcheck.dispatched(world.forge, pull).builder.name.workspace == SIBLING
+    found = audit.audit(world.forge, _workspaces(world))
+    assert not [f for f in found if f.anomaly is audit.Anomaly.WORKSPACE_WITHOUT_RECORD]
+
+
+def _claim_beside(world: World, workspace: str, branch: str, closes: bool) -> brief.Brief:
+    """Another builder dispatch on the issue, in `workspace` on `branch`; its brief."""
+    front = f'issue: {ISSUE}\nrole: builder\ndone: Its work lands.\nowned: [other.txt]\ncloses: {str(closes).lower()}\n'
+    beside = _brief(world.checkout.parent, f'---\n{front}workspace: {workspace}\nbranch: {branch}\n---\n')
+    _ = claim.claim(world.forge, claim.Dispatch(beside, SESSION), ISSUE, frozenset({'AGENTS.md'}))
+    return beside
+
+
+def test_a_merge_leaves_a_workspace_a_live_dispatch_still_names(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two dispatches share a workspace on different branches, and one merges."""
+    world = _world(tmp_path, monkeypatch, closes=False)
+    _ = _claim_beside(world, WORKSPACE, 'b-917-other', closes=False)
+    world.review(world.reported)
+
+    _ = world.merge(remains='the other branch')
+
+    assert [d.name.branch for d in world.dispatches()] == ['b-917-other']
+    assert WORKSPACE in _workspaces(world)
+
+
+def test_a_merge_ends_every_dispatch_on_its_branch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The branch dispatched again in a fresh workspace after the first one's agent died: both end with its merge."""
+    world = _world(tmp_path, monkeypatch)
+    again = _claim_beside(world, 'b-917-again', BRANCH, closes=True)
+    body = tmp_path / 'again.md'
+    _ = body.write_text(BODY.format(line=f'Closes Aetf/kluster-ops#{ISSUE}'))
+    opening = f'gh pr create --repo Aetf/kluster --head {BRANCH} --title "the work" --body-file {body}'
+    assert hooks.pr_create(hooks.Event({'command': opening}, agent_type=hooks.BUILDER), world.forge) is None
+    assert isinstance(hooks.dispatch_record(world.forge, again), record.Record)
+    world.review(world.reported)
+
+    _ = world.merge()
+
+    world.landed()
 
 
 def test_a_record_that_leaves_its_issue_open_needs_what_remains(

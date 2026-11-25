@@ -41,7 +41,7 @@ from . import ledger, prbody, record
 from .brief import Role
 from .forge import CODE, Comment, Forge, ForgeError, Gh, Issue
 from .paths import OwnedPath
-from .record import Claim, Event, Front
+from .record import Front
 
 log = logging.getLogger(__name__)
 
@@ -115,14 +115,20 @@ class PullGh(Gh):
 
 @dataclass(frozen=True)
 class Dispatched:
-    """The dispatch whose builder record names a pull request's branch: its live claim, or the run its `end` ended."""
+    """The dispatch whose builder record names a pull request's branch, beside the issue's other dispatches."""
 
     issue: Issue
-    #: The run's records, its `end` aside.
-    claim: Claim
-    #: The builder record's front matter.
+    #: The builder's dispatch: live, or, where `ended`, the latest one an `end` ended.
+    builder: record.Dispatch
+    #: The front matter of its latest builder record.
     front: Front
-    #: Whether an `end` record has ended the run.
+    #: Every dispatch live on the issue, `builder` among them unless it has ended.
+    live: tuple[record.Dispatch, ...]
+    #: What merging the pull request ends, `builder` first: every dispatch on
+    #: its branch, which merges once, and each whose `pr` it is, its reviews;
+    #: the live ones, and, where `ended`, the ones ended too.
+    ending: tuple[record.Dispatch, ...]
+    #: Whether an `end` record has ended the builder's dispatch.
     ended: bool = False
 
     @property
@@ -130,42 +136,42 @@ class Dispatched:
         closes = self.front.fields.get('closes')
         return closes if isinstance(closes, bool) else None
 
-
-def ended_run(number: int, comments: Sequence[Comment]) -> Claim | None:
-    """The run the last `end` record on issue `number` ended, its `end` aside; None where no `end` stands last.
-
-    A run read this way ends at its `end`, where a live claim (`record.claim`)
-    starts after it; a record after that `end` starts another run, which is
-    the issue's live one, so none is returned.
-    """
-    records = [r for r in (record.parse(number, comment) for comment in comments) if r is not None]
-    if not records or records[-1].event is not Event.END:
-        return None
-    before = records[:-1]
-    cuts = [index for index, r in enumerate(before) if r.event is Event.END or r.start]
-    run = before[cuts[-1] :] if cuts else before
-    if run and run[0].event is Event.END:
-        run = run[1:]
-    return Claim(issue=number, records=tuple(run)) if run else None
+    @property
+    def others(self) -> tuple[record.Dispatch, ...]:
+        """The dispatches live on the issue that merging the pull request leaves standing."""
+        ending = {d.name for d in self.ending}
+        return tuple(d for d in self.live if d.name not in ending)
 
 
-def _builder(run: Claim | None, branch: str) -> Front | None:
-    """The front matter of the latest builder record of `run` that names `branch`."""
-    fronts = [
-        r.front
-        for r in (run.records if run is not None else ())
-        if r.front is not None and r.front.role is Role.BUILDER and r.front.fields.get('branch') == branch
-    ]
-    return fronts[-1] if fronts else None
+def _builder(found: Sequence[record.Dispatch], branch: str) -> tuple[record.Dispatch, Front] | None:
+    """The latest of `found` named for `branch` that holds a builder record, with that record's front matter."""
+    for dispatch in reversed(found):
+        fronts = [r.front for r in dispatch.records if r.front is not None and r.front.role is Role.BUILDER]
+        if dispatch.name.branch == branch and fronts:
+            return dispatch, fronts[-1]
+    return None
+
+
+def _ending(
+    found: Sequence[record.Dispatch], pull: PullRequest, builder: record.Dispatch
+) -> tuple[record.Dispatch, ...]:
+    """`builder`, then each other dispatch of `found` on `pull`'s branch or whose `pr` is `pull`, once by name."""
+    of_pull = {
+        d.name: d
+        for d in found
+        if d.name != builder.name and (d.name.branch == pull.branch or d.front.fields.get('pr') == pull.number)
+    }
+    return (builder, *of_pull.values())
 
 
 def dispatched(forge: Forge, pull: PullRequest, *, ended: bool = False) -> Dispatched:
-    """The live dispatch of `pull`; with `ended`, the run an `end` ended where none is live. Raises `PullUnreadable`.
+    """The live dispatch of `pull`; with `ended`, one an `end` ended where none is live. Raises `PullUnreadable`.
 
     The issues read are every open one carrying a claim label and every one
     the description names, which finds a claimed issue its own pull
     request's keyword has already closed, and one whose labels a close-out
-    already took off.
+    already took off. Each dispatch on an issue is read on its own, so one
+    that ended leaves the issue's others live.
     """
     log.info("reading the ledger for the dispatch of #%d's branch %s", pull.number, pull.branch)
     numbers = sorted(
@@ -176,30 +182,34 @@ def dispatched(forge: Forge, pull: PullRequest, *, ended: bool = False) -> Dispa
     unread: list[str] = []
     for number in numbers:
         issue = forge.issue(number)
-        if not ledger.claimed(issue) and not ended:
+        claimed = ledger.claimed(issue)
+        if not claimed and not ended:
             continue
         try:
-            comments = forge.comments(number)
-            claim = record.claim(number, comments) if ledger.claimed(issue) else None
-            run = ended_run(number, comments) if ended else None
+            history = record.read(number, forge.comments(number))
         except record.RecordUnreadable as exc:
             unread.append(str(exc))
             continue
-        front = _builder(claim, pull.branch)
-        if claim is not None and front is not None:
-            live.append(Dispatched(issue=issue, claim=claim, front=front))
-        front = _builder(run, pull.branch)
-        if run is not None and front is not None:
-            over.append(Dispatched(issue=issue, claim=run, front=front, ended=True))
-    found = live or over
-    if len(found) > 1:
-        issues = ', '.join(f'#{d.issue.number}' for d in found)
+        standing = history.live if claimed else ()
+        found = _builder(standing, pull.branch)
+        if found is not None:
+            builder, front = found
+            ending = _ending(standing, pull, builder)
+            live.append(Dispatched(issue=issue, builder=builder, front=front, live=standing, ending=ending))
+        found = _builder(history.ended, pull.branch) if ended else None
+        if found is not None:
+            builder, front = found
+            ending = _ending([*history.ended, *standing], pull, builder)
+            over.append(Dispatched(issue=issue, builder=builder, front=front, live=standing, ending=ending, ended=True))
+    candidates = live or over
+    if len(candidates) > 1:
+        issues = ', '.join(f'#{d.issue.number}' for d in candidates)
         raise PullUnreadable(f'the records of {issues} all name branch {pull.branch}')
-    if not found:
+    if not candidates:
         unreadable = f' (and these records do not read: {"; ".join(unread)})' if unread else ''
-        which = 'no live builder record, nor a run an `end` ended,' if ended else 'no live builder record'
+        which = 'no live builder record, nor a dispatch an `end` ended,' if ended else 'no live builder record'
         raise PullUnreadable(f'#{pull.number} is on branch {pull.branch}, which {which} names{unreadable}')
-    return found[0]
+    return candidates[0]
 
 
 # -- the local store ----------------------------------------------------------

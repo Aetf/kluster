@@ -1,4 +1,4 @@
-"""The ledger's labels and links, as dispatch.md §2 and §4 define them, and its live claims."""
+"""The ledger's labels and links, as dispatch.md §2 and §4 define them, and its live dispatches."""
 
 from __future__ import annotations
 
@@ -52,8 +52,8 @@ def claimed(issue: Issue) -> bool:
 class Claims:
     """The open issues that carry a claim label, by what their records say."""
 
-    #: Each issue with its live claim; None where it has none.
-    live: dict[int, record.Claim | None]
+    #: Each issue with its live dispatches; empty where its claim label stands with none.
+    live: dict[int, tuple[record.Dispatch, ...]]
     #: Each issue whose records do not read, with why.
     unreadable: dict[int, record.RecordUnreadable]
 
@@ -61,11 +61,11 @@ class Claims:
 def claims(forge: Forge) -> Claims:
     """Every open issue that carries a claim label, read."""
     numbers = sorted({issue.number for label in CLAIMS for issue in forge.issues(label=label)})
-    live: dict[int, record.Claim | None] = {}
+    live: dict[int, tuple[record.Dispatch, ...]] = {}
     unreadable: dict[int, record.RecordUnreadable] = {}
     for number in numbers:
         try:
-            live[number] = record.claim(number, forge.comments(number))
+            live[number] = record.dispatches(number, forge.comments(number))
         except record.RecordUnreadable as exc:
             unreadable[number] = exc
     return Claims(live=live, unreadable=unreadable)

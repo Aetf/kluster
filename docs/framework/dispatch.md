@@ -104,8 +104,9 @@ directory, written with its trailing `/`; a pattern, in which `*` and
 `?` match within one path segment and `**` across segments; or a file
 narrowed to one of its sections after a `#`. A builder's brief
 carries `closes` and owns at least one path. A review's carries `pr`,
-and it may own nothing, as may a design written on its issue. A field
-outside this block refuses the brief. So does a `done` that holds a
+and it may own nothing, as may a design written on its issue. Every
+brief names a `workspace` or a `branch`, which name its dispatch
+(§2.1). A field outside this block refuses the brief. So does a `done` that holds a
 space and a `#` unquoted, which YAML reads as the start of a comment
 and cuts the sentence at: such a `done` is quoted.
 
@@ -250,7 +251,8 @@ No workspace outlives the dispatch that created it:
     standing and names its path in the report. Removing it is the
     merging dispatcher's closing step, beside the label, because each
     dispatcher merges only its own pull requests (§2): `dispatch merge`
-    takes it, with every workspace the claim's records name (§2.1).
+    takes it, with the workspace of each dispatch the merge ends and of
+    none it leaves live (§2.1).
 -   An agent that **stops** to ask, for a path outside its brief or a
     ruling, has not finished: it leaves the workspace standing, with
     whatever it holds, and its report opens with `Stopped:` (§2.2). The
@@ -667,14 +669,17 @@ milestone). The rules that keep them out of each other's way:
     parked on a ruling with no claim is one a second dispatcher would
     pick up. `dispatch claim` applies `in-flight` and posts the
     dispatch record in one step (§2.1), and refuses an issue whose
-    claim label stands under another dispatcher's record or under none.
+    claim label stands under another dispatcher's live dispatch or
+    under none. An issue's claim may carry several dispatches at once,
+    each a brief of its own (§2.1), and one dispatcher holds it however
+    many it carries.
 2.  **Claims may overlap in paths, and an overlap is recorded.**
     Owned paths bound what each agent edits, not what another claim may
     own, so two concurrent claims whose paths intersect both go ahead,
     and the conflict, if any, is settled at merge: the rebase that
     conflicts goes back to the builder (rule 4). `dispatch claim`
-    compares each owned path against every path a live record owns and
-    every file an open pull request changes, the issue's own records
+    compares each owned path against every path a live dispatch owns and
+    every file an open pull request changes, the issue's own dispatches
     and pull requests aside, and prints each overlap and writes it into
     the record. Two patterns it cannot tell apart count as
     intersecting; two sections of one file do not. A bot's pull
@@ -688,10 +693,11 @@ milestone). The rules that keep them out of each other's way:
     most one open pull request may touch each of them, whoever opened
     it, a bot aside: a bot's bump is settled at merge like any overlap.
     `dispatch claim` reads the set from AGENTS.md and refuses a claim on
-    one of them, whichever section, while another live record owns it,
+    one of them, whichever section, while another live dispatch owns it,
     an open pull request that is not a bot's touches it, or a claimed
     issue's paths cannot be read, for a record that does not read or a
-    claim label with none; the refusal names each such issue. Where
+    claim label with no live dispatch; the refusal names each such
+    issue. Where
     AGENTS.md names no such file in a form it reads, every claim is
     refused.
 4.  **Each dispatcher merges only its own pull requests** and absorbs
@@ -771,13 +777,17 @@ retry starts afresh:
     `area/*` label, a `kind/*` label or an open milestone (§4).
 -   **`dispatch claim <issue> <brief>`** is the claim of rule 1. It
     refuses unless the issue is open, carries its labels and milestone,
-    and is the one the front matter names; no other dispatcher holds
+    and is the one the front matter names; the front matter names a
+    workspace or a branch, which name the dispatch; no other dispatcher holds
     it; an RFC slice's issue title leads with the slice
     ([rfc.md](rfc.md) §3.4); the milestone gate (§4) and the design gate
     (§3.1) pass; and rule 3 holds. It records rule 2's overlaps and
-    prints them. A review's brief is claimed
-    under the build claim the same session holds, and its claim checks
-    only the issue and that claim. `--operator-word '<quote>'` passes
+    prints them. A brief claimed again under the workspace and branch of
+    a live dispatch amends that dispatch, as an edited brief is, and one
+    under another workspace or branch starts another dispatch on the
+    issue. A review's brief is claimed on an issue where the same session
+    holds a live dispatch, and its claim checks only the issue and that
+    session's hold of it. `--operator-word '<quote>'` passes
     the milestone gate, and a blank word is refused wherever one is
     taken, since it would pass and leave no quote. `--adopt` takes over an `in-flight` that stands
     with no record, as every claim made before records existed does, on
@@ -790,15 +800,21 @@ retry starts afresh:
     queue (§1.4), under the same preconditions: the brief as a
     `## Brief` comment, the record, then `cloud/ready`, taking off the
     `in-flight` of a claim the same session held.
--   **`dispatch abandon <issue>`** ends a claim: an `end` record, then
-    the claim labels off. A claim another session holds, or one with no
-    record, ends only on the operator's word, which the `end` record
-    quotes.
+-   **`dispatch abandon <issue>`** ends a claim: an `end` record naming
+    every dispatch live on the issue, then the claim labels off. With
+    `--dispatch <name>`, a workspace or a branch, it ends only the live
+    dispatches whose name holds it, and takes the claim labels off only
+    once no dispatch on the issue stays live: the way to end a dispatch
+    that has no pull request of its own to merge, a design, a builder
+    that died, or the review of a pull request that was superseded.
+    Neither form touches a workspace. Ending a dispatch another session
+    holds, or a claim with no record, takes the operator's word, which
+    the `end` record quotes.
 -   **`dispatch audit`** lists the ledger's anomalies and changes
     nothing. Each kind is a member of `audit.Anomaly`, among them an
     open issue lacking a label family or a milestone (an `alert`
     aside), a claim label with no record, a claimed build with no open
-    pull request naming its issue, and a `jj` workspace no live record
+    pull request naming its issue, and a `jj` workspace no live dispatch
     names.
 -   **`dispatch gates <pr>`** checks a pull request's content against
     its dispatch, then asks the model gates its paths trigger (§3), and
@@ -829,15 +845,21 @@ retry starts afresh:
     requests tag; and `dispatch gates appeal <pr> <report>` writes a
     builder's appeals into the comment of the pull request's head.
 -   **`dispatch merge <pr> <head>`** lands a pull request at the head
-    its builder's latest report names, and ends the dispatch. It
+    its builder's latest report names, and ends the pull request's
+    dispatches: every dispatch on its branch, which merges once, and
+    each dispatch whose `pr` it is. It
     refuses, before it changes anything, unless the pull request's
-    branch is the one a live builder record names, that claim is this
-    session's, the title leads with the record's RFC slice, the
-    description holds the form of §1.1, a review dispatched under the
-    claim left a comment naming `<head>` (§3), the forge's head is
-    `<head>` or the dispatcher's own rebase of it (rule 8), and, where
-    the record's `closes` is false, `--remains '<what remains>'` says
-    what is left. A rebase of `<head>` is a commit that leaves the
+    branch is the one a live builder dispatch names, that dispatch is
+    this session's, the title leads with the record's RFC slice, the
+    description holds the form of §1.1, a review dispatched for the
+    pull request left a comment naming `<head>` (§3), the forge's head is
+    `<head>` or the dispatcher's own rebase of it (rule 8), where the
+    record's `closes` is true no other dispatch on the issue is live,
+    since the description's keyword would close the issue under it (a
+    live dispatch with nothing to merge is ended first with
+    `dispatch abandon <issue> --dispatch <name>`), and, where the
+    record's `closes` is false,
+    `--remains '<what remains>'` says what is left. A rebase of `<head>` is a commit that leaves the
     forge's `main` at `<head>`'s fork point or later, and whose tree is
     exactly what a three-way merge of `<head>`'s change onto its own
     fork point gives (`git merge-tree`). A fold of the branch's commits
@@ -867,13 +889,17 @@ retry starts afresh:
     retry after a check that failed and passed on a re-run of its job.
     Once merged, it closes every issue the description closes that the
     merge left open, or comments on the dispatch's own what remains;
-    posts the `end` record; takes the claim labels off; and forgets and
-    removes every workspace the claim's records name that stands under
-    `.claude/workspaces/` and is not the checkout it runs in (§1.2).
+    posts an `end` record naming the dispatches it ends; takes the claim
+    labels off once no dispatch on the issue is live; and forgets and
+    removes each workspace a dispatch it ends names and no live dispatch
+    does, that stands under `.claude/workspaces/` and is not the
+    checkout it runs in (§1.2). The issue's other dispatches, their
+    workspaces and the claim labels they stand under are left as they
+    are, and so is the issue itself, open, while any of them is live.
     Each of those steps is skipped where it is done already, and run on
-    a pull request that is already merged it finds the run its `end`
-    ended, so a close-out that stopped part way is finished by running
-    the command again. The commits `main` does not contain are listed
+    a pull request that is already merged it finds the dispatch its
+    `end` ended, so a close-out that stopped part way is finished by
+    running the command again. The commits `main` does not contain are listed
     before each fetch (§1.2), and rule 5's rebase of the primary's `@`
     after it stays the dispatcher's.
 
@@ -887,17 +913,30 @@ the builder's agent definition, which refuses `claim`, `queue` and
 forked session has an id of its own, and the claims of the session it
 forked from end and are claimed again on the operator's word.
 
-**The dispatch record is the claim's evidence**: a comment on the
+**The dispatch record is a dispatch's evidence**: a comment on the
 ledger issue whose first line is `**Dispatch record**`, then a line for
 a reader, then a fenced `json` block holding the event, the dispatcher's
 session, the front matter, the brief's sha256, and the operator's word
-where one was given, with the milestones it went past. A claim made
-while the issue carries no claim label starts a run, since a claim
-that ended with its label taken off by hand left no `end` record. An
-issue's **live claim** is its records after its last `end` or start,
-the start included, read while it carries a claim label; the latest is
-the live record, and each builder or design record among them still
-owns its paths.
+where one was given, with the milestones it went past.
+
+**A dispatch is one brief's, and the workspace and branch its front
+matter names are its name**, and a brief that names neither is
+refused, since its dispatch would have no name to be amended or ended
+by alone. An issue carries any number of dispatches
+at once, a slice of the work each. A `claim` or `queue` record under a
+name a live dispatch has amends that dispatch, and one under any other
+name starts another. An `end` record names the dispatches it ends, and
+ends those alone; one that names none, as every `end` written before
+records named what they ended does, ends every dispatch live at it. A
+claim made while the issue carries no claim label starts a run, which
+ends every dispatch before it, since a claim that ended with its label
+taken off by hand left no `end` record. A dispatch is **live** while no
+`end` and no start has ended it and the issue carries a claim label;
+its latest record says which session holds it, and each builder or
+design record of it still owns its paths. Everything that reads the
+ledger reads liveness this way, a dispatch at a time: a dispatch that
+ends leaves the issue's other dispatches live, their records, their
+workspaces and the label they stand under.
 
 **Only a record the account `gh` runs as wrote is read**: anyone else's
 comment is data, whatever its first line says. Within that account
@@ -928,21 +967,22 @@ refuses goes on to the session's permissions: no hook allows anything.
 
 -   **A spawn** of an agent this repository defines under
     `.claude/agents/` goes ahead only when its prompt names one brief by
-    absolute path, and the issue that brief names carries a claim whose
-    live records include one for the brief's sha256. A brief edited
-    after its claim is claimed again. An agent of any other type is not
+    absolute path, and the issue that brief names carries a live
+    dispatch whose records include one for the brief's sha256. A brief
+    edited after its claim is claimed again. An agent of any other type is not
     held.
 -   **`gh pr create` on this repository** goes ahead only with `--repo`,
     `--head`, and a `--body` or an absolute `--body-file`, since the
     hook cannot tell which directory the command runs in. The branch is
-    one a live record names, and the description takes the form of
+    named by live dispatches of a single issue, whose latest speaks for
+    the rest, and the description takes the form of
     §1.1. The hook runs on the commands Claude Code's `if` filter on
     `Bash(gh pr create *)` matches. The reference says that filter can
     miss ("How `if` patterns match Bash commands"), so the hook holds
     the command as agents run it, and not a pull request opened any
     other way.
 -   **A builder's report**, its `SubagentHandback`, goes back only under
-    the live record of the brief it names (§4). A report whose first
+    a live dispatch's record of the brief it names (§4). A report whose first
     line opens `Stopped:` stops to ask, for a path outside the brief or
     a ruling, and goes back on that alone, its workspace standing with
     whatever it holds, pushed or not. Otherwise, with a pull request,
@@ -1054,8 +1094,8 @@ pull request merges reviewed by nobody but its author.
 heading opening `Review`** (`## Review (combined)`, `## Review (round
 2)`), and it names the head it read, in full or by its first twelve
 characters or more. `dispatch merge` refuses a head that no comment of
-that form names, or whose claim holds no review dispatch for the pull
-request (§2.1). So the round that ends a fix cycle is itself a review
+that form names, or for which no review of the pull request is
+dispatched on its issue (§2.1). So the round that ends a fix cycle is itself a review
 of the head that fix cycle reported, the one-line clean review above
 included. **The dispatcher may write that round-closing comment**,
 `## Review (round N)` naming the head, once it has checked that each
@@ -1066,8 +1106,8 @@ asked goes back to a tech lead instead.
 What `dispatch merge` reads of a review is its form, and two things it
 does not check stay with the dispatcher. Who wrote the comment is one:
 every session writes as the operator's account (§1), so a review
-dispatch on the claim and a comment of the form are all the forge can
-show. Whether the findings are fixed is the other: a review that names
+dispatch for the pull request and a comment of the form are all the
+forge can show. Whether the findings are fixed is the other: a review that names
 the head and carries a blocking finding passes the check, and the
 round-closing comment above is where that is settled.
 
@@ -1245,13 +1285,14 @@ merge can report once:
     phase is not formally closed, except on the operator's word given
     with `--operator-word`:
     the record quotes it beside the phases it went past, and
-    `dispatch audit` lists every live claim made that way. The forge
+    `dispatch audit` lists every live dispatch made that way. The forge
     cannot tell the operator's word from a session's, so the word is
     made loud and kept beside the work it licensed rather than
     verified.
 -   **Dispatch is visible**: `in-flight` marks a dispatched issue — it
-    is the dispatcher's claim as well (§2) — and comes off when the
-    pull request merges or the dispatch is abandoned
+    is the dispatcher's claim as well (§2) — and comes off when no
+    dispatch on the issue is live any longer: the last one's pull request
+    merges, or the claim is abandoned
     (`dispatch merge` and `dispatch abandon`, §2.1). **`in-flight` and
     `decision/*` answer different questions** — whether somebody is
     dispatched, and who holds the ball — so an issue may carry both,
@@ -1264,7 +1305,9 @@ merge can report once:
     `Closes Aetf/kluster-ops#N` (cross-repository closing works), so
     the merge itself moves the ledger, and `dispatch merge` closes each
     issue the description closes wherever the merge left it open, so a
-    keyword that failed to fire still ends with the issue closed (§2.1).
+    keyword that failed to fire still ends with the issue closed, except
+    the dispatch's own issue while another dispatch on it is live
+    (§2.1).
     One pull request may close several issues; an issue only partly addressed is
     *referenced* without the keyword and kept open with a comment
     saying what remains, which `dispatch merge` posts from its

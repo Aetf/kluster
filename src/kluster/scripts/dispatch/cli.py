@@ -3,7 +3,7 @@
     dispatch file --title <title> --body-file <file> --label <label>... --milestone <milestone>
     dispatch claim <issue> <brief> [--operator-word <quote>] [--adopt]
     dispatch queue <issue> <brief> [--operator-word <quote>]
-    dispatch abandon <issue> [--operator-word <quote>]
+    dispatch abandon <issue> [--dispatch <workspace or branch>] [--operator-word <quote>]
     dispatch audit
     dispatch gates <pr>
     dispatch gates calibrate <gate>
@@ -86,9 +86,19 @@ def build_parser() -> argparse.ArgumentParser:
                 ),
             )
     abandoning = commands.add_parser(
-        'abandon', help="end a dispatch's claim", description='Post the end record and take the claim labels off.'
+        'abandon',
+        help="end an issue's dispatches, or one of them",
+        description=(
+            "Post an end record naming the issue's live dispatches, or those --dispatch names, and take the claim "
+            'labels off once none stays live. No workspace is touched.'
+        ),
     )
     _ = abandoning.add_argument('issue', type=int)
+    _ = abandoning.add_argument(
+        '--dispatch',
+        metavar='NAME',
+        help='a workspace or branch: end only the live dispatches it names, and leave the others live',
+    )
     _ = abandoning.add_argument('--operator-word', help=_WORD_HELP)
     _ = commands.add_parser('audit', help="list the ledger's anomalies", description="List the ledger's anomalies.")
     gating = commands.add_parser(
@@ -225,8 +235,12 @@ def _run(args: argparse.Namespace) -> int:
         log.error('%s is not set: a claim names the dispatcher session that holds it', SESSION)
         return REFUSED
     if args.command == 'abandon':
-        claim.abandon(forge, args.issue, session, args.operator_word)
-        log.info('#%d is no longer claimed', args.issue)
+        abandoned = claim.abandon(forge, args.issue, session, args.operator_word, args.dispatch)
+        log.info('#%d: ended %s', args.issue, '; '.join(map(str, abandoned.ended)) or 'no named dispatch')
+        if abandoned.standing:
+            log.info('#%d stays claimed by %s', args.issue, '; '.join(str(d.name) for d in abandoned.standing))
+        else:
+            log.info('#%d is no longer claimed', args.issue)
         return DONE
     if args.command == 'merge':
         merged = merge.merge(
