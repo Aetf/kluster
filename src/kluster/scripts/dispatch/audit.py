@@ -27,20 +27,20 @@ class Anomaly(enum.StrEnum):
     #: An open issue, not an alert, lacking an `area/*` or `kind/*` label or a
     #: milestone (dispatch.md §4).
     UNLABELED = 'unlabeled'
-    #: An issue carrying a claim label and no live record, whose holder nothing names.
+    #: An issue carrying a claim label and no live dispatch, whose holder nothing names.
     CLAIM_WITHOUT_RECORD = 'claim-without-record'
     #: An issue whose record comments do not read.
     RECORD_UNREADABLE = 'record-unreadable'
     #: A claimed build with no open pull request that closes or refers to its
     #: issue: a dispatch still building, or one that died (dispatch.md §4.2).
     CLAIM_WITHOUT_PULL = 'claim-without-pull'
-    #: A live claim made on the operator's word, past a gate.
+    #: A live dispatch made on the operator's word, past a gate.
     OPERATOR_WORD = 'operator-word'
     #: An open pull request, not a bot's, that names no ledger issue (dispatch.md §4).
     PULL_WITHOUT_ISSUE = 'pull-without-issue'
     #: An issue in two states of a decision at once (dispatch.md §4.1).
     TWO_DECISIONS = 'two-decisions'
-    #: A `jj` workspace no live record names (dispatch.md §1.2).
+    #: A `jj` workspace no live dispatch names (dispatch.md §1.2).
     WORKSPACE_WITHOUT_RECORD = 'workspace-without-record'
 
 
@@ -85,26 +85,28 @@ def audit(forge: Forge, workspaces: Sequence[str]) -> list[Finding]:
     claimed = {issue.number: issue for label in ledger.CLAIMS for issue in forge.issues(label=label)}
     for number, issue in sorted(claimed.items()):
         try:
-            claim = record.claim(number, forge.comments(number))
+            live = record.dispatches(number, forge.comments(number))
         except record.RecordUnreadable as exc:
             findings.append(Finding(Anomaly.RECORD_UNREADABLE, f'#{number}', str(exc)))
             continue
-        if claim is None:
+        if not live:
             labels = ', '.join(f'`{label}`' for label in ledger.CLAIMS if label in issue.labels)
             findings.append(Finding(Anomaly.CLAIM_WITHOUT_RECORD, f'#{number}', f'carries {labels}'))
             continue
-        fronts = [r.front for r in claim.records if r.front is not None]
-        named |= {front.workspace for front in fronts if front.workspace is not None}
-        building = ledger.CLAIMED in issue.labels and any(front.role is Role.BUILDER for front in fronts)
+        named |= {d.name.workspace for d in live if d.name.workspace is not None}
+        building = ledger.CLAIMED in issue.labels and any(
+            r.front is not None and r.front.role is Role.BUILDER for d in live for r in d.records
+        )
         if building and number not in referenced:
             findings.append(Finding(Anomaly.CLAIM_WITHOUT_PULL, f'#{number}', 'is claimed for a build'))
         findings += [
             Finding(Anomaly.OPERATOR_WORD, f'#{number}', f'past {"; ".join(r.waiver.passed)}: {r.waiver.quote!r}')
-            for r in claim.records
+            for d in live
+            for r in d.records
             if r.waiver is not None
         ]
     findings += [
-        Finding(Anomaly.WORKSPACE_WITHOUT_RECORD, f'workspace {name}', 'is named by no live record')
+        Finding(Anomaly.WORKSPACE_WITHOUT_RECORD, f'workspace {name}', 'is named by no live dispatch')
         for name in workspaces
         if name != PRIMARY_WORKSPACE and name not in named
     ]

@@ -62,11 +62,13 @@ def forge() -> MemoryForge:
 
 
 def _brief(issue: int, *owned: str, role: str = 'builder', **fields: object) -> brief.Brief:
-    """A brief file's bytes, read the way `dispatch` reads one."""
+    """A brief file's bytes, read the way `dispatch` reads one; named by a workspace of its role's where none is given."""
     lines = [f'issue: {issue}', f'role: {role}', 'done: The work merges and the gate passes.']
     lines.append('owned: [' + ', '.join(f'"{path}"' for path in owned) + ']')
     if role == 'builder':
         lines.append('closes: true')
+    if 'workspace' not in fields and 'branch' not in fields:
+        lines.append(f'workspace: {role}-{issue}')
     lines += [f'{key}: {value}' for key, value in fields.items()]
     return brief.read(('---\n' + '\n'.join(lines) + '\n---\n\nThe brief.\n').encode())
 
@@ -91,11 +93,11 @@ def _refused(forge: MemoryForge, dispatch: claim.Dispatch, number: int) -> set[P
     return {r.precondition for r in refused.value.refusals}
 
 
-def _claimed(forge: MemoryForge, dispatch: claim.Dispatch, number: int) -> record.Claim:
-    """Claim, and the live claim the forge then holds."""
+def _claimed(forge: MemoryForge, dispatch: claim.Dispatch, number: int) -> record.Dispatch:
+    """Claim, and the live dispatch of the brief the forge then holds."""
     _ = claim.claim(forge, dispatch, number, serialized.read())
-    live = ledger.claims(forge).live[number]
-    assert live is not None
+    name = record.Front.of(dispatch.brief.front).name
+    (live,) = [found for found in ledger.claims(forge).live[number] if found.name == name]
     return live
 
 
@@ -388,9 +390,9 @@ def test_an_rfc_slice_whose_issue_title_leads_with_it_passes(forge: MemoryForge)
 def test_a_review_is_recorded_under_the_build_claim_this_session_holds(forge: MemoryForge) -> None:
     forge.add(17, PARALLEL, *LABELS)
     _ = _claimed(forge, _dispatch(17, 'tests/test_one.py'), 17)
-    live = _claimed(forge, _dispatch(17, role='review', pr=924), 17)
-    assert [r.front.role for r in live.records if r.front] == [brief.Role.BUILDER, brief.Role.REVIEW]
-    assert live.owned == (OwnedPath.parse('tests/test_one.py'),)
+    review = _claimed(forge, _dispatch(17, role='review', pr=924), 17)
+    assert review.front.role is brief.Role.REVIEW
+    assert [path for d in ledger.claims(forge).live[17] for path in d.owned] == [OwnedPath.parse('tests/test_one.py')]
 
 
 def test_a_review_refuses_an_issue_no_claim_of_this_session_holds(forge: MemoryForge) -> None:
@@ -498,13 +500,54 @@ def test_a_claim_after_its_label_came_off_by_hand_starts_a_new_run(forge: Memory
     assert _claimed(forge, _dispatch(23, 'tests/test_old.py'), 23).live.overlaps == ()
 
 
+def test_a_brief_claimed_again_after_an_edit_amends_its_dispatch(forge: MemoryForge) -> None:
+    """The same workspace and branch are the same dispatch, whatever else the brief now says."""
+    forge.add(17, PARALLEL, *LABELS)
+    _ = _claimed(forge, _dispatch(17, 'tests/test_one.py', workspace='b-one', branch='b-one-work'), 17)
+    edited = _dispatch(17, 'tests/test_one.py', 'tests/test_two.py', workspace='b-one', branch='b-one-work')
+    _ = claim.claim(forge, edited, 17, serialized.read())
+    (live,) = ledger.claims(forge).live[17]
+    assert (len(live.records), live.live.brief) == (2, edited.brief.sha256)
+
+
+def test_a_brief_naming_neither_a_workspace_nor_a_branch_is_refused(forge: MemoryForge) -> None:
+    """Its dispatch would have no name to be amended or ended by alone."""
+    forge.add(17, PARALLEL, *LABELS)
+    assert _refused(forge, _dispatch(17, 'tests/test_one.py', workspace='null'), 17) == {Precondition.UNNAMED}
+
+
+def test_abandoning_a_named_dispatch_ends_it_alone(forge: MemoryForge) -> None:
+    """A dispatch with no pull request of its own, a design or a builder that died, ends beside the issue's others."""
+    forge.add(17, PARALLEL, *LABELS)
+    _ = _claimed(forge, _dispatch(17, 'docs/rfc/rfc-099-x.md', role='design', workspace='dispatcher'), 17)
+    _ = _claimed(forge, _dispatch(17, 'tests/test_one.py', workspace='b-one', branch='b-one-work'), 17)
+    with pytest.raises(claim.Refused):
+        _ = claim.abandon(forge, 17, SESSION, None, 'b-gone')
+    abandoned = claim.abandon(forge, 17, SESSION, None, 'dispatcher')
+    assert [name.workspace for name in abandoned.ended] == ['dispatcher']
+    standing = [d.name.workspace for d in abandoned.standing]
+    assert standing == [d.name.workspace for d in ledger.claims(forge).live[17]] == ['b-one']
+    assert ledger.CLAIMED in forge.issues_[17].labels
+    assert claim.abandon(forge, 17, SESSION, None, 'b-one-work').standing == ()
+    assert not forge.issues_[17].labels & set(ledger.CLAIMS)
+
+
+def test_an_end_naming_no_dispatch_ends_every_dispatch_live_at_it(forge: MemoryForge) -> None:
+    """An `end` written before an `end` named what it ends, as `dispatch abandon` and `merge` wrote it."""
+    forge.add(17, PARALLEL, *LABELS)
+    _ = _claimed(forge, _dispatch(17, 'tests/test_one.py', workspace='b-one', branch='b-one-work'), 17)
+    _ = _claimed(forge, _dispatch(17, 'tests/test_two.py', workspace='b-two', branch='b-two-work'), 17)
+    forge.issues_[17].comments.append(Comment(_block({'version': 1, 'event': 'end', 'session': SESSION}), mine=True))
+    assert ledger.claims(forge).live[17] == ()
+
+
 def test_a_record_another_account_wrote_is_not_read(forge: MemoryForge) -> None:
     forge.add(17, PARALLEL, *LABELS)
     _ = _claimed(forge, _dispatch(17, 'tests/test_one.py'), 17)
     foreign = record.Record(event=record.Event.END, session=OTHER_SESSION).render()
     forge.issues_[17].comments.append(Comment(foreign, mine=False))
-    live = ledger.claims(forge).live[17]
-    assert live is not None and live.owned == (OwnedPath.parse('tests/test_one.py'),)
+    (live,) = ledger.claims(forge).live[17]
+    assert live.owned == (OwnedPath.parse('tests/test_one.py'),)
 
 
 def _plant(forge: MemoryForge, number: int, body: str) -> None:
@@ -539,8 +582,8 @@ def test_an_unreadable_record_refuses_its_own_issue_and_passes_an_unrelated_clai
 def test_a_record_carrying_a_front_matter_field_this_reader_does_not_know_reads(forge: MemoryForge) -> None:
     front = {'issue': 30, 'role': 'builder', 'owned': ['tests/test_y.py'], 'a_later_field': 'x'}
     _plant(forge, 30, _block({'event': 'claim', 'session': SESSION, 'front': front}))
-    live = ledger.claims(forge).live[30]
-    assert live is not None and live.owned == (OwnedPath.parse('tests/test_y.py'),)
+    (live,) = ledger.claims(forge).live[30]
+    assert live.owned == (OwnedPath.parse('tests/test_y.py'),)
 
 
 ADOPTION_WORD = 'Adopt #17: its dispatcher predates the records.'
@@ -715,5 +758,5 @@ def test_a_record_saved_with_crlf_line_endings_reads(forge: MemoryForge) -> None
     _ = _claimed(forge, _dispatch(17, 'tests/test_one.py'), 17)
     (written,) = forge.issues_[17].comments
     forge.issues_[17].comments[0] = Comment(written.body.replace('\n', '\r\n'), mine=True)
-    live = ledger.claims(forge).live[17]
-    assert live is not None and live.owned == (OwnedPath.parse('tests/test_one.py'),)
+    (live,) = ledger.claims(forge).live[17]
+    assert live.owned == (OwnedPath.parse('tests/test_one.py'),)

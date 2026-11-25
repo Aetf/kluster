@@ -368,7 +368,11 @@ def _one_brief(text: str, what: str) -> tuple[Path, brief.Brief] | Deny:
 
 
 def dispatch_record(forge: Forge, found: brief.Brief) -> record.Record | str:
-    """The live record of the dispatch `found` is the brief of; why there is none, where there is none."""
+    """The record of `found` in a live dispatch of its issue; why there is none, where there is none.
+
+    Each dispatch live on the issue is read on its own, so a record stays
+    live whatever ended the issue's other dispatches.
+    """
     number = found.front.issue
     log.info('reading #%d and its records', number)
     issue = forge.issue(number)
@@ -376,10 +380,10 @@ def dispatch_record(forge: Forge, found: brief.Brief) -> record.Record | str:
     if not ledger.claimed(issue):
         return f'#{number}, the issue the brief names, carries no claim: {claim_} is the dispatch (dispatch.md §2.1)'
     try:
-        live = record.claim(number, forge.comments(number))
+        live = record.dispatches(number, forge.comments(number))
     except record.RecordUnreadable as exc:
         return f'the records of #{number} do not read: {exc}'
-    match = next((r for r in reversed(live.records) if r.brief == found.sha256), None) if live else None
+    match = next((r for d in live for r in reversed(d.records) if r.brief == found.sha256), None)
     if match is None:
         return (
             f'no live dispatch record on #{number} is for this brief (sha256 {found.sha256}): '
@@ -552,18 +556,17 @@ def _pr_creates(command: str) -> list[list[str]] | None:
 
 
 def _branch_record(forge: Forge, branch: str) -> record.Front | str:
-    """The front matter of the live record that names `branch`; why there is none, where there is none."""
-    log.info('reading every live claim for the record of %s', branch)
+    """The front matter of the latest live dispatch that names `branch`; why there is none, where there is none.
+
+    Several dispatches of one issue may name the branch, one dispatched
+    again after another died, and the latest speaks for them; dispatches of
+    several issues naming it are a conflict.
+    """
+    log.info('reading every live dispatch for the record of %s', branch)
     claims = ledger.claims(forge)
-    fronts = {
-        r.front.issue: r.front
-        for c in claims.live.values()
-        if c is not None
-        for r in c.records
-        if r.front is not None and r.front.fields.get('branch') == branch
-    }
+    fronts = {number: d.front for number, found in claims.live.items() for d in found if d.name.branch == branch}
     if len(fronts) > 1:
-        return f'the live records of {", ".join(f"#{n}" for n in sorted(fronts))} all name branch {branch}'
+        return f'the live dispatches of {", ".join(f"#{n}" for n in sorted(fronts))} all name branch {branch}'
     if not fronts:
         unread = f' (the records of {", ".join(f"#{n}" for n in sorted(claims.unreadable))} do not read)'
         return (

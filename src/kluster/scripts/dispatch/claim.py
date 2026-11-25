@@ -9,7 +9,9 @@ dispatch.md it comes from, is `Precondition`'s.
 Each step posts its record before it changes a label. A record on an issue
 with no claim label is never read, so a step that fails between the two
 leaves nothing a retry trips on: the retry finds no claim label and starts a
-new run.
+new run. An issue's claim is its label, and the dispatches its records hold
+live under it (`record`) are each read on their own: every one of them is
+the session's that holds the issue.
 """
 
 from __future__ import annotations
@@ -23,7 +25,7 @@ from . import ledger, milestones, record
 from .brief import Brief, Role
 from .forge import Forge, Issue, Pull
 from .paths import OwnedPath
-from .record import Claim, Event, Front, Record, RecordUnreadable, Waiver
+from .record import Event, Front, Record, RecordUnreadable, Waiver
 
 log = logging.getLogger(__name__)
 
@@ -40,12 +42,16 @@ class Precondition(enum.StrEnum):
     UNLABELED = 'unlabeled'
     #: The front matter names another issue than the one being claimed (§1.1).
     BRIEF_ISSUE = 'brief-issue'
-    #: Another dispatcher holds the claim, or a claim label stands with no
-    #: record to say whose it is (§2 rule 1).
+    #: Another dispatcher holds a live dispatch of the issue, or a claim label
+    #: stands with no live dispatch to say whose it is (§2 rule 1).
     CLAIMED = 'claimed'
-    #: A review of an issue this dispatcher does not hold the claim of (§3),
-    #: or an adoption of an issue that carries no `in-flight` to adopt.
+    #: A review of an issue this dispatcher holds no live dispatch of (§3), an
+    #: adoption of an issue that carries no `in-flight` to adopt, or an
+    #: abandonment of a dispatch no live one is named by.
     NOT_HELD = 'not-held'
+    #: A brief naming neither a workspace nor a branch, which would leave its
+    #: dispatch without a name to amend it or end it by alone (§2.1).
+    UNNAMED = 'unnamed'
     #: The issue's own records do not read (§2.1).
     RECORD_UNREADABLE = 'record-unreadable'
     #: An RFC slice's issue title does not lead with the slice (rfc.md §3.4).
@@ -76,8 +82,8 @@ class Verdict:
     issue: Issue
     refusals: tuple[Refusal, ...]
     passed: tuple[milestones.NotClosed, ...]
-    #: The issue's own live claim, where it has one.
-    own: Claim | None
+    #: The issue's own live dispatches.
+    own: tuple[record.Dispatch, ...]
     #: Where an owned path can touch another claim's paths or an open pull
     #: request's files: recorded and printed, never refused (§2 rule 2).
     overlaps: tuple[str, ...] = ()
@@ -108,22 +114,24 @@ class Dispatch:
         _word(self.operator_word)
 
 
-def _held(issue: Issue, own: Claim | None, dispatch: Dispatch) -> Refusal | None:
-    """The refusal when another dispatcher holds `issue`'s claim, or when an adoption finds nothing to adopt."""
+def _held(issue: Issue, own: Sequence[record.Dispatch], dispatch: Dispatch) -> Refusal | None:
+    """The refusal when another dispatcher holds a live dispatch of `issue`, or when an adoption finds nothing."""
     if dispatch.adopt:
         if ledger.CLAIMED not in issue.labels:
             return Refusal(Precondition.NOT_HELD, f'#{issue.number} carries no `{ledger.CLAIMED}` to adopt')
-        if own is not None:
+        if own:
             return Refusal(Precondition.CLAIMED, f'#{issue.number} already carries a record of its claim')
         if dispatch.operator_word is None:
             return Refusal(Precondition.CLAIMED, f"adopting #{issue.number}'s claim takes the operator's word")
         return None
     if not ledger.claimed(issue):
         return None
-    if own is None:
-        return Refusal(Precondition.CLAIMED, f'#{issue.number} carries a claim label and no dispatch record')
-    if own.live.session != dispatch.session:
-        return Refusal(Precondition.CLAIMED, f'#{issue.number} is claimed by dispatcher session {own.live.session}')
+    if not own:
+        return Refusal(Precondition.CLAIMED, f'#{issue.number} carries a claim label and no live dispatch record')
+    others = [d for d in own if d.live.session != dispatch.session]
+    if others:
+        held = '; '.join(f'{d.name} by dispatcher session {d.live.session}' for d in others)
+        return Refusal(Precondition.CLAIMED, f'#{issue.number} carries live dispatches of another session: {held}')
     return None
 
 
@@ -171,15 +179,16 @@ def _design(forge: Forge, title: str, every: Sequence[milestones.Milestone]) -> 
 def _overlaps(
     owned: Sequence[OwnedPath],
     issue: int,
-    claims: Collection[Claim],
+    claims: Collection[record.Dispatch],
     unknown: Collection[int],
     pulls: Collection[Pull],
     serialized: frozenset[str],
 ) -> tuple[list[Refusal], list[str]]:
     """The serialized files' refusals, and the overlaps with other claims and pull requests, which only note.
 
-    `unknown` are the claimed issues whose paths cannot be read: a record that
-    does not read, or a claim label with none. A claim of a serialized file
+    `claims` are the live dispatches of every claimed issue, and `unknown`
+    the claimed issues whose paths cannot be read: a record that does not
+    read, or a claim label with no live dispatch. A claim of a serialized file
     refuses while any stands, since any of them may hold it. A bot's pull
     request holds no paths: it is a pin or a lock file moving, whose conflict
     the next rebase answers.
@@ -227,11 +236,17 @@ def check(forge: Forge, dispatch: Dispatch, number: int, serialized: frozenset[s
     issue = forge.issue(number)
     refusals: list[Refusal] = []
     try:
-        own = record.claim(number, forge.comments(number)) if ledger.claimed(issue) else None
+        own = record.dispatches(number, forge.comments(number)) if ledger.claimed(issue) else ()
     except RecordUnreadable as exc:
-        return Verdict(issue, (Refusal(Precondition.RECORD_UNREADABLE, str(exc)),), (), None)
+        return Verdict(issue, (Refusal(Precondition.RECORD_UNREADABLE, str(exc)),), (), ())
     if front.issue != number:
         refusals.append(Refusal(Precondition.BRIEF_ISSUE, f'the brief names #{front.issue}, not #{number}'))
+    if front.workspace is None and front.branch is None:
+        refusals.append(
+            Refusal(
+                Precondition.UNNAMED, 'the brief names neither a `workspace` nor a `branch`, which name its dispatch'
+            )
+        )
     if not issue.open:
         refusals.append(Refusal(Precondition.ISSUE_CLOSED, f'#{number} is closed'))
     refusals += [
@@ -242,19 +257,19 @@ def check(forge: Forge, dispatch: Dispatch, number: int, serialized: frozenset[s
     if held is not None:
         refusals.append(held)
     if front.role is Role.REVIEW:
-        if own is None:
+        if not own:
             refusals.append(
-                Refusal(Precondition.NOT_HELD, f'#{number} carries no claim of this session to review under')
+                Refusal(Precondition.NOT_HELD, f'#{number} carries no live dispatch of this session to review under')
             )
         return Verdict(issue=issue, refusals=tuple(refusals), passed=(), own=own)
     if front.rfc is not None and not issue.title.startswith(f'{front.rfc}:'):
         refusals.append(Refusal(Precondition.RFC_TITLE, f'the title of #{number} does not lead with `{front.rfc}:`'))
     gated, passed = _gates(forge, issue, front.role, dispatch.operator_word)
     refusals += gated
-    log.info('reading every live claim and open pull request')
+    log.info('reading every live dispatch and open pull request')
     read = ledger.claims(forge)
-    claims = [c for c in read.live.values() if c is not None]
-    unknown = [n for n, c in read.live.items() if c is None] + list(read.unreadable)
+    claims = [live for found in read.live.values() for live in found]
+    unknown = [n for n, found in read.live.items() if not found] + list(read.unreadable)
     serial, overlaps = _overlaps(front.owned, number, claims, unknown, forge.pulls(), serialized)
     refusals += serial
     return Verdict(issue=issue, refusals=tuple(refusals), passed=tuple(passed), own=own, overlaps=tuple(overlaps))
@@ -327,29 +342,63 @@ def queue(forge: Forge, dispatch: Dispatch, number: int, serialized: frozenset[s
     return verdict
 
 
-def abandon(forge: Forge, number: int, session: str, operator_word: str | None) -> None:
-    """End this session's claim of issue `number`: the `end` record, then the claim labels off. Raises `Refused`.
+@dataclass(frozen=True)
+class Abandoned:
+    """What `abandon` ended, and what it left live."""
 
-    A claim of another session, or one with no record or none that reads,
-    ends only on the operator's word, which the `end` record quotes.
+    #: The names the `end` record gives.
+    ended: tuple[record.Name, ...]
+    #: The dispatches of the issue still live, under the claim labels where any is.
+    standing: tuple[record.Dispatch, ...]
+
+
+def abandon(
+    forge: Forge, number: int, session: str, operator_word: str | None, dispatch: str | None = None
+) -> Abandoned:
+    """End dispatches of issue `number` with an `end` record naming them. Raises `Refused`.
+
+    With `dispatch`, a workspace or a branch, it ends the live dispatches
+    whose name holds it, and refuses where none does; without, every
+    dispatch live on the issue. The claim labels come off once no dispatch
+    on the issue stays live, and no workspace is touched. Ending a dispatch
+    of another session, or a claim with no record or none that reads, takes
+    the operator's word, which the `end` record quotes.
     """
     _word(operator_word)
     issue = forge.issue(number)
     if not ledger.claimed(issue):
         raise Refused([Refusal(Precondition.NOT_HELD, f'#{number} carries no claim label')])
     try:
-        own = record.claim(number, forge.comments(number))
-        holder = f'dispatcher session {own.live.session}' if own is not None else 'no record'
-        mine = own is not None and own.live.session == session
-    except RecordUnreadable:
-        holder, mine = 'a record that does not read', False
+        own = record.dispatches(number, forge.comments(number))
+        readable = True
+    except RecordUnreadable as exc:
+        if dispatch is not None:
+            raise Refused([Refusal(Precondition.RECORD_UNREADABLE, str(exc))]) from exc
+        own, readable = (), False
+    ending = own if dispatch is None else tuple(d for d in own if dispatch in (d.name.workspace, d.name.branch))
+    if dispatch is not None and not ending:
+        raise Refused([Refusal(Precondition.NOT_HELD, f'no live dispatch on #{number} is named {dispatch}')])
+    holders = sorted({d.live.session for d in ending})
+    holder = ' and '.join(f'dispatcher session {s}' for s in holders) if ending else 'no record'
+    if not readable:
+        holder = 'a record that does not read'
+    mine = readable and holders == [session]
     waiver: Waiver | None = None
+    what = 'the claim' if dispatch is None else '; '.join(str(d.name) for d in ending)
     if not mine:
         if operator_word is None:
             raise Refused(
-                [Refusal(Precondition.CLAIMED, f"#{number}'s claim is {holder}'s; ending it takes the operator's word")]
+                [
+                    Refusal(
+                        Precondition.CLAIMED, f"{what} on #{number} is {holder}'s; ending it takes the operator's word"
+                    )
+                ]
             )
-        waiver = Waiver(quote=operator_word, passed=(f'the claim of {holder}',))
+        waiver = Waiver(quote=operator_word, passed=(f'{what} of {holder}',))
     log.info('posting the end record on #%d', number)
-    forge.comment(number, Record(event=Event.END, session=session, waiver=waiver).render())
-    forge.relabel(number, remove=[label for label in ledger.CLAIMS if label in issue.labels])
+    ends = tuple(d.name for d in ending)
+    forge.comment(number, Record(event=Event.END, session=session, waiver=waiver, ends=ends).render())
+    standing = tuple(d for d in own if d.name not in ends)
+    if not standing:
+        forge.relabel(number, remove=[label for label in ledger.CLAIMS if label in issue.labels])
+    return Abandoned(ended=ends, standing=standing)
