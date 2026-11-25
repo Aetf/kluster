@@ -1,0 +1,90 @@
+    taking item 4's reading as item 5's baseline; the rebuild has no
+    later reading of the old node to take. A read that failed prints no
+    count, and compares as a failure.
+
+    **Step 8: `k8s-base` and `apps` from empty.**
+
+        mise x -- pulumi refresh --stack k8s-base
+        mise x -- pulumi refresh --stack apps
+        credentials derived sync --only kubeconfig
+
+    Each refresh runs under the committed kubeconfig copy, which
+    authenticates, the PKI and the endpoint being kept, and drops every
+    object the rebuilt cluster does not hold, a custom resource whose
+    definition went with etcd among them, with no error. **Without those two
+    refreshes a plain `up` of either stack creates nothing**: a plain
+    `up` diffs the program against the state, which still holds every
+    object the old cluster held, and the chain's `up` takes no
+    `--refresh` (framework/ci.md §3.2). The `Kubeconfig` was issued
+    again, so the sync of §2.5 follows. Then: a pull request committing
+    the two stack files alone;
+    `gh workflow enable deploy.yml --repo Aetf/kluster`; and the merge.
+    The chain runs: `plan-physical` finds no diff, and `up-k8s-base` and
+    `up-apps` are both stacks' first `up` on an empty cluster.
+
+    **Step 9:** bring-up stage 5's gate on the rebuilt cluster, the
+    sealing certificate differing from `$D/sealing.pem`. The sealing
+    sitting of the paragraph on stage 6 above follows, and its pull request commits
+    `Pulumi.k8s-base.yaml`, and after stage 9 `Pulumi.apps.yaml` with
+    it. Once its merge has
+    applied `k8s-base`, both stores leave `Init`, and `metrics` prints
+    the baseline's earliest sample and at least the baseline's rows.
+    Then the peak recorder is stopped with Ctrl-C, and the import writes
+    its file into the history store, printing the lines written for each
+    control plane (§8.5). It refuses while vmagent still holds what it
+    queued for the stores while they waited in `Init`, and is run again
+    once that has drained:
+
+        mise x uv -- uv run perf import "$D/peaks"
+
+    Then the pass readings.
+
+    **It passes when each of these holds:**
+
+    1.  Step 5's `up` exits 0 behind the health gate with no reboot of
+        the worker, the worker's EPHEMERAL reads as step 5 says, and
+        step 6's readings hold.
+    2.  Step 7's readings hold, its comparison of the volume's `ids`
+        with the baseline printing `ids pass`.
+    3.  Bring-up stage 5's gate holds on the rebuilt cluster, each
+        of `up-k8s-base` and `up-apps` converged in its one run, and no
+        node reports `DiskPressure` through either of them.
+    4.  **Nothing outside changed:**
+        -   `gateway-health` is clean at step 0, after step 3 and after
+            step 9;
+        -   `physical`'s refreshed preview is clean, the gateway, the
+            overlay's members, routes, rules and DNS, and the backup
+            bucket included, and `outside` equals the baseline;
+        -   `mise x -- pulumi preview --refresh --expect-no-changes
+            --stack dns` exits 0, the four outputs equal `$D/outputs`,
+            and `anchors` prints what `$D/anchors` holds;
+        -   every plan read during the run passed the scope check.
+    5.  **The metrics history came back**: `metrics` prints the earliest sample `$D/metrics` holds,
+        and no fewer rows, and the history's backup job succeeds on its
+        next run (§6.2). `metrics` counts the rows only over a read that
+        succeeded, so a failed read prints no `rows` line rather than
+        `rows 0`, and a `metrics`, at step 0 or here, that prints none
+        is no reading.
+    6.  `deploy.yml` is enabled again, and `.claude/drill/` is deleted.
+
+    **What a failure leaves running.** Through step 2, the old cluster,
+    whole: steps 1 and 2 changed state alone, and they run in the same
+    sitting as step 3, after step 0's go. After step 3 and until step 5
+    passes, no control plane exists, the old worker idles until step 5
+    deletes it, and the balancer answers nothing; the reserved IP is
+    unassigned and the volume detached; the gateway, the overlay and the
+    zones run as before, since nothing in them reads the cluster.
+    Recovery is forward, steps 4 and 5 again. A create refused at step
+    5 leaves that instance missing, and its dependents, the day-1 chain
+    among them, are not created, so nothing is bootstrapped; the
+    launched nodes reboot on Talos's 70-minute timer. A preview of a
+    plain `physical up` is read and the `up` run, at intervals, until
+    the instance launches. The `--replace` flags are not repeated for a
+    resource the failed run already replaced, and §3.2 covers a worker
+    left half-built. Any other failure is fixed forward in a pull
+    request (physical/bring-up.md §3).
+
+    **Not established, and read by the first run that meets it:**
+
+    -   whether a targeted `destroy` of an instance refuses while a
+        protected dependent stays outside the targets, or drops it; the

@@ -1,0 +1,61 @@
+once, and `auto` would start a worker per core for each of them. So a case
+shares the machine with three others of the suite's own, and holds only
+state that is its own: its `tmp_path`, its backend and its `PULUMI_HOME`, a
+container named for the case. A run aimed at one case passes `-n 0`, which
+runs it in the `pytest` process itself. `addopts` also passes `-rfEs`:
+the summary `pytest` gives by default, failures and errors, with every
+skipped case and its reason added. `tests/test_state_roles.py` skips
+where the Postgres image it runs is not local, and runs on CI as it does
+on a workstation, because `checks` pulls that image before the tests
+([ci.md](ci.md) §3), apart from the tripwire on each of its workarounds,
+whose verdict is the runner's: where the podman or pasta it runs on no
+longer has the defect a workaround answers, that tripwire fails on CI and
+skips anywhere else. The cases of `tests/test_monitoring.py` that run the
+backup and restore scripts skip where podman is not on `PATH`, as in a
+cloud session, because the `/bin/busybox` each script runs under is read
+out of its pinned image with podman (`tests/image_busybox.py`); on CI's
+runner, which has podman, they fail instead.
+
+A coroutine that never resolves its futures hangs forever instead of failing,
+and the run is bounded twice against that, at two scales:
+
+-   **Per case**, by `pytest-timeout`, configured in `pyproject.toml`
+    (`[tool.pytest.ini_options]`). A case that hangs fails by name, with the
+    stack it hung in — a frame waiting on a future is a hang, a frame doing
+    work is a stalled machine — and the run goes on to a summary, so one
+    hung case costs one red line rather than the whole report. The signal
+    method is the configured one because it is what lets the run continue;
+    the thread method ends the process after a stack dump, with no summary,
+    which is the same blind result as a kill from outside. A worker runs its
+    cases on its main thread, so the signal reaches them there as it does in
+    a run without workers, and the worker goes on to its next case. The
+    bound is a hang guard, an order of magnitude above every case it
+    bounds: under the four workers the slowest take about 4 s. On a
+    machine loaded four times over -- twelve busy processes beside the
+    workers on four cores -- the slowest take 8–12 s, five times under it.
+    A case that starts the pinned `pulumi` CLI carries a bound of its own
+    instead, set from measurement, because its duration grows with the
+    machine's load (§8).
+-   **Around the run**, by the outer `timeout` above, for what a per-case
+    bound cannot reach: collection, and a process still alive after the
+    summary is printed. A kill there ends with status 124 and no summary,
+    which is why it is an order of magnitude above the run's duration
+    rather than a budget the ordinary run approaches — the suite takes
+    about two minutes on four cores, and it grows with every campaign.
+
+The outer number is carried wherever the gate's command is written out,
+and the per-case number lives in `pyproject.toml`, apart from the
+real-CLI cases' own, which live beside them (§8).
+`tests/test_gate_command.py` holds every launch of `pytest` it finds to one
+form, timed and through `mise`, and every launch of the whole suite to one
+number. What CI executes it finds by definition: every launch it knows
+the spelling of — `pytest` or `py.test` as a word or at the end of a path,
+or `-m pytest` — in any workflow or local action, today the `Tests` step
+of `checks.yml` and of `sdk-regenerate.yml`. The prose it reads is a
+named set of documents, each read whole — AGENTS.md, README.md and this
+one, the ones that write the command out. Any other document points at
+one of those rather than writing its own. A run aimed at part of the
+suite, such as a drill's (§5), is not the gate and carries its own number.
+
+### 1.1 A test process reaches none of the operator's credentials
+

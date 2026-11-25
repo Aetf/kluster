@@ -1,0 +1,61 @@
+cross-namespace reach-ins; unbudgeted sidecars;
+cluster-scoped resources (those belong to `k8s-base` and go through its
+closed-list rule), save the PersistentVolume of a `nas_claim`, which is
+bound to its claim by name and to no other (§2).
+
+Namespaces are created with **Pod Security `restricted` enforced** by
+default — non-root, no added capabilities, RuntimeDefault seccomp
+(part of containing third-party binaries on the combined CP+ingress
+nodes, architecture.md §4.1). An exception is a declared component
+parameter with the reason on record — the same discipline as
+`off('<reason>')` (§2) — which `application_namespace` takes as its `looser`
+argument, a `LooserLevel` carrying the reason. No workload in the
+design holds one today.
+
+An application's reach to private space outside the cluster, and a
+pod's reach to the kube-apiserver, are declared on its namespace with the
+reason, and the base denies both otherwise (cluster-infra.md §2). A reach
+names one address, a port and its transports, and is refused where it is
+written unless the address is private space the base denies; it opens
+that port at that address and nothing beside it, which is where
+physical/gateway.md §4.2 rule 3 leaves what a workload may call at home.
+A namespace whose pods call the API declares `api_clients`, and the pods
+that call it carry `conventions.API_CLIENT_LABEL`; without the
+declaration the label opens nothing, and a labelled pod reaches the API's
+port on a node and no other port there. The device relay declares its
+device as its namespace's reach, and the database shape declares its
+instances and its restore drill as API clients (rfc-008 §4.1, §4.3).
+
+A pod that sends mail through the cluster's relay carries
+`conventions.MAIL_SENDER_LABEL`, which its own component puts on it: the
+relay admits a pod carrying it, from any namespace, to its SMTP port
+alone, and refuses a pod of another namespace without it
+(`kluster.components.apps.exim`).
+
+## 2. Choosing storage: two axes, then the data's character
+
+The storage.md §2 classes are the *menu*; this is how a workload
+chooses. Ask, in order:
+
+**Axis 1 — does it need to persist?** State that is re-derivable
+(caches, transcode scratch, ML model downloads) gets **a claim with no
+backup, or an `emptyDir`** where it need not survive a restart — but the
+exemption is explicit: `claim` requires its `retention`, and an unbacked
+claim takes `off('<reason>')`, which refuses an empty reason, so
+"unbacked" is always a decision on record, never an omission.
+Beware the false "cache": **hath's cache is not re-derivable** — it is
+this client's slice of the globally distributed H@H archive, and must
+be preserved (see the worked example).
+
+**Axis 2 — what performance does it actually need?**
+
+| Profile | Backing | Why |
+| --- | --- | --- |
+| Latency/fsync-sensitive: databases, app state stores, sync indexes | node-local NVMe (local-path) | NAS adds network RTT + ZFS-over-JBOD latency to every fsync; DBs on NFS is a known failure mode |
+| Sequential/streaming, read-mostly | NAS is fine | throughput is what ZFS+NFS is good at; latency hidden by streaming |
+| Cold, rarely read | object storage | highest latency, cheapest, durable |
+
+**Then the data's character decides among the survivors:**
+
+-   **Working state** (small-to-medium, hot, mutated in place) →
+    **`claim` under a retention class**, local-path backed up by VolSync

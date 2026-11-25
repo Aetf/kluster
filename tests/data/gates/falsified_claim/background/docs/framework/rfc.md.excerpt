@@ -1,0 +1,61 @@
+4.  **It reverses something an accepted RFC or a design document
+    states.**
+
+Several issues that only make sense together, in an order, are a symptom
+of those rather than a fifth of their own: work that large usually
+crosses a boundary or writes a rule, and where it does neither it does
+not need this machinery.
+
+**Size is not the test either.** A thousand lines of new application
+component built to the contract in
+[declarative/workloads.md](../declarative/workloads.md) is an ops issue:
+the contract already decided everything an RFC would decide, and nothing
+about it will iterate. A forty-line change to
+[style/pulumi.md](../style/pulumi.md) is an RFC, because every future
+reviewer has to be able to find why the rule says what it says. Bug
+fixes, chart bumps, version pins, renames inside one module, document
+corrections and new resources declared under an existing pattern are ops
+issues however large they run.
+
+**An RFC is not the way to ask a question.** A single ruling the operator
+has to make — a trade-off with two defensible answers, a name, a risk
+somebody has to accept — is an ops issue carrying `decision/pending`
+([dispatch.md](dispatch.md) §4.1), and it is answered in a comment. An
+RFC is for a design: a set of decisions that hold each other up and are
+read together later.
+
+### 1.2 A design on its own issue, and how it is promoted
+
+A design that will converge in one round — one pass of §3.3's loop:
+posted, answered, revised, ruled — changes no rule, and lands in the
+design documents rather than in a rule is **posted as a design on its
+own decision issue**, ruled on there, and cut into slices exactly as
+§3.4 describes. None of the rest of this document stops applying to it:
+the label loop of §3.3, the dispositions of §4.2 and the slice
+discipline of §3.4 are the same. What an RFC adds is a durable document.
+The count that decides between them is passes of the loop, not points
+answered, documents landed in, or slices cut.
+
+**A design issue becomes an RFC when it turns out to be bigger than it
+looked** — a second pass of that loop nobody expected, a rule that has
+to be written after all, a decision a later reader will need the
+argument for. It is a promotion rather than a restart:
+
+*   **The issue stays.** It keeps its number, its labels, its milestone
+    and its place in the ledger, and becomes the RFC's decision issue
+    from that moment (§3.2). Its label state carries over unchanged: a
+    design sitting at `decision/responded` is an RFC sitting at
+    `decision/responded`.
+*   **The title gains `rfc-NNN`** — the lowest number not already spent
+    — in the same action as the promotion. §6's claim rule is unchanged;
+    the promotion is simply when the claim happens, rather than at the
+    first dispatch.
+*   **The posted design is the first draft.** Its content moves into the
+    document as the context and the decisions, and the comments that
+    revised it stay where they are as the record of how it got there.
+    What the document adds is what §2 requires, and what an issue thread
+    never had: the precedent table, what does not propagate, the landing
+    table, the slices.
+*   **A ruling already given stands for what it covered.** The document
+    still goes to §4.1's review and back to the operator as a pull
+    request, because the sections it adds have not been read; a ruling

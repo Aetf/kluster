@@ -1,0 +1,15 @@
+    bound. A reading of what one workload's start writes is what would
+    size it.
+-   **One pull's own rate is beyond what either bound reaches.**
+    Whether one pull at a time, with four operations in flight, keeps
+    etcd within rule 1 is read at the next from-scratch rebuild
+    (Aetf/kluster-ops#785); if it does not, buying disk performance is
+    the operator's decision on that issue.
+-   **A worker's pulls are not bounded**: its disk holds no etcd.
+
+## 2. The deciding factor is egress, not compute
+
+Compute prices in this size class differ by ~$10/mo; egress prices differ by
+~$100/mo. The legacy Vultr node quietly provided terabytes of included
+transfer, and the legacy cluster leaned on that (hath via EgressGateway,
+seeding). Hyperscaler pricing breaks that assumption:
