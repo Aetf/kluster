@@ -19,7 +19,7 @@ The operator passphrase is read
 by the `operator-stack` driver instead, through the acquisition chain
 (`kluster.lib.acquisition`), so its slot is the chain's file layer, below the
 store in the chain's order: where it lives on a machine whose store does not
-hold it.
+hold it. The model gates' API key is found the same way, by `dispatch gates`.
 
 The names below are this package's; the directory they sit in and the modes
 they are written with are `kluster.lib.workstation`, which the `physical`
@@ -39,6 +39,9 @@ from kluster.lib.stack_environment import OPERATOR_PASSPHRASE_SLOT, PHYSICAL_PAS
 
 __all__ = (
     'BUNDLE',
+    'GATES_KEY',
+    'GATES_KEY_ACCOUNT',
+    'GATES_KEY_ENV',
     'KIT',
     'OPERATOR_PASSPHRASE',
     'PASSPHRASE',
@@ -47,6 +50,7 @@ __all__ = (
     'WorkstationError',
     'bundle_dir',
     'directory',
+    'gates_key_path',
     'kit_path',
     'operator_passphrase_path',
     'passphrase_path',
@@ -91,6 +95,15 @@ OPERATOR_PASSPHRASE = OPERATOR_PASSPHRASE_SLOT
 #: smaller than the stack passphrase's. Named where `stack_environment` names it.
 PHYSICAL_PASSPHRASE = PHYSICAL_PASSPHRASE_SLOT
 
+#: The Console API key of the dispatch protocol's model gates (§3), which
+#: `dispatch gates` finds through the acquisition chain under these three
+#: names: its key in the desktop secret store, this slot, the chain's file
+#: layer, and the variable a one-off shell hands it in. Its own variable rather
+#: than `ANTHROPIC_API_KEY`, which a shell may carry for another purpose and
+#: which would then pay for the gates unasked.
+GATES_KEY_ACCOUNT = 'anthropic-gates-key'
+GATES_KEY = 'anthropic-gates.key'
+GATES_KEY_ENV = 'KLUSTER_GATES_API_KEY'
 #: The account roots' file layer (`masters.py`), one file per field.
 ROOTS = 'roots'
 
@@ -142,6 +155,10 @@ def _passphrase(slot: Path) -> str | None:
         return None
     except OSError as exc:
         raise stack_environment.EnvironmentRefused(f'{slot} cannot be read ({exc.strerror})') from exc
+
+
+def gates_key_path() -> Path:
+    return directory() / GATES_KEY
 
 
 def root_path(name: str) -> Path:

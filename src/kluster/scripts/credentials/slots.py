@@ -1213,6 +1213,20 @@ ROWS: dict[str, Row] = {
             WorkstationSlot(workstation.OPERATOR_PASSPHRASE),
         ),
     ),
+    escrow.row_name(escrow.GATES_KEY): Row(
+        register='Claude Console API key (model gates)',
+        source=Derived(escrow.GATES_KEY),
+        # **The workstation alone, and that is the row.** `dispatch gates` runs
+        # on the dispatcher's workstation and asks the model gates from there,
+        # and no CI job runs a gate (dispatch.md §3), so no GitHub secret holds
+        # it: a pull request's run can spend nothing. `record` escrows it and
+        # `recover` lands it in the store, or in the slot where there is none.
+        targets=(
+            EscrowCopy(escrow.GATES_KEY),
+            SecretStore(workstation.GATES_KEY_ACCOUNT),
+            WorkstationSlot(workstation.GATES_KEY),
+        ),
+    ),
     'state-backend-ca': Row(
         register='State-backend CA',
         source=Derived(escrow.CA),

@@ -104,6 +104,11 @@ BACKUP = 'backup/age'
 #: (credentials.md §3). One label per App, because they rotate apart.
 DISPATCH_KEY = 'github/dispatch-key'
 TRIGGER_KEY = 'github/trigger-key'
+#: The Console API key `dispatch gates` asks the model gates' questions with
+#: (docs/framework/dispatch.md §3), from the organization the Max plan's monthly
+#: API credit is linked to. Escrowed for the App keys' reason: the Console shows
+#: a key once, so a lost slot is a re-recovery rather than a new key.
+GATES_KEY = 'anthropic/gates-key'
 #: Authelia's storage encryption key, which encrypts the second factors and
 #: the OIDC data in its database (credentials.md §2.2). Escrowed because a
 #: backup of that database opens with it and with nothing else, and sealed by
@@ -250,6 +255,10 @@ def _is_private_key(value: str) -> bool:
 TEXT = Shape('a value', lambda value: bool(value.strip()))
 IDENTITY = Shape(f'an age identity, which starts {age.SECRET_PREFIX}', _is_identity)
 PRIVATE_KEY = Shape('a PEM private key, which starts -----BEGIN and ends -----END ... -----', _is_private_key)
+#: What the Console prints for an API key: its prefix, then the key.
+ANTHROPIC_API_KEY = Shape(
+    'a Claude Console API key, which starts sk-ant-api', lambda value: value.strip().startswith('sk-ant-api')
+)
 #: The length alone: Authelia refuses a shorter key and takes any longer one,
 #: whatever its characters, so a key a predecessor drew some other way is
 #: imported as it stands.
@@ -461,6 +470,18 @@ _APP_KEY_CONSOLE = """github.com/settings/apps → the "kluster {name}" App → 
 {app}"""
 
 
+#: How the gates' key is made. The organization is the one the Max plan's
+#: monthly API credit is linked to, so the gates spend that credit; its spend
+#: limit bounds what a runaway run can cost.
+_GATES_KEY_CONSOLE = """platform.claude.com, signed in to the organization the Max plan's monthly API
+  credit is linked to → Settings → API keys → Create key, named "kluster gates",
+  in the default workspace. The key is shown once and never again, and the
+  Console is the only place one is made. Under Settings → Limits, a monthly
+  spend limit on the organization bounds what the gates can spend. Rotation is
+  this same visit: create another, record it, and delete the superseded key on
+  the same page."""
+
+
 def _named(names: Sequence[str]) -> str:
     """Names as a sentence lists them: `a`, `a and b`, `a, b and c`."""
     return ' and '.join(names) if len(names) < 3 else f'{", ".join(names[:-1])} and {names[-1]}'
@@ -624,6 +645,20 @@ def register() -> dict[str, Label]:
                 kit=KitAttachment('seeds/GitHub App (trigger)', 'private-key.pem'),
             ),
             shape=PRIVATE_KEY,
+        ),
+        Label(
+            GATES_KEY,
+            "the Claude Console API key the dispatch protocol's model gates ask their questions with",
+            Console(_GATES_KEY_CONSOLE),
+            shape=ANTHROPIC_API_KEY,
+            # Found by `dispatch gates` through the acquisition chain on every
+            # run that asks a model gate (credentials.md §4.4), and read by
+            # nothing else.
+            slot=WorkstationSlot(
+                path=workstation.gates_key_path,
+                read_by='`dispatch gates` finds it there for every model gate it runs',
+                store=workstation.GATES_KEY_ACCOUNT,
+            ),
         ),
     ]
     return {row.name: row for row in rows}

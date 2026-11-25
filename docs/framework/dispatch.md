@@ -801,7 +801,12 @@ retry starts afresh:
     pull request naming its issue, and a `jj` workspace no live record
     names.
 -   **`dispatch gates <pr>`** checks a pull request's content against
-    its dispatch, changes nothing, and exits non-zero on any finding:
+    its dispatch, then asks the model gates its paths trigger (§3), and
+    exits non-zero on any finding of the first kind, on any finding of a
+    blocking gate, or item it left undecided, that no appeal answers, and
+    on a blocking gate that asked nothing. A shadow gate decides nothing
+    here. The first kind changes
+    nothing:
     the dispatch owns every path the change touches, a file owned in a
     section is changed only in that section's lines at the base, and
     the description names each new file outside the owned paths (§1.1
@@ -815,7 +820,14 @@ retry starts afresh:
     nothing names a control and every control fires its pattern. The
     commits are read from the local store, which holds them once the
     dispatcher has fetched. A host name of one label reads like any
-    other word, and reading for one stays the reviewer's.
+    other word, and reading for one stays the reviewer's. The model
+    gates' findings go into one comment on the pull request, the only
+    thing the command writes. Its three steps keep those gates honest:
+    `dispatch gates calibrate <gate>` measures a gate against its
+    labelled set and writes its record; `dispatch gates harvest <pr>...`
+    appends to each gate's set the places the reviews of those pull
+    requests tag; and `dispatch gates appeal <pr> <report>` writes a
+    builder's appeals into the comment of the pull request's head.
 -   **`dispatch merge <pr> <head>`** lands a pull request at the head
     its builder's latest report names, and ends the dispatch. It
     refuses, before it changes anything, unless the pull request's
@@ -1060,9 +1072,100 @@ the head and carries a blocking finding passes the check, and the
 round-closing comment above is where that is settled.
 
 **`dispatch gates <pr>` runs when the builder reports, before a
-reviewer is commissioned** (§2.1). Its checks are deterministic, so a
-finding is not argued: it goes back to the builder as a fix cycle, and
-a refusal that is wrong is a defect in the check, filed as one.
+reviewer is commissioned** (§2.1). Its deterministic checks come first,
+and their findings are not argued: each goes back to the builder as a
+fix cycle, and a refusal that is wrong is a defect in the check, filed
+as one.
+
+**The model gates come after them, and each answers one narrow
+question.** A gate is a directory of
+`src/kluster/scripts/dispatch/gates/` holding a prompt (that package
+says what else). It runs where the change touches a path its trigger
+matches. Its extractor, which is deterministic, narrows the change to
+the items its question is about, and the model is asked about those
+items alone. They go in batches up to a fixed size, and each batch is
+asked three times. The reply is held to a schema by the API's
+structured outputs, and answers each item by the id it was given. A
+finding stands on two samples of the three. The rule the prompt quotes
+is a section of a document in this repository, read from the tree at
+the head under review, so the gate never restates it. What a gate's
+model says can only add a finding. It approves nothing, and every
+deterministic check runs whatever it says. The gates ask with the Claude
+Console API key the register files for them
+([credentials.md](../credentials.md) §3), which nothing else reads.
+Running them spends the API credit of the organization that key belongs
+to, and no CI job runs a gate. On a workstation that does not hold the
+key, every gate asks nothing, and the comment says so. A call the API
+still fails after the SDK's retries is a sample that answered nothing.
+An item whose unanswered samples could still have made a finding stand
+is left undecided: a shadow gate passes it, and a blocking gate holds it
+against the change as it holds a finding, until it is asked again or
+appealed.
+
+**The run leaves one comment**, headed
+`## Gate findings (head <sha>)`. A run at the same head edits it in
+place, keeping the appeals it records, and a run at a new head posts
+another. Each finding gives its place, its gate, its status, its
+reason, its samples and a link to the rule at the head. Below the
+findings, a fenced `json` block records the whole run: each gate with
+its model and status, whether it asked, and every item it asked about,
+passes included, by its place, with one letter for each sample's
+verdict. The record keeps each sample's reason too, for every item
+whose samples are not a unanimous pass. The comment fits in the most a
+GitHub comment holds: where it would not, the reasons give way first,
+then the list of findings above the record, and the verdicts stay.
+Where the run's items would not fit even as verdicts alone, every gate
+asks nothing and spends nothing, and the comment says why.
+
+**A gate is `shadow` until it is measured, and `blocking` only while
+its measurement holds.** A shadow finding is advisory and blocks
+nothing. A gate blocks once `dispatch gates calibrate` has measured it
+against its labelled set: the gate's `cases.jsonl`, whose first two
+cases are the one it must catch and the one it must pass. Its record,
+`calibration.json`, holds the hashes of its prompt, the canonical text
+and its model id, and what the set scored. The prompt is the gate's
+`prompt.md` together with the fixed text every call carries beside it
+and the counts its samples are judged by, so an edit to any of them is
+an edit to the prompt. The bar is set beside the
+record (`gates.calibration`): the falsifier pair holds in every sample,
+the set holds enough positives and negatives, recall is high enough, and
+false positives few enough. The status is read off those measurements
+against the bar as it stands, so a moved bar applies at once. A gate
+that blocks stays blocking where its canonical section does not read at
+the head, and then refuses, since it asked nothing. A record that
+measured some other prompt,
+text or model reads as shadow, and the comment says which part
+changed. A test case holds every record against its gate in the tree,
+so such an edit fails the gate until `calibrate` runs again. A builder
+holds no key and writes no record, so a gate lands without one and runs
+in shadow until the dispatcher measures it, in a pull request of its
+own.
+
+**A blocking finding goes back to the builder as a fix cycle before any
+reviewer is commissioned.** The builder fixes it, and the gates run
+again at the new head, or appeals it in its report, one line each:
+`Gate appeal: <gate> <path>:<line>: <reason>`. `dispatch gates appeal`
+writes each appeal beside its finding, or beside an item a blocking
+gate left undecided, and refuses an appeal that names neither. **The reviewer rules on each appeal,
+and on a gate's family of findings, with a tag beside the place**:
+`[gate:<name>]` where the place breaks the rule, a rejected appeal
+included, and `[gate:<name> clean]` where the review holds it to the
+rule in so many words, an accepted appeal included. A tag binds to
+every `path:line` its paragraph names, a list item and the indented
+paragraphs under it being one paragraph. So the tag goes in the
+paragraph that names the place, and the place of a rule the finding
+cites stays out of that paragraph; a tag whose paragraph names no place
+binds to nothing, and harvest reports it. `dispatch gates
+harvest` turns each tag in a review this account wrote into a case of
+that gate. It takes the item the gate's own extractor draws at that
+place at the reviewed head. Against the run recorded at the same head,
+it reports each case the gate judged otherwise, and each finding of the
+gate the review left untagged, which a tag then makes a case. Every
+disagreement between a gate and a reviewer therefore becomes a case,
+and moves the gate's measurement at its next calibration. An appeal
+that disputes the rule itself, rather than how the gate applied it, goes
+to the operator as a `decision/pending` issue (§4.1). A deterministic
+check has no appeal.
 
 ### 3.1 Cadence
 
