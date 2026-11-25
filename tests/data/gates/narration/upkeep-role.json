@@ -1,0 +1,14 @@
+{
+ "pr": 846,
+ "head": "47bbc7c14373126091f7caed93e831925dcf5922",
+ "source": "https://github.com/Aetf/kluster/pull/846#issuecomment-6998957199",
+ "path": "docs/physical/state-backend.md",
+ "first": 364,
+ "written": [
+  [
+   364,
+   390
+  ]
+ ],
+ "text": "-   **`upkeep` reads and deletes rows of the state table, and does\n    nothing else.** It is the role the cluster's daily upkeep of the\n    table connects as — the census, the prune of expired rows and the\n    ceiling (below) — with a bundle sealed to the cluster\n    (credentials.md §3). It is `LOGIN NOSUPERUSER NOCREATEDB\n    NOCREATEROLE`, no member of `state_owner`, and acts as itself. The\n    box's initialization grants it `CONNECT` on `pulumi_state` and\n    `USAGE` on `public` without `CREATE`, and a default privilege of\n    `state_owner`'s in `public` gives it `SELECT` and `DELETE` on every\n    table that role creates. So it inserts, updates, truncates, drops\n    and creates nothing, and the pooler admits it into the transaction\n    entry alone, never the session entry. Its statements are pooled\n    like every query, inside the cap, which gains no term.\n    -   **A default privilege, not a grant on the table.** The table\n        does not exist when the box initializes, and it comes to exist\n        in two ways, each a session acting as `state_owner`: the\n        backend's first open, and every restore, whose `--clean` drops\n        the table and creates it again (§7). A dump carries the grant\n        the table holds, and a restore replays it, so an archive of a box\n        this commit builds restores only into a box that has the role.\n    -   **What it can do is the excess.** It can delete any row, a\n        checkpoint included, and read every value; credentials.md §3\n        records that as its certificate's excess. The delete is not\n        bounded by row: that would take a row-level policy on a table\n        that both the backend's first open and every restore create, so\n        the box would declare the backend's own schema, or apply the\n        policy again after every restore."
+}
