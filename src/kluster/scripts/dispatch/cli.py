@@ -14,9 +14,10 @@
 Run from the dispatcher's checkout under `mise x uv -- uv run`, which puts the
 pinned `gh` and `jj` on `PATH`. `claim`, `queue`, `abandon` and `merge` name
 the dispatcher by `CLAUDE_CODE_SESSION_ID`, which a Claude Code session's
-commands inherit, and refuse without it. `gates` and `gates calibrate` ask
-the model gates (`gates/`) with the key the register files for them, which
-nothing else here reads. docs/framework/dispatch.md is the protocol.
+commands inherit, and refuse without it. Every command that asks a model
+gate (`gates/`) asks with the key the register files for them, and nothing
+else here reads it: today `gates` and `gates calibrate`, and `claim` and
+`queue`, which ask about the brief. docs/framework/dispatch.md is the protocol.
 """
 
 from __future__ import annotations
@@ -254,6 +255,7 @@ def _run(args: argparse.Namespace) -> int:
         session=session,
         operator_word=args.operator_word,
         adopt=bool(getattr(args, 'adopt', False)),
+        file=claim.BriefFile(Path(args.brief).name, content.decode()),
     )
     if args.command == 'claim':
         verdict = claim.claim(forge, dispatch, args.issue, serialized.read())

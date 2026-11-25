@@ -19,7 +19,8 @@ The operator passphrase is read
 by the `operator-stack` driver instead, through the acquisition chain
 (`kluster.lib.acquisition`), so its slot is the chain's file layer, below the
 store in the chain's order: where it lives on a machine whose store does not
-hold it. The model gates' API key is found the same way, by `dispatch gates`.
+hold it. The model gates' API key is found the same way, by every `dispatch`
+command that asks a model gate.
 
 The names below are this package's; the directory they sit in and the modes
 they are written with are `kluster.lib.workstation`, which the `physical`
@@ -96,7 +97,8 @@ OPERATOR_PASSPHRASE = OPERATOR_PASSPHRASE_SLOT
 PHYSICAL_PASSPHRASE = PHYSICAL_PASSPHRASE_SLOT
 
 #: The Console API key of the dispatch protocol's model gates (§3), which
-#: `dispatch gates` finds through the acquisition chain under these three
+#: every `dispatch` command that asks a model gate finds through the
+#: acquisition chain under these three
 #: names: its key in the desktop secret store, this slot, the chain's file
 #: layer, and the variable a one-off shell hands it in. Its own variable rather
 #: than `ANTHROPIC_API_KEY`, which a shell may carry for another purpose and

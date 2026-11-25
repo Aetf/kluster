@@ -6,6 +6,21 @@ what stands in its way at once. `claim` and `queue` change the forge only when
 `check` returns none. What each precondition is, and the section of
 dispatch.md it comes from, is `Precondition`'s.
 
+Every brief, whatever its role, is then asked about by the model gates
+whose trigger names a brief (`ask_about_brief`, dispatch.md §2.1), with
+their canon read from the dispatcher's checkout. Their verdicts land in the
+dispatcher's log, which is where the claim is run and where the brief can
+still be rewritten before the agent is spawned, and not on a pull request,
+which is public while a brief may name what a public page must not. A gate
+in shadow blocks nothing there. A gate whose calibration earns `blocking`
+refuses the claim on a finding or an item it left undecided, and wherever
+it asked nothing, as it would refuse a pull request.
+
+The forge is read by `check` and written after the gates answer, so the
+window between the two runs as long as the model takes. Another dispatcher
+that claims the same issue inside it passes the same check, and both post a
+record.
+
 Each step posts its record before it changes a label. A record on an issue
 with no claim label is never read, so a step that fails between the two
 leaves nothing a retry trips on: the retry finds no claim label and starts a
@@ -18,12 +33,23 @@ from __future__ import annotations
 
 import enum
 import logging
-from collections.abc import Collection, Sequence
-from dataclasses import dataclass
+from collections.abc import Callable, Collection, Sequence
+from dataclasses import dataclass, replace
+from functools import cache
+
+from kluster.lib import workstation
 
 from . import ledger, milestones, record
 from .brief import Brief, Role
 from .forge import Forge, Issue, Pull
+from .gates.ask import Asked, judge
+from .gates.calibration import Status, standing
+from .gates.comment import Entry, Evidence, Ran
+from .gates.extract import Change, Changed
+from .gates.gate import Gate, GateUnreadable, discover
+from .gates.model import KeyMissing, Messages, Model, key
+from .gates.reading import asks_about_briefs, brief_path
+from .gates.verdict import reason
 from .paths import OwnedPath
 from .record import Event, Front, Record, RecordUnreadable, Waiver
 
@@ -64,6 +90,9 @@ class Precondition(enum.StrEnum):
     #: A serialized file is already held by another claim or an open pull
     #: request (§2 rule 3).
     SERIALIZED = 'serialized'
+    #: A blocking model gate holds a finding against the brief, left an item
+    #: of it undecided, or asked nothing (§2.1, §3).
+    BRIEF_GATE = 'brief-gate'
 
 
 @dataclass(frozen=True)
@@ -77,7 +106,7 @@ class Refusal:
 
 @dataclass(frozen=True)
 class Verdict:
-    """What `check` found: the refusals, and the phases an operator's word let the dispatch past."""
+    """What a dispatch found: the refusals and the phases an operator's word let it past, which `check` reads, and the model gates' run over the brief, which `claim` and `queue` add once `check` passes."""
 
     issue: Issue
     refusals: tuple[Refusal, ...]
@@ -87,6 +116,8 @@ class Verdict:
     #: Where an owned path can touch another claim's paths or an open pull
     #: request's files: recorded and printed, never refused (§2 rule 2).
     overlaps: tuple[str, ...] = ()
+    #: The model gates' run over the brief (`ask_about_brief`); None from `check`, or with no brief file.
+    brief_evidence: Evidence | None = None
 
 
 class WordRefused(ValueError):
@@ -100,6 +131,14 @@ def _word(word: str | None) -> None:
 
 
 @dataclass(frozen=True)
+class BriefFile:
+    """A brief as its file holds it: the file's name, and its text, which the model gates read."""
+
+    name: str
+    text: str
+
+
+@dataclass(frozen=True)
 class Dispatch:
     """Who dispatches what: the brief, the dispatcher session, and the operator's word if it was given."""
 
@@ -109,6 +148,9 @@ class Dispatch:
     operator_word: str | None = None
     #: Whether the dispatch adopts an `in-flight` that stands with no record, on the operator's word (§2.1).
     adopt: bool = False
+    #: The brief's file, which the model gates read; a dispatch made without
+    #: it, as the ledger's own cases make one, is asked about by no gate.
+    file: BriefFile | None = None
 
     def __post_init__(self) -> None:
         _word(self.operator_word)
@@ -293,6 +335,114 @@ def _record(dispatch: Dispatch, event: Event, verdict: Verdict) -> str:
     ).render()
 
 
+@dataclass(frozen=True)
+class Asking:
+    """What a brief is asked through: the gates, the tree their canonical sections are read from, and the model."""
+
+    gates: Sequence[Gate]
+    #: The text of a path in the tree the canon is read from; None where it holds no such file.
+    canon: Callable[[str], str | None]
+    #: Made only where a gate has an item to ask about.
+    model: Callable[[], Model]
+
+
+def _checkout(path: str) -> str | None:
+    file = workstation.repo_root() / path
+    return file.read_text() if file.is_file() else None
+
+
+def _messages() -> Model:
+    return Messages.with_key(key())
+
+
+@cache
+def workstation_asking() -> Asking:
+    """This checkout's gates, their canon as the checkout holds it, and the model the register's key asks."""
+    return Asking(tuple(discover()), _checkout, _messages)
+
+
+def _unasked(gate: Gate, status: Status, why: str) -> Ran:
+    return Ran(gate.name, gate.spec.model, status, why, '', (), asked=False)
+
+
+def ask_about_brief(file: BriefFile, issue: Issue, sha256: str, asking: Asking) -> Evidence:
+    """Every gate whose trigger names the brief, asked about it: the run, as evidence at the brief's hash.
+
+    The brief is read as a change that writes the whole of one file, at the
+    path `gates.reading.brief_path` gives it from the areas of the issue. A
+    gate asks about it where a pattern of its trigger names briefs and
+    matches that path (`gates.reading.asks_about_briefs`), and draws from it
+    with its own extractor. Each gate's canonical section is read from the
+    tree `asking.canon` reads, and its status is what its calibration record
+    earns against the gate as it now runs (`gates.calibration.standing`). A
+    gate whose section does not read asks nothing, and stays blocking where
+    its record earned that: a canon moved out from under a gate does not
+    open it.
+    """
+    areas = [label.removeprefix(ledger.AREA) for label in issue.labels if label.startswith(ledger.AREA)]
+    path = brief_path(areas, file.name)
+    written = Changed(path, 'A', ((1, file.text.count('\n') + 1),))
+    change = Change(head=sha256, files=(written,), text=lambda asked: file.text if asked == path else None)
+    prepared: list[tuple[Gate, Status, str, Asked]] = []
+    unread: list[Ran] = []
+    for gate in (g for g in asking.gates if asks_about_briefs(g.spec.trigger, path)):
+        try:
+            section = gate.canon(asking.canon)
+        except GateUnreadable as exc:
+            held = gate.record()
+            status = Status.BLOCKING if held is not None and not held.shortfalls() else Status.SHADOW
+            unread.append(_unasked(gate, status, f'its canonical section does not read: {exc}'))
+            continue
+        status, why = standing(gate.record(), gate.hashes(section.text))
+        asked = Asked(gate.system(section.text), gate.spec.model, list(gate.spec.extract(change)))
+        prepared.append((gate, status, why, asked))
+    log.info('asking %s about the brief', ', '.join(g.name for g, *_ in prepared) or 'no gate')
+    try:
+        judged = judge([asked for *_, asked in prepared], asking.model)
+    except KeyMissing as exc:
+        ran = [_unasked(g, status, f'no model could be asked: {exc}') for g, status, _, _ in prepared]
+    else:
+        ran = [
+            Ran(
+                g.name,
+                g.spec.model,
+                status,
+                why,
+                '',
+                tuple(Entry(j.item.path, j.item.line, j.item.end_line, j.samples) for j in verdicts),
+            )
+            for (g, status, why, _), verdicts in zip(prepared, judged, strict=True)
+        ]
+    return Evidence(sha256, tuple(ran + unread))
+
+
+def _held_against(evidence: Evidence) -> list[Refusal]:
+    """Log every gate's run over the brief; the refusals of the blocking gates, which a shadow gate never makes."""
+    refusals: list[Refusal] = []
+    for ran in evidence.gates:
+        said = f'asked nothing: {ran.why}' if ran.unheard else ran.why
+        log.info('%s on the brief, %s: %s; %d items asked', ran.gate, ran.status, said, len(ran.entries))
+        for entry in ran.open:
+            why = reason(entry.samples) if entry.finding else 'no verdict: too few of its samples answered'
+            log.warning('%s, %s: %s: %s', ran.gate, ran.status, entry.place, why)
+            if ran.status is Status.BLOCKING:
+                refusals.append(Refusal(Precondition.BRIEF_GATE, f'{ran.gate} holds {entry.place}: {why}'))
+        if ran.status is Status.BLOCKING and ran.unheard:
+            refusals.append(Refusal(Precondition.BRIEF_GATE, f'{ran.gate} blocks and asked nothing: {ran.why}'))
+    return refusals
+
+
+def _ask(dispatch: Dispatch, verdict: Verdict, asking: Asking | None) -> Verdict:
+    """`verdict` with the brief gates' run; raises `Refused` where a blocking gate holds the brief."""
+    if dispatch.file is None:
+        return verdict
+    evidence = ask_about_brief(dispatch.file, verdict.issue, dispatch.brief.sha256, asking or workstation_asking())
+    refusals = _held_against(evidence)
+    if refusals:
+        raise Refused(refusals)
+    return replace(verdict, brief_evidence=evidence)
+
+
 class Refused(Exception):
     """The dispatch fails a precondition; nothing on the forge was changed."""
 
@@ -301,15 +451,20 @@ class Refused(Exception):
         self.refusals = tuple(refusals)
 
 
-def claim(forge: Forge, dispatch: Dispatch, number: int, serialized: frozenset[str]) -> Verdict:
+def claim(
+    forge: Forge, dispatch: Dispatch, number: int, serialized: frozenset[str], asking: Asking | None = None
+) -> Verdict:
     """Claim issue `number` for the dispatch: the record, then `in-flight`. Raises `Refused`.
 
     With `dispatch.adopt`, the issue's standing `in-flight` is the claim, and
-    only the record is posted, quoting the operator's word.
+    only the record is posted, quoting the operator's word. Once every
+    precondition passes, the brief is asked about by the gates of `asking`,
+    this checkout's where none is given (`ask_about_brief`).
     """
     verdict = check(forge, dispatch, number, serialized)
     if verdict.refusals:
         raise Refused(verdict.refusals)
+    verdict = _ask(dispatch, verdict, asking)
     log.info('posting the dispatch record on #%d', number)
     forge.comment(number, _record(dispatch, Event.CLAIM, verdict))
     labels = verdict.issue.labels
@@ -319,7 +474,9 @@ def claim(forge: Forge, dispatch: Dispatch, number: int, serialized: frozenset[s
     return verdict
 
 
-def queue(forge: Forge, dispatch: Dispatch, number: int, serialized: frozenset[str], brief: str) -> Verdict:
+def queue(
+    forge: Forge, dispatch: Dispatch, number: int, serialized: frozenset[str], brief: str, asking: Asking | None = None
+) -> Verdict:
     """Queue issue `number` for a cloud session: the brief, the record, then `cloud/ready`. Raises `Refused`.
 
     `brief` is the brief's text, which the session reads from the comment. A
@@ -332,6 +489,7 @@ def queue(forge: Forge, dispatch: Dispatch, number: int, serialized: frozenset[s
         refusals.append(Refusal(Precondition.NOT_HELD, 'a review is not queued: the cloud queue holds builds'))
     if refusals:
         raise Refused(refusals)
+    verdict = _ask(dispatch, verdict, asking)
     log.info('posting the brief and the dispatch record on #%d', number)
     forge.comment(number, f'{BRIEF_HEADING}\n\n{brief}')
     forge.comment(number, _record(dispatch, Event.QUEUE, verdict))

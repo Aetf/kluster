@@ -796,6 +796,24 @@ retry starts afresh:
     preconditions, and refuses an issue without `in-flight`, one queued
     with `cloud/ready` included, or one that already carries a
     record.
+
+    Once every precondition passes, the brief goes to the gates whose
+    trigger names a brief (§3): a pattern rooted at `:brief/` that
+    matches the path the brief is read at. The brief is read as a
+    change that writes one file whole, at `:brief/<areas>/<file>`,
+    where the areas are the issue's `area/*` labels, so a trigger that
+    takes every path of a pull request takes no brief. Today those
+    gates are `enumeration`, for every brief, and `conclusion`, for
+    the brief of an issue in `area/cluster`. Their canonical sections
+    are read from the dispatcher's checkout, which is the tree the
+    claim runs in. Their verdicts land in the
+    claim's log. That is where the dispatcher runs the claim, and the
+    brief can still be rewritten before the agent is spawned. A pull
+    request is public, and a brief can name what a public page must
+    not. A gate in shadow blocks nothing there. A gate whose
+    calibration earns `blocking` refuses the claim on a finding, on
+    an item it left undecided, and wherever it asked nothing. No
+    appeal is recorded against a brief, which is rewritten instead.
 -   **`dispatch queue <issue> <brief>`** is the claim for the cloud
     queue (§1.4), under the same preconditions: the brief as a
     `## Brief` comment, the record, then `cloud/ready`, taking off the
@@ -1121,7 +1139,8 @@ as one.
 question.** A gate is a directory of
 `src/kluster/scripts/dispatch/gates/` holding a prompt (that package
 says what else). It runs where the change touches a path its trigger
-matches. Its extractor, which is deterministic, narrows the change to
+matches, and on a brief when its trigger names one and the brief is
+claimed (§2.1). Its extractor, which is deterministic, narrows the change to
 the items its question is about, and the model is asked about those
 items alone. They go in batches up to a fixed size, and each batch is
 asked three times. The reply is held to a schema by the API's
