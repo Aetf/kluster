@@ -4,7 +4,16 @@ from __future__ import annotations
 
 from ipaddress import IPv4Address
 
-from kluster.conventions.site import eui64_link_local
+from kluster.conventions.site import SERVER_LAN, SiteHost, eui64_link_local
+
+#: The homelab host on the server LAN, at the address the homelab member's
+#: mapping lands on: the gateway's UPnP service maps a port to whatever
+#: address asks for it, so the controller's fixed-IP reservation for the MAC
+#: holds the IPv4 address, and no lease moves the mapping's endpoint. The
+#: reservation is a row of the gateway's census (physical/gateway.md §4.2
+#: rule 8). The host forms its ULA on the server LAN by EUI-64 of the same
+#: MAC, which is what the type requires.
+HOMELAB_HOST = SiteHost(network=SERVER_LAN, v4=IPv4Address('192.168.80.238'), mac='50:eb:f6:b5:79:fd')
 
 #: The homelab host as the device plane names it: a DHCP-derived name the
 #: gateway's own resolver answers and no public one does (dns.md §4 item 1).

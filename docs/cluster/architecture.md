@@ -1020,15 +1020,19 @@ The entire stack is deployed via Pulumi using multiple providers:
         shapes to the envelope the design is budgeted against + budget
         alerts.
 3.  **UniFi (filipowm/unifi, bridged; decided 2026-08-23)**: firewall
-    rules and the one surviving port-forward — the `lan` pool
-    address-group policy (§3.4), the qbittorrent v6 pinhole (§3.5),
-    and **qbittorrent's v4 peer-port forward** (workloads.md §4 — an
-    app-traffic inheritance). The forward is declared only once
-    qbittorrent runs on the worker (`qbittorrentOnWorker`,
-    physical/gateway.md §4.2): until its migration wave the legacy
-    qbittorrent on the homelab host holds the port by whatever holds it
-    today, UPnP or a hand-kept rule, and moving it is a step of that
-    wave (migration.md §2, Wave D). Provider selection: the UDM runs the
+    rules, the one port forward the census declares, and the gateway's
+    UPnP service — the `lan` pool address-group policy (§3.4), the
+    qbittorrent v6 pinhole (§3.5), **qbittorrent's v4 peer-port
+    forward** (workloads.md §4 — an app-traffic inheritance), the allow
+    of ZeroTier's UDP to the gateway's own overlay member, and UPnP and
+    NAT-PMP for the server LAN alone, through which the homelab host's
+    member maps its port, with the reservation that holds the host's
+    address (physical/gateway.md §4.2 rules 7 and 8). The peer-port
+    forward is declared only once qbittorrent runs on the worker
+    (`qbittorrentOnWorker`, physical/gateway.md §4.2): until its
+    migration wave the legacy qbittorrent on the homelab host holds the
+    port by its UPnP lease (physical/gateway.md §4.2 rule 8), and moving
+    it is a step of that wave (migration.md §2, Wave D). Provider selection: the UDM runs the
     **zone-based firewall** (measured, §3.4), whose v2 API the
     pulumiverse/unifi provider cannot drive — it bridges the stalled
     paultyng/ubiquiti-community lineage, whose `firewall_rule` targets
@@ -1072,9 +1076,11 @@ The entire stack is deployed via Pulumi using multiple providers:
     on record**: each app component documents its cross-VLAN flow, so
     if inter-VLAN isolation is ever introduced, the allows to declare
     are already enumerated in the code rather than rediscovered by
-    outage. **No management inbound exists at the home network**: the
-    control plane lives cloud-side, the homelab worker dials out
-    (KubeSpan), and management traffic terminates at the NLB. A personal
+    outage. **No management inbound is declared at the home network**:
+    the control plane lives cloud-side, the homelab worker dials out
+    (KubeSpan), and management traffic terminates at the NLB. What a
+    device on the server LAN maps for itself is its own (threat-model.md
+    §2.10). A personal
     device away from home reaches LAN services through the overlay's
     tunnel, as a home client (§5.3).
 4.  **Cloudflare (pulumi-cloudflare)**: **all** public DNS records move

@@ -10,10 +10,11 @@ leader, `nsenter`, which runs `zerotier-cli info` in the overlay member's
 leader's mount namespace and `ip -o link show host0` in a bridged machine's
 leader's network namespace, the package script, whose `--check` the reading
 relays, `ip`, which lists the policy rules, the device's links and a bridge's
-global addresses, and
+global addresses,
 `vtysh`, which answers for the routing session's peer with what the BGP daemon
-was recorded answering, are stand-ins that answer what a case sets and record
-what they were asked.
+was recorded answering, and `mongo`, which answers the controller's database's
+query for the networks that opt in to UPnP with the networks a case sets, are
+stand-ins that answer what a case sets and record what they were asked.
 `networkctl` and `systemd-analyze` are the stand-in systemd's own: the links it
 reports are the ones a case set, and the configuration it assembles is the
 files under the stand-in's tree. The base is read under that tree too: its
@@ -65,6 +66,15 @@ NO_SUITE = 'Exiting: failed to connect to any daemons.'
 #: FRR 10.1, the release the firmware ships, which adds `bgpNoSuchNeighbor`
 #: to the answer when no peer matches.
 NO_SUCH_NEIGHBOR = '{\n  "bgpNoSuchNeighbor":true\n}\n'
+
+#: What the controller's database answers for the networks that opt in to UPnP
+#: with the server LAN opted in alone: its subnet as the controller spells it
+#: and its name, from the server LAN's network object as it was read off the
+#: controller's database.
+SERVER_LAN_OPTED_IN = '192.168.80.1/24\tDefault\n'
+
+#: The IoT VLAN's network object, opted in beside it.
+IOT_OPTED_IN = '192.168.90.1/24\tIoT\n'
 
 #: The playbook section every finding points into.
 PLAYBOOK_DOC = Path(__file__).parent.parent / 'docs' / 'physical' / 'gateway.md'
@@ -232,6 +242,15 @@ class _Device:
     neighbor: Path
     vtysh_fails: Path
     vtysh_calls: Path
+    #: What `mongo` answers for the networks that opt in to UPnP; where
+    #: present, what it writes to stderr first, whether it then answers or
+    #: fails; and, where present, the file
+    #: that makes it fail instead: its output, and its exit status beside it
+    #: in `<file>.status`.
+    upnp: Path
+    mongo_warns: Path
+    mongo_fails: Path
+    mongo_calls: Path
 
 
 def _stub(path: Path, body: str) -> None:
@@ -338,6 +357,10 @@ def _device(tmp_path: Path, *, legacy: tuple[conventions.gateway.LegacyVhost, ..
         neighbor=root / 'neighbor',
         vtysh_fails=root / 'vtysh-fails',
         vtysh_calls=logs / 'vtysh',
+        upnp=root / 'upnp',
+        mongo_warns=root / 'mongo-warns',
+        mongo_fails=root / 'mongo-fails',
+        mongo_calls=logs / 'mongo',
     )
     # `machinectl` as the device's systemd answers for a machine whose init is
     # not systemd: `show` names the leader of a running machine and knows no
@@ -443,6 +466,20 @@ def _device(tmp_path: Path, *, legacy: tuple[conventions.gateway.LegacyVhost, ..
         'esac\n',
     )
     _ = device.neighbor.write_text(NEIGHBOR)
+    # `mongo --quiet --port <port> <database> --eval <script>`, the controller's
+    # own client, which prints what the case set for the networks that opt in
+    # to UPnP, or fails with what it set; nothing else is modeled.
+    _stub(
+        tools / gateway.MONGO,
+        f'printf "%s\\n" "$*" >>{device.mongo_calls}\n'
+        f'if [ "$1 $2 $3 $4 $5" != "--quiet --port {gateway.CONTROLLER_DB_PORT} {gateway.CONTROLLER_DB} --eval" ]; then\n'
+        '    echo "stand-in mongo: modeled for --quiet --port <port> <database> --eval <script> only, not $*" >&2; exit 1\n'
+        'fi\n'
+        f'[ ! -e {device.mongo_warns} ] || cat {device.mongo_warns} >&2\n'
+        f'if [ -e {device.mongo_fails} ]; then cat {device.mongo_fails}; exit "$(cat {device.mongo_fails}.status)"; fi\n'
+        f'cat {device.upnp}\n',
+    )
+    _ = device.upnp.write_text(SERVER_LAN_OPTED_IN)
     _write_ports(device)
     for family in RULE_FAMILIES:
         _ = (device.rules / family).write_text(RULES)
@@ -697,6 +734,19 @@ def _name_another_subnet_in_the_lease(device: _Device) -> None:
     _ = device.leases.write_text(_renumbered(LEASE, {BRIDGE: RENUMBERED_SUBNET}))
 
 
+def _opt_the_server_lan_out(device: _Device) -> None:
+    _ = device.upnp.write_text('')
+
+
+def _opt_another_network_in(device: _Device) -> None:
+    _ = device.upnp.write_text(SERVER_LAN_OPTED_IN + IOT_OPTED_IN)
+
+
+def _stop_the_controller_database(device: _Device) -> None:
+    _ = device.mongo_fails.write_text("Error: couldn't connect to server 127.0.0.1:27117\n")
+    _ = Path(f'{device.mongo_fails}.status').write_text('1')
+
+
 def _misshape_the_bridges_lease_line(device: _Device) -> None:
     _ = device.leases.write_text(
         ''.join(
@@ -735,6 +785,9 @@ def _misshape_the_bridges_lease_line(device: _Device) -> None:
         (_drop_the_bridges_lease_line, BRIDGE, gateway.PLAYBOOKS.lease),
         (_name_another_subnet_in_the_lease, BRIDGE, gateway.PLAYBOOKS.lease),
         (_misshape_the_bridges_lease_line, BRIDGE, gateway.PLAYBOOKS.lease),
+        (_opt_the_server_lan_out, str(conventions.SERVER_LAN.v4), gateway.PLAYBOOKS.upnp),
+        (_opt_another_network_in, str(conventions.IOT_VLAN.v4), gateway.PLAYBOOKS.upnp),
+        (_stop_the_controller_database, 'networkconf', gateway.PLAYBOOKS.upnp),
     ],
     ids=[
         'machine',
@@ -764,6 +817,9 @@ def _misshape_the_bridges_lease_line(device: _Device) -> None:
         'no-lease-line',
         'lease-elsewhere',
         'lease-misshapen',
+        'upnp-server-lan-out',
+        'upnp-other-network-in',
+        'upnp-no-database',
     ],
 )
 def test_each_deviation_is_exactly_one_finding_that_names_its_subject_and_its_playbook(
@@ -1249,6 +1305,7 @@ def _healthy(_: _Device) -> None:
         _peer_at_another_as,
         _renumber_the_bridge,
         _name_another_subnet_in_the_lease,
+        _opt_another_network_in,
     ],
 )
 def test_the_reading_writes_nothing(tmp_path: Path, deviation: Callable[[_Device], None]) -> None:
@@ -1259,8 +1316,10 @@ def test_the_reading_writes_nothing(tmp_path: Path, deviation: Callable[[_Device
     `zerotier-cli info`, run in its leader's mount namespace, and a bridged
     machine only to show its `host0`, in its leader's network namespace.
     networkd is asked only to list its links and to assemble its configuration,
-    the kernel only to list its rules and its links, and the BGP daemon only to
-    show the session's peer.
+    the kernel only to list its rules and its links, the BGP daemon only to
+    show the session's peer, and the controller's database only to find the
+    networks that opt in to UPnP, with a script that calls no method that
+    writes.
     """
     device = _device(tmp_path)
     deviation(device)
@@ -1284,6 +1343,9 @@ def test_the_reading_writes_nothing(tmp_path: Path, deviation: Callable[[_Device
     assert {call.split()[0] for call in device.systemd.take_calls(NETWORKCTL)} == {'list'}
     assert {call.split()[-2] for call in device.systemd.take_calls(SYSTEMD_ANALYZE)} == {'cat-config'}
     assert set(device.vtysh_calls.read_text().splitlines()) == {f'-c show bgp neighbors {PEER} json'}
+    (script,) = {call.split(' --eval ', 1)[1] for call in device.mongo_calls.read_text().splitlines()}
+    assert '.find(' in script
+    assert not re.search(r'\.(insert|update|replace|delete|remove|save|drop|bulkWrite|findAndModify)\w*\(', script)
     assert (_tree(device.root), device.systemd.enabled, device.systemd.active) == before
 
 
@@ -1322,6 +1384,30 @@ def test_a_lease_line_of_another_subnet_is_quoted_whole(tmp_path: Path) -> None:
 
     (line,) = (line for line in device.leases.read_text().splitlines() if f' {BRIDGE} ' in line)
     assert finding['state'] == f"{device.leases} reads '{line}', not {DELEGATED[BRIDGE]}"
+
+
+def test_what_the_database_client_writes_to_stderr_is_not_read_as_a_network(tmp_path: Path) -> None:
+    """A client that answers and warns is an answer: its warning is no network, and the networks it printed are read."""
+    device = _device(tmp_path)
+    _ = device.mongo_warns.write_text('WARNING: shell and server versions do not match\n')
+
+    reading = _read(device)
+
+    assert (reading.status, reading.lines) == (0, [])
+
+
+def test_a_database_that_fails_is_quoted_from_both_streams(tmp_path: Path) -> None:
+    """The finding carries what the client printed and what it wrote to stderr, and its exit status."""
+    device = _device(tmp_path)
+    _stop_the_controller_database(device)
+    _ = device.mongo_warns.write_text('connecting to: mongodb://127.0.0.1:27117/ace\n')
+
+    (finding,) = _findings(_read(device))
+
+    assert finding['subject'] == 'networkconf'
+    assert "couldn't connect to server" in finding['state']
+    assert 'connecting to: mongodb://' in finding['state']
+    assert finding['state'].endswith('(exit 1)')
 
 
 def test_a_lease_renewed_with_the_same_prefix_is_no_finding(tmp_path: Path) -> None:

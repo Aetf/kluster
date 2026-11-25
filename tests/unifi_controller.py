@@ -1,10 +1,12 @@
 """The gateway's controller, for the suites that declare its firewall and the provider that ranks it.
 
 **A mock monitor.** The firewall looks up the controller's stock zones by
-name rather than creating them, so a run under mocks needs something to answer
-that lookup. The answer is an invention: every zone exists, is empty, and has
-the id `zone_id` spells for it. A suite asserting which zone a rule names
-compares against `zone_id` rather than against a spelling of its own.
+name rather than creating them, and the network a reservation is keyed on by
+its id, so a run under mocks needs something to answer those lookups. The
+answer is an invention: every zone exists, is empty, and has the id `zone_id`
+spells for it, and every network exists under the id it was asked for. A suite
+asserting which zone a rule names compares against `zone_id` rather than
+against a spelling of its own.
 
 Every suite whose run reaches the firewall shares this module rather than
 carrying a copy -- its own suites and the whole physical program's -- because a
@@ -45,6 +47,9 @@ from mock_monitor import Recorder
 #: The invoke the firewall resolves a stock zone through.
 ZONE_LOOKUP = 'unifi:index/getFirewallZone:getFirewallZone'
 
+#: The invoke the firewall resolves a reservation's network through.
+NETWORK_LOOKUP = 'unifi:index/getNetwork:getNetwork'
+
 
 def zone_id(name: str) -> str:
     """The id `Controller` answers for the zone of this name."""
@@ -52,7 +57,7 @@ def zone_id(name: str) -> str:
 
 
 class Controller(Recorder):
-    """A monitor that answers the firewall's zone lookups; every zone exists and is empty.
+    """A monitor that answers the firewall's zone and network lookups; every one exists, and a zone is empty.
 
     The zone is reported on the site the lookup asked about. A lookup that
     names none gets `site`, standing in for the site the real provider is
@@ -69,6 +74,9 @@ class Controller(Recorder):
             asked = cast('dict[str, Any]', args.args)
             name = str(asked['name'])
             return {'id': zone_id(name), 'name': name, 'networks': [], 'site': asked.get('site', self.site)}
+        if args.token == NETWORK_LOOKUP:
+            asked = cast('dict[str, Any]', args.args)
+            return {'id': str(asked['id']), 'site': asked.get('site', self.site)}
         return {}
 
 

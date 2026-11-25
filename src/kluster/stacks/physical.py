@@ -642,11 +642,12 @@ def _gateway(config: pulumi.Config) -> Gateway:
         static_hosts=GATEWAY_STATIC_HOSTS,
         # Optional, and absent until qbittorrent's own migration wave: the
         # legacy qbittorrent on the homelab host holds the peer port's WAN
-        # side until then, by a UPnP lease or a rule kept by hand, and the
-        # IPv4 forward that would take it is not declared. The wave reads the
-        # device for what holds the port, clears it, and sets the key
-        # (cluster/migration.md, Wave D; physical/gateway.md §4.2). A value
-        # that is not a boolean refuses the run rather than reading as absent.
+        # side until then, by the UPnP lease it asks for (physical/gateway.md
+        # §4.2 rule 8), and the IPv4 forward that would take it is not
+        # declared. The wave reads the device for what holds the port, clears
+        # it, and sets the key (cluster/migration.md, Wave D;
+        # physical/gateway.md §4.2). A value that is not a boolean refuses the
+        # run rather than reading as absent.
         peer_on_worker=config.get_bool(QBITTORRENT_ON_WORKER) or False,
     )
 

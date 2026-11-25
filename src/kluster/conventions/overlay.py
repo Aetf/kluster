@@ -60,6 +60,23 @@ CI_DNS = IPv4Address('10.144.2.2')
 #: reads the port.
 UDM_PORT = 9993
 
+#: The UDP port the homelab host's member is reached on from the internet:
+#: the port its daemon binds as its third port and asks the gateway to map,
+#: the same number outside, through the gateway's NAT-PMP or UPnP on the
+#: server LAN (physical/gateway.md §4.2 rule 8). The daemon pushes the mapped
+#: WAN address and port to its peers beside its bound ones, so a runner's
+#: first packet toward this port reaches the member. The number is not
+#: `UDM_PORT`, which the gateway's own daemon binds on the WAN address. The
+#: mapped port is this one while no other device on the server LAN holds it
+#: at the WAN address, and the first free one above it otherwise. Two
+#: declarations name it: the host's `local.conf`, which fixes the third port
+#: at it and belongs to the host's aconfmgr change-set
+#: (physical/homelab-host.md §4), whose line names this constant; and the
+#: census row for the gateway's UPnP service, which names it as the one
+#: mapping this repository asks for (`components/gateway/unifi.py`). A change
+#: lands on the host first and here second.
+HOMELAB_PORT = 9994
+
 #: The tag the roles are carried in on the network.
 TAG_ROLE_ID = 1000
 
