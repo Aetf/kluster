@@ -224,6 +224,30 @@
     the warm pass idle before the land; slice 35 deletes the stage, the
     seed and the NAS claim; and slice 35a deletes the seed's machinery
     once nothing calls it (§10.3).
+*   **Updated:** 2026-11-25. The worker is at its end-state size
+    before the waves, 16 vCPU and 32 GiB
+    ([Aetf/kluster-ops#948](https://github.com/Aetf/kluster-ops/issues/948),
+    the operator's ruling of 2026-11-24): the host has 128 GiB of RAM
+    (125 GiB usable), and 32 GiB is twice what §6.1's table comes to
+    with every peak at once. nodes.md §4.2 and migration.md §0 rule 4 state it. No wave
+    changes the worker's size, so the passages that size it by what
+    the legacy cluster releases do not hold: §1's growth toward 20
+    GiB, §2's row for it and §8's item on it; §3.5's removal releasing
+    memory for the next growth, and §3.6's row for a rollback after
+    one; §5.3's and §5.5's sentences on growth and the worker as it
+    booted; §5.6's growth in Wave C's window, which binds the A380
+    and grows the worker's disk; §5.8's and §5.9's items on the
+    worker's final size and its one window; §6.1's two ceilings,
+    §6.2's growth to fit and its new rule, §6.3's readings before the
+    growth and §6.4's reversed window; §9's rows for migration.md §0
+    rule 4, nodes.md §4.2 and homelab-host.md §3 as far as they name
+    the growth, the ceilings or the decommission's decision on the
+    size; slice 39's growth; §11.2 whole, whose question the operator
+    has ruled, and §6.1's last sentence on it; and the scope lines on
+    the worker's memory across the waves and its final size.
+    A rollback restarts a legacy application without touching the
+    worker, and what the legacy cluster releases at the decommission
+    stays with the host. §6.1's table and its requests stand.
 *   **Authority:** AGENTS.md,
     [framework/dispatch.md](../framework/dispatch.md),
     [framework/rfc.md](../framework/rfc.md) and the style rules

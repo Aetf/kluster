@@ -133,7 +133,7 @@ same key again (credentials.md §4).
 | --- | --- | --- |
 | Stage 1 | The device's new layout | Nothing. The gateway serves as it did |
 | Stage 2 | The cloud fleet, the balancer, the backup bucket and the worker | The cloud side is free while idle. The worker takes about 1.5 GiB of host memory while idle, and the VPS bills as it always did |
-| Stage 5 | The platform: monitoring first | The worker's real use grows into its 10 GiB as the scheduler places the platform's pods, which is why stage 5's gate reads the host's memory |
+| Stage 5 | The platform: monitoring first | The worker's real use grows into its 32 GiB as the scheduler places the platform's pods, which is why stage 5's gate reads the host's memory |
 | Stage 5a | Nothing new | Nothing in money: the rebuilt fleet bills what the fleet bills. A capacity hunt costs only time |
 | Stage 9 | Nothing new | Coexistence is cheap until here. It costs for real from the first wave, which starts stopping and moving applications |
 
@@ -168,8 +168,8 @@ These run alongside and gate no stage:
     §3.5. The monitoring arrives partway through stage
     5, so the recording is all the history holds of the bring-up's
     peak.
-*   **The worker's GPU and growth windows**, which belong to the waves
-    and not to this pass.
+*   **The worker's GPU window**, which also grows its disk, and which
+    belongs to the waves and not to this pass.
 
 gateway-cutover.md's update window, which its §8 applies to the steps
 that follow the ceremony, holds for stages 2 to 4.

@@ -55,8 +55,7 @@ owns sequencing, data movement, and teardown.
         the cut, revert the cut in one merge, re-run the chain once its
         first run has failed in `up-dns` (rule 2), then revert the stop.
         Data written to the new application after its cut is not
-        carried back. After a growth of the worker, rule 4's reversed
-        window comes first.
+        carried back.
     -   **A legacy service that other legacy applications depend on
         stops when its last legacy consumer has moved**, not with its
         successor's land. The mail relay keeps relaying for legacy
@@ -70,8 +69,7 @@ owns sequencing, data movement, and teardown.
     -   **The legacy application is removed by a second kluster-code
         change, after its cut has soaked**, as part of the next window's
         head: the component goes, and its claims' directories are mapped
-        or deleted in the retained-volume census (§3). The removal is
-        what releases its memory for the next growth (rule 4).
+        or deleted in the retained-volume census (§3).
 2.  **The DNS cut is per application, and the name changes hands in one
     run of the deploy chain.** `dns` deletes the legacy record and
     `apps` creates the application's — or `k8s-base`, for the name the
@@ -96,46 +94,19 @@ owns sequencing, data movement, and teardown.
     made before the flip: [sources-of-truth.md](../sources-of-truth.md).
     What the gw-config commit covers, piece by piece, and what holds
     each piece instead: physical/gateway-cutover.md §7.
-4.  **RAM is interleaved, and the worker grows to fit** (nodes.md
-    §4.2). While both clusters coexist, legacy k3s holds its share of
-    the host's memory, so the worker VM boots at **10 GiB RAM**. Its
-    disk is created at 60 GiB (`HOMELAB_DISK_GIB` in
-    `kluster.conventions.homelab`) and grown on the host to its target
-    in Wave C's window, under the bound physical/homelab-host.md §1
-    sets on the disk file's length.
-    -   **A window grows the worker by what the next wave's requests
-        and their headroom need, capped by what legacy has released.**
-        Whatever legacy releases beyond that stays with the host, so the
-        end-state size is the decommission's decision (§4) and not a
-        side effect of the waves.
-    -   **A growth is a drained window and a pull request of its own**:
-        a commit to `HOMELAB_MEMORY_GIB` in `kluster.conventions.homelab`
-        and an apply of `physical` that replaces the domain, stopping
-        it, redefining it and starting it again.
-    -   **One window is enough: Wave C's.** It grows the worker from
-        10 GiB to about 16, for Waves C and D together, and is also the
-        A380's bind, which replaces the domain anyway. Waves A and B put
-        little on the worker and fit it as it booted, and Wave D's
-        qbittorrent and seedwatch take 0.25 GiB.
-    -   **Before the growth commit merges**, each of these is read and
-        recorded on the wave's issue: every application of Wave B has
-        been cut and has soaked; each of their legacy workloads has been
-        removed in kluster-code, not merely stopped, so nothing can start
-        it again; the host's available memory, read with the ZFS cache
-        at its floor and the legacy CI runners at the load they will
-        carry through the wave, covers the growth with a margin; the
-        worker's requests after Wave C's land, and its peaks, leave the
-        headroom against the allocatable the growth gives; and the root
-        filesystem covers the disk file at its new length, read as
-        physical/homelab-host.md §1 states. Where they do not, the wave
-        waits, and the operator rules on the worker's size
-        (rfc-008 §11.2).
-    -   **A rollback across a growth is the window reversed.** A growth
-        spends memory a legacy application needs to start again, so the
-        worker is drained, the domain shrunk by the commit's revert, and
-        the legacy application started, and only then is rule 1's
-        rollback run. It costs a drained window, which restarts every
-        workload on the worker.
+4.  **The worker is at its end-state size before the waves, and no
+    wave changes it** (nodes.md §4.2). It runs at 16 vCPU and 32 GiB,
+    `HOMELAB_VCPUS` and `HOMELAB_MEMORY_GIB` in
+    `kluster.conventions.homelab`, beside the legacy cluster's share of
+    the host's memory, so no wave's head waits on memory the legacy
+    cluster frees, and a rollback restarts a legacy application without
+    touching the worker. Its disk is created at 60 GiB
+    (`HOMELAB_DISK_GIB` in the same module) and grown on the host to
+    its target in Wave C's window, under the bound
+    physical/homelab-host.md §1 sets on the disk file's length; before
+    that window, the root filesystem is read as that section states and
+    recorded on the wave's issue as covering the disk file at its new
+    length, and where it does not, the wave waits.
 5.  **Sealing key first, then rotated last**: the legacy sealed-secrets
     key is carried into the new cluster before any legacy ciphertext
     is ported (§1 item 5); it is regenerated, and the legacy key
@@ -315,8 +286,6 @@ spends its way back (rfc-008 §5.9).
     8443, which a redirect on 443 sends each device to, so no device's
     discovery address changes
     ([Aetf/kluster-ops#723](https://github.com/Aetf/kluster-ops/issues/723)).
-    Legacy splitpro and matrix run on the homelab host, so Wave A frees
-    homelab memory and asks for no growth (§0 rule 4).
 -   **hath, after Wave A2 has soaked** (operator ruling, rfc-008 §11.1),
     ahead of Wave B: it is cloud-side and depends on nothing Waves B to
     D move, and the address it needs is exercised by nothing but hath,
@@ -332,9 +301,8 @@ spends its way back (rfc-008 §5.9).
     that registers the new address with the network. The VPS holds no
     ingress after Wave C's cut, and is cancelled when hath's soak ends
     (§4).
--   **Wave B — homelab VM, light**, and no window: every application of
-    it fits the worker as it booted. **Its head waits** for the
-    operations handler's first push delivered over the overlay, which
+-   **Wave B — homelab VM, light**, and no window. **Its head waits**
+    for the operations handler's first push delivered over the overlay, which
     the operations repository builds under Aetf/kluster-ops#715, and
     then for rfc-008's slice 47, which turns `deploy.yml`'s
     `notify-failure` into the `alert` job; until the handler delivers,
@@ -371,19 +339,19 @@ spends its way back (rfc-008 §5.9).
     change that stops the legacy monitoring merges, imports the legacy
     series of what moves to the control planes into the history store
     (§2.1). The wave then opens with
-    one drained window that both grows the VM (§0 rule 4) and runs the
-    A380's vfio-pci cutover (drain → bind → hostdev → reboot,
-    physical/homelab-host.md §3), since each replaces the worker's
-    domain. The cutover takes the legacy cluster's GPU: since
-    kluster-code#253 the legacy device plugin is limited to the A380,
-    which every legacy GPU consumer holds. At the head, a kluster-code
+    one drained window that runs the A380's vfio-pci cutover (drain →
+    bind → hostdev → reboot, physical/homelab-host.md §3), which
+    replaces the worker's domain, and grows the worker's disk to its
+    target while the worker is drained (§0 rule 4). The cutover takes
+    the legacy cluster's GPU: since kluster-code#253 the legacy device
+    plugin is limited to the A380, which every legacy GPU consumer
+    holds. At the head, a kluster-code
     change moves that plugin to the UHD 770 iGPU (`8086:4680`), which
     stays with the host. The legacy GPU consumers are already down when
-    the window binds the A380, and §0 rule 4 grows the VM by what they
-    free. They stay down from the head until each move verifies, and a
-    legacy app runs again only through §0 rule 1's rollback, which
-    starts it on the iGPU at any point in the wave and, after the
-    growth, comes after §0 rule 4's reversed window (kluster-ops#672).
+    the window binds the A380. They stay down from the head until each
+    move verifies, and a legacy app runs again only through §0 rule 1's
+    rollback, which starts it on the iGPU at any point in the wave
+    (kluster-ops#672).
     Then the moves, with the new immich and jellyfin taking the A380
     from their first start: immich (CNPG by recovery from the legacy
     store, §3 — a path this cluster has not drilled; NAS media PVs
@@ -627,10 +595,9 @@ waves leave it:
 2.  Homelab host: the legacy cluster stopped and k3s uninstalled after
     Waves C/D, its retained-volume census finished. **The CI runners a
     neighboring project runs on the legacy cluster need a home before
-    the uninstall.** The worker's final memory size is decided here,
-    against what the host keeps for what the operator runs beside the
-    cluster (nodes.md §4.2); JuiceFS redis/mount residue gone with k3s;
-    `lan.ucw.phd` entries emptied (dns.md §4).
+    the uninstall.** The worker keeps its size, and what the legacy
+    cluster releases stays with the host (nodes.md §4.2); JuiceFS
+    redis/mount residue gone with k3s; `lan.ucw.phd` entries emptied (dns.md §4).
 3.  Trackers: gw-config repo retired (provider owns the device);
     qbittorrent/quadlet units removed
     from yadm/aconfmgr; the legacy state backend's Postgres stops last,

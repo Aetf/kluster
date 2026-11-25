@@ -56,13 +56,12 @@ declaration.
 **What the provider makes irreversible.** Every field of a libvirt volume
 forces a new volume, `size` included, and the volume resource has no update
 path at all; the domain's `vcpu` and `memory` force a new domain. So the two
-growth steps the migration plans for (migration.md §0.4) are not the same
-operation:
+ways the worker changes size are not the same operation:
 
--   *RAM* grows by editing the declared size and applying, which stops the
-    domain, redefines it and starts it again. The disk is a separate resource
-    and survives; the workloads on it do not, so the growth belongs in a
-    drained window.
+-   *vCPU and memory* change by editing the declared size and applying, which
+    stops the domain, redefines it and starts it again. The disk is a separate
+    resource and survives; the workloads on it do not, so the change belongs
+    in a drained window.
 -   *Disk* of a running worker grows on the host — `truncate` plus `virsh
     blockresize`, and then a reboot of the worker (`talosctl reboot`),
     because Talos extends its EPHEMERAL partition into the new space only at
