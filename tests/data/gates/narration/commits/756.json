@@ -1,0 +1,14 @@
+{
+  "pr": 756,
+  "head": "03699ac2b235583d8eb5c16dcc233de151ba093d",
+  "commits": [
+    {
+      "sha": "ed2204992f69dddb64eb2d745583a155746f13d4",
+      "message": "cilium: a values change rolls the agent and the operator\n\nThe agent and the operator read `cilium-config` when they start, so a\nchange to the chart's values only takes effect through new pods. The\nvalues turn on the chart's `rollOutCiliumPods` and\n`operator.rollOutPods`, which put a checksum of the rendered ConfigMap\non each pod template: a change that rewrites the ConfigMap rolls both,\nand an `up` that leaves it alone rolls neither.\n\nThe test renders the pinned chart with the pinned Helm three times --\nthe component's values, the same again, and one value changed that only\nthe ConfigMap carries -- and holds the two pod templates to follow the\nConfigMap and nothing else.\n\nCloses Aetf/kluster-ops#794\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\nClaude-Session: https://claude.ai/code/session_01CJmrvVbyBgWvDPTBT51UcB"
+    },
+    {
+      "sha": "03699ac2b235583d8eb5c16dcc233de151ba093d",
+      "message": "cilium: a values change rolls Envoy as well\n\nEnvoy reads its bootstrap from `cilium-envoy-config`, which the values\nare rendered into, when it starts. The values turn on the chart's\n`envoy.rollOutPods`, which puts that ConfigMap's checksum on the\n`cilium-envoy` pod template, so a change that rewrites it rolls Envoy\nas `rollOutCiliumPods` and `operator.rollOutPods` roll the agent and\nthe operator.\n\nThe rollout test covers the Envoy DaemonSet with a change to\n`envoy.log.format`, which only the bootstrap reads.\n\nAddresses the dispatcher's ruling on #756 that Envoy is within\nAetf/kluster-ops#794.\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\nClaude-Session: https://claude.ai/code/session_01CJmrvVbyBgWvDPTBT51UcB"
+    }
+  ]
+}

@@ -92,14 +92,14 @@ def git(repo: Path, *arguments: str) -> str:
     return process_sessions.run(['git', *arguments], cwd=repo, text=True, check=True, timeout=GIT_TIMEOUT).stdout
 
 
-def commit(repo: Path, files: Mapping[str, str]) -> str:
-    """Write `files`, commit everything, and return the commit."""
+def commit(repo: Path, files: Mapping[str, str], message: str = 'a commit') -> str:
+    """Write `files`, commit everything with `message`, and return the commit."""
     for name, text in files.items():
         path = repo / name
         path.parent.mkdir(parents=True, exist_ok=True)
         _ = path.write_text(text)
     _ = git(repo, 'add', '-A')
-    _ = git(repo, 'commit', '-q', '-m', 'a commit')
+    _ = git(repo, 'commit', '-q', '--cleanup=verbatim', '-m', message)
     return git(repo, 'rev-parse', 'HEAD').strip()
 
 

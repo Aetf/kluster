@@ -5,7 +5,10 @@ head judges, or by appealing it in its report, one line each:
 
     Gate appeal: <gate> <path>:<line>: <reason>
 
-The appeals are written into the findings comment of the pull request's
+A finding in a commit's message is appealed at its place as the findings
+comment gives it, `:commit/<sha>:<line>` with the SHA in full
+(`extract.message_path`); one that names the commit by less is refused,
+saying so. The appeals are written into the findings comment of the pull request's
 head, each on the finding whose place holds that line, so the finding reads
 as answered and the reviewer who rules on it finds the reason beside it
 (dispatch.md §3). An item a blocking gate left undecided is appealed the
@@ -23,14 +26,19 @@ from dataclasses import dataclass
 
 from . import comment
 from .comment import Evidence, Place
+from .extract import COMMITS, is_message
 from .forge import GateForge
 from .run import findings_comment
 
 log = logging.getLogger(__name__)
 
+#: How long a commit's full SHA is, which an appeal of a place in its message names.
+SHA_LENGTH = 40
+
 #: One appeal line of a report.
 APPEAL = re.compile(
-    r'^[ \t]*Gate appeal:[ \t]*(?P<gate>[a-z0-9-]+)[ \t]+(?P<path>[^\s:]+):(?P<line>\d+):[ \t]*(?P<reason>\S.*?)[ \t]*$',
+    rf'^[ \t]*Gate appeal:[ \t]*(?P<gate>[a-z0-9-]+)[ \t]+(?P<path>{COMMITS}/[0-9a-f]+|[^\s:]+):(?P<line>\d+):'
+    r'[ \t]*(?P<reason>\S.*?)[ \t]*$',
     re.M,
 )
 
@@ -64,6 +72,9 @@ def apply(evidence: Evidence, made: Sequence[Appeal]) -> Evidence:
     refusals: list[str] = []
     reasons: dict[Place, str] = {}
     for appeal in made:
+        if is_message(appeal.path) and len(appeal.path.removeprefix(f'{COMMITS}/')) != SHA_LENGTH:
+            refusals.append(f'{appeal}: name the commit by its full SHA, as the findings comment gives its place')
+            continue
         ran = next((r for r in evidence.gates if r.gate == appeal.gate), None)
         if ran is None:
             refusals.append(f'{appeal}: no gate {appeal.gate} ran at {evidence.head[:12]}')

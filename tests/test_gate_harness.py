@@ -32,9 +32,11 @@ from gate_stub import (
 from kluster.scripts.dispatch.gates import ask, comment, run
 from kluster.scripts.dispatch.gates.appeal import AppealRefused, appeals, apply, record
 from kluster.scripts.dispatch.gates.calibration import Status
-from kluster.scripts.dispatch.gates.extract import Change, Item, change
+from kluster.scripts.dispatch.gates.extract import Change, Item, change, message_path
 from kluster.scripts.dispatch.gates.gate import RECORD, Gate
 from kluster.scripts.dispatch.gates.model import KeyMissing, Model, Reply
+from kluster.scripts.dispatch.gates.prose import blocks
+from kluster.scripts.dispatch.gates.reading import markdown
 from kluster.scripts.dispatch.gates.verdict import Answer, Verdict
 from kluster.scripts.dispatch.prcheck import Git, Hunk
 
@@ -252,6 +254,23 @@ def test_an_appeal_line_is_read_wherever_the_report_holds_it() -> None:
     ]
 
 
+def test_a_finding_in_a_commits_message_is_named_by_its_place_and_appealed_there() -> None:
+    sha = 'c' * 40
+    found = comment.Entry(message_path(sha), 3, 5, (Answer(Verdict.FINDING, 'it narrates'),) * 3)
+    ran = comment.Ran('narration', 'claude-haiku-5-5', Status.BLOCKING, 'why', '', (found,))
+    evidence = comment.Evidence('a' * 40, (ran,))
+
+    rendered = comment.render(evidence)
+    assert f'`:commit/{sha}:3–5`' in rendered
+    held = comment.parse(rendered)
+    assert held is not None
+    appealed = apply(held, appeals(f'Gate appeal: narration :commit/{sha}:4: it states what the tree holds.'))
+    assert appealed.unanswered == []
+    # A commit named by less than its full SHA is refused, saying so, rather than read as no appeal at all.
+    with pytest.raises(AppealRefused, match='full SHA'):
+        _ = apply(held, appeals(f'Gate appeal: narration :commit/{sha[:12]}:4: it states what the tree holds.'))
+
+
 def test_a_planted_findings_comment_by_another_account_is_neither_edited_nor_read(
     tmp_path: Path, repository: Path
 ) -> None:
@@ -426,3 +445,72 @@ def test_a_split_item_reads_back_with_its_reasons_and_a_unanimous_pass_with_none
 def test_a_reason_is_rendered_on_one_line_where_no_name_in_it_notifies() -> None:
     assert comment.one_line('Ask @someone\nabout it.') == '`Ask @someone about it.`'
     assert comment.one_line('a `span` here') == '`` a `span` here ``'
+
+
+@pytest.mark.parametrize(
+    ('path', 'text', 'passages'),
+    [
+        # A `#!` line names an interpreter; the comment under it is prose.
+        pytest.param(
+            'scripts/run.sh',
+            '#!/bin/sh\n# Runs once a day.\nexec true\n',
+            [(2, 2, 'Runs once a day.')],
+            id='interpreter',
+        ),
+        # A comment in a shell fence is the command's, and the paragraph after the fence is prose.
+        pytest.param(
+            'docs/run.md', '```sh\n# held by hand\nmake\n```\nThen it runs.\n', [(5, 5, 'Then it runs.')], id='fence'
+        ),
+        # A fence closes only on a run as long as its own, so an example fence inside it is code too.
+        pytest.param(
+            'docs/run.md',
+            'Para.\n\n````markdown\n```python\nx = 1\n```\nInside still.\n````\n\nAfter.\n',
+            [(1, 1, 'Para.'), (10, 10, 'After.')],
+            id='long-fence',
+        ),
+        # Front matter is data for whatever reads the file.
+        pytest.param(
+            'docs/agent.md', '---\nname: builder\ndescription: builds\n---\n\nBody.\n', [(6, 6, 'Body.')], id='front'
+        ),
+        # A comment after code is its own passage, apart from the comment alone on the next line, and a
+        # docstring's text ends where its string does.
+        pytest.param(
+            'src/run.py',
+            'x = 1  # one\n# Two lines\n# of prose.\n"""A doc."""  # after\n',
+            [(1, 1, 'one'), (2, 3, 'Two lines of prose.'), (4, 4, 'A doc.'), (4, 4, 'after')],
+            id='after-code',
+        ),
+        # The same outside Python, where the marker has whitespace on both sides.
+        pytest.param(
+            'conf/a.yaml',
+            'key: 1  # one\n# own\nv: "${#a}"\nurl: http://host/x#y\n',
+            [(1, 1, 'one'), (2, 2, 'own')],
+            id='after-code-yaml',
+        ),
+        # A line holding only its marker ends a paragraph of comments.
+        pytest.param('renovate.json5', '// One.\n//\n// Two.\n', [(1, 1, 'One.'), (3, 3, 'Two.')], id='paragraph'),
+        # A template's Jinja comment is prose whatever it renders, and no other reading takes a line of it.
+        pytest.param(
+            'conf/a.yaml.j2',
+            '{#\n# Kept here.\n#}\n# Read.\nkey: 1\n',
+            [(1, 3, ' # Kept here. '), (4, 4, 'Read.')],
+            id='jinja',
+        ),
+        pytest.param(
+            'docs/a.md.j2', '{#\nKept here.\n#}\nBody.\n', [(1, 3, ' Kept here. '), (4, 4, 'Body.')], id='jinja-md'
+        ),
+    ],
+)
+def test_the_prose_reader_draws_each_passage_by_the_files_language(
+    path: str, text: str, passages: list[tuple[int, int, str]]
+) -> None:
+    assert sorted((b.first, b.last, b.text) for b in blocks(path, text)) == passages
+
+
+def test_the_brief_gates_reader_takes_what_is_code_in_markdown_from_the_prose_reader() -> None:
+    # A `~~~` fence holding a backtick example, then an indented block: code for every gate that reads markdown.
+    text = 'Lead.\n\n~~~\n```sh\nmake\n```\nstill code\n~~~\n\nAfter.\n\n    indented code\n'
+    read = [(p.first, p.last, p.prose) for p in markdown(text)]
+
+    assert read == [(1, 1, True), (3, 8, False), (10, 10, True), (12, 12, False)]
+    assert [(b.first, b.last) for b in sorted(blocks('docs/a.md', text), key=lambda b: b.first)] == [(1, 1), (10, 10)]

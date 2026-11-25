@@ -42,13 +42,13 @@ from kluster.lib import workstation
 from . import ledger, milestones, record
 from .brief import Brief, Role
 from .forge import Forge, Issue, Pull
-from .gates.ask import Asked, judge
-from .gates.calibration import Status, standing
-from .gates.comment import Entry, Evidence, Ran
+from .gates.calibration import Status
+from .gates.comment import Evidence, Ran
 from .gates.extract import Change, Changed
-from .gates.gate import Gate, GateUnreadable, discover
-from .gates.model import KeyMissing, Messages, Model, key
+from .gates.gate import Gate, discover
+from .gates.model import Model
 from .gates.reading import asks_about_briefs, brief_path
+from .gates.run import Prepared, asked, messages, prepare
 from .gates.verdict import reason
 from .paths import OwnedPath
 from .record import Event, Front, Record, RecordUnreadable, Waiver
@@ -351,18 +351,10 @@ def _checkout(path: str) -> str | None:
     return file.read_text() if file.is_file() else None
 
 
-def _messages() -> Model:
-    return Messages.with_key(key())
-
-
 @cache
 def workstation_asking() -> Asking:
     """This checkout's gates, their canon as the checkout holds it, and the model the register's key asks."""
-    return Asking(tuple(discover()), _checkout, _messages)
-
-
-def _unasked(gate: Gate, status: Status, why: str) -> Ran:
-    return Ran(gate.name, gate.spec.model, status, why, '', (), asked=False)
+    return Asking(tuple(discover()), _checkout, messages)
 
 
 def ask_about_brief(file: BriefFile, issue: Issue, sha256: str, asking: Asking) -> Evidence:
@@ -373,47 +365,23 @@ def ask_about_brief(file: BriefFile, issue: Issue, sha256: str, asking: Asking) 
     gate asks about it where a pattern of its trigger names briefs and
     matches that path (`gates.reading.asks_about_briefs`), and draws from it
     with its own extractor. Each gate's canonical section is read from the
-    tree `asking.canon` reads, and its status is what its calibration record
-    earns against the gate as it now runs (`gates.calibration.standing`). A
-    gate whose section does not read asks nothing, and stays blocking where
-    its record earned that: a canon moved out from under a gate does not
-    open it.
+    tree `asking.canon` reads, and the gate is made ready and asked as a
+    pull request's gates are (`gates.run.prepare`, `gates.run.asked`).
     """
     areas = [label.removeprefix(ledger.AREA) for label in issue.labels if label.startswith(ledger.AREA)]
     path = brief_path(areas, file.name)
     written = Changed(path, 'A', ((1, file.text.count('\n') + 1),))
     change = Change(head=sha256, files=(written,), text=lambda asked: file.text if asked == path else None)
-    prepared: list[tuple[Gate, Status, str, Asked]] = []
+    prepared: list[Prepared] = []
     unread: list[Ran] = []
     for gate in (g for g in asking.gates if asks_about_briefs(g.spec.trigger, path)):
-        try:
-            section = gate.canon(asking.canon)
-        except GateUnreadable as exc:
-            held = gate.record()
-            status = Status.BLOCKING if held is not None and not held.shortfalls() else Status.SHADOW
-            unread.append(_unasked(gate, status, f'its canonical section does not read: {exc}'))
-            continue
-        status, why = standing(gate.record(), gate.hashes(section.text))
-        asked = Asked(gate.system(section.text), gate.spec.model, list(gate.spec.extract(change)))
-        prepared.append((gate, status, why, asked))
-    log.info('asking %s about the brief', ', '.join(g.name for g, *_ in prepared) or 'no gate')
-    try:
-        judged = judge([asked for *_, asked in prepared], asking.model)
-    except KeyMissing as exc:
-        ran = [_unasked(g, status, f'no model could be asked: {exc}') for g, status, _, _ in prepared]
-    else:
-        ran = [
-            Ran(
-                g.name,
-                g.spec.model,
-                status,
-                why,
-                '',
-                tuple(Entry(j.item.path, j.item.line, j.item.end_line, j.samples) for j in verdicts),
-            )
-            for (g, status, why, _), verdicts in zip(prepared, judged, strict=True)
-        ]
-    return Evidence(sha256, tuple(ran + unread))
+        ready = prepare(gate, asking.canon, change)
+        if isinstance(ready, Prepared):
+            prepared.append(ready)
+        else:
+            unread.append(ready)
+    log.info('asking %s about the brief', ', '.join(p.gate.name for p in prepared) or 'no gate')
+    return Evidence(sha256, tuple(asked(prepared, asking.model) + unread))
 
 
 def _held_against(evidence: Evidence) -> list[Refusal]:

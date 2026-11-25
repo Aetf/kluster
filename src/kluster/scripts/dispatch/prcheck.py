@@ -224,6 +224,14 @@ class Status:
 
 
 @dataclass(frozen=True)
+class Commit:
+    """A commit a change holds: its full SHA and its message, subject first, as git stores it."""
+
+    sha: str
+    message: str
+
+
+@dataclass(frozen=True)
 class Hunk:
     """One hunk of a file's diff, by its lines at the base and at the head.
 
@@ -291,6 +299,16 @@ class Git:
             )
             for m in _HUNK.finditer(out.stdout.decode(errors='replace'))
         ]
+
+    def commits(self, base: str, head: str) -> list[Commit]:
+        """The commits `head` holds that `base` does not, oldest first."""
+        out = self._run('log', '--reverse', '-z', '--format=%H%n%B', f'{base}..{head}').stdout.decode(errors='replace')
+        found: list[Commit] = []
+        for entry in out.split('\0'):
+            sha, _, message = entry.lstrip('\n').partition('\n')
+            if sha:
+                found.append(Commit(sha, message.rstrip('\n')))
+        return found
 
     def text(self, commit: str, path: str) -> str | None:
         """The text of `path` at `commit`; None where it is not there."""
