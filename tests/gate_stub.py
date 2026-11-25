@@ -7,6 +7,10 @@ into the case's own directory so that a record a case writes stays its own;
 its question is about the lines a change writes under `docs/notes/`, and its
 canon is a section of `docs/rule.md` in the scratch repository.
 
+A real gate's cases run it the same way over a recorded change
+(`real_change`): excerpts of a pull request's files at its base and its
+head, under `tests/data/gates/<gate>/`.
+
 The replies are Messages API response bodies (`tests/data/gates/stub/messages/`)
 in the shape the API documents, served by a transport handed to the real
 client, so a run builds its requests and reads its replies through the SDK
@@ -99,6 +103,44 @@ def commit(repo: Path, files: Mapping[str, str]) -> str:
     return git(repo, 'rev-parse', 'HEAD').strip()
 
 
+#: The suffix a recorded file carries, so no check of this repository reads an excerpt of another commit as its own.
+EXCERPT = '.excerpt'
+
+
+def files(directory: Path) -> dict[str, str]:
+    """Every recorded file under `directory`, by its path relative to it with `EXCERPT` cut; none where none is."""
+    if not directory.is_dir():
+        return {}
+    return {
+        str(f.relative_to(directory)).removesuffix(EXCERPT): f.read_text()
+        for f in sorted(directory.rglob(f'*{EXCERPT}'))
+    }
+
+
+def real_change(
+    repo: Path, fixture: Path, *, beside: Mapping[str, str] | None = None, reverse: bool = False
+) -> tuple[str, str]:
+    """Commit a recorded change in `repo`, and return its base and its head.
+
+    `fixture` holds excerpts of a pull request's files, each named for its
+    path with `EXCERPT` after it: `base/` as the base has them and `head/` as
+    its head does, a file under `base/` alone being one the change deletes;
+    `tree/`, files the change leaves as they are. `beside` adds files to both
+    sides, and `reverse` commits the change undone: `head/` as the base and
+    `base/` as the head.
+    """
+    old, new = ('head', 'base') if reverse else ('base', 'head')
+    unchanged = {**(beside or {}), **files(fixture / 'tree')}
+    at_base = {**unchanged, **files(fixture / old)}
+    # A change that only adds files has a base with none in it.
+    _ = git(repo, 'commit', '-q', '--allow-empty', '-m', 'the base')
+    base = commit(repo, at_base) if at_base else git(repo, 'rev-parse', 'HEAD').strip()
+    head_files = files(fixture / new)
+    for gone in at_base.keys() - unchanged.keys() - head_files.keys():
+        (repo / gone).unlink()
+    return base, commit(repo, head_files or unchanged)
+
+
 @dataclass
 class GateMemoryForge(MemoryForge):
     """`memory_forge`'s forge, with each pull request read whole and its comments by id."""
@@ -165,6 +207,6 @@ class Recorded:
         )
 
 
-def recorded() -> Recorded:
-    """The stub gate's recorded replies."""
-    return Recorded([cast(dict[str, Any], json.loads(p.read_text())) for p in sorted((STUB / 'messages').iterdir())])
+def recorded(messages: Path = STUB / 'messages') -> Recorded:
+    """The recorded replies of `messages`, the stub gate's unless another gate's are named."""
+    return Recorded([cast(dict[str, Any], json.loads(p.read_text())) for p in sorted(messages.iterdir())])

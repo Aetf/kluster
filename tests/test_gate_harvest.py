@@ -9,6 +9,7 @@ and holds the third clean, naming it by its file name alone.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -25,6 +26,7 @@ from gate_stub import (
 )
 
 from kluster.scripts.dispatch.gates import run
+from kluster.scripts.dispatch.gates.extract import Change, Item
 from kluster.scripts.dispatch.gates.harvest import HarvestGit, harvest
 from kluster.scripts.dispatch.gates.verdict import Verdict
 
@@ -117,6 +119,34 @@ def test_a_place_the_extractor_draws_no_item_at_is_reported_and_not_appended(tmp
 
     assert stub.cases() == []
     assert any('stub draws no item at docs/other.md:1, so the gate never saw it' in note for note in harvested.notes)
+
+
+def test_a_tag_on_a_file_the_change_never_touched_is_read_against_the_tree(tmp_path: Path, repository: Path) -> None:
+    # `docs/rule.md` is in the tree at the head, and the change does not touch it.
+    review = '## Review (combined)\n\nAt {head}: `docs/rule.md:5` no longer holds. [gate:stub]\n'
+    forge, _ = _reviewed(tmp_path, repository, review)
+    stub = stub_gate(tmp_path)
+
+    harvested = harvest(forge, HarvestGit(repository), [PULL], [stub])
+
+    assert any('stub draws no item at docs/rule.md:5' in note for note in harvested.notes)
+    assert not any('docs/rule.md is no path' in note for note in harvested.notes)
+
+
+def test_an_extractor_that_raises_at_the_reviewed_head_is_reported_and_appends_nothing(
+    tmp_path: Path, repository: Path
+) -> None:
+    def broken(change: Change) -> list[Item]:
+        raise SyntaxError('invalid syntax')
+
+    forge, _ = _reviewed(tmp_path, repository, REVIEW)
+    stub = stub_gate(tmp_path)
+    failing = replace(stub, spec=replace(stub.spec, extract=broken))
+
+    harvested = harvest(forge, HarvestGit(repository), [PULL], [failing])
+
+    assert stub.cases() == []
+    assert any('stub drew nothing at' in note and 'SyntaxError: invalid syntax' in note for note in harvested.notes)
 
 
 def test_a_tag_in_an_indented_paragraph_binds_and_one_naming_no_place_is_reported(

@@ -23,9 +23,8 @@ from gate_stub import PULL, GateMemoryForge, Recorded, commit, pull_request, scr
 from kluster.lib import workstation
 from kluster.scripts.dispatch.gates import gate, run
 from kluster.scripts.dispatch.gates.calibration import Status
-from kluster.scripts.dispatch.gates.extract import Change, Changed, Item
+from kluster.scripts.dispatch.gates.extract import NOT_WRITTEN_HERE, Change, Changed, Item
 from kluster.scripts.dispatch.gates.narration import GATE
-from kluster.scripts.dispatch.gates.narration.prose import NOT_WRITTEN_HERE
 from kluster.scripts.dispatch.prcheck import Git
 
 DATA = Path(__file__).parent / 'data' / 'gates' / 'narration'

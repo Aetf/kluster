@@ -7,7 +7,8 @@ head, so a change to the canon is judged by the canon it makes; its status
 is its calibration record's only while that record measured the gate as it
 now runs (`calibration.standing`). A gate whose canonical section does not
 read at the head asks nothing, and its line in the comment says why; so
-does every gate where no model can be asked, for a key this workstation
+does a gate whose extractor raised (`drawn`), which leaves every other gate
+to run, every gate where no model can be asked, for a key this workstation
 does not hold, and every gate of a run whose record would not fit in one
 comment even as verdicts alone (`comment.fits`), which asks nothing and
 spends nothing.
@@ -21,14 +22,14 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from ..prcheck import Git
 from . import comment
 from .ask import Asked, judge
 from .calibration import Status, standing
 from .comment import Entry, Evidence, Ran
-from .extract import change
+from .extract import Change, Item, change
 from .forge import GateForge, PullComment
 from .gate import Gate, GateUnreadable
 from .model import KeyMissing, Model
@@ -53,6 +54,34 @@ def findings_comment(comments: Sequence[PullComment], head: str) -> PullComment 
     """The findings comment of `head` this account wrote, the latest where there are several."""
     found = [c for c in comments if c.mine and comment.head_of(c.body) == head]
     return found[-1] if found else None
+
+
+class ExtractorFailed(RuntimeError):
+    """A gate's extractor raised, so the gate has no items to ask about."""
+
+
+def drawn(g: Gate, changed: Change) -> list[Item]:
+    """`g`'s items from `changed`. Raises `ExtractorFailed`, naming the file the extractor last read.
+
+    An extractor is the gate's own code over a change nothing vetted, so it
+    can fail on a file it was not written for, a Python file that does not
+    parse among them. That fails the one gate, which then asks nothing and is
+    recorded so, rather than the run of every gate on the pull request.
+    """
+    read: list[str] = []
+
+    def reading(source: Callable[[str], str | None]) -> Callable[[str], str | None]:
+        def text(path: str) -> str | None:
+            read.append(path)
+            return source(path)
+
+        return text
+
+    try:
+        return list(g.spec.extract(replace(changed, text=reading(changed.text), base_text=reading(changed.base_text))))
+    except Exception as exc:
+        where = f' after reading {read[-1]}' if read else ''
+        raise ExtractorFailed(f'its extractor failed{where}: {type(exc).__name__}: {exc}') from exc
 
 
 #: A gate ready to ask: the gate, its rule link, its status and why, and what it asks.
@@ -87,7 +116,7 @@ def review(forge: GateForge, git: Git, number: int, gates: Sequence[Gate], model
     """Run every gate pull request `number` triggers and post or edit its findings comment; None where none ran."""
     pull = forge.pull_request(number)
     base = git.merge_base(pull.base, pull.head)
-    changed = change(git, base, pull.head)
+    changed = change(git, base, pull.head, pull.body)
     triggered = [g for g in gates if g.triggered(changed.paths)]
     if not triggered:
         log.info('#%d: no model gate is triggered by the paths it changes', number)
@@ -107,7 +136,13 @@ def review(forge: GateForge, git: Git, number: int, gates: Sequence[Gate], model
             unread.append(_unasked(g, status, f'its canonical section does not read at the head: {exc}'))
             continue
         status, why = standing(g.record(), g.hashes(section.text))
-        asked = Asked(system=g.system(section.text), model=g.spec.model, items=list(g.spec.extract(changed)))
+        try:
+            items = drawn(g, changed)
+        except ExtractorFailed as exc:
+            log.error('%s asks nothing: %s', g.name, exc)
+            unread.append(_unasked(g, status, str(exc), g.rule(pull.head, section)))
+            continue
+        asked = Asked(system=g.system(section.text), model=g.spec.model, items=items)
         prepared.append((g, g.rule(pull.head, section), status, why, asked))
     skeleton = Evidence(
         pull.head,

@@ -10,6 +10,8 @@ serves those replies, so no case here reaches the network or holds a key.
 from __future__ import annotations
 
 import json
+import shutil
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -17,6 +19,8 @@ from gate_stub import (
     PULL,
     RULE,
     RULE_DOCUMENT,
+    SPEC,
+    STUB,
     GateMemoryForge,
     commit,
     pull_request,
@@ -28,11 +32,11 @@ from gate_stub import (
 from kluster.scripts.dispatch.gates import ask, comment, run
 from kluster.scripts.dispatch.gates.appeal import AppealRefused, appeals, apply, record
 from kluster.scripts.dispatch.gates.calibration import Status
-from kluster.scripts.dispatch.gates.extract import Item
+from kluster.scripts.dispatch.gates.extract import Change, Item, change
 from kluster.scripts.dispatch.gates.gate import RECORD, Gate
 from kluster.scripts.dispatch.gates.model import KeyMissing, Model, Reply
 from kluster.scripts.dispatch.gates.verdict import Answer, Verdict
-from kluster.scripts.dispatch.prcheck import Git
+from kluster.scripts.dispatch.prcheck import Git, Hunk
 
 NOTE = 'docs/notes/placement.md'
 LINES = ['The cache runs on the homelab node.', 'The cache requests a GPU.', 'The cache keeps a week of entries.']
@@ -192,6 +196,27 @@ def test_a_change_no_gate_is_triggered_by_asks_nothing_and_posts_nothing(tmp_pat
     assert forge.pull_comments(PULL) == []
 
 
+def test_a_change_reads_both_sides_of_each_hunk_the_tree_at_its_head_and_its_description(repository: Path) -> None:
+    kept = 'One.\nTwo.\nThree.\nFour.\n'
+    gone = 'A note.\nAnother.\n'
+    base = commit(repository, {'docs/kept.md': kept, 'docs/gone.md': gone})
+    _ = (repository / 'docs' / 'gone.md').unlink()
+    # Line 2 rewritten as two, and line 4 deleted: a hunk that only deletes reaches the change too.
+    head = commit(repository, {'docs/kept.md': 'One.\n2.\n2b.\nThree.\n', 'docs/new.md': 'New.\n'})
+
+    changed = change(Git(repository), base, head, 'the description')
+
+    files = {f.path: f for f in changed.files}
+    # Each hunk with both of its sides, as `git diff -U0` gives them: a side that holds no line is a count of 0.
+    assert files['docs/kept.md'].hunks == (Hunk(2, 1, 2, 2), Hunk(4, 1, 4, 0))
+    assert files['docs/kept.md'].written == ((2, 3),)
+    assert (files['docs/gone.md'].hunks, files['docs/gone.md'].written) == ((Hunk(1, 2, 0, 0),), ())
+    assert (files['docs/new.md'].hunks, files['docs/new.md'].written) == ((Hunk(0, 0, 1, 1),), ((1, 1),))
+    assert (changed.base_text('docs/gone.md'), changed.text('docs/gone.md')) == (gone, None)
+    assert sorted(changed.tree()) == ['docs/kept.md', 'docs/new.md']
+    assert changed.body == 'the description'
+
+
 def test_items_are_cut_into_batches_at_the_cap_and_one_over_it_goes_alone() -> None:
     small = [Item('a.md', n, n, 'x' * 30) for n in range(1, 4)]
     large = Item('a.md', 9, 9, 'y' * 3000)
@@ -240,6 +265,29 @@ def test_a_planted_findings_comment_by_another_account_is_neither_edited_nor_rea
     assert not posted.edited
     assert forge.pull_comments(PULL)[0] == planted
     assert run.findings_comment(forge.pull_comments(PULL), head) == forge.pull_comments(PULL)[1]
+
+
+def test_a_gate_whose_extractor_raises_asks_nothing_names_why_and_leaves_the_others_to_run(
+    tmp_path: Path, repository: Path
+) -> None:
+    def broken(change: Change) -> list[Item]:
+        _ = change.text(NOTE)
+        raise SyntaxError('invalid syntax')
+
+    copy = tmp_path / 'broken'
+    _ = shutil.copytree(STUB, copy)
+    failing = Gate.load(copy, replace(SPEC, extract=broken))
+    _blocking(failing)
+
+    posted = run.review(_forge(repository), Git(repository), PULL, [stub_gate(tmp_path), failing], recorded().model)
+
+    assert posted is not None
+    ran = {r.gate: r for r in posted.evidence.gates}
+    assert (ran['broken'].asked, ran['broken'].status) == (False, Status.BLOCKING)
+    assert f'after reading {NOTE}: SyntaxError' in ran['broken'].why
+    assert ran['stub'].asked
+    assert [e.line for e in ran['stub'].entries] == [1, 2, 3]
+    assert run.refuses(0, posted)
 
 
 def test_a_gate_no_model_can_ask_still_posts_and_refuses_only_where_it_blocks(tmp_path: Path, repository: Path) -> None:

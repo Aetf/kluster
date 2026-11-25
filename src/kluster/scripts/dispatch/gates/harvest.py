@@ -14,15 +14,19 @@ and a tag planted in one would teach a gate what its author liked. The
 review's head is the first commit it names by twelve characters or more
 that the local store holds. A tag binds to every place its paragraph names,
 a list item and the indented paragraphs under it being one paragraph, by a
-path the change touches, or the one changed path that ends with it. So the
-reviewer puts the tag in the paragraph that names the place, and keeps out
-of it the place of a rule it cites. A tag in a paragraph that names no
+path the change touches, or the one changed path that ends with it; failing
+both, by a path the head tracks, or the one tracked path that ends with it,
+since a passage a change made false can sit in a file the change never
+touched. So the reviewer puts the tag in the paragraph that names the place,
+and keeps out of it the place of a rule it cites. A tag in a paragraph that names no
 place binds to nothing, and is reported.
 
 The case is the item the gate's own extractor draws at that place at that
 head, so the set holds what the gate would have been asked. A place the
 extractor draws no item at is reported and not appended: the gate never saw
-it, which is the extractor's miss rather than the model's. Where the
+it, which is the extractor's miss rather than the model's. An extractor that
+raises at that head draws nothing there (`run.drawn`), and that is reported
+too, the other pull requests of the harvest going on. Where the
 pull request carries the findings comment of the same head, each case is
 paired with the gate's verdict there; a disagreement is reported, and so is
 each finding the gate made that the review left untagged, which a tag then
@@ -37,15 +41,15 @@ import re
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field
 
-from ..prcheck import Git
-from . import comment
+from ..prcheck import Git, PullRequest
+from . import comment, run
 from .cases import Case
 from .cases import append as append_cases
 from .comment import Evidence
-from .extract import Change, change
+from .extract import Change, Item, change
 from .forge import GateForge, PullComment
 from .gate import CASES, Gate
-from .run import findings_comment
+from .run import ExtractorFailed, findings_comment
 from .verdict import Verdict
 
 log = logging.getLogger(__name__)
@@ -152,17 +156,24 @@ def _pair(tagged: Case, gate: str, evidence: Evidence | None) -> str | None:
 
 
 def _review(
-    review: PullComment, number: int, git: HarvestGit, base: str, gates: Sequence[Gate], held: Sequence[PullComment]
+    review: PullComment,
+    pull: PullRequest,
+    git: HarvestGit,
+    gates: Sequence[Gate],
+    held: Sequence[PullComment],
 ) -> tuple[dict[str, list[Case]], list[str]]:
+    number = pull.number
     notes: list[str] = []
     head = next((full for sha in SHA.findall(review.body) if (full := git.resolve(sha)) is not None), None)
     if head is None:
         return {}, [f'{review.url}: names no commit the local store holds; fetch the head it read']
-    changed: Change = change(git, git.merge_base(base, head), head)
+    changed: Change = change(git, git.merge_base(pull.base, head), head, pull.body)
     by_name = {g.name: g for g in gates}
     found = findings_comment(held, head)
     evidence = comment.parse(found.body) if found else None
     drawn: dict[str, list[Case]] = {}
+    # Each gate's items at the head, drawn once for the review however many places it tags: or why it drew none.
+    extracted: dict[str, list[Item] | ExtractorFailed] = {}
     if found is None:
         notes.append(f'{review.url}: no findings comment of {head[:12]} to pair the review against')
     for tagged in tags(review.body):
@@ -177,11 +188,20 @@ def _review(
             )
             continue
         for named, line, end_line in tagged.places:
-            path = _path(named, changed.paths)
+            path = _path(named, changed.paths) or _path(named, changed.tree())
             if path is None:
-                notes.append(f'{review.url}: {named} is no path the change at {head[:12]} touches, or names several')
+                notes.append(f'{review.url}: {named} is no path the tree at {head[:12]} holds, or names several')
                 continue
-            items = [i for i in gate.spec.extract(changed) if i.path == path and i.overlaps(line, end_line)]
+            if gate.name not in extracted:
+                try:
+                    extracted[gate.name] = run.drawn(gate, changed)
+                except ExtractorFailed as exc:
+                    extracted[gate.name] = exc
+                    notes.append(f'{review.url}: {gate.name} drew nothing at {head[:12]}: {exc}; not appended')
+            drawn_here = extracted[gate.name]
+            if isinstance(drawn_here, ExtractorFailed):
+                continue
+            items = [i for i in drawn_here if i.path == path and i.overlaps(line, end_line)]
             if not items:
                 notes.append(
                     f'{review.url}: {gate.name} draws no item at {path}:{line}, so the gate never saw it; not appended'
@@ -226,7 +246,7 @@ def harvest(forge: GateForge, git: HarvestGit, numbers: Sequence[int], gates: Se
         if not reviews:
             harvested.notes.append(f'#{number} has no review this account wrote')
         for review in reviews:
-            drawn, notes = _review(review, number, git, pull.base, gates, comments)
+            drawn, notes = _review(review, pull, git, gates, comments)
             harvested.notes += notes
             for name, new in drawn.items():
                 added = append_cases(by_name[name].directory / CASES, new)
