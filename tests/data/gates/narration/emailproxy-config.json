@@ -1,0 +1,14 @@
+{
+ "pr": 879,
+ "head": "94b21d695f92db8ecb0c0762c1419f6c869a5fc1",
+ "source": "https://github.com/Aetf/kluster/pull/879",
+ "path": "src/kluster/components/apps/emailproxy/templates/emailproxy.config.j2",
+ "first": 1,
+ "written": [
+  [
+   1,
+   19
+  ]
+ ],
+ "text": "{#\nemail-oauth2-proxy's configuration, the program's part of the ported Secret.\nEach field below in single braces is a key the Secret seals, which the\nsealed-secrets controller puts in its place (`kluster.lib.k8s.rendered_template`);\neverything else is the program's.\n-#}\n[IMAP-{{ port }}]\nserver_address = imap.gmail.com\nserver_port = 993\nlocal_certificate_path = {{ certificate }}\nlocal_key_path = {{ key }}\n\n[{account}]\npermission_url = https://accounts.google.com/o/oauth2/auth\ntoken_url = https://oauth2.googleapis.com/token\noauth2_scope = https://mail.google.com/\nredirect_uri = http://localhost:{{ authorization_port }}\nclient_id = {client_id}\nclient_secret = {client_secret}\n"
+}
