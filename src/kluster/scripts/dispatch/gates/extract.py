@@ -6,6 +6,12 @@ context that question needs, so a gate never reads the whole repository and
 a large change makes more items, not a longer prompt. Every item names a
 place at the head under review, which is where its finding is posted and
 where a review's tag pairs with it (`harvest`).
+
+Most questions are about the lines a change writes, and read the head
+alone. A question about what the change leaves behind it, a passage
+elsewhere that a removed sentence made false, reads the base side of each
+hunk (`Changed.hunks`, `Change.base_text`), the tree at the head
+(`Change.tree`) and the pull request's description (`Change.body`) as well.
 """
 
 from __future__ import annotations
@@ -16,6 +22,16 @@ from typing import Protocol
 
 from ..paths import OwnedPath
 from ..prcheck import Hunk, Status
+
+#: Where the text is held here but written elsewhere, so that no passage of it is this repository's
+#: prose: generated (the SDKs, the CRD package, mise's lockfiles), vendored, or recorded as test data.
+#: Today's instances.
+NOT_WRITTEN_HERE = ('sdks/', 'packages/crds/', 'mise.lock', 'mise.ci.lock', 'tests/vendor/', 'tests/data/')
+
+
+def written_here(path: str) -> bool:
+    """Whether the text of `path` is this repository's own writing, and so prose a gate may ask about."""
+    return not path.startswith(NOT_WRITTEN_HERE)
 
 
 @dataclass(frozen=True)
@@ -47,6 +63,16 @@ class Changed:
     kind: str
     #: Each run of lines the change writes at the head, first and last line.
     written: tuple[tuple[int, int], ...]
+    #: Each hunk of the file's diff, its lines at the base and at the head (`git diff -U0`), in order.
+    hunks: tuple[Hunk, ...] = ()
+
+
+def _absent(_path: str) -> str | None:
+    return None
+
+
+def _empty() -> Sequence[str]:
+    return ()
 
 
 @dataclass(frozen=True)
@@ -57,6 +83,14 @@ class Change:
     files: tuple[Changed, ...]
     #: The text of a path at the head; None where the head holds no such file.
     text: Callable[[str], str | None]
+    #: The text of a path at the base; None where the base holds no such file.
+    #: `change` reads it from the store; a change built by hand holds no base.
+    base_text: Callable[[str], str | None] = _absent
+    #: Every path the head tracks. `change` reads it from the store; a change
+    #: built by hand holds no tree beyond what it names.
+    tree: Callable[[], Sequence[str]] = _empty
+    #: The pull request's description.
+    body: str = ''
 
     @property
     def paths(self) -> list[str]:
@@ -88,14 +122,23 @@ class Store(Protocol):
 
     def text(self, commit: str, path: str) -> str | None: ...
 
+    def paths(self, commit: str) -> list[str]: ...
 
-def change(store: Store, base: str, head: str) -> Change:
-    """The change from `base` to `head`, read from the local store."""
+
+def change(store: Store, base: str, head: str, body: str) -> Change:
+    """The change from `base` to `head`, read from the local store, with `body` its pull request's description."""
     files: list[Changed] = []
     for status in store.statuses(base, head):
-        hunks: Sequence[Hunk] = () if status.kind == 'D' else store.hunks(base, head, status.path)
+        hunks: Sequence[Hunk] = store.hunks(base, head, status.path)
         written = tuple(
             (hunk.head_start, hunk.head_start + hunk.head_count - 1) for hunk in hunks if hunk.head_count > 0
         )
-        files.append(Changed(status.path, status.kind, written))
-    return Change(head=head, files=tuple(files), text=lambda path: store.text(head, path))
+        files.append(Changed(status.path, status.kind, written, tuple(hunks)))
+    return Change(
+        head=head,
+        files=tuple(files),
+        text=lambda path: store.text(head, path),
+        base_text=lambda path: store.text(base, path),
+        tree=lambda: store.paths(head),
+        body=body,
+    )

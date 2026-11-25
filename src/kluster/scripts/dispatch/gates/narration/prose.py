@@ -19,7 +19,7 @@ A `#!` line names an interpreter, and is no comment in either kind of file.
 Each passage the change writes into is an item: its lines are the first to
 the last the change writes, its text those lines, and its context the whole
 passage where it runs past them. Text this repository holds but did not
-write gives no item (`NOT_WRITTEN_HERE`).
+write gives no item (`extract.written_here`).
 """
 
 from __future__ import annotations
@@ -32,12 +32,7 @@ import tokenize
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 
-from ..extract import Change, Item
-
-#: Where the text is held here but written elsewhere, so that no passage of it is this repository's
-#: prose: generated (the SDKs, the CRD package, mise's lockfiles), vendored, or recorded as test data.
-#: Today's instances.
-NOT_WRITTEN_HERE = ('sdks/', 'packages/crds/', 'mise.lock', 'mise.ci.lock', 'tests/vendor/', 'tests/data/')
+from ..extract import Change, Item, written_here
 
 #: A fence opening or closing a fenced block of markdown.
 _FENCE = re.compile(r'^\s*(```|~~~)')
@@ -189,7 +184,7 @@ def extract(change: Change) -> list[Item]:
     """An item for each passage of prose `change` writes into, with the lines it writes as the item's."""
     items: list[Item] = []
     for changed in change.files:
-        if not changed.written or changed.path.startswith(NOT_WRITTEN_HERE):
+        if not changed.written or not written_here(changed.path):
             continue
         text = change.text(changed.path)
         if text is None:
