@@ -1,4 +1,4 @@
-"""`gate: narration`: its extractor over changes this repository's reviews ruled on, and the gate run in shadow.
+"""`gate: narration`: its extractor over changes this repository's reviews ruled on.
 
 The extractor cases read real changes, recorded under
 `tests/data/gates/narration/`: the file a pull request wrote, at the head its
@@ -7,10 +7,7 @@ there. A long file is kept
 from a line its passages do not cross (its first line, `first`), and the
 case puts it back at its own line numbers. The commits of a pull request
 whose messages a review ruled on are recorded under `commits/`, each with
-the head the review read. The run case asks the gate as it
-is declared, about the pair its labelled set opens with, and serves the
-replies recorded beside the changes, so it reaches no network and holds no
-key.
+the head the review read.
 """
 
 from __future__ import annotations
@@ -20,11 +17,9 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
-from gate_stub import PULL, GateMemoryForge, Recorded, commit, pull_request, scratch_repository
+from gate_stub import commit, scratch_repository
 
-from kluster.lib import workstation
-from kluster.scripts.dispatch.gates import gate, run
-from kluster.scripts.dispatch.gates.calibration import Status
+from kluster.scripts.dispatch.gates import gate
 from kluster.scripts.dispatch.gates.extract import NOT_WRITTEN_HERE, Change, Changed, Item, change, message_path
 from kluster.scripts.dispatch.gates.narration import GATE
 from kluster.scripts.dispatch.prcheck import Commit, Git
@@ -176,33 +171,6 @@ def test_text_this_repository_holds_but_did_not_write_gives_no_item() -> None:
 @pytest.fixture
 def repository(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return scratch_repository(tmp_path, monkeypatch)
-
-
-def test_the_gate_runs_in_shadow_end_to_end_on_its_falsifier_pair_against_recorded_replies(repository: Path) -> None:
-    gate_ = narration()
-    catch, keep = gate_.cases()[:2]
-    canon = (workstation.repo_root() / AGENTS).read_text()
-    base = commit(repository, {AGENTS: canon})
-    head = commit(repository, {'docs/archive.md': f'{catch.text}\n\n{keep.text}\n'})
-    forge = GateMemoryForge()
-    pull_request(forge, base, head)
-    replies = Recorded([cast(dict[str, Any], json.loads(p.read_text())) for p in sorted((DATA / 'messages').iterdir())])
-
-    posted = run.review(forge, Git(repository), PULL, [gate_], replies.model)
-
-    # Each sample carries the rule as the head's AGENTS.md states it, and both passages as data.
-    assert len(replies.requests) == 3
-    section = gate_.canon(lambda path: canon if path == AGENTS else None).text
-    for request in replies.requests:
-        assert section in request['system']
-        rows = cast(list[dict[str, Any]], json.loads(request['messages'][0]['content'].partition('\n\n')[2]))
-        assert [row['text'] for row in rows] == [catch.text, keep.text]
-    assert posted is not None
-    (ran,) = posted.evidence.gates
-    assert ran.gate == 'narration'
-    assert ran.status is Status.SHADOW
-    # A shadow finding blocks nothing.
-    assert not run.refuses(0, posted)
 
 
 def test_each_paragraph_of_a_commits_body_is_an_item_at_the_place_that_names_the_commit(repository: Path) -> None:

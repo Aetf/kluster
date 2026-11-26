@@ -25,27 +25,27 @@ and keeps out of it the place of a rule it cites. A tag in a paragraph that name
 place binds to nothing, and is reported.
 
 The case is the item the gate's own extractor draws at that place at that
-head, so the set holds what the gate would have been asked. A place the
-extractor draws no item at is reported and not appended: the gate never saw
-it, which is the extractor's miss rather than the model's. An extractor that
-raises at that head draws nothing there (`run.drawn`), and that is reported
-too, the other pull requests of the harvest going on. Where the
-pull request carries the findings comment of the same head, each case is
-paired with the gate's verdict there; a disagreement is reported, and so is
-each finding the gate made that the review left untagged, which a tag then
-makes a case. Where it carries none, that is reported too: nothing was
-paired.
+head, since a case holds an item's text (`cases`). A place the extractor
+draws no item at is reported and not appended. An extractor that raises at
+that head draws nothing there (`run.drawn`), and that is reported too, the
+other pull requests of the harvest going on. Where the pull request carries
+the findings comment of the same head, each case is paired with the gate's
+verdict there, which is a pass at a place of a file the gate was shown
+(`view.parts`) where no entry of its run lies; a disagreement is reported,
+and so is each finding the gate made that the review left untagged, which a
+tag then makes a case. Where it carries none, that is reported too: nothing
+was paired.
 """
 
 from __future__ import annotations
 
 import logging
 import re
-from collections.abc import Iterator, Sequence
+from collections.abc import Collection, Iterator, Sequence
 from dataclasses import dataclass, field
 
 from ..prcheck import Git, PullRequest
-from . import comment, run
+from . import comment, run, view
 from .cases import Case
 from .cases import append as append_cases
 from .comment import Evidence
@@ -148,22 +148,25 @@ def _message(named: str, changed: Change) -> str | None:
     return found[0] if len(found) == 1 else None
 
 
-def _pair(tagged: Case, gate: str, evidence: Evidence | None) -> str | None:
+def _pair(tagged: Case, gate: str, evidence: Evidence | None, shown: Collection[str]) -> str | None:
     """The disagreement between a review's case and the gate's verdict at the same head; None where none.
 
-    An item the gate's samples left undecided is no verdict to disagree with, and is reported as one.
+    A place of a path in `shown` that no entry of a run that asked overlaps
+    is one the gate passed, in a record of `comment.VERSION` 2 or later; in
+    an earlier one, whose entries are the items it asked, it was not asked.
+    A place the gate's samples left undecided is no verdict to disagree with,
+    and is reported as one.
     """
     ran = next((r for r in evidence.gates if r.gate == gate), None) if evidence else None
-    entry = (
-        next((e for e in ran.entries if e.path == tagged.path and e.overlaps(tagged.line, tagged.end_line)), None)
-        if ran
-        else None
-    )
-    if entry is None:
+    if ran is None:
         return None
-    if entry.undecided:
+    entry = next((e for e in ran.entries if e.path == tagged.path and e.overlaps(tagged.line, tagged.end_line)), None)
+    passes = evidence is not None and evidence.version >= 2 and ran.asked and tagged.path in shown
+    if entry is None and not passes:
+        return None
+    if entry is not None and entry.undecided:
         return f'{gate} gave no verdict at {tagged.item.place}, which the review tags {tagged.verdict}'
-    said = Verdict.FINDING if entry.finding else Verdict.PASS
+    said = Verdict.FINDING if entry is not None and entry.finding else Verdict.PASS
     if said is tagged.verdict:
         return None
     return f'{gate} disagrees with the review at {tagged.item.place}: the gate said {said}, the review {tagged.verdict}'
@@ -188,6 +191,8 @@ def _review(
     drawn: dict[str, list[Case]] = {}
     # Each gate's items at the head, drawn once for the review however many places it tags: or why it drew none.
     extracted: dict[str, list[Item] | ExtractorFailed] = {}
+    # Each gate's paths the run at the head was shown, read once for the review.
+    shown: dict[str, set[str]] = {}
     if found is None:
         notes.append(f'{review.url}: no findings comment of {head[:12]} to pair the review against')
     for tagged in tags(review.body):
@@ -223,7 +228,7 @@ def _review(
             items = [i for i in drawn_here if i.path == path and i.overlaps(line, end_line)]
             if not items:
                 notes.append(
-                    f'{review.url}: {gate.name} draws no item at {path}:{line}, so the gate never saw it; not appended'
+                    f'{review.url}: {gate.name} draws no item at {path}:{line}, so it makes no case; not appended'
                 )
                 continue
             for item in items:
@@ -239,7 +244,9 @@ def _review(
                     context=item.context,
                 )
                 drawn.setdefault(gate.name, []).append(case)
-                disagreement = _pair(case, gate.name, evidence)
+                if gate.name not in shown:
+                    shown[gate.name] = {part.path for part in view.parts(changed, gate.spec.trigger)}
+                disagreement = _pair(case, gate.name, evidence, shown[gate.name])
                 if disagreement is not None:
                     notes.append(f'{review.url}: {disagreement}')
     for ran in evidence.gates if evidence else ():

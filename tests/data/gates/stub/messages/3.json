@@ -5,13 +5,8 @@
  "model": "claude-haiku-5-5",
  "content": [
   {
-   "type": "thinking",
-   "thinking": "",
-   "signature": "recorded-signature"
-  },
-  {
    "type": "text",
-   "text": "{\"items\": [{\"id\": 0, \"verdict\": \"pass\", \"why\": \"It may be a constraint.\"}, {\"id\": 1, \"verdict\": \"pass\", \"why\": \"It states a declared fact.\"}]}"
+   "text": "{\"findings\": []}"
   }
  ],
  "stop_reason": "end_turn",

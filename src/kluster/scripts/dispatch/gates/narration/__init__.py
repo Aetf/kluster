@@ -1,7 +1,10 @@
 """`gate: narration`: does a passage the change writes narrate history, attempts, verification or provenance instead of stating what is?
 
 The rule is AGENTS.md's "Every artifact is as-built", the section the gate
-quotes. The items are the passages of prose the change writes into
+quotes. Every path can carry a comment, so every change triggers the gate,
+which is shown each file the change writes and each of its commits'
+messages. The items its extractor draws, which `harvest` records a review's
+tags as, are the passages of prose the change writes into
 (`gates.prose`), one item to a passage: its lines are the first to the last
 the change writes, its text those lines, and its context the whole passage
 where it runs past them. A passage is the least a question about narration
@@ -10,9 +13,7 @@ across lines and only some of them rewritten. Text this repository holds but
 did not write gives no item (`extract.written_here`). Each paragraph of the
 body of each of the change's commits is an item too, whole, at the place
 that names the commit (`extract.message_path`, `gates.prose.message`), since
-a commit message is an artifact the rule holds as it holds a file. Every
-path can carry a comment, so every change triggers the gate, and one that
-writes no prose gives it no item to ask about.
+a commit message is an artifact the rule holds as it holds a file.
 """
 
 from __future__ import annotations

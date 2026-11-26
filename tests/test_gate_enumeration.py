@@ -1,20 +1,16 @@
-"""`gate: enumeration`: its extractor on reviewed changes and on a brief, and the gate run end to end in shadow.
+"""`gate: enumeration`: its extractor on reviewed changes and on a brief.
 
 Each fixture under `tests/data/gates/enumeration/` is one file of a reviewed
 pull request: its text at the head the review read, the lines the pull
 request wrote there, and under `program` the text at that head of every
 other file the extractor reads for it. Every case of the gate's labelled set
 drawn from that file is an item the extractor draws from that change, its
-text and context included, since a case is what the gate would have been
-asked (`gates.cases`); and every item is of a line the change writes. The
+text and context included, since a case holds the item as the extractor
+drew it (`gates.cases`); and every item is of a line the change writes. The
 context a case's finding turns on is shown on the case it was missing from:
 the guard around a message (#920), the docstring of the test case around an
 assertion (#819), the `#:` comment above a binding (#911), and the census a
-docstring names in a code span (#925). The run end
-to end is the harness's own, `dispatch gates <pr>` over a scratch
-repository, with a recorded reply standing in for the model and no
-calibration record, so the gate is discovered, its canon read and its
-item asked about in shadow.
+docstring names in a code span (#925).
 """
 
 from __future__ import annotations
@@ -24,15 +20,11 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
-from gate_stub import GateMemoryForge, Recorded, commit, pull_request, scratch_repository
 
-from kluster.lib import workstation
-from kluster.scripts.dispatch.gates import run
 from kluster.scripts.dispatch.gates.enumeration import extract
 from kluster.scripts.dispatch.gates.extract import ITEM_CONTEXT_CAP, Change, Changed, Item
 from kluster.scripts.dispatch.gates.gate import named
 from kluster.scripts.dispatch.gates.reading import brief_path
-from kluster.scripts.dispatch.prcheck import Git
 
 DATA = Path(__file__).parent / 'data' / 'gates' / 'enumeration'
 GATE = named('enumeration')
@@ -125,25 +117,6 @@ def test_a_brief_sentence_that_tells_the_agent_to_add_an_entry_is_drawn_at_its_l
     assert [(i.line, i.end_line, i.text) for i in drawn] == [
         (10, 11, 'Add its name to the\ncensus in `tests/test_census.py`, beside the others.')
     ]
-
-
-def test_the_gate_runs_end_to_end_on_a_pull_request_in_shadow(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    checkout = workstation.repo_root()
-    repository = scratch_repository(tmp_path, monkeypatch)
-    canon = GATE.spec.canon.document
-    base = commit(repository, {canon: (checkout / canon).read_text()})
-    head = commit(repository, {'tests/test_census.py': "NAMES = ('authelia', 'blog', 'immich')\n"})
-    forge = GateMemoryForge()
-    pull_request(forge, base, head)
-    replies = Recorded([cast(dict[str, Any], json.loads((DATA / 'messages' / '1.json').read_text()))])
-
-    posted = run.review(forge, Git(repository), 4917, [GATE], replies.model)
-
-    assert posted is not None
-    (ran,) = posted.evidence.gates
-    assert ran.gate == 'enumeration'
-    assert [e.place for e in ran.entries] == ['tests/test_census.py:1']
-    assert 'A membership is a definition, not a list' in replies.requests[0]['system']
 
 
 def _written(files: dict[str, str]) -> Change:

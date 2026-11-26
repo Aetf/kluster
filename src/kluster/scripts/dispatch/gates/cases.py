@@ -4,8 +4,7 @@ A case is an item a review ruled on, and how it ruled: the pull request and
 the head the review read, the place, the verdict, the comment the verdict
 came from, and the item's text and context as the gate's extractor drew
 them at that head. The text travels with the case, so `calibrate` asks the
-model exactly what the gate would have been asked, with no store and no
-forge behind it. The first two cases are the gate's falsifier pair: the one
+model about it as an item, with no store and no forge behind it. The first two cases are the gate's falsifier pair: the one
 it must catch, then the one it must pass (dispatch.md §3).
 """
 

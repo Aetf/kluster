@@ -806,14 +806,17 @@ retry starts afresh:
     gates are `enumeration`, for every brief, and `conclusion`, for
     the brief of an issue in `area/cluster`. Their canonical sections
     are read from the dispatcher's checkout, which is the tree the
-    claim runs in. Their verdicts land in the
-    claim's log. That is where the dispatcher runs the claim, and the
-    brief can still be rewritten before the agent is spawned. A pull
-    request is public, and a brief can name what a public page must
-    not. A gate in shadow blocks nothing there. A gate whose
-    calibration earns `blocking` refuses the claim on a finding, on
-    an item it left undecided, and wherever it asked nothing. No
-    appeal is recorded against a brief, which is rewritten instead.
+    claim runs in, and each gate is shown the brief whole. Their
+    verdicts land in the claim's log. That is where the dispatcher
+    runs the claim, and the brief can still be rewritten before the
+    agent is spawned. A pull request is public, and a brief can name
+    what a public page must not. **A verdict on a brief refuses
+    nothing**, whatever status the gate's calibration earns. That
+    status is measured on pull requests, and no history holds a brief,
+    so it says nothing of how the gate reads one; and the brief is
+    rewritten before the agent is spawned whichever way a verdict
+    reads. No appeal is recorded against a brief, which is rewritten
+    instead.
 -   **`dispatch queue <issue> <brief>`** is the claim for the cloud
     queue (§1.4), under the same preconditions: the brief as a
     `## Brief` comment, the record, then `cloud/ready`, taking off the
@@ -837,8 +840,8 @@ retry starts afresh:
 -   **`dispatch gates <pr>`** checks a pull request's content against
     its dispatch, then asks the model gates its paths trigger (§3), and
     exits non-zero on any finding of the first kind, on any finding of a
-    blocking gate, or item it left undecided, that no appeal answers, and
-    on a blocking gate that asked nothing. A shadow gate decides nothing
+    blocking gate, or place it left undecided, that no appeal answers, and
+    on a blocking gate that gave no verdict. A shadow gate decides nothing
     here. The first kind changes
     nothing:
     the dispatch owns every path the change touches, a file owned in a
@@ -1154,16 +1157,34 @@ question.** A gate is a directory of
 `src/kluster/scripts/dispatch/gates/` holding a prompt (that package
 says what else). It runs where the change touches a path its trigger
 matches, and on a brief when its trigger names one and the brief is
-claimed (§2.1). Its extractor, which is deterministic, narrows the change to
-the items its question is about, and the model is asked about those
-items alone. An item's place is a path and its lines, or, for a
-paragraph of the message of one of the change's commits,
-`:commit/<sha>` and lines of that message, the subject being line 1.
-They go in batches up to a fixed size, and each batch is
-asked three times. The reply is held to a schema by the API's
-structured outputs, and answers each item by the id it was given. A
-finding stands on two samples of the three. The rule the prompt quotes
-is a section of a document in this repository, read from the tree at
+claimed (§2.1). **It is shown the change as a reviewer reads it**: each
+file the change writes that its trigger matches, whole, as the head holds
+it, every line under its number with the change's diff inline, the lines
+the change writes marked and the lines it removes standing where they
+were; and the message of each of the change's commits whose place its
+trigger matches, `:commit/<sha>`, the subject being line 1. A file the
+change deletes, one that is not text, and text this repository holds but
+did not write, generated or recorded, are not shown. No code of the
+gate's own narrows what the question is about. The model is asked which
+of what it is shown breaks the gate's rule, and answers with findings,
+each a place, a path and the lines it is about at the head, and a
+reason. The schema of each call names the paths it showed, and a reply
+that names another is a sample that answered nothing; a finding at a
+line the call did not show is dropped. What a
+gate is shown goes into one call up to a fixed bound, and past the bound
+into more, cut by file, and a file too long alone into runs of its
+lines, each with the hunks it holds. Each call is asked three times, and
+the reply is held to that schema by the API's structured outputs. The
+samples' findings at one path, taken in order of their lines, each join
+the earliest place whose own lines they lie within a margin of, which is
+set beside the bar (`gates.calibration`), and that holds no finding of
+their sample; a finding that joins none opens a place. So a place is
+linked within itself, each of its findings within the margin of another
+of them, it holds at most one finding of each sample, whatever order the
+samples came back in, and a finding stands on two samples of the three.
+Each call's samples are matched alone, so where a file too long for one
+call is cut, a finding about lines on both sides of the cut can stand
+twice, or in neither run. The rule the prompt quotes is a section of a document in this repository, read from the tree at
 the head under review, so the gate never restates it. What a gate's
 model says can only add a finding. It approves nothing, and every
 deterministic check runs whatever it says. The gates ask with the Claude
@@ -1173,39 +1194,47 @@ Running them spends the API credit of the organization that key belongs
 to, and no CI job runs a gate. On a workstation that does not hold the
 key, every gate asks nothing, and the comment says so. A call the API
 still fails after the SDK's retries is a sample that answered nothing.
-An item whose unanswered samples could still have made a finding stand
-is left undecided: a shadow gate passes it, and a blocking gate holds it
-against the change as it holds a finding, until it is asked again or
-appealed.
+Where a call's unanswered samples could still have made a finding stand,
+every file, or run of a file's lines, it showed is left undecided, and
+so is a place a sample found that they could still have made stand: a
+shadow gate passes such a place, and a blocking gate holds it against
+the change as it holds a finding, until it is asked again or appealed.
 
-**A gate asks nothing wherever the run cannot put its question to the
-model as the gate declares it, or could not record the answer**: a part
-the question is made of does not come to hand, the model cannot be
+**A gate gives no verdict wherever the run cannot put its question to
+the model as the gate declares it, or could not record the answer**: a
+part the question is made of does not come to hand, the model cannot be
 reached, or what it answered would not fit where the run records it.
 Its line in the comment, or the claim's log, says which. Today's
-instances are a canonical section that does not read, an extractor that
-raised on the change, a workstation without the key, and a run whose
-items would not fit in one comment, the last only on a pull request,
-since a brief's run is recorded in the claim's log. An extractor is
-the gate's own code over a change nothing vetted, so a file it was not
-written for, a Python file that does not parse among them, can make it
-raise; that stops the one gate, and the others ask. A shadow gate that
-asks nothing passes, and a blocking one refuses (§2.1).
+instances are a canonical section that does not read and a workstation
+without the key, where the gate asks nothing, and a run whose answers
+would not fit in one comment, where they are dropped, the last only on
+a pull request, since a brief's run is recorded in the claim's log. A
+shadow gate that gives no verdict passes, and a blocking one refuses
+(§2.1).
 
 **The run leaves one comment**, headed
 `## Gate findings (head <sha>)`. A run at the same head edits it in
-place, keeping the appeals it records, and a run at a new head posts
-another. Each finding gives its place, its gate, its status, its
+place, keeping the appeals it records: an appeal of a finding goes to
+the nearest finding of the new run, of the same gate and path, within
+the margin of the one it was written on, and an appeal of an undecided
+place to an undecided place of the same gate over the same lines. Each
+appeal answers one place at most, so a finding the new run split in two,
+or found where a call had failed, is held again. A run at a new head
+posts another. Each finding gives its place, its gate, its status, its
 reason, its samples and a link to the rule at the head. Below the
 findings, a fenced `json` block records the whole run: each gate with
-its model and status, whether it asked, and every item it asked about,
-passes included, by its place, with one letter for each sample's
-verdict. The record keeps each sample's reason too, for every item
-whose samples are not a unanimous pass. The comment fits in the most a
-GitHub comment holds: where it would not, the reasons give way first,
-then the list of findings above the record, and the verdicts stay.
-Where the run's items would not fit even as verdicts alone, every gate
-asks nothing and spends nothing, and the comment says why.
+its model and status, whether it asked and whether its answers were
+dropped, and every place
+a sample found or the samples left undecided, with one letter for each
+sample's word there: a finding, a pass where the sample answered and
+found nothing there, or none where it answered nothing. A place no
+sample found holds no entry, and is a pass. The record keeps each
+sample's reason too, for every entry whose samples are not a unanimous
+pass. The comment fits in the most a GitHub comment holds: where it
+would not, the reasons give way first, then the list of findings above
+the record, and the verdicts stay. Where the run's answers would not fit
+even as verdicts alone, every gate's answers are dropped, and the
+comment says why.
 
 **A gate is `shadow` until it is measured, and `blocking` only while
 its measurement holds.** A shadow finding is advisory and blocks
@@ -1222,7 +1251,10 @@ retries among the causes, measured nothing about that case, so it
 writes no record, leaves the one already there, and says why. The
 prompt is the gate's `prompt.md` together with the fixed text every
 call carries beside it and the counts its samples are judged by, so an
-edit to any of them is an edit to the prompt. The bar is set beside the
+edit to any of them is an edit to the prompt. `calibrate` asks each case
+as the item it holds, a batch at a time, under fixed text and counts of
+its own, so a record it writes measures another prompt than the one
+`dispatch gates` asks, and reads there as shadow. The bar is set beside the
 record (`gates.calibration`): the falsifier pair holds in every sample,
 the set holds enough positives and negatives, recall is high enough, and
 false positives few enough. The status is read off those measurements
@@ -1243,7 +1275,7 @@ again at the new head, or appeals it in its report, one line each:
 `Gate appeal: <gate> <path>:<line>: <reason>`, where a finding in a
 commit's message is appealed at `:commit/<sha>:<line>`, the SHA in full
 as the findings comment gives it. `dispatch gates appeal`
-writes each appeal beside its finding, or beside an item a blocking
+writes each appeal beside its finding, or beside a place a blocking
 gate left undecided, and refuses an appeal that names neither. **The reviewer rules on each appeal,
 and on a gate's family of findings, with a tag beside the place**:
 `[gate:<name>]` where the place breaks the rule, a rejected appeal
@@ -1259,7 +1291,8 @@ binds to nothing, and harvest reports it. `dispatch gates
 harvest` turns each tag in a review this account wrote into a case of
 that gate. It takes the item the gate's own extractor draws at that
 place at the reviewed head. Against the run recorded at the same head,
-it reports each case the gate judged otherwise, and each finding of the
+where a place of a file the gate was shown that no entry holds is one it
+passed, it reports each case the gate judged otherwise, and each finding of the
 gate the review left untagged, which a tag then makes a case. Every
 disagreement between a gate and a reviewer therefore becomes a case,
 and moves the gate's measurement at its next calibration. An appeal

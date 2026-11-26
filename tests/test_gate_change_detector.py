@@ -1,4 +1,4 @@
-"""The `change-detector` gate: its extractor over real diffs, and the gate run end to end against recorded replies.
+"""The `change-detector` gate: its extractor over real diffs.
 
 Each diff is recorded under `tests/data/gates/change_detector/<name>/`: the
 files it starts from under `base/` (each with `.txt` after its path), and the
@@ -22,21 +22,15 @@ change as `git diff` printed it.
 
 from __future__ import annotations
 
-import json
-import shutil
 from pathlib import Path
-from typing import Any, cast
 
 import pytest
-from gate_stub import PULL, GateMemoryForge, Recorded, commit, git, pull_request, scratch_repository
+from gate_stub import commit, git, scratch_repository
 
 from kluster.lib import workstation
-from kluster.scripts.dispatch.gates import change_detector, run
-from kluster.scripts.dispatch.gates.calibration import Status
+from kluster.scripts.dispatch.gates import change_detector
 from kluster.scripts.dispatch.gates.extract import ITEM_CONTEXT_CAP, Change, Changed, Item, change
-from kluster.scripts.dispatch.gates.gate import RECORD, Gate
 from kluster.scripts.dispatch.gates.reading import CONTEXT_CAP
-from kluster.scripts.dispatch.gates.verdict import SAMPLES
 from kluster.scripts.dispatch.prcheck import Git
 
 DATA = Path(__file__).parent / 'data' / 'gates' / 'change_detector'
@@ -178,31 +172,3 @@ def test_a_large_program_constant_a_helper_reads_is_capped_as_a_part() -> None:
     assert definition.startswith('BIG = (') and len(definition) <= CONTEXT_CAP + 1
     assert len(item.context) < ITEM_CONTEXT_CAP
     assert 'characters of the context left out' not in item.context
-
-
-def _replies() -> Recorded:
-    return Recorded([cast(dict[str, Any], json.loads(p.read_text())) for p in sorted((DATA / 'messages').iterdir())])
-
-
-def test_the_gate_runs_in_shadow_end_to_end_against_recorded_replies(tmp_path: Path, repository: Path) -> None:
-    base, head = _diff(repository, 'devices')
-    forge = GateMemoryForge()
-    pull_request(forge, base, head)
-    # The gate as this tree holds it, less any record a calibration wrote:
-    # a builder's gate has none, and runs in shadow until it is measured.
-    copy = tmp_path / 'change_detector'
-    _ = shutil.copytree(change_detector.__path__[0], copy, ignore=shutil.ignore_patterns(RECORD, '__pycache__'))
-    gate = Gate.load(copy, change_detector.GATE)
-    replies = _replies()
-
-    posted = run.review(forge, Git(repository), PULL, [gate], replies.model)
-
-    # One batch, each sample asked with the canon as the head holds it.
-    assert len(replies.requests) == SAMPLES
-    section = gate.canon(lambda path: (repository / path).read_text()).text
-    assert all(section in request['system'] for request in replies.requests)
-    assert posted is not None
-    (ran,) = posted.evidence.gates
-    assert (ran.gate, ran.status) == ('change-detector', Status.SHADOW)
-    assert [e.line for e in ran.findings] == [283, 418]
-    assert not run.refuses(0, posted)

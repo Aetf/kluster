@@ -1,12 +1,12 @@
-"""What a gate's extractor reads, and what it hands the model: a change, and the items drawn from it.
+"""A change as the gates read it, and the items a gate's extractor draws from it.
 
-An extractor is a function from a `Change` to `Item`s. It is deterministic
-and narrow: it picks the lines its gate's question is about and the least
-context that question needs, so a gate never reads the whole repository and
-a large change makes more items, not a longer prompt. Every item names a
-place at the head under review, which is where its finding is posted and
-where a review's tag pairs with it (`harvest`). A place in a file is its
-path and lines. A place in the message of one of the change's commits
+The ask shows a gate the change itself (`view`). An extractor is a
+function from a `Change` to `Item`s, which `harvest` records a review's tags
+as cases of: it is deterministic and narrow, picking the lines its gate's
+question is about and the least context that question needs. Every item
+names a place at the head under review, which is where a review's tag pairs
+with it. A place in a file is its path and lines, as a finding's is. A
+place in the message of one of the change's commits
 (`Change.commits`) is a pseudo-path that names the commit, under `COMMITS`,
 and lines of the message, the subject being line 1 (`message_path`): no
 path of this repository starts with `:`, so no file is read as a message.
@@ -28,13 +28,21 @@ from ..paths import OwnedPath
 from ..prcheck import Commit, Hunk, Status
 
 #: Where the text is held here but written elsewhere, so that no passage of it is this repository's
-#: prose: generated (the SDKs, the CRD package, mise's lockfiles), vendored, or recorded as test data.
+#: prose: generated (the SDKs, the CRD package, the lockfiles of mise and uv), vendored, or recorded as test data.
 #: Today's instances.
-NOT_WRITTEN_HERE = ('sdks/', 'packages/crds/', 'mise.lock', 'mise.ci.lock', 'tests/vendor/', 'tests/data/')
+NOT_WRITTEN_HERE = (
+    'sdks/',
+    'packages/crds/',
+    'mise.lock',
+    'mise.ci.lock',
+    'uv.lock',
+    'tests/vendor/',
+    'tests/data/',
+)
 
 
 #: The most of an item's context, in characters, whatever its extractor joins: well under a batch's token cap
-#: (`ask.TOKEN_CAP`), so that a batch holds several items and no one item's call grows with what it reads.
+#: (`ask.ITEM_TOKEN_CAP`), so that a batch holds several items and no one item's call grows with what it reads.
 ITEM_CONTEXT_CAP = 24_000
 #: What stands where `bounded` cuts a context, with the count of characters cut.
 _CUT = '\n… [{} characters of the context left out] …\n'
@@ -76,10 +84,10 @@ def written_here(path: str) -> bool:
 
 @dataclass(frozen=True)
 class Item:
-    """One thing a gate asks about: a place at the head, its text, and the context the question needs.
+    """One thing an extractor draws: a place at the head, its text, and the context the question needs.
 
     The context is held to `ITEM_CONTEXT_CAP` (`bounded`) as the item is
-    made, so no extractor can hand the model more.
+    made, so no extractor can draw more.
     """
 
     path: str

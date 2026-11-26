@@ -1,8 +1,11 @@
 """`gate: conclusion`: does this state where something runs, when a runtime mechanism derives that?
 
 The canon is style/pulumi.md's "The program declares constraints, not
-conclusions". The extractor narrows a change to the passages it writes about
-placement:
+conclusions". The gate is shown each file the change writes in the
+components, the Kubernetes library and the conventions, and the brief of an
+issue in `area/cluster` (`TRIGGER`). Its extractor, which draws the items
+`harvest` records a review's tags as, narrows a change to the passages it
+writes about placement:
 
 -   in the components, the Kubernetes library and the conventions, a
     statement whose words reach placement (`_PLACEMENT_CODE`): an affinity,
@@ -12,15 +15,15 @@ placement:
     class's docstring, the headers of the compound statements around it,
     the comment above it and the module-level names it reads, so a label or
     a requirement it takes from elsewhere is in view.
-    A statement longer than `LONG` lines is asked about in its parts, each
+    A statement longer than `LONG` lines is drawn in its parts, each
     argument or entry that reaches placement;
 -   there too, a docstring or comment paragraph whose words speak of where
     something runs: a node, a site, a pool (`_PLACEMENT_PROSE`);
 -   in the brief of an issue in `area/cluster`, a sentence of either kind.
 
-What the model is asked is whether the item states the answer the
-scheduler or a volume binding derives, where the program should declare
-the fact it is derived from.
+What the model is asked is whether a passage the change writes states the
+answer the scheduler or a volume binding derives, where the program should
+declare the fact it is derived from.
 """
 
 from __future__ import annotations
@@ -41,7 +44,7 @@ BRIEFS = (':brief/cluster/**', ':brief/**/cluster/**')
 TRIGGER = (*CODE, *BRIEFS)
 
 #: The most lines an item runs to: a longer statement, a pod's or a workload's
-#: declaration, is asked about in its parts (`_items`).
+#: declaration, is drawn in its parts (`_items`).
 LONG = 20
 
 #: Words of a statement that reach where a pod runs.
@@ -70,7 +73,7 @@ def _drawn(passage: Passage) -> bool:
 
 
 def _parts(node: ast.AST) -> Iterator[tuple[int, int, ast.AST]]:
-    """The parts of an expression a long statement is asked about in, each with its first and last line.
+    """The parts of an expression a long statement is drawn in, each with its first and last line.
 
     A part is a call's argument, keyword or positional, an entry of a dict,
     an element of a list, a tuple or a set, or a function's parameter: the
@@ -131,7 +134,7 @@ def extract(change: Change) -> list[Item]:
 def _spans(
     module: Module, node: ast.AST, first: int, last: int, written: Sequence[tuple[int, int]]
 ) -> list[tuple[int, int]]:
-    """What a long `node`, its lines `first` to `last`, is asked about in.
+    """What a long `node`, its lines `first` to `last`, is drawn in.
 
     Each of its outermost parts (`_parts`) of at most `LONG` lines that the
     change writes in and that reaches placement, kept within `first` to

@@ -11,9 +11,9 @@ comment gives it, `:commit/<sha>:<line>` with the SHA in full
 saying so. The appeals are written into the findings comment of the pull request's
 head, each on the finding whose place holds that line, so the finding reads
 as answered and the reviewer who rules on it finds the reason beside it
-(dispatch.md §3). An item a blocking gate left undecided is appealed the
+(dispatch.md §3). A place a blocking gate left undecided is appealed the
 same way. An appeal that names neither a finding standing at the head nor
-an undecided item is refused, every such appeal at once, and nothing is
+an undecided place is refused, every such appeal at once, and nothing is
 written.
 """
 
@@ -44,7 +44,7 @@ APPEAL = re.compile(
 
 
 class AppealRefused(ValueError):
-    """Appeals that name neither a finding standing at the head nor an item left undecided."""
+    """Appeals that name neither a finding standing at the head nor a place left undecided."""
 
     def __init__(self, refusals: Sequence[str]) -> None:
         super().__init__('; '.join(refusals))
@@ -82,7 +82,7 @@ def apply(evidence: Evidence, made: Sequence[Appeal]) -> Evidence:
         entry = next((e for e in ran.open if e.path == appeal.path and e.overlaps(appeal.line, appeal.line)), None)
         if entry is None:
             refusals.append(
-                f'{appeal}: {appeal.gate} has no finding standing there, nor an item left undecided, '
+                f'{appeal}: {appeal.gate} has no finding standing there, nor a place left undecided, '
                 f'at {evidence.head[:12]}'
             )
             continue

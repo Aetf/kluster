@@ -1,4 +1,4 @@
-"""The sweep `gate: falsified-claim` asks about: every passage at the head that a claim of the change reaches.
+"""The sweep `gate: falsified-claim` draws its items by: every passage at the head that a claim of the change reaches.
 
 A claim is a sentence of a hunk, on either side of it: what the base said
 before the change, and what the head says after. A passage is a block of
@@ -23,8 +23,8 @@ own sentence, and is no item. Every other hit is, one within another hunk of
 the change included: a passage the change wrote can still be falsified by
 what another part of it does. The items are the `MOST` passages the change
 reaches most strongly (`Hit.score`), a description's pattern outweighing
-every pair, so a change that touches a common subject costs a bounded
-number of questions; the run logs how many it left out.
+every pair, so a change that touches a common subject draws a bounded
+number of items; the extractor logs how many it left out.
 """
 
 from __future__ import annotations
@@ -53,9 +53,9 @@ SEED = 0.43
 THRESHOLD = 0.76
 #: How far apart two terms may stand and still be one claim, in characters, as `.{0,120}`.
 WINDOW = 120
-#: The most items one change is asked about.
+#: The most items one change draws.
 MOST = 100
-#: The longest a passage is asked about whole, in lines. A longer one is narrowed to the lines its hits
+#: The longest a passage is drawn whole, in lines. A longer one is narrowed to the lines its hits
 #: reach where those fit in as many, and otherwise to the lines its heaviest hit reaches.
 LONGEST = 24
 #: How many lines either side of its hits a narrowed passage keeps.
@@ -315,7 +315,7 @@ def extract(change: Change) -> list[Item]:
                 hits.setdefault(at, Hit(passage)).add(lines, described, f"the description's `{named.text}`", behind)
     ranked = sorted(hits.values(), key=lambda h: (-h.score, h.passage.path, h.passage.block.first))
     if len(ranked) > MOST:
-        log.info('%d passages reached; asking about the %d the heaviest claims reach', len(ranked), MOST)
+        log.info('%d passages reached; drawing the %d the heaviest claims reach', len(ranked), MOST)
     texts: dict[str, list[str]] = {}
     items: list[Item] = []
     for hit in sorted(ranked[:MOST], key=lambda h: (h.passage.path, h.passage.block.first)):

@@ -7,8 +7,10 @@ census restated in a test (style/pulumi.md, "A census is the source of
 truth, and no test restates it") is that rule's case of a table copied
 from the implementation, and is judged by it.
 
-The gate reads the assertions a change writes in a test module
-(`assertions`), so it runs on a change that touches one.
+The gate runs on a change that touches a test module, and is shown each
+one the change writes. Its extractor (`assertions`), which draws the items
+`harvest` records a review's tags as, draws the assertions a change writes
+there.
 """
 
 from __future__ import annotations

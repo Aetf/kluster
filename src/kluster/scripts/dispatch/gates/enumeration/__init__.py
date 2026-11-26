@@ -1,8 +1,10 @@
 """`gate: enumeration`: does this name a set's members where a definition would cover them?
 
 The canon is style/README.md, "A membership is a definition, not a list".
-The extractor narrows a change to the passages that can enumerate a set,
-among those the change writes:
+The gate is shown each file the change writes under `src/` and `tests/`
+and in the style rules, and every brief (`TRIGGER`). Its extractor, which
+draws the items `harvest` records a review's tags as, narrows a change to
+the passages that can enumerate a set, among those the change writes:
 
 -   in Python under `src/` and `tests/`, a collection display of names, ids
     or paths (`_listing`) that a statement defines or acts on, rather than
@@ -18,10 +20,10 @@ among those the change writes:
 -   in the style rules, a paragraph whose words do;
 -   in a brief, a sentence telling the agent to add an entry somewhere.
 
-What the model is asked is whether the item names members where a
-definition would take the next one, so that the next member needs an edit
-here; a definition, today's instances after one, and a census nothing can
-derive pass.
+What the model is asked is whether a passage the change writes names
+members where a definition would take the next one, so that the next member
+needs an edit there; a definition, today's instances after one, and a
+census nothing can derive pass.
 """
 
 from __future__ import annotations

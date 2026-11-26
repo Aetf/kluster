@@ -1,13 +1,17 @@
 """`gate: count`: does a count the change writes have its members in view, and is it its own document's to keep?
 
 The canon is style/README.md's "A count stands beside the members it
-counts", which holds the count rules. The extractor (`extract`) reads the
-prose a change writes into a file this repository writes
+counts", which holds the count rules. The gate is shown each file the
+change writes that can hold prose (`gates.prose.TRIGGER`), and is asked of
+each count the change writes whether the rules allow it where it stands.
+Its extractor (`extract`), which draws the items `harvest` records a
+review's tags as, reads the prose a change writes into a file this
+repository writes
 (`extract.written_here`), which is markdown outside code, comments and
 Python docstrings (`gates.prose`), and draws each place where a number is
-used as a count (`COUNT`). It hands the model the count's lines, and as
-context the paragraph they sit in with what follows it, which is where the
-rule allows the members to be.
+used as a count (`COUNT`): the count's lines, and as context the paragraph
+they sit in with what follows it, which is where the rule allows the
+members to be.
 """
 
 from __future__ import annotations
