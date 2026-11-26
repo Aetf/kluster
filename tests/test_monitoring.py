@@ -17,20 +17,23 @@ from __future__ import annotations
 import base64
 import dataclasses
 import datetime as dt
+import http.client
 import importlib
 import json
 import re
 import subprocess
 import sys
+import time
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any, cast
-from urllib.parse import urlsplit
+from urllib.parse import urlencode, urlsplit
 
 import fake_b2_shell
 import image_busybox
 import process_sessions
 import promql_parser
+import psutil
 import pulumi
 import pytest
 import pytest_asyncio
@@ -2041,8 +2044,21 @@ def _env(container: Mapping[str, Any]) -> dict[str, Any]:
     return {it['name']: it.get('value', it.get('valueFrom')) for it in container['env']}
 
 
+def _reaches_the_bucket(container: Mapping[str, Any]) -> bool:
+    """Whether `container` runs `vmbackup` or `vmrestore`, or a script that calls the bucket through `b2.sh`."""
+    from kluster.components.monitoring import stores
+
+    scripts = [arg.rsplit('/', 1)[-1] for arg in container['command'] if arg.startswith(f'{stores.SHELL_DIR}/')]
+    return any(arg in ('/vmbackup-prod', '/vmrestore-prod') for arg in container['command']) or any(
+        'b2.sh' in stores.SHELL[script] for script in scripts
+    )
+
+
 def test_the_writer_key_is_declared_where_the_backups_and_restores_read_it(applied: Run) -> None:
-    """Sealed in, the key becomes the Secret every backup and restore container reads both halves from."""
+    """Sealed in, the key becomes the Secret every backup and restore container that reaches the bucket reads both halves from.
+
+    A container that does not reach the bucket is handed neither half.
+    """
     (secret,) = [
         it.inputs for it in applied.monitor.of_type(SEALED_SECRET) if it.inputs['metadata']['name'] == WRITER_KEY.name
     ]
@@ -2053,18 +2069,24 @@ def test_the_writer_key_is_declared_where_the_backups_and_restores_read_it(appli
 
     assert secret['metadata']['namespace'] == conventions.MONITORING_NAMESPACE
     assert secret['spec']['encryptedData'] == SEALED[WRITER_KEY.name]
-    assert containers
+    assert any(_reaches_the_bucket(it) for it in containers)
+    assert not all(_reaches_the_bucket(it) for it in containers)
     for container in containers:
         env = _env(container)
         for field in conventions.WRITER_KEY_FIELDS:
-            assert env[field] == {'secretKeyRef': {'name': secret['metadata']['name'], 'key': field}}
+            if _reaches_the_bucket(container):
+                assert env[field] == {'secretKeyRef': {'name': secret['metadata']['name'], 'key': field}}
+            else:
+                assert field not in env, container['name']
 
 
 # -- The scripts, run --------------------------------------------------------------------
 
-#: `vmrestore` and `vmbackup`: each records its arguments, and fails where its
-#: name is in the state directory's `fails`; `vmrestore` writes a part into
-#: the data directory its arguments name.
+#: `vmrestore` and `vmbackup`: each records its arguments, in a file of its own
+#: and as a line of the state directory's `events`, and fails where its name is
+#: in the state directory's `fails`; `vmrestore` writes a part into the data
+#: directory its arguments name, and `vmbackup` fails where the snapshot its
+#: arguments name is not one the store holds (`FAKE_STORE_CURL`).
 FAKE_BINARY = """
 import os, sys
 from pathlib import Path
@@ -2072,12 +2094,91 @@ from pathlib import Path
 state = Path(os.environ['FAKE_STATE'])
 name = Path(sys.argv[0]).name
 (state / f'{name}.args').write_text('\\n'.join(sys.argv[1:]))
+with (state / 'events').open('a') as events:
+    events.write(' '.join([name, *sys.argv[1:]]) + '\\n')
 if (state / 'fails').exists() and name in (state / 'fails').read_text().split():
     sys.exit(1)
 for arg in sys.argv[1:]:
     if name == 'vmrestore' and arg.startswith('-storageDataPath='):
         (Path(arg.split('=', 1)[1]) / 'restored-part').write_text('part')
+    if name == 'vmbackup' and arg.startswith('-snapshotName='):
+        if not (state / 'snapshots' / arg.split('=', 1)[1]).is_dir():
+            sys.exit(f'no snapshot {arg}')
 """
+
+#: A store's `/snapshot/*` endpoints as `curl` reaches them, in front of the
+#: fake bucket (`fake_b2_shell`), to which every other call is handed on.
+#: The store takes its key as the form value `authKey`, and the fake takes it
+#: from the url-encoded body alone, as `--data-urlencode` sends it -- a
+#: `name@file` argument reads the file -- so a key sent in the address is
+#: refused like a wrong one. `/snapshot/create` answers a name and keeps it
+#: under the state directory's `snapshots`, and `/snapshot/delete` deletes
+#: the one its body names, each as a line of `events`, in the shapes the
+#: store answers (`app/vmstorage/main.go` at v1.150.0, which
+#: `test_the_pinned_store_takes_its_snapshot_key_from_a_posts_body` holds).
+FAKE_STORE_CURL = """
+import json, os, sys
+from pathlib import Path
+from urllib.parse import urlsplit
+
+state = Path(os.environ['FAKE_STATE'])
+args, fields, url = sys.argv[1:], {}, None
+rest = list(args)
+while rest:
+    arg = rest.pop(0)
+    if arg == '--data-urlencode':
+        value = rest.pop(0)
+        if '=' in value and ('@' not in value or value.index('=') < value.index('@')):
+            name, found = value.split('=', 1)
+        else:
+            name, path = value.split('@', 1)
+            found = Path(path).read_text()
+        fields[name] = found
+    elif arg in ('-H', '--data', '--data-binary', '-o', '--max-time'):
+        rest.pop(0)
+    elif not arg.startswith('-'):
+        url = arg
+path = urlsplit(url).path
+if not path.startswith('/snapshot/'):
+    os.execv(str(Path(sys.argv[0]).with_name('curl-b2')), sys.argv)
+with (state / 'curl.argv').open('a') as log:
+    log.write(json.dumps(args) + '\\n')
+
+
+def refuse(status):
+    print(f'curl: (22) The requested URL returned error: {status}', file=sys.stderr)
+    sys.exit(22)
+
+
+def event(line):
+    with (state / 'events').open('a') as events:
+        events.write(line + '\\n')
+
+
+if urlsplit(url).query or fields.get('authKey') != os.environ['FAKE_SNAPSHOT_KEY']:
+    refuse(401)
+snapshots = state / 'snapshots'
+snapshots.mkdir(exist_ok=True)
+if path == '/snapshot/create':
+    name = f'20261126120000-{len(list(snapshots.iterdir())) + 1:016X}'
+    (snapshots / name).mkdir()
+    event(f'create {name}')
+    print(json.dumps({'status': 'ok', 'snapshot': name}, separators=(',', ':')), end='')
+    sys.exit(0)
+if path == '/snapshot/delete':
+    name = fields.get('snapshot', '')
+    if not name or not (snapshots / name).is_dir():
+        refuse(500)
+    (snapshots / name).rmdir()
+    event(f'delete {name}')
+    print(json.dumps({'status': 'ok'}, separators=(',', ':')), end='')
+    sys.exit(0)
+refuse(400)
+"""
+
+#: The store's snapshot key as a backup pod's Secret volume holds it, and as
+#: the fake store takes it.
+SNAPSHOT_KEY = 'theStoresSnapshotKey0123456789'
 
 #: The bound on one script's run, which takes a fraction of a second.
 SHELL_TIMEOUT = 30
@@ -2087,8 +2188,9 @@ SHELL = '/bin/sh'
 
 #: The pins of the images a backup or restore pod runs a script in, each
 #: script under its own image's busybox (`image_busybox`): curl's runs every
-#: script but `restore.sh`, which `vmrestore`'s runs.
-SCRIPT_IMAGES = ('metrics-bucket', 'metrics-restore')
+#: script but `restore.sh`, which `vmrestore`'s runs, and `backup.sh`, which
+#: `vmbackup`'s runs.
+SCRIPT_IMAGES = ('metrics-bucket', 'metrics-restore', 'metrics-backup')
 
 #: The pin each image reference the installation is configured with comes from,
 #: so a container's `image` names the pin whose busybox it runs its script under.
@@ -2149,10 +2251,11 @@ class Pod:
     restore's pod is its store's, whose main container, the store itself,
     is not run. A container's `/bin/sh` and its `PATH`'s applets are the
     busybox of the pin its `image` is configured from, and `PATH` holds the
-    fakes beside them alone, as the images hold no other tool. `vmbackup`'s
-    image runs its binary and no script, so its busybox is never read, and
-    a container whose command names `/bin/sh` in an image whose busybox is
-    not read is refused, naming the image.
+    fakes beside them alone, as the images hold no other tool. A container
+    whose command names `/bin/sh` in an image whose busybox is not read is
+    refused, naming the image. Each Secret volume of `volumes` is laid out as
+    the kubelet lays it out, a file per item, holding `SNAPSHOT_KEY`, and a
+    container sees it at its mount path.
     """
 
     def __init__(
@@ -2161,6 +2264,7 @@ class Pod:
         shells: Mapping[str, Path],
         init: Sequence[Mapping[str, Any]],
         main: Sequence[Mapping[str, Any]] = (),
+        volumes: Sequence[Mapping[str, Any]] = (),
     ) -> None:
         from kluster.components.monitoring import stores
 
@@ -2177,7 +2281,8 @@ class Pod:
         for name, text in stores.SHELL.items():
             (shell / name).write_text(text)
         fake_b2_shell.install(self.state, self.fakes)
-        for name, text in (('vmrestore', FAKE_BINARY), ('vmbackup', FAKE_BINARY)):
+        _ = (self.fakes / 'curl').rename(self.fakes / 'curl-b2')
+        for name, text in (('vmrestore', FAKE_BINARY), ('vmbackup', FAKE_BINARY), ('curl', FAKE_STORE_CURL)):
             binary = self.fakes / name
             binary.write_text(f'#!{sys.executable}\n{text}')
             binary.chmod(0o755)
@@ -2188,6 +2293,17 @@ class Pod:
             '/vmrestore-prod': str(self.fakes / 'vmrestore'),
             '/vmbackup-prod': str(self.fakes / 'vmbackup'),
         }
+        secrets = {it['name']: it['secret'] for it in volumes if 'secret' in it}
+        for container in containers:
+            for mount in container.get('volumeMounts', []):
+                if mount['name'] not in secrets:
+                    continue
+                directory = tmp_path / 'volumes' / mount['name']
+                directory.mkdir(parents=True, exist_ok=True)
+                for item in secrets[mount['name']]['items']:
+                    (directory / item['path']).write_text(SNAPSHOT_KEY)
+                self.local[mount['mountPath']] = str(directory)
+        self.snapshot_key = SNAPSHOT_KEY
         self.shells = shells
         self.containers = containers
         self.key = ':'.join(FAKE_KEY)
@@ -2213,8 +2329,8 @@ class Pod:
         return value.replace(SHELL, str(shell / 'sh')) if shell is not None else value
 
     def fake_env(self) -> dict[str, str]:
-        """What the fakes read: the state directory, the key B2 admits, and the bucket it is restricted to."""
-        return fake_env(self.state, self.key)
+        """What the fakes read: the state directory, the keys B2 and the store admit, and the bucket it is restricted to."""
+        return {**fake_env(self.state, self.key), 'FAKE_SNAPSHOT_KEY': self.snapshot_key}
 
     def _env(self, container: Mapping[str, Any], shell: Path | None) -> dict[str, str]:
         halves = dict(zip(sorted(conventions.WRITER_KEY_FIELDS), FAKE_KEY, strict=True))
@@ -2222,9 +2338,7 @@ class Pod:
             'PATH': ':'.join(str(it) for it in (self.fakes, shell) if it is not None),
             **self.fake_env(),
             **{
-                it['name']: self._here(it['value'], shell)
-                if 'value' in it
-                else halves.get(it['name'], 'the-snapshot-key')
+                it['name']: self._here(it['value'], shell) if 'value' in it else halves[it['name']]
                 for it in container.get('env', [])
             },
         }
@@ -2249,7 +2363,13 @@ class Pod:
     def succeeded(self) -> bool:
         runs = self.run()
         self.stderr = '\n'.join(it.stderr for it in runs)
+        self.output = '\n'.join(f'{it.stdout}\n{it.stderr}' for it in runs)
         return len(runs) == len(self.containers) and all(it.returncode == 0 for it in runs)
+
+    def events(self) -> list[str]:
+        """What the store and the binaries did, in order: a snapshot taken or deleted, a binary run with its arguments."""
+        found = self.state / 'events'
+        return found.read_text().splitlines() if found.exists() else []
 
     def ran(self, binary: str) -> list[str] | None:
         """The arguments `binary` was run with, `None` where it was not run."""
@@ -2272,7 +2392,7 @@ def _backup_pod(run: Run, store: str, tmp_path: Path, shells: Mapping[str, Path]
         if it.inputs['metadata']['name'] == schedule.METRICS_BACKUPS[store].cronjob
     ]
     pod = job['spec']['jobTemplate']['spec']['template']['spec']
-    return Pod(tmp_path, shells, pod.get('initContainers', []), pod['containers'])
+    return Pod(tmp_path, shells, pod.get('initContainers', []), pod['containers'], pod['volumes'])
 
 
 def _prefix(pod: Pod) -> str:
@@ -2499,22 +2619,14 @@ def _recorded(pod: Pod, text: str) -> Path:
 def test_the_history_store_is_backed_up_and_its_rows_recorded_where_it_holds_no_fewer(
     applied: Run, tmp_path: Path, shells: Mapping[str, Path], recorded: int | None
 ) -> None:
-    """The backup runs against the store's snapshot endpoint, and the count read becomes the record."""
-    from kluster.components.monitoring import stores
-
+    """The backup copies a snapshot the store took for it, then deletes it, and the count read becomes the record."""
     pod = _backup_pod(applied, 'history', tmp_path, shells)
     _metrics(pod, 42_000_000_000)
     if recorded is not None:
         _ = _recorded(pod, str(recorded))
 
     assert pod.succeeded(), pod.stderr
-    args = pod.ran('vmbackup')
-    assert args is not None
-    assert any(
-        arg.startswith('-snapshot.createURL=http://')
-        and arg.endswith(f'/snapshot/create?authKey=%{{{stores.SNAPSHOT_KEY_ENV}}}')
-        for arg in args
-    )
+    _copied_one_snapshot(pod)
     assert _record(pod).read_text() == '42000000000'
 
 
@@ -2543,77 +2655,283 @@ def test_the_history_store_is_not_backed_up_where_its_record_does_not_clear_it(
     assert record.read_text() == held
 
 
-def test_a_failed_backup_records_nothing(applied: Run, tmp_path: Path, shells: Mapping[str, Path]) -> None:
-    """The record is of the last backup that completed, so a count is never recorded for a backup that is not there."""
-    pod = _backup_pod(applied, 'history', tmp_path, shells)
+@pytest.mark.parametrize('store', ['recent', 'history'])
+def test_a_failed_backup_deletes_its_snapshot_fails_and_records_nothing(
+    applied: Run, tmp_path: Path, shells: Mapping[str, Path], store: str
+) -> None:
+    """The snapshot goes whatever `vmbackup` did, and the record is of the last backup that completed.
+
+    A snapshot left behind holds its parts' hard links, and so every part
+    merged away since, until the store's `-snapshotsMaxAge` deletes it.
+    """
+    pod = _backup_pod(applied, store, tmp_path, shells)
     _metrics(pod, 1_000)
     (pod.state / 'fails').write_text('vmbackup')
 
     assert not pod.succeeded()
-    assert not _record(pod).exists()
+    (created,) = [it.split()[1] for it in pod.events() if it.startswith('create ')]
+    assert f'delete {created}' in pod.events()
+    assert not list((pod.state / 'snapshots').iterdir())
+    if store == 'history':
+        assert not _record(pod).exists()
+
+
+def _copied_one_snapshot(pod: Pod) -> None:
+    """The store took one snapshot, `vmbackup` copied it by name, and the store deleted it after, holding none."""
+    events = pod.events()
+    (created,) = [it.split()[1] for it in events if it.startswith('create ')]
+    (copied,) = [it for it in events if it.startswith('vmbackup ')]
+    assert f'-snapshotName={created}' in copied.split()
+    assert events.index(f'create {created}') < events.index(copied) < events.index(f'delete {created}')
+    assert not list((pod.state / 'snapshots').iterdir())
 
 
 def test_the_recent_store_is_backed_up_whatever_it_holds(
     applied: Run, tmp_path: Path, shells: Mapping[str, Path]
 ) -> None:
-    """Its rows age out with its retention, so its count falls, and its backup reads neither the store nor a record."""
+    """Its rows age out with its retention, so its count falls, and its backup reads neither its rows nor a record.
+
+    The bucket is down throughout, and the store is called for its snapshot
+    alone.
+    """
     pod = _backup_pod(applied, 'recent', tmp_path, shells)
     (pod.state / 'down').write_text('')
 
     assert pod.succeeded(), pod.stderr
-    assert pod.ran('vmbackup') is not None
-    assert pod.curl_arguments() == []
+    _copied_one_snapshot(pod)
+    assert [urlsplit(call[-1]).path for call in pod.curl_arguments()] == ['/snapshot/create', '/snapshot/delete']
 
 
-def test_no_credential_is_an_argument_of_any_process_the_scripts_start(
+def test_no_credential_is_an_argument_or_a_line_of_output_of_any_process_the_pods_start(
     applied: Run, tmp_path: Path, shells: Mapping[str, Path]
 ) -> None:
-    """The node exporter reads every process's arguments on the node; the key and B2's tokens reach `curl` as files.
+    """The node exporter reads every process's arguments on the node, and a pod's log outlives it: credentials go as files.
 
-    Every call the restore and the history's backup make, recorded by the
-    fake `curl`, is read for the key's two halves, the Basic credential made
-    of them, and each token the fake bucket hands out. The files they are
-    written to instead are their owner's alone, since the node exporter
-    reads the host's filesystem too.
+    Every call the restore and each backup make, recorded by the fake `curl`,
+    and the arguments `vmbackup` and `vmrestore` are run with, are read for the
+    writer key's two halves, the Basic credential made of them, each token the
+    fake bucket hands out, and the store's snapshot key; so is everything each
+    container writes. The files the scripts write them to instead are their
+    owner's alone, since the node exporter reads the host's filesystem too.
     """
     basic = base64.b64encode(':'.join(FAKE_KEY).encode()).decode()
-    secrets = (*FAKE_KEY, basic, *FAKE_TOKENS)
+    secrets = (*FAKE_KEY, basic, *FAKE_TOKENS, SNAPSHOT_KEY)
     restore = _restore_pod(applied, 'history', tmp_path / 'restore', shells)
     _backed_up(restore, _prefix(restore))
-    backup = _backup_pod(applied, 'history', tmp_path / 'backup', shells)
-    _metrics(backup, 1_000)
-    _ = _recorded(backup, '1')
+    backups = [_backup_pod(applied, store, tmp_path / store, shells) for store in ('recent', 'history')]
+    for pod in backups:
+        _metrics(pod, 1_000)
+    _ = _recorded(backups[-1], '1')
 
-    assert restore.succeeded(), restore.stderr
-    assert backup.succeeded(), backup.stderr
-    calls = [*restore.curl_arguments(), *backup.curl_arguments()]
+    pods = [restore, *backups]
+    for pod in pods:
+        assert pod.succeeded(), pod.stderr
+    calls = [call for pod in pods for call in pod.curl_arguments()]
+    binaries = [args for pod in pods for args in (pod.ran('vmbackup'), pod.ran('vmrestore')) if args is not None]
     assert len(calls) >= 6
-    for call in calls:
+    assert len(binaries) == len(pods)
+    assert any(arg.startswith('authKey@') for call in calls for arg in call), 'no call sends the snapshot key'
+    for call in [*calls, *binaries]:
         assert not [secret for secret in secrets if any(secret in arg for arg in call)], call
-    written = [path for pod in (restore, backup) for path in pod.work.iterdir()]
+    for pod in pods:
+        assert not [secret for secret in secrets if secret in pod.output]
+    written = [path for pod in pods for path in pod.work.iterdir()]
     assert written
     for path in written:
         assert path.stat().st_mode & 0o077 == 0, f'{path.name} is readable beyond its owner'
 
 
-def test_no_container_is_handed_a_secret_in_its_command(applied: Run) -> None:
-    """The snapshot key and the writer key reach every container through its environment, from their Secrets."""
-    from kluster.components.monitoring import AUTH_KEYS_SECRET
+def test_the_snapshot_key_reaches_only_the_steps_that_call_the_store_and_only_as_a_file(applied: Run) -> None:
+    """The writer key reaches containers through their environment; the snapshot key through a volume of its Secret alone.
+
+    So no container's command or environment carries the snapshot key, or
+    a reference to it for a binary to expand into an address, and the
+    volume holds that key of the Secret and no other.
+    """
+    from kluster.components.monitoring import AUTH_KEYS_SECRET, stores
 
     containers = [
         *[container for job in _backup_jobs(applied).values() for container in _pod_containers(job)],
         *[container for restores in _restores(applied).values() for container in restores],
     ]
     keyed = {
-        it['name']: it['valueFrom']['secretKeyRef']
+        it['valueFrom']['secretKeyRef']['name']
         for container in containers
         for it in container.get('env', [])
         if 'valueFrom' in it
     }
 
-    assert {ref['name'] for ref in keyed.values()} == {WRITER_KEY.name, AUTH_KEYS_SECRET}
+    assert keyed == {WRITER_KEY.name}
     for container in containers:
         assert not [arg for arg in container['command'] if 'generated-in-state' in arg or 'AgB-sealed' in arg]
+        assert not [arg for arg in container['command'] if '%{' in arg]
+    for job in _backup_jobs(applied).values():
+        pod = job['spec']['jobTemplate']['spec']['template']['spec']
+        (key,) = [it['secret'] for it in pod['volumes'] if 'secret' in it]
+        assert key == {'secretName': AUTH_KEYS_SECRET, 'items': [{'key': 'snapshotAuthKey', 'path': 'snapshotAuthKey'}]}
+        mounting = [
+            container['name']
+            for container in _pod_containers(job)
+            if any(it['name'] == stores.SNAPSHOT_KEY_VOLUME for it in container['volumeMounts'])
+        ]
+        calling = [
+            container['name']
+            for container in _pod_containers(job)
+            if any(
+                '/snapshot/' in stores.SHELL[arg.rsplit('/', 1)[-1]]
+                for arg in container['command']
+                if arg.startswith(stores.SHELL_DIR)
+            )
+        ]
+        assert mounting == calling
+        assert mounting
+
+
+# -- The snapshot layer's tripwire ------------------------------------------------
+#
+# `components.monitoring.stores` takes and deletes each backup's snapshot
+# itself, around `vmbackup`, because `vmbackup` can send the store's key only
+# in an address it logs. These cases run the pinned binaries: the first, the
+# case of the layer's removal condition, turns red once `vmbackup` takes that
+# key through a password-type flag of its own, when the layer goes, and both
+# once what the layer leans on moves.
+
+#: How long the pinned store may take to listen and answer `/health`, and to
+#: answer a call: a stop-loss.
+STORE_TIMEOUT = 30.0
+
+#: Where each image keeps its one binary.
+VMBACKUP_BINARY = '/vmbackup-prod'
+STORE_BINARY = '/victoria-metrics-prod'
+
+
+def _flags(help_text: str) -> dict[str, str]:
+    """Each flag a Go program's `-help` lists, by name: its description, every line of it."""
+    flags: dict[str, str] = {}
+    name = None
+    for line in help_text.splitlines():
+        if found := re.match(r'^  -(\S+)', line):
+            name = found.group(1)
+            flags[name] = ''
+        elif name is not None and line.startswith('    '):
+            flags[name] += line.strip() + '\n'
+    return flags
+
+
+def test_the_pinned_vmbackup_has_no_password_flag_for_the_snapshot_key(
+    request: pytest.FixtureRequest, tmp_path_factory: pytest.TempPathFactory
+) -> None:
+    """No `-snapshot.*` flag reads its value from a file, as a password flag does, and a snapshot is backed up by name.
+
+    A password flag says so in its help (`flagutil.NewPassword`), which
+    `-httpAuth.password` shows the reading recognizes. Once a `-snapshot.*`
+    flag does, `vmbackup` can take the store's key without logging it, and
+    the snapshot layer goes, as its removal condition says. The case watches
+    for that remedy, not for the defect: a `vmbackup` that stops logging the
+    key by redacting it leaves the case green.
+    """
+    cache = image_busybox.cache_directory(request.config, tmp_path_factory)
+    binary = image_busybox.copied(image_busybox.pinned('metrics-backup'), VMBACKUP_BINARY, cache)
+
+    run = process_sessions.run([str(binary), '-help'], text=True, timeout=STORE_TIMEOUT)
+    flags = _flags(run.stdout)
+    passwords = {name for name, text in flags.items() if f'-{name}=file://' in text}
+
+    assert 'httpAuth.password' in passwords, run.stdout
+    assert 'snapshotName' in flags
+    assert not {name for name in passwords if name.startswith('snapshot')}, (
+        'vmbackup takes the snapshot key from a file: the snapshot layer of components.monitoring.stores goes'
+    )
+
+
+def _listening(pid: int) -> int:
+    """The port the process `pid` listens at once it does, within `STORE_TIMEOUT`."""
+    process = psutil.Process(pid)
+    deadline = time.monotonic() + STORE_TIMEOUT
+    while time.monotonic() < deadline:
+        ports = [held.laddr.port for held in process.net_connections(kind='tcp') if held.status == psutil.CONN_LISTEN]
+        if ports:
+            return ports[0]
+        time.sleep(0.05)
+    raise AssertionError(f'the store did not listen within {STORE_TIMEOUT:g}s')
+
+
+def _healthy(port: int) -> None:
+    """Return once the store at `port` answers `/health` with `OK`, within `STORE_TIMEOUT`, or fail naming its last answer."""
+    deadline = time.monotonic() + STORE_TIMEOUT
+    last: object = None
+    while time.monotonic() < deadline:
+        connection = http.client.HTTPConnection('127.0.0.1', port, timeout=STORE_TIMEOUT)
+        try:
+            connection.request('GET', '/health')
+            response = connection.getresponse()
+            body = response.read()
+            if response.status == http.HTTPStatus.OK and body == b'OK':
+                return
+            last = (response.status, body)
+        except OSError as error:
+            last = error
+        finally:
+            connection.close()
+        time.sleep(0.05)
+    raise AssertionError(
+        f'the store did not answer /health with OK within {STORE_TIMEOUT:g}s; its last answer: {last!r}'
+    )
+
+
+def _post(port: int, path: str, fields: Mapping[str, str]) -> tuple[int, str]:
+    """The store's status and body for a POST of `fields` to `path`, url-encoded in the body as `curl --data-urlencode` sends them."""
+    connection = http.client.HTTPConnection('127.0.0.1', port, timeout=STORE_TIMEOUT)
+    try:
+        connection.request(
+            'POST', path, body=urlencode(fields), headers={'Content-Type': 'application/x-www-form-urlencoded'}
+        )
+        response = connection.getresponse()
+        return response.status, response.read().decode()
+    finally:
+        connection.close()
+
+
+def test_the_pinned_store_takes_its_snapshot_key_from_a_posts_body(
+    request: pytest.FixtureRequest, tmp_path_factory: pytest.TempPathFactory, tmp_path: Path
+) -> None:
+    """`/snapshot/create` and `/snapshot/delete` take `authKey` from a url-encoded body, and answer as `FAKE_STORE_CURL` does.
+
+    The store is the history store's own binary, which runs at the release
+    the chart runs the recent store at, read out of its pinned image and run
+    on the host on a port it picks, with its key read from a file as the
+    cluster's stores read theirs. A call with no key is refused, so it is
+    the key in the body that the store takes.
+    """
+    cache = image_busybox.cache_directory(request.config, tmp_path_factory)
+    binary = image_busybox.copied(image_busybox.pinned('metrics-history'), STORE_BINARY, cache)
+    key = tmp_path / 'snapshotAuthKey'
+    key.write_text(SNAPSHOT_KEY)
+    data = tmp_path / 'store'
+    argv = [
+        str(binary),
+        '-httpListenAddr=127.0.0.1:0',
+        f'-storageDataPath={data}',
+        f'-snapshotAuthKey=file://{key}',
+        '-loggerLevel=ERROR',
+    ]
+
+    with process_sessions.started(argv, stdout=process_sessions.DEVNULL, stderr=process_sessions.DEVNULL) as running:
+        port = _listening(running.pid)
+        _healthy(port)
+        refused, _ = _post(port, '/snapshot/create', {})
+        created_status, created = _post(port, '/snapshot/create', {'authKey': SNAPSHOT_KEY})
+        name = json.loads(created)['snapshot']
+        taken = sorted(it.name for it in (data / 'snapshots').iterdir())
+        deleted = _post(port, '/snapshot/delete', {'authKey': SNAPSHOT_KEY, 'snapshot': name})
+
+    assert refused == 401
+    assert created_status == 200
+    assert json.loads(created) == {'status': 'ok', 'snapshot': name}
+    assert re.fullmatch(r'[0-9]{14}-[0-9A-Fa-f]+', name)
+    assert taken == [name]
+    assert deleted == (200, '{"status":"ok"}')
+    assert not list((data / 'snapshots').iterdir())
 
 
 # -- The scheduled-job family ------------------------------------------------------

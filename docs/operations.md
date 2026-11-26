@@ -1871,11 +1871,21 @@ behind, and a rebuild would restore it only as far as its last success
    the writer key's Secret, `writer-vm-monitoring`, which a SealedSecret
    the controller cannot open never creates, and which the sealing
    sitting of bring-up stage 6 (physical/bring-up.md §2) seals again
-   after a rebuild (§3.5); or the scripts' `ConfigMap`, `metrics-backup-shell`. `mise x -- kubectl -n
+   after a rebuild (§3.5); the stores' keys, `vmsingle-auth-keys`,
+   which the program declares beside the stores; or the scripts'
+   `ConfigMap`, `metrics-backup-shell`. `mise x -- kubectl -n
    monitoring describe pod` names which.
 5. **The store did not answer.** The snapshot is taken through the
-   store's Service, so a store that is down fails every backup. A store
-   whose pod sits in `Init` is its restore, step 7.
+   store's Service, by the run's `snapshot-create` container, so a
+   store that is down fails every backup. A store whose pod sits in
+   `Init` is its restore, step 7. The run's `snapshot-delete`
+   container deletes the snapshot after `vmbackup`, whether it
+   succeeded or failed, and is the container that fails where
+   `vmbackup` failed, its log reading `vmbackup did not back up
+   snapshot <name>`; the reason is in the `vmbackup` container's log.
+   A run that never
+   reaches it, such as one cut off at its deadline, leaves the snapshot
+   to the store's `-snapshotsMaxAge`, a day.
 6. **The history store's backup refused.** The log reads `holds <n>
    rows, fewer than the <m> the last backup recorded at
    vm/monitoring/history.rows`. Its retention keeps every row, so a

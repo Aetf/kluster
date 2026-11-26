@@ -14,7 +14,9 @@ instant snapshot of hard links to the store's immutable parts, under
 different minutes, mounting the store's claim read-only, so the job's pod
 lands on the store's node with it. A copy taken file by file while the store
 merges and deletes its parts is not consistent, which is why it is not
-VolSync's. Each job is a row of the scheduled-job family
+VolSync's. The snapshot is taken and deleted around `vmbackup` by steps of
+the job's own (`_snapshotted`), because `vmbackup` logs the address it takes
+one at, the key in it. Each job is a row of the scheduled-job family
 (`conventions.schedule.METRICS_BACKUPS`, `Store.backup`), which gives its name,
 its period and the deadline a run is cut off at. The history store's job also refuses a store holding fewer
 rows than its last backup recorded beside the backup (`Store.record`):
@@ -35,8 +37,9 @@ all, and the history's row count kept beside its backup. Those calls run in
 curl's image, whose `curl` reads the request headers carrying the writer key
 and B2's tokens from files in the pod's memory, so no credential is ever a
 process's argument, which every process on the node that sees the PID can
-read; `vmbackup` and `vmrestore` read the key from their environment, and
-`vmbackup` the snapshot key too. The scripts are shell because the images
+read; `vmbackup` and `vmrestore` read the writer key from their environment,
+and the snapshot steps read the store's snapshot key from its Secret, mounted
+as a file. The scripts are shell because the images
 carry no other interpreter: busybox, and the one binary each. They are one
 ConfigMap, the scripts of `shell/` and `b2.sh` beside them, which the jobs and
 the init containers mount.
@@ -71,7 +74,8 @@ __all__ = (
     'SHELL_DIR',
     'SHELL_MODE',
     'SHELL_VOLUME',
-    'SNAPSHOT_KEY_ENV',
+    'SNAPSHOT_KEY_DIR',
+    'SNAPSHOT_KEY_VOLUME',
     'VMAGENT_PORT',
     'WORK_DIR',
     'WORK_VOLUME',
@@ -120,8 +124,10 @@ SHELL_MODE = 0o555
 WORK_VOLUME = 'work'
 WORK_DIR = '/work'
 
-#: The variable `vmbackup` reads the store's snapshot key from.
-SNAPSHOT_KEY_ENV = 'SNAPSHOT_AUTH_KEY'
+#: The volume a backup pod mounts the store's snapshot key from, the one key
+#: of its Secret, and where. A Secret's volume is held in memory.
+SNAPSHOT_KEY_VOLUME = 'snapshot-key'
+SNAPSHOT_KEY_DIR = '/opt/kluster/snapshot-key'
 
 #: The scripts, by file name, as the ConfigMap carries them: this package's
 #: own, and the bucket client they source.
@@ -332,12 +338,13 @@ def _bucket_url(store: Store) -> str:
     return f's3://{conventions.BUCKET_BACKUP}/{store.repository}'
 
 
-def _mounts(*, data: bool, data_read_only: bool = True) -> list[dict[str, Any]]:
-    """The scripts and the work directory, and the store's data where the container reads it, at the same paths."""
+def _mounts(*, data: bool, data_read_only: bool = True, snapshot_key: bool = False) -> list[dict[str, Any]]:
+    """The scripts and the work directory, and the store's data and its snapshot key where the container reads them."""
     return [
         *([{'name': DATA_VOLUME, 'mountPath': DATA_DIR, 'readOnly': data_read_only}] if data else []),
         {'name': SHELL_VOLUME, 'mountPath': SHELL_DIR, 'readOnly': True},
         {'name': WORK_VOLUME, 'mountPath': WORK_DIR},
+        *([{'name': SNAPSHOT_KEY_VOLUME, 'mountPath': SNAPSHOT_KEY_DIR, 'readOnly': True}] if snapshot_key else []),
     ]
 
 
@@ -405,95 +412,198 @@ def _typed_env(env: list[dict[str, Any]]) -> list[k8s.core.v1.EnvVarArgs]:
     ]
 
 
-def _typed_mounts(mounts: list[dict[str, Any]]) -> list[k8s.core.v1.VolumeMountArgs]:
-    return [
-        k8s.core.v1.VolumeMountArgs(name=it['name'], mount_path=it['mountPath'], read_only=it.get('readOnly'))
-        for it in mounts
-    ]
-
-
-def _typed_resources(resources: memory.Resources) -> k8s.core.v1.ResourceRequirementsArgs:
-    rendered = resources.rendered()
-    return k8s.core.v1.ResourceRequirementsArgs(requests=rendered['requests'], limits=rendered['limits'])
+def _typed_container(container: Mapping[str, Any]) -> k8s.core.v1.ContainerArgs:
+    """A container declared as a pod's object spells it, as the provider's type."""
+    resources = container['resources']
+    return k8s.core.v1.ContainerArgs(
+        name=container['name'],
+        image=container['image'],
+        command=container['command'],
+        env=_typed_env(container['env']),
+        volume_mounts=[
+            k8s.core.v1.VolumeMountArgs(name=it['name'], mount_path=it['mountPath'], read_only=it.get('readOnly'))
+            for it in container['volumeMounts']
+        ],
+        resources=k8s.core.v1.ResourceRequirementsArgs(requests=resources['requests'], limits=resources['limits']),
+    )
 
 
 def backup_pod(
     store: Store, *, images: Images, bucket: Bucket, snapshot_key: tuple[str, str]
 ) -> k8s.core.v1.PodSpecArgs:
-    """The pod of `store`'s backup job: `vmbackup` of the claim, read-only, and around it the refusal to shrink.
+    """The pod of `store`'s backup job: `vmbackup` of a snapshot of the claim, read-only, and around it the refusal to shrink.
 
     `snapshot_key` is the Secret and the key in it that hold the store's
-    snapshot key. `vmbackup` reads it from its environment through
-    VictoriaMetrics' `%{ENV}` placeholder in its argument (`expandArgs`,
-    `lib/envflag/envflag.go` at v1.150.0), so no argument carries it. A store
-    that keeps every row is checked ahead of `vmbackup` and its rows recorded
-    after it, by containers in the bucket client's image; the record's
-    container runs only once the init containers, `vmbackup` among them, have
+    snapshot key, which the pod mounts as a file, that key alone. A store
+    that keeps every row is checked ahead of the backup and its rows recorded
+    after it, by containers in the bucket client's image. The containers run
+    one after another, the last as the pod's container and the rest as its
+    init containers, so each runs only once every one before it has
     succeeded.
     """
     key_secret, key = snapshot_key
-    vmbackup = k8s.core.v1.ContainerArgs(
-        name='vmbackup',
-        image=images.backup,
-        command=[
-            _VMBACKUP,
-            f'-storageDataPath={DATA_DIR}',
-            f'-dst={_bucket_url(store)}',
-            f'-customS3Endpoint={bucket.endpoint}',
-            f'-snapshot.createURL={store.url}/snapshot/create?authKey=%{{{SNAPSHOT_KEY_ENV}}}',
-        ],
-        env=_typed_env(
-            [
-                {'name': SNAPSHOT_KEY_ENV, 'valueFrom': {'secretKeyRef': {'name': key_secret, 'key': key}}},
-                {'name': 'AWS_REGION', 'value': bucket.region},
+    copy = [
+        _VMBACKUP,
+        f'-storageDataPath={DATA_DIR}',
+        f'-dst={_bucket_url(store)}',
+        f'-customS3Endpoint={bucket.endpoint}',
+    ]
+    copy_env = [{'name': 'AWS_REGION', 'value': bucket.region}, *_writer_env(bucket)]
+
+    def bucket_step(name: str, script: str, record: str) -> dict[str, Any]:
+        return {
+            'name': name,
+            'image': images.bucket,
+            'command': ['/bin/sh', f'{SHELL_DIR}/{script}'],
+            'env': [
+                {'name': 'STORE', 'value': store.url},
+                {'name': 'RECORD', 'value': record},
+                {'name': 'WORK', 'value': WORK_DIR},
                 *_writer_env(bucket),
-            ]
-        ),
-        # The store's data alone: `vmbackup` runs no script.
-        volume_mounts=_typed_mounts([{'name': DATA_VOLUME, 'mountPath': DATA_DIR, 'readOnly': True}]),
-        resources=_typed_resources(memory.VMBACKUP),
-    )
-    data = k8s.core.v1.VolumeArgs(
-        name=DATA_VOLUME,
-        persistent_volume_claim=k8s.core.v1.PersistentVolumeClaimVolumeSourceArgs(
-            claim_name=store.workload, read_only=True
-        ),
-    )
+            ],
+            # The bucket and the store's address are all it reads: no data.
+            'volumeMounts': _mounts(data=False),
+            'resources': memory.BUCKET_STEP.rendered(),
+        }
+
     record = store.record
-    if record is None:
-        return k8s.core.v1.PodSpecArgs(restart_policy='Never', containers=[vmbackup], volumes=[data])
-    volumes = [
-        data,
-        k8s.core.v1.VolumeArgs(
+    steps = [
+        *([bucket_step('backup-check', 'backup-check.sh', record)] if record is not None else []),
+        *_snapshotted(store, copy, copy_env, images=images, key_file=f'{SNAPSHOT_KEY_DIR}/{key}'),
+        *([bucket_step('backup-record', 'backup-record.sh', record)] if record is not None else []),
+    ]
+    volumes = {
+        DATA_VOLUME: k8s.core.v1.VolumeArgs(
+            name=DATA_VOLUME,
+            persistent_volume_claim=k8s.core.v1.PersistentVolumeClaimVolumeSourceArgs(
+                claim_name=store.workload, read_only=True
+            ),
+        ),
+        SHELL_VOLUME: k8s.core.v1.VolumeArgs(
             name=SHELL_VOLUME,
             config_map=k8s.core.v1.ConfigMapVolumeSourceArgs(name=SHELL_CONFIGMAP, default_mode=SHELL_MODE),
         ),
-        k8s.core.v1.VolumeArgs(
+        WORK_VOLUME: k8s.core.v1.VolumeArgs(
             name=WORK_VOLUME, empty_dir=k8s.core.v1.EmptyDirVolumeSourceArgs(medium=_WORK_MEDIUM, size_limit=_WORK_SIZE)
         ),
-    ]
-
-    def bucket_step(name: str, script: str) -> k8s.core.v1.ContainerArgs:
-        return k8s.core.v1.ContainerArgs(
-            name=name,
-            image=images.bucket,
-            command=['/bin/sh', f'{SHELL_DIR}/{script}'],
-            env=_typed_env(
-                [
-                    {'name': 'STORE', 'value': store.url},
-                    {'name': 'RECORD', 'value': record},
-                    {'name': 'WORK', 'value': WORK_DIR},
-                    *_writer_env(bucket),
-                ]
+        SNAPSHOT_KEY_VOLUME: k8s.core.v1.VolumeArgs(
+            name=SNAPSHOT_KEY_VOLUME,
+            secret=k8s.core.v1.SecretVolumeSourceArgs(
+                secret_name=key_secret, items=[k8s.core.v1.KeyToPathArgs(key=key, path=key)]
             ),
-            # The bucket and the store's address are all it reads: no data.
-            volume_mounts=_typed_mounts(_mounts(data=False)),
-            resources=_typed_resources(memory.BUCKET_STEP),
-        )
-
+        ),
+    }
+    mounted = {mount['name'] for step in steps for mount in step['volumeMounts']}
     return k8s.core.v1.PodSpecArgs(
         restart_policy='Never',
-        init_containers=[bucket_step('backup-check', 'backup-check.sh'), vmbackup],
-        containers=[bucket_step('backup-record', 'backup-record.sh')],
-        volumes=volumes,
+        init_containers=[_typed_container(it) for it in steps[:-1]],
+        containers=[_typed_container(it) for it in steps[-1:]],
+        volumes=[volume for name, volume in volumes.items() if name in mounted],
     )
+
+
+# -- The snapshot layer --------------------------------------------------------------
+#
+# A workaround for an upstream defect, a layer of its own (docs/style/README.md,
+# "A workaround for an upstream defect is a layer of its own").
+#
+# **The defect.** `vmbackup` takes its snapshot at `-snapshot.createURL`, and
+# the store takes its snapshot key only as the form value `authKey`
+# (`CheckAuthFlag`, `lib/httpserver/httpserver.go` at v1.150.0), which that
+# client can send only in the URL's query. `vmbackup` logs that URL and the
+# delete URL made from it (`app/vmbackup/main.go`, "Snapshot create url"),
+# through Go's `URL.Redacted`, which hides a password in the URL's user
+# information and nothing else; a failed call logs it again, in its error
+# (`lib/snapshot/snapshot.go`, and the `url.Error` of Go's client, which
+# strips the same password alone). Its client has no flag that carries a key
+# by any other way. VictoriaMetrics#5973 asks for one.
+#
+# **The boundary.** `_snapshotted` below, and the three scripts it runs, each
+# naming this layer: `shell/snapshot-create.sh` and `shell/snapshot-delete.sh`,
+# in the curl image, which send the key read from its mounted file as the
+# url-encoded body of a POST, and `shell/backup.sh`, in `vmbackup`'s, which
+# runs `vmbackup` on the snapshot by name (`-snapshotName`). `backup_pod`
+# hands the layer what it would hand `vmbackup` with no defect: the copy's
+# command, its environment, and the path of the mounted key. In
+# `tests/test_monitoring.py`, what reads the snapshot steps goes with the
+# layer, or moves to the one-container form: the fake store
+# `FAKE_STORE_CURL`, which `Pod` installs in front of the fake bucket, and
+# the snapshot check of the fake `vmbackup` in `FAKE_BINARY`;
+# `_copied_one_snapshot` and its callers,
+# `test_the_history_store_is_backed_up_and_its_rows_recorded_where_it_holds_no_fewer`
+# and `test_the_recent_store_is_backed_up_whatever_it_holds`, whose assertion
+# on the paths `curl` called goes too;
+# `test_a_failed_backup_deletes_its_snapshot_fails_and_records_nothing`; the
+# `authKey@` assertion of
+# `test_no_credential_is_an_argument_or_a_line_of_output_of_any_process_the_pods_start`;
+# the comparison of the containers that mount the key with those that call
+# the store in
+# `test_the_snapshot_key_reaches_only_the_steps_that_call_the_store_and_only_as_a_file`;
+# and the section of the layer's tripwire.
+#
+# **The removal condition.** `vmbackup` takes the snapshot key through a
+# password-type flag, one that reads `file://` (`flagutil.NewPassword`), such
+# as the `-snapshot.authKey` VictoriaMetrics#6475 proposes, and the store, at
+# the release that ships it, takes the key the way that flag sends it. Then
+# `_snapshotted` returns one container, `vmbackup` with `-snapshot.createURL`
+# at the store and that flag at `key_file`, mounting the key and the data, and
+# the three scripts go.
+#
+# **The tripwire.** `tests/test_monitoring.py` runs the pinned `vmbackup` and
+# the pinned store. Its case of the removal condition,
+# `test_the_pinned_vmbackup_has_no_password_flag_for_the_snapshot_key`, turns
+# red on the `vmbackup` whose help lists a password-type `-snapshot.*` flag.
+# It watches for that remedy rather than for the defect itself: an upstream
+# that stops logging the key some other way, by redacting it from what
+# `vmbackup` logs, leaves it green, and the layer is then judged by the
+# removal condition read again. Its case of the detour,
+# `test_the_pinned_store_takes_its_snapshot_key_from_a_posts_body`, on the
+# store that stops taking the key that way.
+
+
+def _snapshotted(
+    store: Store,
+    copy: list[str],
+    copy_env: list[dict[str, Any]],
+    *,
+    images: Images,
+    key_file: str,
+) -> list[dict[str, Any]]:
+    """`vmbackup` running `copy` with `copy_env`, of a snapshot of `store` taken at the store with the key at `key_file`.
+
+    Three steps: the snapshot taken, `vmbackup` of it, and the snapshot
+    deleted, whether or not `vmbackup` succeeded, which also fails the run
+    where `vmbackup` failed. A run that never reaches the deletion -- one cut
+    off at its deadline, one whose `vmbackup` container never starts, one
+    whose store does not answer the deletion -- leaves the snapshot to the
+    store's `-snapshotsMaxAge`, at most one a run.
+    """
+
+    def snapshot_step(name: str, script: str) -> dict[str, Any]:
+        return {
+            'name': name,
+            'image': images.bucket,
+            'command': ['/bin/sh', f'{SHELL_DIR}/{script}'],
+            'env': [
+                {'name': 'STORE', 'value': store.url},
+                {'name': 'KEY', 'value': key_file},
+                {'name': 'WORK', 'value': WORK_DIR},
+            ],
+            # The store's address and its snapshot key are all it reads.
+            'volumeMounts': _mounts(data=False, snapshot_key=True),
+            'resources': memory.BUCKET_STEP.rendered(),
+        }
+
+    vmbackup = {
+        'name': 'vmbackup',
+        'image': images.backup,
+        'command': ['/bin/sh', f'{SHELL_DIR}/backup.sh', *copy],
+        'env': [{'name': 'WORK', 'value': WORK_DIR}, *copy_env],
+        'volumeMounts': _mounts(data=True),
+        'resources': memory.VMBACKUP.rendered(),
+    }
+    return [
+        snapshot_step('snapshot-create', 'snapshot-create.sh'),
+        vmbackup,
+        snapshot_step('snapshot-delete', 'snapshot-delete.sh'),
+    ]
