@@ -33,6 +33,28 @@ from ..prcheck import Commit, Hunk, Status
 NOT_WRITTEN_HERE = ('sdks/', 'packages/crds/', 'mise.lock', 'mise.ci.lock', 'tests/vendor/', 'tests/data/')
 
 
+#: The most of an item's context, in characters, whatever its extractor joins: well under a batch's token cap
+#: (`ask.TOKEN_CAP`), so that a batch holds several items and no one item's call grows with what it reads.
+ITEM_CONTEXT_CAP = 24_000
+#: What stands where `bounded` cuts a context, with the count of characters cut.
+_CUT = '\n… [{} characters of the context left out] …\n'
+
+
+def bounded(context: str) -> str:
+    """`context` held to `ITEM_CONTEXT_CAP`: where longer, its middle is cut out and the cut says how much went.
+
+    Both ends stay, since an extractor puts where the item sits first and,
+    for an assertion, the case around it last.
+    """
+    if len(context) <= ITEM_CONTEXT_CAP:
+        return context
+    # The count of what is cut has no more digits than the context's length.
+    keep = ITEM_CONTEXT_CAP - len(_CUT.format(len(context)))
+    head = keep // 2
+    tail = len(context) - (keep - head)
+    return f'{context[:head]}{_CUT.format(tail - head)}{context[tail:]}'
+
+
 #: The directory a commit's message is presented under as a place (`message_path`).
 COMMITS = ':commit'
 
@@ -54,14 +76,22 @@ def written_here(path: str) -> bool:
 
 @dataclass(frozen=True)
 class Item:
-    """One thing a gate asks about: a place at the head, its text, and the context the question needs."""
+    """One thing a gate asks about: a place at the head, its text, and the context the question needs.
+
+    The context is held to `ITEM_CONTEXT_CAP` (`bounded`) as the item is
+    made, so no extractor can hand the model more.
+    """
 
     path: str
     line: int
     end_line: int
     text: str
-    #: The enclosing case or paragraph, and the module-level names the text reads; empty where none is needed.
+    #: What the extractor gives beside the text for its gate's question, as its own docstring says; empty where
+    #: none is needed.
     context: str = ''
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, 'context', bounded(self.context))
 
     def overlaps(self, line: int, end_line: int) -> bool:
         """Whether any of lines `line`–`end_line` is one of this item's."""

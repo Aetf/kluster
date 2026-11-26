@@ -8,12 +8,19 @@ any of whose lines the change writes or rewrites, and its context is what a
 reader needs to trace its sides and nothing more, in this order:
 
 -   the test module's top-level statements binding the names the case reads
-    or takes as a fixture (`module`);
+    or takes as a fixture (`module`), where a helper the case calls is given
+    whole, up to `reading.CONTEXT_CAP`, since what it computes is a side of
+    the assertion;
 -   the program's definitions of the names among them it imports from the
-    program, and of the attributes the case reads off an imported program
-    module (`program`);
+    program, of the attributes the case reads off an imported program
+    module, and of the members it reads off an object of a program class
+    (`program`); of the names a helper the case calls reads, the same;
+    each up to `reading.CONTEXT_CAP`;
 -   the case the assertion sits in, whole: the outermost function around
     it. An assertion at module level has none.
+
+The whole is held to `extract.ITEM_CONTEXT_CAP` as the item is made, its
+middle cut where it runs over, so the case at its end stays.
 """
 
 from __future__ import annotations
@@ -23,9 +30,10 @@ from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 
 from ...paths import OwnedPath
+from .. import program
 from ..extract import Change, Item
-from . import program
-from .module import Binding, Function, bindings, definition_end, first_line
+from ..module import Binding, Function, bindings, definition_end, first_line
+from ..reading import capped
 
 #: The files whose assertions the gate reads.
 TESTS = 'tests/**.py'
@@ -98,25 +106,33 @@ def _context(code: program.Program, module: _Module, check: _Check) -> str:
     """The test module's statements the case reads, the program's definitions of them, then the case."""
     case = check.case
     scope: ast.AST = case if case is not None else check.node
-    names = {n.id for n in ast.walk(scope) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)}
+    reads = program.reads(scope)
+    names = {r[0] for r in reads if len(r) == 1}
     if case is not None:
         arguments = case.args
         names |= {a.arg for a in (*arguments.posonlyargs, *arguments.args, *arguments.kwonlyargs)}
-    attributes: dict[str, set[str]] = {}
-    for node in ast.walk(scope):
-        if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
-            attributes.setdefault(node.value.id, set()).add(node.attr)
+    called = _called(scope)
     read = {id(s): s for name, s in module.bound.items() if name in names and s is not case}
-    blocks = [
-        _block(module.path, first_line(s), definition_end(s), module.lines)
-        for s in sorted(read.values(), key=lambda s: s.lineno)
-    ]
-    defined = code.definitions(module.imported, names, attributes)
-    blocks += [f'{_heading(d.path, d.first, d.last)}\n{d.text}' for d in sorted(set(defined), key=_where)]
+    blocks: list[str] = []
+    for statement in sorted(read.values(), key=lambda s: s.lineno):
+        first = first_line(statement)
+        if isinstance(statement, Function) and statement.name in called:
+            last = statement.end_lineno or statement.lineno
+            blocks.append(f'{_heading(module.path, first, last)}\n{capped(_span(module.lines, first, last))}')
+            reads |= program.reads(statement)
+        else:
+            blocks.append(_block(module.path, first, definition_end(statement), module.lines))
+    defined = code.definitions(module.imported, reads | {(name,) for name in names})
+    blocks += [f'{_heading(d.path, d.first, d.last)}\n{capped(d.text)}' for d in sorted(set(defined), key=_where)]
     if case is not None:
         first, last = first_line(case), case.end_lineno or case.lineno
         blocks.append(f'{_heading(module.path, first, last)}, the enclosing case\n{_span(module.lines, first, last)}')
     return '\n\n'.join(blocks)
+
+
+def _called(scope: ast.AST) -> set[str]:
+    """The names `scope` calls by name: the test module's helpers among them."""
+    return {n.func.id for n in ast.walk(scope) if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)}
 
 
 def _where(definition: program.Definition) -> tuple[str, int]:

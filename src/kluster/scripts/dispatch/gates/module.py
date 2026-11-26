@@ -1,9 +1,12 @@
 """A Python module's top-level bindings, and how much of each one an item's context gives.
 
-The test module's and the program's are read alike: an assignment or an
+A test module's and the program's are read alike: an assignment or an
 import is its whole statement, since its value is what an assertion may
 restate; a function or a class is its signature and docstring, since a case
-reads it by what it returns or makes.
+reads it by what it returns or makes. The one exception is a test module's
+helper that a case calls, which the change-detector extractor gives whole
+(`change_detector.assertions`), since what the case asserts on is what its
+body computes.
 """
 
 from __future__ import annotations
