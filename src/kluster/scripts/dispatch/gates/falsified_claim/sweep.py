@@ -4,9 +4,9 @@ A claim is a sentence of a hunk, on either side of it: what the base said
 before the change, and what the head says after. A passage is a block of
 prose at the head (`gates.prose`). A claim reaches a passage that holds two
 of its terms within `WINDOW` characters of each other, in either order,
-which is the proximity pattern `a.{0,120}b` of style/README.md, "Comments
-and docs", over whitespace-collapsed text, run for every pair of the claim's
-terms.
+which is the proximity pattern `a.{0,120}b` of style/README.md, "A sweep
+looks for the claim, not the identifier", over whitespace-collapsed text,
+run for every pair of the claim's terms.
 
 The terms are the claim's nouns as nearly as words can say: each word of
 `SHORTEST` letters or more, in lower case and with its inflection cut

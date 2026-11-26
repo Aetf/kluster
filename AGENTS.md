@@ -56,8 +56,9 @@ except where a bullet says otherwise:
 * a claim the change made false is swept for — not the identifier that
   moved. How to shape the patterns, and what a sweep that found nothing
   owes the pull request, are in
-  [docs/style/README.md](docs/style/README.md) under "Comments and
-  docs". This one runs on a workstation only; CI does not run it.
+  [docs/style/README.md](docs/style/README.md) under "A sweep looks for
+  the claim, not the identifier". This one runs on a workstation only;
+  CI does not run it.
 * provider-facing code has one more requirement —
   [dispatch.md](docs/framework/dispatch.md) §1.1
 
@@ -115,9 +116,6 @@ ships with it rather than after it.
 
 ## Writing the prose
 
-* **Every artifact is as-built.** Docs, comments and commit messages say
-  what is, not what was done: no "verified on", no narrative of attempts,
-  no history the reader has to subtract.
 * **Prose is checked like code.** Every markdown file this repository
   writes passes `ltex-cli-plus` against `.vscode/ltex.dictionary.en-US.txt` and
   `.vscode/ltex.disabledRules.en-US.txt`. The checker is pinned like
@@ -249,6 +247,32 @@ ships with it rather than after it.
       with, is the reword, "the rows of `apps`", which leaves nothing to
       pair. Resizing the text above only moves the finding, and the rule
       stays on, because a quote left open is a real finding in prose.
+
+### Every artifact is as-built
+
+Docs, comments and commit messages say what is, not what was done: no
+"verified on", no narrative of attempts, no history the reader has to
+subtract.
+
+Provenance is narration too. Where a thing came from — the review, the
+issue, the pull request or the conversation that asked for it or found
+it — is the story of how it got there, and the artifact leaves it out.
+A reason is cited where this repository's own documents hold it: a
+doc, a comment or a commit message names the document that holds a
+reason, never a review, an issue comment or a pull request as the
+reason a thing is so. A ruling is one such reason: "ruled in
+kluster-ops#NNN" is metadata of how a thing was decided, so the
+ruling's record stays in the ledger, and the document states the rule.
+
+These references are not provenance, and stay:
+
+* the ledger line that names the issue a change belongs to, in its pull
+  request's description ([dispatch.md](docs/framework/dispatch.md) §1.1)
+  and in its commit message;
+* a runbook's record of a run, which keeps the issue the run was made
+  under: "**Done on 2026-11-22** (`kluster-ops#935`)";
+* a third party's own record, such as its documentation, its source or
+  an issue in its tracker, cited as evidence of how that party behaves.
 
 ## Working beside other agents
 

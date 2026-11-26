@@ -328,22 +328,6 @@ case: dependencies and start order between systemd units are declared
 in the units (`After=`/`Requires=`/`BindsTo=`), never in the order
 resources happen to be created or in boot scripts.
 
-**The program declares constraints, not conclusions.** Where a runtime
-mechanism derives an answer — the scheduler placing a pod, a volume
-binding on the node its consumer runs on — the program declares the
-fact the mechanism derives it from: the device a pod requests, the
-volume it mounts, the egress it needs. It never states the answer. A
-conclusion written into a declaration is a second statement of a fact
-the mechanism already holds. It agrees until the fact moves, and then
-the program forces the old answer. A pod that requests a GPU is
-scheduled only onto a node that offers one, so nothing restates the
-device's node label, and a mover takes its placement from the workload
-that uses the volume rather than from a copy of that workload's
-requirements. Where a constraint has to be written explicitly, it is
-built from the declaration that implies it and says which fact it
-stands for. A conclusion about where something runs belongs in planning
-documents and nowhere in the program.
-
 **A logical name is chosen, never derived from a value that can
 move.** A resource's logical name is half of the URN its state is keyed
 by, so renaming one is a delete and a create — not a rename. A name
@@ -588,6 +572,23 @@ another owner. A resource that stays fully ignored has no owner.
 **Rendered configuration comes from files** — see
 [python.md](python.md)'s long-literals rule; the loading mechanism is
 shared, one per repository, not re-invented per component.
+
+### The program declares constraints, not conclusions
+
+Where a runtime mechanism derives an answer — the scheduler placing a
+pod, a volume binding on the node its consumer runs on — the program
+declares the fact the mechanism derives it from: the device a pod
+requests, the volume it mounts, the egress it needs. It never states the
+answer. A conclusion written into a declaration is a second statement of
+a fact the mechanism already holds. It agrees until the fact moves, and
+then the program forces the old answer. A pod that requests a GPU is
+scheduled only onto a node that offers one, so nothing restates the
+device's node label, and a mover takes its placement from the workload
+that uses the volume rather than from a copy of that workload's
+requirements. Where a constraint has to be written explicitly, it is
+built from the declaration that implies it and says which fact it stands
+for. A conclusion about where something runs belongs in planning
+documents and nowhere in the program.
 
 ## Review questions
 
