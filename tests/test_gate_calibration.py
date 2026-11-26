@@ -23,11 +23,12 @@ import pytest
 from gate_stub import RULE, RULE_DOCUMENT, SPEC, stub_gate
 
 from kluster.lib import workstation
-from kluster.scripts.dispatch.gates import ask, gate
-from kluster.scripts.dispatch.gates.calibrate import calibrate
+from kluster.scripts.dispatch import cli
+from kluster.scripts.dispatch.gates import ask, gate, run
+from kluster.scripts.dispatch.gates.calibrate import Unanswered, calibrate
 from kluster.scripts.dispatch.gates.calibration import Status, standing
 from kluster.scripts.dispatch.gates.cases import Case
-from kluster.scripts.dispatch.gates.gate import CASES, Gate
+from kluster.scripts.dispatch.gates.gate import CASES, RECORD, Gate
 from kluster.scripts.dispatch.gates.model import Model, Reply, Request
 from kluster.scripts.dispatch.gates.verdict import Verdict
 
@@ -116,9 +117,15 @@ class Scripted:
     #: How many times to answer `pass` to the line `slip` names, before answering as scripted.
     slips: int = 0
     slip: str = ''
+    #: How many calls to fail, as the API does when it still fails after the SDK's retries, before answering.
+    failures: int = 0
     _lock: threading.Lock = field(default_factory=threading.Lock)
 
     def ask(self, request: Request) -> Reply:
+        with self._lock:
+            if self.failures:
+                self.failures -= 1
+                return Reply(None, 'the call failed: APIConnectionError')
         rows = cast(list[dict[str, Any]], json.loads(request.user.split('\n\n', 1)[1]))
         answers: list[dict[str, object]] = []
         for row in rows:
@@ -127,7 +134,8 @@ class Scripted:
                 if finding and self.slips and row['text'] == self.slip:
                     self.slips -= 1
                     finding = False
-            answers.append({'id': row['id'], 'verdict': 'finding' if finding else 'pass', 'why': 'scripted'})
+            why = f'scripted for {row["text"]}'
+            answers.append({'id': row['id'], 'verdict': 'finding' if finding else 'pass', 'why': why})
         return Reply(json.dumps({'items': answers}))
 
 
@@ -162,7 +170,7 @@ def test_a_gate_that_meets_the_bar_earns_blocking_and_runs_blocking(tmp_path: Pa
     def model() -> Model:
         return Scripted()
 
-    record = calibrate(stub, checkout, model)
+    record = calibrate(stub, checkout, model).record
 
     assert (record.status, record.recall, record.false_positives, record.pair) == (Status.BLOCKING, 1.0, 0.0, True)
     assert stub.record() == record
@@ -177,7 +185,7 @@ def test_a_falsifier_pair_that_slips_in_one_sample_keeps_the_gate_in_shadow(tmp_
     def model() -> Model:
         return scripted
 
-    record = calibrate(stub, checkout, model)
+    record = calibrate(stub, checkout, model).record
 
     # Two samples of three still find it, and recall over the set is whole: the pair alone keeps it out.
     assert (record.status, record.recall, record.pair) == (Status.SHADOW, 1.0, False)
@@ -194,7 +202,62 @@ def test_a_set_short_of_the_minimum_earns_no_status_whatever_it_scores(tmp_path:
     def model() -> Model:
         return Scripted()
 
-    record = calibrate(stub, checkout, model)
+    record = calibrate(stub, checkout, model).record
 
     assert (record.status, record.recall, record.pair) == (Status.SHADOW, 1.0, True)
     assert record.shortfalls() == ['the set holds 3 positives and 1 negatives, where the bar measures on 8 of each']
+
+
+def _command(monkeypatch: pytest.MonkeyPatch, stub: Gate, checkout: Path, scripted: Scripted) -> int:
+    """`dispatch gates calibrate stub`, its gate `stub`, its checkout `checkout` and its model `scripted`."""
+
+    def named(name: str) -> Gate:
+        assert name == stub.name
+        return stub
+
+    def messages() -> Model:
+        return scripted
+
+    monkeypatch.setattr(gate, 'named', named)
+    monkeypatch.setattr(run, 'messages', messages)
+    monkeypatch.setattr(workstation, 'repo_root', lambda: checkout)
+    return cli.main(['gates', 'calibrate', stub.name])
+
+
+def test_a_run_in_which_a_sample_answered_nothing_writes_no_record_and_refuses(
+    tmp_path: Path,
+    checkout: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    stub = stub_gate(tmp_path)
+    cases = _set(stub)
+
+    def model() -> Model:
+        return Scripted()
+
+    _ = calibrate(stub, checkout, model)
+    before = (stub.directory / RECORD).read_text()
+
+    # One call of three fails, so two samples still find every positive and the scores would read as whole.
+    assert _command(monkeypatch, stub, checkout, Scripted(failures=1)) == cli.REFUSED
+
+    assert (stub.directory / RECORD).read_text() == before
+    # The samples that did answer are still reported, each with its reason.
+    out = capsys.readouterr().out
+    assert all(out.count(f'scripted for {c.text}') == 2 for c in cases)
+    with pytest.raises(Unanswered) as refused:
+        _ = calibrate(stub, checkout, lambda: Scripted(failures=1))
+    assert refused.value.judgement.unanswered() == list(range(len(cases)))
+
+
+def test_calibration_reports_each_cases_samples_with_their_reasons(
+    tmp_path: Path, checkout: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    stub = stub_gate(tmp_path)
+    cases = _set(stub)
+
+    assert _command(monkeypatch, stub, checkout, Scripted()) == cli.DONE
+
+    out = capsys.readouterr().out
+    assert all(out.count(f'scripted for {c.text}') == 3 for c in cases)

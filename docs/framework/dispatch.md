@@ -1213,10 +1213,16 @@ nothing. A gate blocks once `dispatch gates calibrate` has measured it
 against its labelled set: the gate's `cases.jsonl`, whose first two
 cases are the one it must catch and the one it must pass. Its record,
 `calibration.json`, holds the hashes of its prompt, the canonical text
-and its model id, and what the set scored. The prompt is the gate's
-`prompt.md` together with the fixed text every call carries beside it
-and the counts its samples are judged by, so an edit to any of them is
-an edit to the prompt. The bar is set beside the
+and its model id, and what the set scored. Why the gate judged each case
+as it did stays out of the record: `calibrate` prints every case to
+standard output beside its label, the falsifier pair marked, with
+whether it held and each sample's verdict and reason. A calibration in
+which any sample answered nothing, an API error left after the SDK's
+retries among the causes, measured nothing about that case, so it
+writes no record, leaves the one already there, and says why. The
+prompt is the gate's `prompt.md` together with the fixed text every
+call carries beside it and the counts its samples are judged by, so an
+edit to any of them is an edit to the prompt. The bar is set beside the
 record (`gates.calibration`): the falsifier pair holds in every sample,
 the set holds enough positives and negatives, recall is high enough, and
 false positives few enough. The status is read off those measurements

@@ -7,9 +7,13 @@ which are the prompt (`prompt.md` with the harness's own fixed text,
 and what the set scored. A gate blocks only while those scores meet the
 bar and all three of those hashes still match the gate as it is run;
 anything else is `shadow`, posted and advisory, with the reason said
-(`standing`). A pytest case holds every record's hashes against its gate
-in the tree, so an edit to a prompt, a model or a canonical section turns
-the gate red until it is measured again (dispatch.md §3).
+(`standing`). A run in which any sample answered nothing measured
+nothing about those cases: it writes no record, leaves the one already
+there, and refuses (`calibrate.Unanswered`). The record holds no
+sample's reason; the command prints each one. A pytest case holds every
+record's hashes against its gate in the tree, so an edit to a prompt, a
+model or a canonical section turns the gate red until it is measured
+again (dispatch.md §3).
 
 The bar is this repository's, not the canon's, and moving it re-derives
 every status at once.
@@ -34,6 +38,8 @@ RECALL = 0.8
 FALSE_POSITIVES = 1 / 20
 #: The fewest positives, and the fewest negatives, a set measures a blocking gate on.
 MINIMUM = 8
+#: The falsifier pair, the first cases of every set: the verdict each is labelled, and every sample must give.
+PAIR = (Verdict.FINDING, Verdict.PASS)
 
 
 class Status(enum.StrEnum):
@@ -158,6 +164,18 @@ def standing(record: Calibration | None, now: Hashes) -> tuple[Status, str]:
     return Status.BLOCKING, (f'calibrated on {record.positives} positives and {record.negatives} negatives, at the bar')
 
 
+def pair_held(index: int, case: Case, judged: Judged) -> bool:
+    """Whether the case at `index` of a set holds as its place in the falsifier pair asks.
+
+    It holds where it is labelled with that place's verdict in `PAIR` and
+    every sample gives that verdict; a case past the pair never holds as one.
+    """
+    if index >= len(PAIR):
+        return False
+    wanted = PAIR[index]
+    return case.verdict is wanted and all(s is not None and s.verdict is wanted for s in judged.samples)
+
+
 def measure(set_: Sequence[Case], judged: Sequence[Judged], *, cases: str, hashes: Hashes) -> Calibration:
     """The record of `judged`, the gate's verdicts on `set_` in the same order."""
     if len(set_) != len(judged):
@@ -167,13 +185,7 @@ def measure(set_: Sequence[Case], judged: Sequence[Judged], *, cases: str, hashe
     negatives = [j for c, j in pairs if c.verdict is Verdict.PASS]
     recall = sum(1 for j in positives if j.finding) / len(positives) if positives else None
     false_positives = sum(1 for j in negatives if j.finding) / len(negatives) if negatives else None
-    pair = (
-        len(pairs) >= 2
-        and pairs[0][0].verdict is Verdict.FINDING
-        and pairs[1][0].verdict is Verdict.PASS
-        and all(s is not None and s.verdict is Verdict.FINDING for s in pairs[0][1].samples)
-        and all(s is not None and s.verdict is Verdict.PASS for s in pairs[1][1].samples)
-    )
+    pair = len(pairs) >= len(PAIR) and all(pair_held(index, c, j) for index, (c, j) in enumerate(pairs[: len(PAIR)]))
     return Calibration(
         hashes=hashes,
         cases=cases,
