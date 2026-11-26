@@ -1,8 +1,8 @@
 """`gate: conclusion`: does this state where something runs, when a runtime mechanism derives that?
 
-The canon is the section of style/pulumi.md that holds "The program
-declares constraints, not conclusions". The extractor narrows a change to
-the passages it writes about placement:
+The canon is style/pulumi.md's "The program declares constraints, not
+conclusions". The extractor narrows a change to the passages it writes about
+placement:
 
 -   in the components, the Kubernetes library and the conventions, a
     statement whose words reach placement (`_PLACEMENT_CODE`): an affinity,
@@ -167,7 +167,7 @@ def _items(path: str, module: Module, passage: Passage, written: Sequence[tuple[
 
 
 GATE = Spec(
-    canon=Canon('docs/style/pulumi.md', 'Resources and their contents'),
+    canon=Canon('docs/style/pulumi.md', 'The program declares constraints, not conclusions'),
     trigger=TRIGGER,
     extract=extract,
 )

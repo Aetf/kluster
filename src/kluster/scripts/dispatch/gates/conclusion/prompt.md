@@ -7,8 +7,6 @@ derives, such as the node, site or pool something runs on, where the program
 should declare the fact that answer is derived from? Answer `finding` where
 it does and `pass` where it does not, with one sentence saying why.
 
-The rule, as this repository states it. The question is about the paragraph
-that opens "The program declares constraints, not conclusions"; the rest of
-the section governs other questions.
+The rule, as this repository states it:
 
 {canon}

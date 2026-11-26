@@ -142,41 +142,6 @@ what the next line does, not where an idea came from. Every artifact is
 as-built: comments, commit messages, docs describe what is, without the
 story of how it got there.
 
-**A count is written only where the members it counts are in view** —
-in the same paragraph, or in the list or the subsections immediately
-below it. There the number is a reading aid the reader verifies on the
-spot, and anyone who grows the list is already looking at it: a set
-that grows is not the problem, distance is. Everywhere else the count
-is a liability, and a set counted anywhere other than immediately above
-its own members is named without a number — "a decision that moved
-during construction", not "one decision moved". Dropping it turns a
-sentence that goes **false** as the set grows into one that goes
-**incomplete**, and incomplete fails open, because a reader who follows
-it finds more than was promised instead of hunting for something that
-is no longer there.
-
-**A count in a comment is a claim about a list the reader cannot see.**
-The rule above is about prose whose members sit in the same document,
-where a reader verifies the number on the spot. A comment counts a body
-of code instead — declarations spread down a file, some of them
-conditional — and nothing brings the two together: the comment is read
-where it stands, the code changes where it stands, and a reader who
-disagrees with the number has no way to tell which of them is wrong.
-Name the members, or point at the list, and let the code be the census:
-"the pinhole is the only conditional policy", not "ten rules, one
-forward".
-
-**A count that belongs to another document is never restated**,
-wherever that document keeps it and however close its own members sit
-to it there. The two failures are not the same failure: a stale count
-of one's own set leaves the sentence incomplete, while a copied count
-can lose its referent altogether — a reader sent to find "the two
-criteria" in a document that now states three has nothing to match the
-sentence against, and no way to tell which one went missing. Naming the
-members as anchors is fine, since a list left short fails open the way
-any incomplete sentence does; it is the quantifier that may not travel.
-Cite the document and leave the number where the members are.
-
 **A section is cited by the number its document visibly gives it.**
 `§N.M` is a numbered heading or an inline `**§N.M**` label. A numbered
 list item is `§N.M` only under a heading with no numbered heading or
@@ -185,91 +150,6 @@ a reader who finds `### N.1` and `### N.2` but no `### N.3` reads `§N.3`
 as stale rather than as the third item of a list. The sweep
 (`tests/test_docs_sections.py`) holds this, so a citation of the other
 kind fails the gate rather than reading as a stale number.
-
-**When a change makes a claim false, sweep for the claim, not for the
-identifier that moved.** Searching for the symbol finds call sites; the
-sentence that asserted something about them is prose, and only a search
-for the claim itself finds it. Five things keep that search from being
-open-ended:
-
--   **Anchor the pattern on the claim's nouns, not on its predicates.**
-    A predicate is where a document's voice varies — "comes from", "is
-    read at", "lives in" — while the nouns of a technical claim are
-    this repository's own fixed terms. A proximity match between two
-    nouns, with no verb in it at all, is the form that survives
-    whatever voice the target happens to be written in.
--   **The operator between those nouns is `.{0,N}`**, matched over text
-    whose whitespace has been collapsed first, or under `re.S` where it
-    has not:
-
-        state backend.{0,120}B2
-
-    `\W{0,N}` is the trap. `\W` matches a *single* non-word character,
-    so the run spans punctuation and whitespace and **cannot cross an
-    intervening word**: over `state backend exists. Mints the B2
-    management key`, the pattern above matches and
-    `state backend\W{0,120}B2` returns nothing. The weak form reads as
-    "these two terms within a hundred and twenty characters of each
-    other", which is what a proximity sweep means and not what it does.
-    The naming rule below does not catch it either: a reader handed the
-    pattern reads the intent rather than the defect. `\b` has the same
-    shape of failure on a noun with an underscore in it: `_` is a word
-    character, so `\brestore\b` does not match inside `pg_restore`, and
-    a boundary meant to keep `restores` out keeps every `pg_` form out
-    with it.
--   **Make a second pass for closure operators near those nouns** —
-    "nowhere else", "only", "never", "no other", "and nothing else". A
-    change that adds an exception leaves the affirmative form merely
-    incomplete but falsifies the closed form outright, and the closed
-    form shares almost no vocabulary with the affirmative one. The
-    variant hardest to reach by matching predicates is the one whose
-    staleness costs the most.
--   **A sweep that found nothing names the patterns it used**, in the
-    pull request or the commit message. "It appears nowhere else in the
-    repository" is not a result a reviewer can falsify.
--   **A pattern that has never fired is not evidence when it reports
-    nothing, and it is exercised in both directions.** Before a clean
-    sweep is read as an absence, run the pattern against a string that
-    must match — the claim as some document actually words it — and
-    confirm it fires; then against a passage the claim is absent from,
-    and confirm it stays silent. The first direction separates "the
-    claim is gone" from "the pattern could never reach it". The second
-    is what makes a hit attributable to the claim rather than to a
-    pattern that would fire anywhere: a mistyped noun leaves `.{0,120}`
-    to do the work, passes the positive check on its own, and turns the
-    sweep into a page of hits to read by eye — a degradation nothing
-    else in the run announces.
-
-**Every pass is newline-insensitive.** Prose here is soft-wrapped, so
-the break falls wherever the wrap puts it, and the line a line-oriented
-matcher sees holds only half the claim: the match returns nothing and
-the sweep reports clean. Collapse whitespace before matching — a few
-lines of Python over the files, which does the proximity matching above
-in the same pass — or run a matcher in a mode that is not line-oriented
-where it has one, or search for the rarest single word in the phrase
-and read the hits. Under-reporting is the failure mode that matters
-here, because it is silent and looks exactly like a clean sweep.
-
-**Every pass reports how many files it read, and a skip set is tested
-against paths relative to the tree being swept.** A sweep run inside a
-workspace stands under the primary checkout's `.claude/`
-([framework/dispatch.md](../framework/dispatch.md) §1.2), so a skip set
-written to keep scratch out excludes every file when it is tested
-against absolute paths, and the sweep visits nothing and reports clean.
-The file count is the control that catches it, the way the positive
-match above catches a pattern that cannot fire: a sweep that read no
-files has found nothing about the repository.
-
-**Scratch is what `.gitignore` ignores, not everything under
-`.claude/`.** The role definitions in `.claude/agents/` and the project
-settings in `.claude/settings.json` are tracked, and a sweep reads them
-like any other file; everything else under `.claude/` — workspaces,
-worktrees, tool configuration, dumps — is ignored scratch. So a skip set
-never names `.claude` itself: it names the ignored paths, which are
-`/.claude/*` less the paths `.gitignore` re-includes after it. The walk
-that needs no skip set at all is the tracked files — `jj file list`
-inside a workspace, `git ls-files` in a checkout — which hold no scratch
-to begin with.
 
 **A document that retires holds only what retires with it.** A runbook
 for a move made once, or a table that lives as long as a transition,
@@ -360,6 +240,130 @@ the design; `docs/rfc/` holds the accepted proposals those documents
 were changed by, as history rather than as reference; this directory
 owns how things are written. What that leaves a vocabulary sweep free
 to edit is [framework/rfc.md](../framework/rfc.md) §5.3.
+
+### A count stands beside the members it counts
+
+**A count is written only where the members it counts are in view** —
+in the same paragraph, or in the list or the subsections immediately
+below it. There the number is a reading aid the reader verifies on the
+spot, and anyone who grows the list is already looking at it: a set
+that grows is not the problem, distance is. Everywhere else the count
+is a liability, and a set counted anywhere other than immediately above
+its own members is named without a number — "a decision that moved
+during construction", not "one decision moved". Dropping it turns a
+sentence that goes **false** as the set grows into one that goes
+**incomplete**, and incomplete fails open, because a reader who follows
+it finds more than was promised instead of hunting for something that
+is no longer there.
+
+**A count in a comment is a claim about a list the reader cannot see.**
+The rule above is about prose whose members sit in the same document,
+where a reader verifies the number on the spot. A comment counts a body
+of code instead — declarations spread down a file, some of them
+conditional — and nothing brings the two together: the comment is read
+where it stands, the code changes where it stands, and a reader who
+disagrees with the number has no way to tell which of them is wrong.
+Name the members, or point at the list, and let the code be the census:
+"the pinhole is the only conditional policy", not "ten rules, one
+forward".
+
+**A count that belongs to another document is never restated**,
+wherever that document keeps it and however close its own members sit
+to it there. The two failures are not the same failure: a stale count
+of one's own set leaves the sentence incomplete, while a copied count
+can lose its referent altogether — a reader sent to find "the two
+criteria" in a document that now states three has nothing to match the
+sentence against, and no way to tell which one went missing. Naming the
+members as anchors is fine, since a list left short fails open the way
+any incomplete sentence does; it is the quantifier that may not travel.
+Cite the document and leave the number where the members are.
+
+### A sweep looks for the claim, not the identifier
+
+**When a change makes a claim false, sweep for the claim, not for the
+identifier that moved.** Searching for the symbol finds call sites; the
+sentence that asserted something about them is prose, and only a search
+for the claim itself finds it. Five things keep that search from being
+open-ended:
+
+-   **Anchor the pattern on the claim's nouns, not on its predicates.**
+    A predicate is where a document's voice varies — "comes from", "is
+    read at", "lives in" — while the nouns of a technical claim are
+    this repository's own fixed terms. A proximity match between two
+    nouns, with no verb in it at all, is the form that survives
+    whatever voice the target happens to be written in.
+-   **The operator between those nouns is `.{0,N}`**, matched over text
+    whose whitespace has been collapsed first, or under `re.S` where it
+    has not:
+
+        state backend.{0,120}B2
+
+    `\W{0,N}` is the trap. `\W` matches a *single* non-word character,
+    so the run spans punctuation and whitespace and **cannot cross an
+    intervening word**: over `state backend exists. Mints the B2
+    management key`, the pattern above matches and
+    `state backend\W{0,120}B2` returns nothing. The weak form reads as
+    "these two terms within a hundred and twenty characters of each
+    other", which is what a proximity sweep means and not what it does.
+    The naming rule below does not catch it either: a reader handed the
+    pattern reads the intent rather than the defect. `\b` has the same
+    shape of failure on a noun with an underscore in it: `_` is a word
+    character, so `\brestore\b` does not match inside `pg_restore`, and
+    a boundary meant to keep `restores` out keeps every `pg_` form out
+    with it.
+-   **Make a second pass for closure operators near those nouns** —
+    "nowhere else", "only", "never", "no other", "and nothing else". A
+    change that adds an exception leaves the affirmative form merely
+    incomplete but falsifies the closed form outright, and the closed
+    form shares almost no vocabulary with the affirmative one. The
+    variant hardest to reach by matching predicates is the one whose
+    staleness costs the most.
+-   **A sweep that found nothing names the patterns it used**, in the
+    pull request or the commit message. "It appears nowhere else in the
+    repository" is not a result a reviewer can falsify.
+-   **A pattern that has never fired is not evidence when it reports
+    nothing, and it is exercised in both directions.** Before a clean
+    sweep is read as an absence, run the pattern against a string that
+    must match — the claim as some document actually words it — and
+    confirm it fires; then against a passage the claim is absent from,
+    and confirm it stays silent. The first direction separates "the
+    claim is gone" from "the pattern could never reach it". The second
+    is what makes a hit attributable to the claim rather than to a
+    pattern that would fire anywhere: a mistyped noun leaves `.{0,120}`
+    to do the work, passes the positive check on its own, and turns the
+    sweep into a page of hits to read by eye — a degradation nothing
+    else in the run announces.
+
+**Every pass is newline-insensitive.** Prose here is soft-wrapped, so
+the break falls wherever the wrap puts it, and the line a line-oriented
+matcher sees holds only half the claim: the match returns nothing and
+the sweep reports clean. Collapse whitespace before matching — a few
+lines of Python over the files, which does the proximity matching above
+in the same pass — or run a matcher in a mode that is not line-oriented
+where it has one, or search for the rarest single word in the phrase
+and read the hits. Under-reporting is the failure mode that matters
+here, because it is silent and looks exactly like a clean sweep.
+
+**Every pass reports how many files it read, and a skip set is tested
+against paths relative to the tree being swept.** A sweep run inside a
+workspace stands under the primary checkout's `.claude/`
+([framework/dispatch.md](../framework/dispatch.md) §1.2), so a skip set
+written to keep scratch out excludes every file when it is tested
+against absolute paths, and the sweep visits nothing and reports clean.
+The file count is the control that catches it, the way the positive
+match above catches a pattern that cannot fire: a sweep that read no
+files has found nothing about the repository.
+
+**Scratch is what `.gitignore` ignores, not everything under
+`.claude/`.** The role definitions in `.claude/agents/` and the project
+settings in `.claude/settings.json` are tracked, and a sweep reads them
+like any other file; everything else under `.claude/` — workspaces,
+worktrees, tool configuration, dumps — is ignored scratch. So a skip set
+never names `.claude` itself: it names the ignored paths, which are
+`/.claude/*` less the paths `.gitignore` re-includes after it. The walk
+that needs no skip set at all is the tracked files — `jj file list`
+inside a workspace, `git ls-files` in a checkout — which hold no scratch
+to begin with.
 
 ## Review gate
 
