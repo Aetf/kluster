@@ -15,6 +15,9 @@ change as `git diff` printed it.
     names the module imports from the component.
 -   `session`: the commit that added `tests/test_unifi_session.py` and the
     module it tests, which the test imports under another name.
+-   `conventions`: Aetf/kluster#119's, which adds `tests/test_conventions.py`,
+    beside the `conventions` package and its `site` module as its head holds
+    them. A case reads a property off an object the package declares.
 """
 
 from __future__ import annotations
@@ -30,8 +33,9 @@ from gate_stub import PULL, GateMemoryForge, Recorded, commit, git, pull_request
 from kluster.lib import workstation
 from kluster.scripts.dispatch.gates import change_detector, run
 from kluster.scripts.dispatch.gates.calibration import Status
-from kluster.scripts.dispatch.gates.extract import Item, change
+from kluster.scripts.dispatch.gates.extract import ITEM_CONTEXT_CAP, Change, Changed, Item, change
 from kluster.scripts.dispatch.gates.gate import RECORD, Gate
+from kluster.scripts.dispatch.gates.reading import CONTEXT_CAP
 from kluster.scripts.dispatch.gates.verdict import SAMPLES
 from kluster.scripts.dispatch.prcheck import Git
 
@@ -90,17 +94,30 @@ def test_an_item_carries_its_case_whole_and_the_module_level_names_the_case_read
     # The case runs from its `def` at 394 to its last assertion at 426.
     case = '\n'.join(lines[393:426])
     assert items[418].context.endswith(f'# {DEVICES}:394–426, the enclosing case\n{case}')
-    # The case at 191 reads the row `ADGUARD`, given whole; the helper `stack`,
-    # by its signature; and the fixture `typed` it takes as a parameter, by
-    # its signature and docstring. The bodies of the two functions are not
-    # given, nor is the helper `parsed_commands`, which this case never reads.
+    # The case at 191 reads the row `ADGUARD`, given whole; the fixture
+    # `typed` it takes as a parameter, by its signature and docstring, not its
+    # body; and not the helper `parsed_commands`, which this case never reads.
     context = items[199].context
     assert f'# {DEVICES}:28\nADGUARD = devices.DEVICES' in context
-    assert f'# {DEVICES}:51\ndef stack(name: str)' in context
-    assert 'runner = RecordedPulumi()' not in context.partition('the enclosing case')[0]
     assert f'# {DEVICES}:64–71\n@pytest.fixture\ndef typed(' in context
     assert 'monkeypatch.setattr' not in context
     assert 'parsed_commands' not in context
+
+
+def test_a_helper_the_case_calls_is_given_whole_with_the_programs_definitions_of_what_it_reads(
+    repository: Path,
+) -> None:
+    devices = {i.line: i for i in _items(repository, 'devices')}
+    bucket = {i.line: i for i in _items(repository, 'bucket')}
+
+    # The case at 191 calls `stack`, whose body makes the runner it asserts on.
+    assert f'# {DEVICES}:51–54\ndef stack(name: str)' in devices[199].context
+    assert '    runner = RecordedPulumi()' in devices[199].context.partition('the enclosing case')[0]
+    # The case at 95 calls `build`, and only `build` reads `BackupBucket`:
+    # the component's definition comes through the helper.
+    context = bucket[107].context
+    assert '# tests/test_backup_bucket.py:72–73\ndef build(' in context
+    assert '# src/kluster/components/backup/__init__.py:115–122\nclass BackupBucket(Component, ' in context
 
 
 def test_an_item_carries_the_programs_definition_of_each_name_the_case_reads(repository: Path) -> None:
@@ -130,6 +147,37 @@ def test_a_module_imported_under_another_name_is_read_by_that_name(repository: P
     context = items[38].context
     assert f'# {SESSION}:16\nfrom kluster.providers import unifi_session as session' in context
     assert "# src/kluster/providers/unifi_session.py:61\nAPI_KEY_CONFIG = 'unifiApiKey'" in context
+
+
+def test_a_member_read_off_an_object_of_a_program_class_is_given(repository: Path) -> None:
+    items = {i.line: i for i in _items(repository, 'conventions')}
+
+    # The case reads `conventions.LAN_POOL.v6`: `LAN_POOL` is an
+    # `AddressPool(...)`, and its `v6` the property that numbers the /64.
+    context = items[45].context
+    site = 'src/kluster/conventions/site.py'
+    assert f'# {site}:133–140\nLAN_POOL = AddressPool(' in context
+    assert (
+        f'# {site}:122–124\n    @property\n    def v6(self) -> IPv6Network:\n'
+        '        """The pool\'s unique-local /64, numbered like every other subnet at the site."""'
+    ) in context
+
+
+def test_a_large_program_constant_a_helper_reads_is_capped_as_a_part() -> None:
+    test = 'from kluster import big\n\n\ndef helper() -> int:\n    return len(big.BIG)\n\n\ndef test_it() -> None:\n    assert helper()\n'
+    program = 'BIG = (\n' + ''.join(f"    'entry-{n}',\n" for n in range(2000)) + ')\n'
+    files = {'tests/test_big.py': test, 'src/kluster/big.py': program}
+    change = Change(head='0' * 40, files=(Changed('tests/test_big.py', 'A', ((1, 9),)),), text=files.get)
+
+    (item,) = change_detector.GATE.extract(change)
+
+    # The case reads nothing of the program; its helper reads the constant,
+    # which is given as far as a part of a context goes, and the item stays
+    # far under its bound rather than cut to it.
+    definition = item.context.split('# src/kluster/big.py:1–2002\n')[1].split('\n\n')[0]
+    assert definition.startswith('BIG = (') and len(definition) <= CONTEXT_CAP + 1
+    assert len(item.context) < ITEM_CONTEXT_CAP
+    assert 'characters of the context left out' not in item.context
 
 
 def _replies() -> Recorded:

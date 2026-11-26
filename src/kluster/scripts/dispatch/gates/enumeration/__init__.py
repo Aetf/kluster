@@ -9,7 +9,12 @@ among those the change writes:
     one handed to an ordinary call as its arguments; a run of sibling calls
     of one function, each naming a member by a literal, which is a
     registration census (`keep('authelia', …)`); and a statement or prose
-    passage whose words name members as a series (`_SERIES`);
+    passage whose words name members as a series (`_SERIES`). Each is
+    given its context as the reader gives it (`reading.Module.context`):
+    a statement, what it sits in and the definitions it reads, where a
+    definition of its set is often stated; a docstring or a comment, the
+    program's definitions of what it names in code spans, which is where
+    the set it lists may be stated;
 -   in the style rules, a paragraph whose words do;
 -   in a brief, a sentence telling the agent to add an entry somewhere.
 
@@ -28,6 +33,7 @@ from collections.abc import Iterator, Sequence
 from ...paths import OwnedPath
 from ..extract import Change, Item, written_here
 from ..gate import Canon, Spec
+from ..program import Program
 from ..reading import Module, Passage, brief, folded, header, is_brief, markdown, python, strings
 
 #: The Python the extractor reads, the style rules, and every brief.
@@ -173,7 +179,7 @@ def _registrations(module: Module, written: Sequence[tuple[int, int]]) -> Iterat
             yield Item('', start, spans[-1][1], text), covered
 
 
-def _python(path: str, text: str, written: Sequence[tuple[int, int]]) -> list[Item]:
+def _python(code: Program, path: str, text: str, written: Sequence[tuple[int, int]]) -> list[Item]:
     module = python(text)
     if module is None:
         return []
@@ -186,8 +192,7 @@ def _python(path: str, text: str, written: Sequence[tuple[int, int]]) -> list[It
         if not passage.touches(written) or any(n in covered for n in range(passage.first, passage.last + 1)):
             continue
         if _drawn(passage):
-            context = module.context(passage) if passage.node is not None else passage.within
-            items.append(Item(path, passage.first, passage.last, passage.text, context))
+            items.append(Item(path, passage.first, passage.last, passage.text, module.context(passage, code, path)))
     return sorted(items, key=lambda i: (i.line, i.end_line))
 
 
@@ -217,6 +222,7 @@ def _under(patterns: Sequence[str], path: str) -> bool:
 def extract(change: Change) -> list[Item]:
     """The passages the change writes that can name a set's members."""
     items: list[Item] = []
+    code = Program(change.text)
     for changed in change.files:
         text = change.text(changed.path) if changed.written and written_here(changed.path) else None
         if text is None:
@@ -229,7 +235,7 @@ def extract(change: Change) -> list[Item]:
                 if s.touches(written) and _ENTRY.search(folded(s.text))
             ]
         elif path.endswith('.py') and _under(CODE, path):
-            items += _python(path, text, written)
+            items += _python(code, path, text, written)
         elif path.endswith('.md') and _under((RULES,), path):
             items += _prose(path, markdown(text), written)
     return items

@@ -7,8 +7,11 @@ placement:
 -   in the components, the Kubernetes library and the conventions, a
     statement whose words reach placement (`_PLACEMENT_CODE`): an affinity,
     a node selector, a toleration, a requirement or a constraint, a site, a
-    pool, a hold; with the header it sits in and the module-level names it
-    reads, so a label or a requirement it takes from elsewhere is in view.
+    pool, a hold; with its context as the reader gives it
+    (`reading.Module.context`): the header it sits in, that function's or
+    class's docstring, the headers of the compound statements around it,
+    the comment above it and the module-level names it reads, so a label or
+    a requirement it takes from elsewhere is in view.
     A statement longer than `LONG` lines is asked about in its parts, each
     argument or entry that reaches placement;
 -   there too, a docstring or comment paragraph whose words speak of where

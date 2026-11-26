@@ -7,7 +7,10 @@ the least context that question needs:
     and its body is statements of their own; a paragraph of a docstring,
     where a `:param` line opens one too; or a run of lines holding nothing
     but a comment. A passage's `within` is the header of the function or
-    class it sits in.
+    class it sits in, and a statement's `enclosing` is what lies between
+    that header and it: the function's or the class's docstring, and the
+    header of each compound statement it is nested in, with the clause
+    that opens the body it is in (`else:`, `except …:`, `case …:`).
 -   in markdown, a paragraph outside code and front matter, which are what
     the prose reader says they are (`prose.literal`), where a list joins
     the paragraph that leads into it with a colon, and a list's items,
@@ -25,7 +28,15 @@ path's form (`is_brief`). No path of this repository starts with `:`, so no
 path a pull request touches is read as a brief.
 
 An extractor selects, among a file's passages, the ones its own question is
-about.
+about. What a Python passage's question needs beside it is its context
+(`Module.context`): for a statement, where it sits, the comment run ending
+on the line above it (a binding's `#:` documentation), and the module-level
+names it reads; for a docstring or comment, where it sits and the
+program's definition of each dotted name it writes in a code span
+(`program.Program.spanned`). Each part is capped on its own at
+`CONTEXT_CAP`, so a long one cannot crowd out the rest, and the whole is
+held to `extract.ITEM_CONTEXT_CAP` as the item is made, however many names
+the passage spans.
 """
 
 from __future__ import annotations
@@ -39,12 +50,14 @@ from dataclasses import dataclass
 from typing import cast
 
 from ..paths import OwnedPath
+from .module import bindings
+from .program import Program, Source, imports
 from .prose import literal
 
 #: The directory a brief is presented under as a change (`brief_path`).
 BRIEFS = ':brief'
 
-#: The most of a passage's context an item carries, in characters.
+#: The most of each part of a passage's context an item carries, in characters.
 CONTEXT_CAP = 1500
 
 #: A line that opens a list item, in markdown and in a docstring.
@@ -55,6 +68,10 @@ _FIELD = re.compile(r'^\s*:(?:param|raises?|returns?|yields?|type|rtype)\b')
 _FRONT_MATTER = re.compile(r'\A---\n.*?\n---\n', re.S)
 #: Where one sentence ends and the next begins.
 _SENTENCE = re.compile(r'(?<=[.!?])["\')\]*_`]*\s+(?=[A-Z0-9*`(\[])')
+#: A code span holding a dotted name and nothing else.
+_SPANNED = re.compile(r'`([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)`')
+#: The keyword opening a compound statement's clause that has no node of its own.
+_CLAUSE = re.compile(r'\s*(?:else|finally)\b')
 
 
 @dataclass(frozen=True)
@@ -70,6 +87,8 @@ class Passage:
     within: str = ''
     #: A code passage's statement.
     node: ast.stmt | None = None
+    #: A statement's: the docstring of the function or class it sits in, then each compound statement's header around it.
+    enclosing: tuple[str, ...] = ()
 
     def touches(self, written: Collection[tuple[int, int]]) -> bool:
         """Whether a line of the passage is one of `written`'s runs."""
@@ -220,14 +239,44 @@ class Module:
                 found.append(self.source(statement.lineno, min(end, statement.lineno + 2)))
         return '\n'.join(found)
 
-    def context(self, passage: Passage) -> str:
-        """What a code passage's question needs beside it: where it sits, and the module-level names it reads."""
-        parts = [passage.within] if passage.within else []
+    def comment(self, passage: Passage) -> str:
+        """The run of comment lines ending on the line above `passage`: a binding's `#:` documentation."""
+        first = passage.first
+        while first > 1 and self.lines[first - 2].lstrip().startswith('#'):
+            first -= 1
+        return self.source(first, passage.first - 1) if first < passage.first else ''
+
+    def spanned(self, passage: Passage, program: Program, path: str) -> list[str]:
+        """The program's definition of each dotted name a prose passage writes in a code span, headed by its place.
+
+        `path` is this module's, where a name the module binds itself is
+        defined; the definition the passage sits in is not given again.
+        """
+        own = Source(path, list(self.lines), bindings(self.tree))
+        imported = imports(self.tree)
+        found: list[str] = []
+        for name in dict.fromkeys(_SPANNED.findall(passage.text)):
+            for definition in program.spanned(own, imported, name):
+                around = definition.path == path and definition.first <= passage.first <= definition.last
+                block = f'# {definition.place}\n{definition.text}'
+                if not around and block not in found:
+                    found.append(block)
+        return found
+
+    def context(self, passage: Passage, program: Program | None = None, path: str = '') -> str:
+        """What a passage's question needs beside it, each part capped on its own.
+
+        A statement's: where it sits, what encloses it, the comment above it,
+        and the module-level names it reads. A docstring's or a comment's:
+        where it sits, and, given the `program` and this module's `path`, the
+        definitions of what it names in code spans.
+        """
+        parts = [passage.within, *passage.enclosing]
         if passage.node is not None:
-            defined = self.definitions(passage.node)
-            if defined:
-                parts.append(defined)
-        return capped('\n'.join(parts))
+            parts += [self.comment(passage), self.definitions(passage.node)]
+        elif program is not None:
+            parts += self.spanned(passage, program, path)
+        return '\n'.join(capped(part) for part in parts if part)
 
 
 def _bodies(statement: ast.stmt) -> list[list[ast.stmt]]:
@@ -242,6 +291,51 @@ def _bodies(statement: ast.stmt) -> list[list[ast.stmt]]:
         if isinstance(value, list):
             bodies += [cast(ast.ExceptHandler | ast.match_case, member).body for member in cast(list[object], value)]
     return bodies
+
+
+def _header_end(lines: Sequence[str], start: int, before: int) -> int:
+    """The last line of a header that opens at line `start`, its body or next clause opening after line `before`.
+
+    Comment and blank lines between the two are the body's, not the header's.
+    """
+    last = before
+    while last > start and (not lines[last - 1].strip() or lines[last - 1].lstrip().startswith('#')):
+        last -= 1
+    return max(start, last)
+
+
+def _headed(lines: Sequence[str], statement: ast.stmt, bodies: Sequence[Sequence[ast.stmt]]) -> int:
+    """The last line of a compound statement's own header: before its first body, or a `match`'s first `case`."""
+    if isinstance(statement, ast.Match):
+        return _header_end(lines, statement.lineno, statement.cases[0].pattern.lineno - 1)
+    return _header_end(lines, statement.lineno, min(b[0].lineno for b in bodies) - 1)
+
+
+def _opening(lines: Sequence[str], statement: ast.stmt, body: Sequence[ast.stmt], header: str) -> str:
+    """What opens `body` of the compound `statement` whose header is `header`: the header, and the clause of a body after the first.
+
+    A handler's and a case's clause is its own node. An `else:` or a
+    `finally:` has none, so it is the line at the statement's own indent
+    nearest above the body's first statement, or that statement's own line,
+    where that line opens with its keyword; an `elif` is a statement of its
+    own, the `if` nested in the body, so the header alone opens it.
+    """
+    if body is getattr(statement, 'body', None):
+        return header
+    clauses = cast(
+        list[ast.ExceptHandler | ast.match_case],
+        [*getattr(statement, 'handlers', ()), *getattr(statement, 'cases', ())],
+    )
+    for clause in clauses:
+        if body is clause.body:
+            node = clause.pattern if isinstance(clause, ast.match_case) else clause
+            return f'{header}\n{_span(lines, node.lineno, _header_end(lines, node.lineno, body[0].lineno - 1))}'
+    for number in range(body[0].lineno, statement.lineno, -1):
+        line = lines[number - 1]
+        if not line.strip() or line.lstrip().startswith('#') or len(line) - len(line.lstrip()) != statement.col_offset:
+            continue
+        return f'{header}\n{line}' if _CLAUSE.match(line) else header
+    return header
 
 
 def _docstring(body: Sequence[ast.stmt]) -> ast.Expr | None:
@@ -261,10 +355,10 @@ def python(text: str) -> Module | None:
     lines = tuple(text.split('\n'))
     passages: list[Passage] = []
 
-    def statement_passage(statement: ast.stmt, first: int, last: int, within: str) -> None:
-        passages.append(Passage(first, last, _span(lines, first, last), False, within, statement))
+    def statement_passage(statement: ast.stmt, first: int, last: int, within: str, enclosing: tuple[str, ...]) -> None:
+        passages.append(Passage(first, last, _span(lines, first, last), False, within, statement, enclosing))
 
-    def walk(body: Sequence[ast.stmt], within: str, documented: bool) -> None:
+    def walk(body: Sequence[ast.stmt], within: str, documented: bool, enclosing: tuple[str, ...]) -> None:
         docstring = _docstring(body) if documented else None
         for statement in body:
             if statement is docstring:
@@ -274,18 +368,26 @@ def python(text: str) -> Module | None:
                 continue
             bodies = _bodies(statement)
             if not bodies:
-                statement_passage(statement, statement.lineno, statement.end_lineno or statement.lineno, within)
+                end = statement.end_lineno or statement.lineno
+                statement_passage(statement, statement.lineno, end, within, enclosing)
                 continue
             decorated = isinstance(statement, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef)
             decorators = statement.decorator_list if decorated else []
             first = min([statement.lineno, *(d.lineno for d in decorators)])
-            last = max(statement.lineno, min(b[0].lineno for b in bodies) - 1)
-            statement_passage(statement, first, last, within)
-            inner = _span(lines, first, last) if decorated else within
+            last = _headed(lines, statement, bodies)
+            statement_passage(statement, first, last, within, enclosing)
+            if decorated:
+                inner = _span(lines, first, last)
+                opened = _docstring(statement.body)
+                held = (_span(lines, opened.lineno, opened.end_lineno or opened.lineno),) if opened else ()
+                for nested in bodies:
+                    walk(nested, inner, True, held)
+                continue
+            header = _span(lines, statement.lineno, last)
             for nested in bodies:
-                walk(nested, inner, decorated)
+                walk(nested, within, False, (*enclosing, _opening(lines, statement, nested, header)))
 
-    walk(tree.body, '', True)
+    walk(tree.body, '', True, ())
     passages += _comments(text, lines)
     return Module(tree, lines, tuple(sorted(passages, key=lambda p: (p.first, p.last))))
 
