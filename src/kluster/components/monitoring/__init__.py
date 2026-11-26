@@ -98,7 +98,9 @@ scrapes do the kubelet's and etcd's, since a reading of a node groups by it.
 taking snapshots and forcing merges are otherwise open to any pod that
 reaches the store's Service. Each key is generated into the stack's state
 and reaches each vmsingle as a file of a Secret it mounts, so no rendered
-object carries one; the backup jobs read the snapshot key from it.
+object carries one; the backup jobs mount the snapshot key from it as a file
+too, and send it in a request's body rather than in its address
+(`stores`).
 
 **The operator's webhook certificate is generated at render time and stays
 put** across runs. The provider renders with a server-side dry run, which lets
@@ -778,8 +780,8 @@ class Monitoring(Component, pulumi_type='kluster:monitoring:Monitoring'):
             string_data={GRAFANA_USER_KEY: GRAFANA_ADMIN_USER, GRAFANA_PASSWORD_KEY: self.grafana_password.result},
             opts=self.child_opts(),
         )
-        # A caller passes a key in the query string (`authKey=`), so a key
-        # holds nothing a URL would need escaped.
+        # A caller passes a key as the form value `authKey`, in a query or a
+        # url-encoded body, so a key holds nothing that would need escaping.
         keys = {
             flag: random.RandomPassword(f'{name}-{flag}', length=48, special=False, opts=behind) for flag in AUTH_KEYS
         }

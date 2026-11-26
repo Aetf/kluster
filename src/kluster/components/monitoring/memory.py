@@ -240,8 +240,8 @@ STATE_BACKEND_CERTIFICATE = Resources(Memory(request=40, limit=128), _JOB_CPU)
 VMBACKUP = Resources(Memory(request=64, limit=512), Cpu(request=15, limit=250, peak=11))
 
 #: A step in the bucket client's image, busybox's shell and one `curl` at a
-#: time: a store's backup job's row check ahead of `vmbackup` and its record
-#: after it, and the check ahead of a store's restore. Neither its CPU nor its
+#: time: every step of a store's backup job but `vmbackup`, and the check
+#: ahead of a store's restore. Neither its CPU nor its
 #: memory is read, a run being shorter than a scrape's rate: both are a
 #: shell's and a client's few MiB with room, estimates.
 BUCKET_STEP = Resources(Memory(request=16, limit=64), Cpu(request=10, limit=100, peak=None))

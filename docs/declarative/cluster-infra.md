@@ -203,18 +203,25 @@ classes its objects fall into (§1.2):
     do themselves, whether a prefix holds a backup at all and the
     history's row count beside its backup, is B2's native API, called
     from containers of their own in curl's image: shell, since the
-    images carry no other interpreter. **No credential is a process's
-    argument**: `curl` reads the headers carrying the writer key and
-    B2's tokens from files in the pod's memory, and `vmbackup` and
-    `vmrestore` read the key, and `vmbackup` the snapshot key, from
-    their environment. A process's arguments are readable by every
+    images carry no other interpreter. **The snapshot a backup copies
+    is taken and deleted by containers of the job's own**, in curl's
+    image, around a `vmbackup` that copies it by name: `vmbackup` can
+    send the store's snapshot key only in the address it takes a
+    snapshot at, and it logs that address, so these containers send the
+    key in a request's body instead, and no log carries it. That detour
+    is a workaround layer, whose boundary and removal condition
+    `components/monitoring/stores.py` states. **No credential is a
+    process's argument**: `curl` reads the headers carrying the writer
+    key and B2's tokens, and the store's snapshot key, from files in
+    the pod's memory, and `vmbackup` and `vmrestore` read the writer key
+    from their environment. A process's arguments are readable by every
     process that sees its PID, the node exporter among them, which runs
     in the host's PID namespace
     ([threat-model.md](../threat-model.md) §2.6); its environment and
     the pod's files are its own user's. What the node exporter still
     sees of these pods is their commands: the scripts' paths, the store's
-    address and the bucket's, and the variable `vmbackup` expands into
-    the snapshot address, none of them secret.
+    address and the bucket's, and the name of the snapshot, none of them
+    secret.
     Each backup job is a row of the scheduled-job family below: a failed run
     raises `MetricsBackupFailed`, and a backup older than an hour and a
     half `MetricsBackupStale` ([operations.md](../operations.md) §6.2),
@@ -357,7 +364,8 @@ classes its objects fall into (§1.2):
     endpoints take keys**: deleting series, taking snapshots and
     forcing a merge each take a key generated into `k8s-base`'s state,
     which each vmsingle reads from a Secret it mounts, so no rendered
-    object carries one; the backup jobs read the snapshot key from it. Without them, code in any pod that reaches the store's
+    object carries one; the backup jobs mount the snapshot key from it
+    as a file. Without them, code in any pod that reaches the store's
     Service, which includes code the installation runs and did not
     write ([threat-model.md](../threat-model.md) §2.6), can delete the
     cluster's metrics. metrics-server reads each
