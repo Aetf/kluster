@@ -117,8 +117,12 @@ def build_parser() -> argparse.ArgumentParser:
     _ = running.add_argument('pr', type=int)
     calibrating = steps.add_parser(
         'calibrate',
-        help='measure a gate against its cases and write its record',
-        description='Ask a gate about every case of its set and write its calibration record (dispatch.md §3).',
+        help='measure a gate against its cases and write its record, or refuse where a sample went unanswered',
+        description=(
+            'Ask a gate about every case of its set, print each case with the verdict and reason of each sample, and '
+            'write its calibration record; a run in which any sample answered nothing writes none and refuses '
+            '(dispatch.md §3).'
+        ),
     )
     _ = calibrating.add_argument('gate', help='the gate, by the name of its directory with - for _')
     harvesting = steps.add_parser(
@@ -186,9 +190,15 @@ def _gate_step(args: argparse.Namespace) -> int:
     if args.step == RUN:
         return _gates(args.pr)
     if args.step == 'calibrate':
-        measured = calibrate.calibrate(gate.named(args.gate), workstation.repo_root(), run.messages)
-        log.info('%s: %s', args.gate, measured.status)
-        for shortfall in measured.shortfalls():
+        try:
+            calibrated = calibrate.calibrate(gate.named(args.gate), workstation.repo_root(), run.messages)
+        except calibrate.Unanswered as exc:
+            print(exc.judgement.report())
+            log.error('refused: %s', exc)
+            return REFUSED
+        print(calibrated.judgement.report())
+        log.info('%s: %s', args.gate, calibrated.record.status)
+        for shortfall in calibrated.record.shortfalls():
             log.warning('%s: %s', args.gate, shortfall)
         return DONE
     if args.step == 'harvest':
