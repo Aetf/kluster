@@ -42,11 +42,10 @@ from kluster.lib import workstation
 from . import ledger, milestones, record
 from .brief import Brief, Role
 from .forge import Forge, Issue, Pull
+from .gates.change import Change, Changed, asks_about_briefs, brief_path
 from .gates.comment import Evidence, Ran
-from .gates.extract import Change, Changed
 from .gates.gate import Gate, discover
 from .gates.model import Model
-from .gates.reading import asks_about_briefs, brief_path
 from .gates.run import Prepared, asked, messages, prepare
 from .gates.verdict import reason
 from .paths import OwnedPath
@@ -357,9 +356,9 @@ def ask_about_brief(file: BriefFile, issue: Issue, sha256: str, asking: Asking) 
     """Every gate whose trigger names the brief, asked about it whole: the run, as evidence at the brief's hash.
 
     The brief is read as a change that writes the whole of one file, at the
-    path `gates.reading.brief_path` gives it from the areas of the issue. A
+    path `gates.change.brief_path` gives it from the areas of the issue. A
     gate asks about it where a pattern of its trigger names briefs and
-    matches that path (`gates.reading.asks_about_briefs`), and is shown it
+    matches that path (`gates.change.asks_about_briefs`), and is shown it
     whole. Each gate's canonical section is read from the tree
     `asking.canon` reads, and the gate is made ready and asked as a pull
     request's gates are (`gates.run.prepare`, `gates.run.asked`).

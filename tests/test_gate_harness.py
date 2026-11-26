@@ -37,12 +37,10 @@ from gate_stub import (
 from kluster.scripts.dispatch.gates import ask, comment, run, view
 from kluster.scripts.dispatch.gates.appeal import AppealRefused, appeals, apply, record
 from kluster.scripts.dispatch.gates.ask import Finding
-from kluster.scripts.dispatch.gates.calibration import MARGIN, Status, near
-from kluster.scripts.dispatch.gates.extract import Item, change, message_path
+from kluster.scripts.dispatch.gates.calibration import FINDINGS, MARGIN, PULL_REQUESTS, Status, near
+from kluster.scripts.dispatch.gates.change import change, message_path
 from kluster.scripts.dispatch.gates.gate import RECORD, Gate
 from kluster.scripts.dispatch.gates.model import KeyMissing, Model, Reply, Request
-from kluster.scripts.dispatch.gates.prose import blocks
-from kluster.scripts.dispatch.gates.reading import markdown
 from kluster.scripts.dispatch.gates.verdict import Answer, Verdict
 from kluster.scripts.dispatch.prcheck import Git, Hunk
 
@@ -72,13 +70,10 @@ def _blocking(gate: Gate) -> None:
             {
                 'hashes': {'prompt': held.prompt, 'canon': held.canon, 'model': held.model},
                 'cases': 'unread here',
-                'positives': 8,
-                'negatives': 8,
-                'recall': 1.0,
-                'false_positives': 0.0,
-                'disagreement': 0.0,
-                'pair': True,
-                'status': 'blocking',
+                'pull_requests': PULL_REQUESTS,
+                'findings': FINDINGS,
+                'recovered': FINDINGS,
+                'false_findings': 0,
             }
         )
     )
@@ -216,7 +211,7 @@ def test_a_change_no_gate_is_triggered_by_asks_nothing_and_posts_nothing(tmp_pat
     assert forge.pull_comments(PULL) == []
 
 
-def test_a_change_reads_both_sides_of_each_hunk_the_tree_at_its_head_and_its_description(repository: Path) -> None:
+def test_a_change_reads_both_sides_of_each_hunk(repository: Path) -> None:
     kept = 'One.\nTwo.\nThree.\nFour.\n'
     gone = 'A note.\nAnother.\n'
     base = commit(repository, {'docs/kept.md': kept, 'docs/gone.md': gone})
@@ -224,7 +219,7 @@ def test_a_change_reads_both_sides_of_each_hunk_the_tree_at_its_head_and_its_des
     # Line 2 rewritten as two, and line 4 deleted: a hunk that only deletes reaches the change too.
     head = commit(repository, {'docs/kept.md': 'One.\n2.\n2b.\nThree.\n', 'docs/new.md': 'New.\n'})
 
-    changed = change(Git(repository), base, head, 'the description')
+    changed = change(Git(repository), base, head)
 
     files = {f.path: f for f in changed.files}
     # Each hunk with both of its sides, as `git diff -U0` gives them: a side that holds no line is a count of 0.
@@ -233,35 +228,6 @@ def test_a_change_reads_both_sides_of_each_hunk_the_tree_at_its_head_and_its_des
     assert (files['docs/gone.md'].hunks, files['docs/gone.md'].written) == ((Hunk(1, 2, 0, 0),), ())
     assert (files['docs/new.md'].hunks, files['docs/new.md'].written) == ((Hunk(0, 0, 1, 1),), ((1, 1),))
     assert (changed.base_text('docs/gone.md'), changed.text('docs/gone.md')) == (gone, None)
-    assert sorted(changed.tree()) == ['docs/kept.md', 'docs/new.md']
-    assert changed.body == 'the description'
-
-
-def test_items_are_cut_into_batches_at_the_cap_and_one_over_it_goes_alone() -> None:
-    small = [Item('a.md', n, n, 'x' * 30) for n in range(1, 4)]
-    large = Item('a.md', 9, 9, 'y' * 3000)
-    cap = 3 * ask.estimate(small[0])
-
-    cut = ask.batches([*small, large, small[0]], cap)
-
-    assert cut == [small, [large], [small[0]]]
-
-
-def test_a_reply_that_answers_an_item_twice_or_by_an_unknown_id_answers_nothing_for_it() -> None:
-    reply = Reply(
-        json.dumps(
-            {
-                'items': [
-                    {'id': 0, 'verdict': 'finding', 'why': 'one'},
-                    {'id': 0, 'verdict': 'pass', 'why': 'two'},
-                    {'id': 1, 'verdict': 'pass', 'why': 'three'},
-                    {'id': 7, 'verdict': 'finding', 'why': 'nobody'},
-                ]
-            }
-        )
-    )
-
-    assert ask.answers(reply, 3) == [None, Answer(Verdict.PASS, 'three'), None]
 
 
 def test_an_appeal_line_is_read_wherever_the_report_holds_it() -> None:
@@ -388,7 +354,7 @@ def test_a_deterministic_finding_refuses_whatever_the_gates_say() -> None:
     assert not run.refuses(0, None)
 
 
-def test_two_thousand_items_fit_in_one_comment_and_read_back_to_the_same_verdicts() -> None:
+def test_two_thousand_places_fit_in_one_comment_and_read_back_to_the_same_verdicts() -> None:
     reason = 'The line states where the service runs, which the scheduler derives from what it declares.'
     entries = tuple(
         comment.Entry(
@@ -464,7 +430,7 @@ def test_a_blocking_gate_whose_canon_does_not_read_at_the_head_stays_blocking_an
     assert run.refuses(0, posted)
 
 
-def test_an_item_a_blocking_gate_left_undecided_holds_until_appealed() -> None:
+def test_a_place_a_blocking_gate_left_undecided_holds_until_appealed() -> None:
     undecided = comment.Entry('a.md', 1, 1, (Answer(Verdict.FINDING, 'one'), None, Answer(Verdict.PASS, 'two')))
     passed = comment.Entry('a.md', 2, 2, (Answer(Verdict.PASS, 'three'), None, Answer(Verdict.PASS, 'four')))
 
@@ -478,7 +444,7 @@ def test_an_item_a_blocking_gate_left_undecided_holds_until_appealed() -> None:
     assert not run.refuses(0, run.Posted(appealed, edited=True))
 
 
-def test_a_split_item_reads_back_with_its_reasons_and_a_unanimous_pass_with_none() -> None:
+def test_a_split_place_reads_back_with_its_reasons_and_a_unanimous_pass_with_none() -> None:
     split = comment.Entry('a.md', 1, 1, (Answer(Verdict.FINDING, 'one'), Answer(Verdict.PASS, 'two'), None))
     unanimous = comment.Entry('a.md', 2, 2, tuple(Answer(Verdict.PASS, 'fine') for _ in range(3)))
     evidence = comment.Evidence(
@@ -524,7 +490,7 @@ def test_a_gate_is_shown_each_file_its_trigger_matches_whole_with_the_diff_inlin
         },
         'docs: a note\n\nIts body.\n',
     )
-    changed = change(Git(repository), base, head, '')
+    changed = change(Git(repository), base, head)
 
     (shown,) = view.parts(changed, ('docs/**',))
 
@@ -658,72 +624,3 @@ def test_where_unanswered_samples_could_still_make_a_finding_stand_each_part_of_
     ]
     # One sample short leaves the two that answered a majority to pass on.
     assert one_missing == []
-
-
-@pytest.mark.parametrize(
-    ('path', 'text', 'passages'),
-    [
-        # A `#!` line names an interpreter; the comment under it is prose.
-        pytest.param(
-            'scripts/run.sh',
-            '#!/bin/sh\n# Runs once a day.\nexec true\n',
-            [(2, 2, 'Runs once a day.')],
-            id='interpreter',
-        ),
-        # A comment in a shell fence is the command's, and the paragraph after the fence is prose.
-        pytest.param(
-            'docs/run.md', '```sh\n# held by hand\nmake\n```\nThen it runs.\n', [(5, 5, 'Then it runs.')], id='fence'
-        ),
-        # A fence closes only on a run as long as its own, so an example fence inside it is code too.
-        pytest.param(
-            'docs/run.md',
-            'Para.\n\n````markdown\n```python\nx = 1\n```\nInside still.\n````\n\nAfter.\n',
-            [(1, 1, 'Para.'), (10, 10, 'After.')],
-            id='long-fence',
-        ),
-        # Front matter is data for whatever reads the file.
-        pytest.param(
-            'docs/agent.md', '---\nname: builder\ndescription: builds\n---\n\nBody.\n', [(6, 6, 'Body.')], id='front'
-        ),
-        # A comment after code is its own passage, apart from the comment alone on the next line, and a
-        # docstring's text ends where its string does.
-        pytest.param(
-            'src/run.py',
-            'x = 1  # one\n# Two lines\n# of prose.\n"""A doc."""  # after\n',
-            [(1, 1, 'one'), (2, 3, 'Two lines of prose.'), (4, 4, 'A doc.'), (4, 4, 'after')],
-            id='after-code',
-        ),
-        # The same outside Python, where the marker has whitespace on both sides.
-        pytest.param(
-            'conf/a.yaml',
-            'key: 1  # one\n# own\nv: "${#a}"\nurl: http://host/x#y\n',
-            [(1, 1, 'one'), (2, 2, 'own')],
-            id='after-code-yaml',
-        ),
-        # A line holding only its marker ends a paragraph of comments.
-        pytest.param('renovate.json5', '// One.\n//\n// Two.\n', [(1, 1, 'One.'), (3, 3, 'Two.')], id='paragraph'),
-        # A template's Jinja comment is prose whatever it renders, and no other reading takes a line of it.
-        pytest.param(
-            'conf/a.yaml.j2',
-            '{#\n# Kept here.\n#}\n# Read.\nkey: 1\n',
-            [(1, 3, ' # Kept here. '), (4, 4, 'Read.')],
-            id='jinja',
-        ),
-        pytest.param(
-            'docs/a.md.j2', '{#\nKept here.\n#}\nBody.\n', [(1, 3, ' Kept here. '), (4, 4, 'Body.')], id='jinja-md'
-        ),
-    ],
-)
-def test_the_prose_reader_draws_each_passage_by_the_files_language(
-    path: str, text: str, passages: list[tuple[int, int, str]]
-) -> None:
-    assert sorted((b.first, b.last, b.text) for b in blocks(path, text)) == passages
-
-
-def test_the_brief_gates_reader_takes_what_is_code_in_markdown_from_the_prose_reader() -> None:
-    # A `~~~` fence holding a backtick example, then an indented block: code for every gate that reads markdown.
-    text = 'Lead.\n\n~~~\n```sh\nmake\n```\nstill code\n~~~\n\nAfter.\n\n    indented code\n'
-    read = [(p.first, p.last, p.prose) for p in markdown(text)]
-
-    assert read == [(1, 1, True), (3, 8, False), (10, 10, True), (12, 12, False)]
-    assert [(b.first, b.last) for b in sorted(blocks('docs/a.md', text), key=lambda b: b.first)] == [(1, 1), (10, 10)]

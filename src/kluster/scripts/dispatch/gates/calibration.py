@@ -1,19 +1,22 @@
 """Whether a gate's verdict blocks: its calibration record, and the bar the record is held to.
 
-`dispatch gates calibrate <name>` asks the gate about every case of its
-labelled set and writes `calibration.json`: the hashes of what it measured,
-which are the prompt (`prompt.md` with the harness's own fixed text,
-`gate.Gate.hashes`), the canonical text and the model id, the hash of the set,
-and what the set scored. A gate blocks only while those scores meet the
-bar and all three of those hashes still match the gate as it is run;
-anything else is `shadow`, posted and advisory, with the reason said
-(`standing`). A run in which any sample answered nothing measured
-nothing about those cases: it writes no record, leaves the one already
-there, and refuses (`calibrate.Unanswered`). The record holds no
-sample's reason; the command prints each one. A pytest case holds every
-record's hashes against its gate in the tree, so an edit to a prompt, a
-model or a canonical section turns the gate red until it is measured
-again (dispatch.md §3).
+`dispatch gates calibrate <name>` asks the gate about every pull request of
+its history, as `dispatch gates` asks it, and writes `calibration.json`: the
+hashes of what it measured, which are the prompt (`prompt.md` with the
+harness's own fixed text, `gate.Gate.hashes`), the canonical text and the
+model id, the hash of the history, and what the history scored. The score
+is the review findings the gate recovered over the whole history, and the
+false findings it made per pull request it ran on (`calibrate`). A gate
+blocks only while that score meets the bar and all three of those hashes
+still match the gate as it is run; anything else is `shadow`, posted and
+advisory, with the reason said (`standing`). A case added to the history
+stales nothing: it moves the next measurement. A run in which any sample
+answered nothing, or that made a finding no case confirms, writes no record
+and leaves the one already there (`calibrate.Unanswered`,
+`calibrate.Unconfirmed`). The record holds no sample's reason; the command
+prints each one. A pytest case holds every record's hashes against its gate
+in the tree, so an edit to a prompt, a model or a canonical section turns
+the gate red until it is measured again (dispatch.md §3).
 
 The bar is this repository's, not the canon's, and moving it re-derives
 every status at once.
@@ -24,22 +27,18 @@ from __future__ import annotations
 import enum
 import hashlib
 import json
-from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, cast
 
-from .cases import Case
-from .verdict import Judged, Verdict, disagreement
-
-#: The least share of the set's positives a blocking gate finds.
-RECALL = 0.8
-#: The most false positives a blocking gate gives per negative: one in twenty.
-FALSE_POSITIVES = 1 / 20
-#: The fewest positives, and the fewest negatives, a set measures a blocking gate on.
-MINIMUM = 8
-#: The falsifier pair, the first cases of every set: the verdict each is labelled, and every sample must give.
-PAIR = (Verdict.FINDING, Verdict.PASS)
+#: The least share of the history's review findings a blocking gate recovers: four in five.
+RECALL = 4 / 5
+#: The most false findings a blocking gate makes per pull request it ran on: one in five.
+FALSE_FINDINGS = 1 / 5
+#: The fewest review findings, and the fewest pull requests the gate ran on, a history measures a blocking
+#: gate on.
+FINDINGS = 8
+PULL_REQUESTS = 20
 #: How many lines apart two findings at one path may lie and still name one place: a model and a reviewer, or
 #: two samples, point at one defect a line or two apart (`ask.matched`).
 MARGIN = 2
@@ -91,15 +90,24 @@ class Calibration:
     hashes: Hashes
     #: The sha256 of the `cases.jsonl` it measured.
     cases: str
-    positives: int
-    negatives: int
-    #: The share of positives found; None for a set with none.
-    recall: float | None
-    #: The share of negatives found; None for a set with none.
-    false_positives: float | None
-    disagreement: float
-    #: Whether the falsifier pair held in every sample.
-    pair: bool
+    #: The pull requests of the history the gate ran on, its trigger matching a path they touch.
+    pull_requests: int
+    #: The review findings of the history, the cases labelled `finding`.
+    findings: int
+    #: The review findings a finding of the gate recovered, one to one.
+    recovered: int
+    #: The gate's findings that a case labelled `pass` confirms are false.
+    false_findings: int
+
+    @property
+    def recall(self) -> float | None:
+        """The share of the review findings recovered; None for a history with none."""
+        return self.recovered / self.findings if self.findings else None
+
+    @property
+    def false_per_pull_request(self) -> float | None:
+        """The false findings per pull request the gate ran on; None where it ran on none."""
+        return self.false_findings / self.pull_requests if self.pull_requests else None
 
     @property
     def status(self) -> Status:
@@ -109,22 +117,28 @@ class Calibration:
     def shortfalls(self) -> list[str]:
         """Each way the measurement falls short of the bar, in words; empty where it meets it."""
         short: list[str] = []
-        if not self.pair:
-            short.append('its first two cases, the one it must catch and the one it must pass, did not hold')
-        if self.positives < MINIMUM or self.negatives < MINIMUM:
+        if self.findings < FINDINGS or self.pull_requests < PULL_REQUESTS:
             short.append(
-                f'the set holds {self.positives} positives and {self.negatives} negatives, '
-                f'where the bar measures on {MINIMUM} of each'
+                f'the history holds {self.findings} review findings over {self.pull_requests} pull requests the '
+                f'gate ran on, where the bar measures on {FINDINGS} findings and {PULL_REQUESTS} pull requests'
             )
         if self.recall is not None and self.recall < RECALL:
-            short.append(f'recall {self.recall:.2f}, under {RECALL}')
-        if self.false_positives is not None and self.false_positives > FALSE_POSITIVES:
-            short.append(f'false positives {self.false_positives:.2f} per negative, over {FALSE_POSITIVES}')
+            short.append(f'it recovered {self.recovered} of {self.findings} review findings, under {RECALL:.0%}')
+        if self.false_per_pull_request is not None and self.false_per_pull_request > FALSE_FINDINGS:
+            short.append(
+                f'{self.false_findings} false findings over {self.pull_requests} pull requests, '
+                f'over {FALSE_FINDINGS:g} per pull request'
+            )
         return short
 
     def to_json(self) -> str:
-        """The record as written: its measurements, and for a reader the status they earn, which `load` ignores."""
-        return json.dumps({**asdict(self), 'status': self.status.value}, indent=2, sort_keys=True) + '\n'
+        """The record as written: its measurements, and for a reader the score and status they earn, which `load` ignores."""
+        derived = {
+            'recall': self.recall,
+            'false_per_pull_request': self.false_per_pull_request,
+            'status': self.status.value,
+        }
+        return json.dumps({**asdict(self), **derived}, indent=2, sort_keys=True) + '\n'
 
 
 def load(path: Path) -> Calibration:
@@ -132,20 +146,13 @@ def load(path: Path) -> Calibration:
     try:
         raw = cast(dict[str, Any], json.loads(path.read_text()))
         hashes = cast(dict[str, Any], raw['hashes'])
-
-        def share(key: str) -> float | None:
-            value: object = raw[key]
-            return None if value is None else float(cast(float, value))
-
         return Calibration(
             hashes=Hashes(prompt=str(hashes['prompt']), canon=str(hashes['canon']), model=str(hashes['model'])),
             cases=str(raw['cases']),
-            positives=int(raw['positives']),
-            negatives=int(raw['negatives']),
-            recall=share('recall'),
-            false_positives=share('false_positives'),
-            disagreement=float(raw['disagreement']),
-            pair=bool(raw['pair']),
+            pull_requests=int(raw['pull_requests']),
+            findings=int(raw['findings']),
+            recovered=int(raw['recovered']),
+            false_findings=int(raw['false_findings']),
         )
     except (OSError, json.JSONDecodeError, KeyError, ValueError, TypeError) as exc:
         raise RecordUnreadable(f'{path} is no calibration record: {exc!r}') from exc
@@ -169,38 +176,7 @@ def standing(record: Calibration | None, now: Hashes) -> tuple[Status, str]:
     shortfalls = record.shortfalls()
     if shortfalls:
         return Status.SHADOW, f'calibrated below the bar: {"; ".join(shortfalls)}'
-    return Status.BLOCKING, (f'calibrated on {record.positives} positives and {record.negatives} negatives, at the bar')
-
-
-def pair_held(index: int, case: Case, judged: Judged) -> bool:
-    """Whether the case at `index` of a set holds as its place in the falsifier pair asks.
-
-    It holds where it is labelled with that place's verdict in `PAIR` and
-    every sample gives that verdict; a case past the pair never holds as one.
-    """
-    if index >= len(PAIR):
-        return False
-    wanted = PAIR[index]
-    return case.verdict is wanted and all(s is not None and s.verdict is wanted for s in judged.samples)
-
-
-def measure(set_: Sequence[Case], judged: Sequence[Judged], *, cases: str, hashes: Hashes) -> Calibration:
-    """The record of `judged`, the gate's verdicts on `set_` in the same order."""
-    if len(set_) != len(judged):
-        raise ValueError(f'{len(judged)} verdicts for {len(set_)} cases')
-    pairs = list(zip(set_, judged, strict=True))
-    positives = [j for c, j in pairs if c.verdict is Verdict.FINDING]
-    negatives = [j for c, j in pairs if c.verdict is Verdict.PASS]
-    recall = sum(1 for j in positives if j.finding) / len(positives) if positives else None
-    false_positives = sum(1 for j in negatives if j.finding) / len(negatives) if negatives else None
-    pair = len(pairs) >= len(PAIR) and all(pair_held(index, c, j) for index, (c, j) in enumerate(pairs[: len(PAIR)]))
-    return Calibration(
-        hashes=hashes,
-        cases=cases,
-        positives=len(positives),
-        negatives=len(negatives),
-        recall=recall,
-        false_positives=false_positives,
-        disagreement=disagreement(judged),
-        pair=pair,
+    return (
+        Status.BLOCKING,
+        f'calibrated on {record.findings} review findings over {record.pull_requests} pull requests, at the bar',
     )

@@ -5,8 +5,8 @@ of them find it. A sample the model did not answer, for a reply that was
 refused, cut short, not in the schema or never made, counts toward neither
 verdict. A place whose unanswered samples could still have made a finding
 stand is `undecided`: a shadow gate passes it, and a blocking gate treats
-it as a finding no appeal has answered yet. A place is one a sample found
-(`ask.matched`), or one of `calibrate`'s labelled items (`Judged`).
+it as a finding no appeal has answered yet. A place is one a sample found,
+or a part of a call the samples left undecided (`ask.matched`).
 """
 
 from __future__ import annotations
@@ -14,8 +14,6 @@ from __future__ import annotations
 import enum
 from collections.abc import Sequence
 from dataclasses import dataclass
-
-from .extract import Item
 
 #: How many times each call is asked.
 SAMPLES = 3
@@ -60,29 +58,7 @@ def undecided(samples: Sequence[Sample]) -> bool:
     return found < MAJORITY <= found + missing
 
 
-def split(samples: Sequence[Sample]) -> bool:
-    """Whether the samples disagree, or any of them is missing: what the disagreement rate counts."""
-    return len({s.verdict if s is not None else None for s in samples}) > 1
-
-
 def reason(samples: Sequence[Sample]) -> str:
     """The reason the verdict that stands gives: its first sample's."""
     wanted = Verdict.FINDING if stands(samples) else Verdict.PASS
     return next((s.why for s in samples if s is not None and s.verdict is wanted), '')
-
-
-@dataclass(frozen=True)
-class Judged:
-    """An item and its samples, in the order they were asked."""
-
-    item: Item
-    samples: tuple[Sample, ...]
-
-    @property
-    def finding(self) -> bool:
-        return stands(self.samples)
-
-
-def disagreement(judged: Sequence[Judged]) -> float:
-    """The share of items whose samples split; 0 for no items."""
-    return sum(1 for j in judged if split(j.samples)) / len(judged) if judged else 0.0

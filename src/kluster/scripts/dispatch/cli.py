@@ -117,18 +117,21 @@ def build_parser() -> argparse.ArgumentParser:
     _ = running.add_argument('pr', type=int)
     calibrating = steps.add_parser(
         'calibrate',
-        help='measure a gate against its cases and write its record, or refuse where a sample went unanswered',
+        help='measure a gate against its history and write its record, or refuse where the run measured too little',
         description=(
-            'Ask a gate about every case of its set, print each case with the verdict and reason of each sample, and '
-            'write its calibration record; a run in which any sample answered nothing writes none and refuses '
-            '(dispatch.md §3).'
+            'Ask a gate about every pull request of its history, print each case with what the gate made of it and '
+            'each place a sample found with its reason, and write its calibration record; a run in which a sample '
+            'answered nothing, or that made a finding no case confirms, writes none and refuses (dispatch.md §3).'
         ),
     )
     _ = calibrating.add_argument('gate', help='the gate, by the name of its directory with - for _')
     harvesting = steps.add_parser(
         'harvest',
-        help="append the cases the reviews of pull requests tag to each gate's set",
-        description="Append each place a review tags [gate:<name>] or [gate:<name> clean] to that gate's cases.",
+        help="record the cases the reviews and rulings on pull requests tag in each gate's history",
+        description=(
+            "Record each place a review or a ruling tags [gate:<name>] or [gate:<name> clean] in that gate's cases, "
+            'replacing the case held there as dispatch.md §3 says.'
+        ),
     )
     _ = harvesting.add_argument('prs', type=int, nargs='+', metavar='pr')
     appealing = steps.add_parser(
@@ -190,9 +193,10 @@ def _gate_step(args: argparse.Namespace) -> int:
     if args.step == RUN:
         return _gates(args.pr)
     if args.step == 'calibrate':
+        root = workstation.repo_root()
         try:
-            calibrated = calibrate.calibrate(gate.named(args.gate), workstation.repo_root(), run.messages)
-        except calibrate.Unanswered as exc:
+            calibrated = calibrate.calibrate(gate.named(args.gate), root, run.messages, GateGh(), prcheck.Git(root))
+        except (calibrate.Unanswered, calibrate.Unconfirmed, calibrate.Unmeasured) as exc:
             print(exc.judgement.report())
             log.error('refused: %s', exc)
             return REFUSED

@@ -32,8 +32,8 @@ log = logging.getLogger(__name__)
 #: The API's own address, given outright rather than read from the environment.
 API = 'https://api.anthropic.com'
 
-#: The most a reply may run to. A reply carries a verdict and a sentence per
-#: item, and Haiku's thinking ahead of it; the bound only stops a reply
+#: The most a reply may run to. A reply carries a place and a sentence per
+#: finding, and Haiku's thinking ahead of it; the bound only stops a reply
 #: running away, since output is paid by the token actually written.
 MAX_TOKENS = 16_000
 
@@ -48,7 +48,7 @@ class KeyMissing(RuntimeError):
 
 @dataclass(frozen=True)
 class Request:
-    """One call: the model, the prompt with its canon, the items, and the schema the reply is held to."""
+    """One call: the model, the prompt with its canon, what the call shows, and the schema the reply is held to."""
 
     model: str
     system: str
@@ -121,5 +121,5 @@ def key() -> str:
 
 
 def dumps(value: object) -> str:
-    """JSON as the requests carry it: stable, so the same items make the same request."""
+    """JSON as the requests carry it: stable, so the same value makes the same request."""
     return json.dumps(value, ensure_ascii=False, sort_keys=True, indent=1)
