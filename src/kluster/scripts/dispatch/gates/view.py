@@ -5,12 +5,12 @@ the lines the change writes marked `+` and the lines it removes shown as `-`
 rows, unnumbered, where they stood: the file whole and the diff of it in one
 reading, the way a reviewer reads a change with its context expanded. A
 commit's message is shown the same way at the place that names it
-(`extract.message_path`), the subject being line 1, every line of it
+(`change.message_path`), the subject being line 1, every line of it
 written by the change.
 
 A gate is shown each such file whose path its trigger matches (`parts`):
 every file the change adds, modifies or retypes whose text is this
-repository's own writing (`extract.written_here`) and is text at all, and
+repository's own writing (`change.written_here`) and is text at all, and
 the message of each of the change's commits whose place the trigger matches.
 A file the change deletes holds no line at the head for a finding to name,
 and is not shown.
@@ -26,7 +26,7 @@ from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 
 from ..paths import OwnedPath
-from .extract import Change, Changed, message_path, written_here
+from .change import Change, Changed, message_path, written_here
 
 #: How a row marks a line the change writes, one it leaves as it was, and one it removes.
 WRITTEN, KEPT, REMOVED = '+', ' ', '-'

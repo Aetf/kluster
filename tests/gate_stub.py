@@ -8,10 +8,6 @@ it is shown each file a change writes under `docs/`, its question is about
 the lines a change writes into a note, and its canon is a section of
 `docs/rule.md` in the scratch repository.
 
-A real gate's extractor cases read a recorded change (`real_change`):
-excerpts of a pull request's files at its base and its head, under
-`tests/data/gates/<gate>/`.
-
 The replies are Messages API response bodies (`tests/data/gates/stub/messages/`)
 in the shape the API documents, served by a transport handed to the real
 client, so a run builds its requests and reads its replies through the SDK
@@ -37,7 +33,6 @@ import pytest
 from memory_forge import MemoryForge
 
 from kluster.scripts.dispatch.forge import CODE
-from kluster.scripts.dispatch.gates.extract import Change, Item
 from kluster.scripts.dispatch.gates.forge import PullComment
 from kluster.scripts.dispatch.gates.gate import Canon, Gate, Spec
 from kluster.scripts.dispatch.gates.model import Messages
@@ -58,13 +53,8 @@ PULL = 4917
 BRANCH = 'b-917-notes'
 
 
-def extract(change: Change) -> list[Item]:
-    """The stub gate's extractor: every line the change writes under `docs/notes/`."""
-    return list(change.written('docs/notes/**'))
-
-
 #: The stub gate's declaration.
-SPEC = Spec(canon=Canon(RULE_DOCUMENT, RULE_SECTION), trigger=('docs/**',), extract=extract)
+SPEC = Spec(canon=Canon(RULE_DOCUMENT, RULE_SECTION), trigger=('docs/**',))
 
 
 def stub_gate(directory: Path) -> Gate:
@@ -105,50 +95,14 @@ def commit(repo: Path, files: Mapping[str, str], message: str = 'a commit') -> s
     return git(repo, 'rev-parse', 'HEAD').strip()
 
 
-#: The suffix a recorded file carries, so no check of this repository reads an excerpt of another commit as its own.
-EXCERPT = '.excerpt'
-
-
-def files(directory: Path) -> dict[str, str]:
-    """Every recorded file under `directory`, by its path relative to it with `EXCERPT` cut; none where none is."""
-    if not directory.is_dir():
-        return {}
-    return {
-        str(f.relative_to(directory)).removesuffix(EXCERPT): f.read_text()
-        for f in sorted(directory.rglob(f'*{EXCERPT}'))
-    }
-
-
-def real_change(
-    repo: Path, fixture: Path, *, beside: Mapping[str, str] | None = None, reverse: bool = False
-) -> tuple[str, str]:
-    """Commit a recorded change in `repo`, and return its base and its head.
-
-    `fixture` holds excerpts of a pull request's files, each named for its
-    path with `EXCERPT` after it: `base/` as the base has them and `head/` as
-    its head does, a file under `base/` alone being one the change deletes;
-    `tree/`, files the change leaves as they are. `beside` adds files to both
-    sides, and `reverse` commits the change undone: `head/` as the base and
-    `base/` as the head.
-    """
-    old, new = ('head', 'base') if reverse else ('base', 'head')
-    unchanged = {**(beside or {}), **files(fixture / 'tree')}
-    at_base = {**unchanged, **files(fixture / old)}
-    # A change that only adds files has a base with none in it.
-    _ = git(repo, 'commit', '-q', '--allow-empty', '-m', 'the base')
-    base = commit(repo, at_base) if at_base else git(repo, 'rev-parse', 'HEAD').strip()
-    head_files = files(fixture / new)
-    for gone in at_base.keys() - unchanged.keys() - head_files.keys():
-        (repo / gone).unlink()
-    return base, commit(repo, head_files or unchanged)
-
-
 @dataclass
 class GateMemoryForge(MemoryForge):
     """`memory_forge`'s forge, with each pull request read whole and its comments by id."""
 
     requests: dict[int, PullRequest] = field(default_factory=dict[int, PullRequest])
     threads: dict[int, list[PullComment]] = field(default_factory=dict[int, list[PullComment]])
+    #: The commits the forge no longer serves.
+    unserved: set[str] = field(default_factory=set[str])
 
     def pull_request(self, number: int) -> PullRequest:
         return self.requests[number]
@@ -156,10 +110,18 @@ class GateMemoryForge(MemoryForge):
     def pull_comments(self, number: int) -> list[PullComment]:
         return list(self.threads.get(number, []))
 
+    def serves(self, commit: str) -> bool:
+        return commit not in self.unserved
+
+    def pull_commits(self, number: int) -> list[str]:
+        return [self.requests[number].head]
+
     def say(self, number: int, body: str, *, mine: bool = True) -> PullComment:
         """A comment on pull request `number`, by this account or, with `mine` false, by another."""
         identity = sum(len(t) for t in self.threads.values()) + 1
-        said = PullComment(identity, body, mine, f'https://github.com/{CODE}/pull/{number}#issuecomment-{identity}')
+        url = f'https://github.com/{CODE}/pull/{number}#issuecomment-{identity}'
+        # Each comment is written a second after the one before it.
+        said = PullComment(identity, body, mine, url, f'2026-11-26T00:{identity // 60:02}:{identity % 60:02}Z')
         self.threads.setdefault(number, []).append(said)
         return said
 
@@ -170,7 +132,8 @@ class GateMemoryForge(MemoryForge):
         for thread in self.threads.values():
             for index, held in enumerate(thread):
                 if held.id == comment:
-                    thread[index] = PullComment(held.id, body, held.mine, held.url)
+                    # The forge keeps when a comment was written through an edit of it.
+                    thread[index] = PullComment(held.id, body, held.mine, held.url, held.created)
                     return
         raise AssertionError(f'gh refuses to edit comment {comment}, which does not exist')
 

@@ -7,15 +7,15 @@ census restated in a test (style/pulumi.md, "A census is the source of
 truth, and no test restates it") is that rule's case of a table copied
 from the implementation, and is judged by it.
 
-The gate runs on a change that touches a test module, and is shown each
-one the change writes. Its extractor (`assertions`), which draws the items
-`harvest` records a review's tags as, draws the assertions a change writes
-there.
+The gate runs on a change that touches a test module (`TESTS`), and is
+shown each one the change writes.
 """
 
 from __future__ import annotations
 
 from ..gate import Canon, Spec
-from .assertions import TESTS, assertions
 
-GATE = Spec(canon=Canon('docs/style/testing.md', 'Testing Style'), trigger=(TESTS,), extract=assertions)
+#: The test modules.
+TESTS = 'tests/**.py'
+
+GATE = Spec(canon=Canon('docs/style/testing.md', 'Testing Style'), trigger=(TESTS,))

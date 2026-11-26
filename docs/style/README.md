@@ -365,6 +365,20 @@ that needs no skip set at all is the tracked files — `jj file list`
 inside a workspace, `git ls-files` in a checkout — which hold no scratch
 to begin with.
 
+### A rule a model gate quotes holds its heading alone
+
+**Each rule a model gate quotes stands under a heading of its own,
+which holds that rule and nothing else.** A gate quotes its rule as a
+section of the document that states it, read from the tree at the head
+under review ([framework/dispatch.md](../framework/dispatch.md) §3), and
+that section's text is part of what the gate's calibration measured. An
+edit anywhere in the section stales the gate, which then runs in shadow
+until it is measured again, so a second rule sharing the heading stales
+it on every edit to that other rule. It also puts two questions to a
+gate measured on one: a miss cannot be laid on either rule, and the
+measurement says nothing about either. A rule written beside one a gate
+quotes takes a heading of its own.
+
 ## Review gate
 
 Every pull request passes an independent review against these rules

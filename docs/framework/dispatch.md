@@ -861,9 +861,9 @@ retry starts afresh:
     gates' findings go into one comment on the pull request, the only
     thing the command writes. Its three steps keep those gates honest:
     `dispatch gates calibrate <gate>` measures a gate against its
-    labelled set and writes its record; `dispatch gates harvest <pr>...`
-    appends to each gate's set the places the reviews of those pull
-    requests tag; and `dispatch gates appeal <pr> <report>` writes a
+    history and writes its record; `dispatch gates harvest <pr>...`
+    records in each gate's history the places the reviews and rulings on
+    those pull requests tag; and `dispatch gates appeal <pr> <report>` writes a
     builder's appeals into the comment of the pull request's head.
 -   **`dispatch merge <pr> <head>`** lands a pull request at the head
     its builder's latest report names, and ends the pull request's
@@ -1126,8 +1126,9 @@ reviews — a docs-only change may take a single combined pass — but no
 pull request merges reviewed by nobody but its author.
 
 **A review is a comment on the pull request whose first line is a
-heading opening `Review`** (`## Review (combined)`, `## Review (round
-2)`), and it names the head it read, in full or by its first twelve
+heading whose text is `Review` and then `(`, `:` or a dash, or nothing
+more** (`## Review (combined)`, `## Review: style`, `## Review — head
+…`; `## Review answers` is none), and it names the head it read, in full or by its first twelve
 characters or more. `dispatch merge` refuses a head that no comment of
 that form names, or for which no review of the pull request is
 dispatched on its issue (§2.1). So the round that ends a fix cycle is itself a review
@@ -1238,36 +1239,98 @@ comment says why.
 
 **A gate is `shadow` until it is measured, and `blocking` only while
 its measurement holds.** A shadow finding is advisory and blocks
-nothing. A gate blocks once `dispatch gates calibrate` has measured it
-against its labelled set: the gate's `cases.jsonl`, whose first two
-cases are the one it must catch and the one it must pass. Its record,
-`calibration.json`, holds the hashes of its prompt, the canonical text
-and its model id, and what the set scored. Why the gate judged each case
-as it did stays out of the record: `calibrate` prints every case to
-standard output beside its label, the falsifier pair marked, with
-whether it held and each sample's verdict and reason. A calibration in
-which any sample answered nothing, an API error left after the SDK's
-retries among the causes, measured nothing about that case, so it
-writes no record, leaves the one already there, and says why. The
+nothing. A gate's history is its `cases.jsonl`: each place a review
+tagged with the gate, a path and lines at a head the review read or
+lines of one of its commits' messages, with the verdict the tag gives
+and a link to the comment the tag is in. A case holds no text. Its head
+is the forge's, and its change is that head against its merge base with
+the base the forge records for the pull request, the change
+`dispatch gates` reads. So the place is public. The comments `harvest`
+records cases from are reviews and rulings on pull requests of this
+repository. A brief is at no head of this repository, and makes no case.
+A head the forge no longer serves drops its cases from every
+measurement, even where a local store still holds it, so that a
+record can be measured again from the forge, and `calibrate` names
+them; a history every head of which is dropped measured nothing, and
+writes no record.
+
+**A place holds one case.** Every session writes as the operator's
+account (§1), so a ruling the operator gave in so many words is marked
+in its tag, `[gate:<name> operator]` or `[gate:<name> clean operator]`,
+which the dispatcher writes only when it relays the operator's own
+word, as an `end` record that quotes the operator does. At one place,
+the same pull request, head, path and lines, the operator's ruling
+replaces any other and no other replaces it; otherwise a later ruling
+replaces an earlier one, later by when its comment was written, as the
+forge gives it, the comment's id breaking a tie. So a place ends with
+the same case whatever order its rulings are harvested in, and
+harvesting rulings the history already reflects writes nothing.
+`harvest` reports every replacement, and every ruling written after an
+operator's at its place, which the operator's keeps out, naming both
+sources. A comment that rules one place two ways rules it neither way,
+and harvest reports it.
+
+**A gate is measured per pull request, against past reviews.**
+`dispatch gates calibrate <gate>` asks the gate about each pull request
+of its history as `dispatch gates` asks it, with its canonical section
+read from the dispatcher's checkout, and scores each pull request
+alone. A finding of the gate recovers a review finding, a case tagged
+`[gate:<name>]`, where both name one path at that head and their lines
+lie within the margin, one to one: a model and a reviewer point at one
+defect a line or two apart, and exact lines would score that as a miss
+and a false finding. A finding that recovers none is false where a case
+tagged `[gate:<name> clean]` names its place. **The score** is the
+review findings recovered over the whole history, and the false
+findings per pull request the gate ran on. The bar sets a floor on the
+share of review findings recovered, a ceiling on the false findings per
+pull request, and a floor on each count the history holds, review
+findings and pull requests the gate ran on; its numbers are set beside
+the record, in `gates.calibration`'s documentation. A false blocking finding
+costs an appeal and a ruling, so the bar counts what a pull request
+pays.
+
+**A finding no review made is confirmed once**, with a tag beside its
+place that binds to that place and head for every later run. The
+reviewer tags those at the head it reads. `calibrate` lists each finding
+of its run that no case confirms or refutes, a replay on reviews older
+than the gate or a finding fixed at a head no reviewer read among them,
+and writes no record while one stands. It names each on a line of its
+own as `#<pr> <path>:<lines> at <head>`, with no tag beside it, and the
+dispatcher rules on them in the calibration pull request: a comment of
+this account whose first line is `## Ruling`, a line for each place in
+that form with its tag beside it, which `dispatch gates harvest` of that
+pull request records as a case at the pull request and head the place
+names. The head must be a commit of that pull request: one the gate's
+history already holds a case of it at, which every place a calibration
+lists is, or one the forge shows is the pull request's, a commit it
+holds now, or the head a comment of this account on it was written
+against, the head a review read or a findings comment ran at, and not a
+commit a review cites in its prose. Otherwise,
+harvest reports the place and records nothing. A review may name a place in the same form, and the case is
+then that pull request's too. A calibration in which any sample answered
+nothing, an API error left after the SDK's retries among the causes,
+measured nothing about what that sample's call showed, so it too writes
+no record, leaves the one already there, and says why.
+
+The record, `calibration.json`, holds the hashes of the gate's prompt,
+the canonical text and its model id, the hash of the history it
+measured, and the score. A case added
+stales nothing: it moves the next measurement. Why the gate judged each
+place as it did stays out of the record: `calibrate` prints every case
+to standard output beside its label with what the gate made of it, and
+every place a sample found with each sample's verdict and reason. The
 prompt is the gate's `prompt.md` together with the fixed text every
 call carries beside it and the counts its samples are judged by, so an
-edit to any of them is an edit to the prompt. `calibrate` asks each case
-as the item it holds, a batch at a time, under fixed text and counts of
-its own, so a record it writes measures another prompt than the one
-`dispatch gates` asks, and reads there as shadow. The bar is set beside the
-record (`gates.calibration`): the falsifier pair holds in every sample,
-the set holds enough positives and negatives, recall is high enough, and
-false positives few enough. The status is read off those measurements
-against the bar as it stands, so a moved bar applies at once. A gate
-that blocks stays blocking where its canonical section does not read at
-the head, and then refuses, since it asked nothing. A record that
-measured some other prompt,
-text or model reads as shadow, and the comment says which part
-changed. A test case holds every record against its gate in the tree,
-so such an edit fails the gate until `calibrate` runs again. A builder
-holds no key and writes no record, so a gate lands without one and runs
-in shadow until the dispatcher measures it, in a pull request of its
-own.
+edit to any of them is an edit to the prompt. The status is read off
+the record's score against the bar as it stands, so a moved bar applies
+at once. A gate that blocks stays blocking where its canonical section
+does not read at the head, and then refuses, since it asked nothing. A
+record that measured some other prompt, text or model reads as shadow,
+and the comment says which part changed. A test case holds every record
+against its gate in the tree, so such an edit fails the gate until
+`calibrate` runs again. A builder holds no key and writes no record, so
+a gate lands without one and runs in shadow until the dispatcher
+measures it, in a pull request of its own.
 
 **A blocking finding goes back to the builder as a fix cycle before any
 reviewer is commissioned.** The builder fixes it, and the gates run
@@ -1281,19 +1344,28 @@ and on a gate's family of findings, with a tag beside the place**:
 `[gate:<name>]` where the place breaks the rule, a rejected appeal
 included, and `[gate:<name> clean]` where the review holds it to the
 rule in so many words, an accepted appeal included. A tag binds to
-every place its paragraph names, a list item and the indented
-paragraphs under it being one paragraph: a `path:line`, or a
+every place its line names, or its list item, the item and the
+paragraphs indented under it being one, and an item nested under it a
+unit of its own: a `path:line`, or a
 `:commit/<sha>:<line>` whose SHA, seven characters of it or more, opens
-the SHA of one commit of the change. So the tag goes in the
-paragraph that names the place, and the place of a rule the finding
-cites stays out of that paragraph; a tag whose paragraph names no place
-binds to nothing, and harvest reports it. `dispatch gates
-harvest` turns each tag in a review this account wrote into a case of
-that gate. It takes the item the gate's own extractor draws at that
-place at the reviewed head. Against the run recorded at the same head,
-where a place of a file the gate was shown that no entry holds is one it
-passed, it reports each case the gate judged otherwise, and each finding of the
-gate the review left untagged, which a tag then makes a case. Every
+the SHA of one commit of the change. So the tag goes on the line, or in
+the item, that names the place, and the place of a rule the finding
+cites stays off it; a tag whose line or item names no place binds to
+nothing, and harvest reports it, as it reports a line or item in which
+one gate's tags disagree, or one that names several places with the
+tags of several gates beside them, which binds none of them, and text
+that opens `[gate` and then `:` or a space and does not read as a tag.
+`dispatch gates harvest` turns each tag in a review or a ruling this
+account wrote, a comment whose first line is a review's heading as
+above or `## Ruling` alone, into a case of that gate, at a place the gate is shown at the
+head the place is at: a tag on
+a file the change does not write, or on a line the file does not hold
+there, makes no case, since the gate is never asked about it, and
+harvest reports it. Against the run recorded at the same head, where a
+place of a file the gate was shown that no finding of its run stands
+within the margin of is one it passed, it reports each case the gate
+judged otherwise, and each finding of the gate the review left
+untagged, which a tag then makes a case. Every
 disagreement between a gate and a reviewer therefore becomes a case,
 and moves the gate's measurement at its next calibration. An appeal
 that disputes the rule itself, rather than how the gate applied it, goes

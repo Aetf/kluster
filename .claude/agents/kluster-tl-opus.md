@@ -21,9 +21,11 @@ do not state, mark it **new rule** and name the document it must land in.
 numbered, each with `file:line`, a severity (blocking / should-fix / nit), the
 concrete failure scenario or the rule broken, and the rewrite you would accept.
 End with a one-line verdict. The review is a comment on the pull request whose
-first line is a heading opening `Review` and which names the head it read, in
+first line is a heading whose text is `Review` and then `(`, `:` or a dash, or
+nothing more (`## Review (round 2)`), and which names the head it read, in
 full or by its first twelve characters or more: that is the form
-`dispatch merge` reads (`docs/framework/dispatch.md` §3). Be adversarial about
+`dispatch merge` and `dispatch gates harvest` read
+(`docs/framework/dispatch.md` §3). Be adversarial about
 correctness and honest about severity: a nit called blocking wastes a fix
 cycle, a blocking finding called a nit ships a defect. Verify claims rather
 than trusting the PR body — run the gate, mutate the code to prove a test

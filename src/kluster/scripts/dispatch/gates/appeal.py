@@ -7,7 +7,7 @@ head judges, or by appealing it in its report, one line each:
 
 A finding in a commit's message is appealed at its place as the findings
 comment gives it, `:commit/<sha>:<line>` with the SHA in full
-(`extract.message_path`); one that names the commit by less is refused,
+(`change.message_path`); one that names the commit by less is refused,
 saying so. The appeals are written into the findings comment of the pull request's
 head, each on the finding whose place holds that line, so the finding reads
 as answered and the reviewer who rules on it finds the reason beside it
@@ -25,8 +25,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 from . import comment
+from .change import COMMITS, is_message
 from .comment import Evidence, Place
-from .extract import COMMITS, is_message
 from .forge import GateForge
 from .run import findings_comment
 

@@ -30,8 +30,8 @@ from ..prcheck import Git
 from . import comment, view
 from .ask import Asked, judge
 from .calibration import Status, standing
+from .change import Change, change
 from .comment import Evidence, Ran
-from .extract import Change, Item, change
 from .forge import GateForge, PullComment
 from .gate import Gate, GateUnreadable
 from .model import KeyMissing, Messages, Model, key
@@ -52,34 +52,6 @@ def findings_comment(comments: Sequence[PullComment], head: str) -> PullComment 
     """The findings comment of `head` this account wrote, the latest where there are several."""
     found = [c for c in comments if c.mine and comment.head_of(c.body) == head]
     return found[-1] if found else None
-
-
-class ExtractorFailed(RuntimeError):
-    """A gate's extractor raised, so it drew no item."""
-
-
-def drawn(g: Gate, changed: Change) -> list[Item]:
-    """`g`'s items from `changed`, which `harvest` records a review's tags as. Raises `ExtractorFailed`.
-
-    An extractor is the gate's own code over a change nothing vetted, so it
-    can fail on a file it was not written for, a Python file that does not
-    parse among them. That fails the one gate at that head, named by the file
-    the extractor last read, rather than the harvest of every pull request.
-    """
-    read: list[str] = []
-
-    def reading(source: Callable[[str], str | None]) -> Callable[[str], str | None]:
-        def text(path: str) -> str | None:
-            read.append(path)
-            return source(path)
-
-        return text
-
-    try:
-        return list(g.spec.extract(replace(changed, text=reading(changed.text), base_text=reading(changed.base_text))))
-    except Exception as exc:
-        where = f' after reading {read[-1]}' if read else ''
-        raise ExtractorFailed(f'its extractor failed{where}: {type(exc).__name__}: {exc}') from exc
 
 
 def messages() -> Model:
@@ -139,9 +111,9 @@ def asked(prepared: Sequence[Prepared], model: Callable[[], Model]) -> list[Ran]
             status=p.status,
             why=p.why,
             rule=p.rule,
-            entries=tuple(entries),
+            entries=tuple(found.entries),
         )
-        for p, entries in zip(prepared, judged, strict=True)
+        for p, found in zip(prepared, judged, strict=True)
     ]
 
 
@@ -149,7 +121,7 @@ def review(forge: GateForge, git: Git, number: int, gates: Sequence[Gate], model
     """Run every gate pull request `number` triggers and post or edit its findings comment; None where none ran."""
     pull = forge.pull_request(number)
     base = git.merge_base(pull.base, pull.head)
-    changed = change(git, base, pull.head, pull.body)
+    changed = change(git, base, pull.head)
     triggered = [g for g in gates if g.triggered(changed.paths)]
     if not triggered:
         log.info('#%d: no model gate is triggered by the paths it changes', number)

@@ -231,9 +231,9 @@ class World:
     forge: Forge
     reported: str
 
-    def review(self, head: str) -> None:
+    def review(self, head: str, heading: str = '## Review (combined)') -> None:
         held = self.forge.requests[PULL]
-        comment = Comment(f'## Review (combined)\n\nReviewed head: `{head}`.\n\n**Verdict: approve.**', mine=True)
+        comment = Comment(f'{heading}\n\nReviewed head: `{head}`.\n\n**Verdict: approve.**', mine=True)
         self.forge.requests[PULL] = replace(held, comments=(*held.comments, comment))
 
     def merge(self, remains: str | None = None, repository: Jj | None = None) -> PullRequest:
@@ -399,6 +399,17 @@ def _reviewed_earlier(world: World) -> None:
     world.review('0123456789ab' + world.reported[12:])
 
 
+def _moved_under_a_colon_heading(world: World) -> None:
+    # A review headed `Review:` names the head, so only the moved head is refused.
+    _ = world.remote.commit(BRANCH, 'work.txt', 'the work, as someone else pushed it\n')
+    world.review(world.reported, '## Review: style angle')
+
+
+def _reviewed_under_another_heading(world: World) -> None:
+    # A heading that only opens with the word is no review's.
+    world.review(world.reported, '## Review answers')
+
+
 def _closing_under_records_that_do_not_read(world: World) -> None:
     # The description closes #918 too, which is claimed and whose record has no block to read.
     world.forge.relabel(OTHER, add=[ledger.CLAIMED])
@@ -422,6 +433,8 @@ def _closing_beside_a_sibling(world: World) -> None:
         (_moved_and_fetched('thework\n'), Precondition.HEAD),
         (_moved_and_fetched('    the work\n'), Precondition.HEAD),
         (_reviewed_earlier, Precondition.REVIEW),
+        (_moved_under_a_colon_heading, Precondition.HEAD),
+        (_reviewed_under_another_heading, Precondition.REVIEW),
         (_closing_beside_a_sibling, Precondition.OTHERS_LIVE),
         (_closing_under_records_that_do_not_read, Precondition.RECORD_UNREADABLE),
     ],
@@ -430,6 +443,8 @@ def _closing_beside_a_sibling(world: World) -> None:
         'moved-head-without-a-space',
         'moved-head-indented',
         'unreviewed-head',
+        'moved-head-under-a-colon-review',
+        'review-answers-is-no-review',
         'closes-beside-another',
         'closes-unreadable',
     ],

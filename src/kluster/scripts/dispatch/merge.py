@@ -65,8 +65,10 @@ MAIN = 'main'
 FULL_SHA = re.compile(r'[0-9a-f]{40}')
 #: The fewest leading characters of a head a review may name it by.
 SHORT_SHA = 12
-#: A review comment's first line: a heading whose text opens with `Review`.
-_REVIEW_HEADING = re.compile(r'\A#{1,6}[ \t]+Review\b')
+#: A review comment's first line (dispatch.md §3): a heading whose text is `Review` and then `(`, `:` or a dash, or
+#: the end of the line, as `## Review (round 2)`, `## Review: style` or `## Review — head …`; `## Review answers`
+#: is none. `harvest` reads a review by it too.
+REVIEW_HEADING = re.compile(r'\A#{1,6}[ \t]+Review[ \t]*(?:[(:\-–—]|$)', re.M)
 #: A run of hex digits standing alone, which is how a review names a head.
 _HEX = re.compile(r'(?<![0-9A-Za-z])[0-9a-f]{12,40}(?![0-9A-Za-z])')
 #: What the comment on an issue left open says before what remains.
@@ -354,7 +356,7 @@ def _review(dispatch: Dispatched, pull: PullRequest, head: str) -> Refusal | Non
             f'no review of #{pull.number} is dispatched on #{dispatch.issue.number} (§3)',
         )
     named = any(
-        _REVIEW_HEADING.match(comment.body.lstrip())
+        REVIEW_HEADING.match(comment.body.lstrip())
         and any(head.startswith(sha) for sha in _HEX.findall(comment.body) if len(sha) >= SHORT_SHA)
         for comment in pull.comments
         if comment.mine

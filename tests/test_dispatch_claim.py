@@ -30,7 +30,7 @@ from kluster.scripts.dispatch import brief, claim, cli, ledger, serialized
 from kluster.scripts.dispatch.claim import Asking, BriefFile
 from kluster.scripts.dispatch.forge import Milestone
 from kluster.scripts.dispatch.gates import enumeration
-from kluster.scripts.dispatch.gates.calibration import Calibration, Status
+from kluster.scripts.dispatch.gates.calibration import FINDINGS, PULL_REQUESTS, Calibration, Status
 from kluster.scripts.dispatch.gates.gate import RECORD, Gate, named
 from kluster.scripts.dispatch.gates.model import KeyMissing, Model
 
@@ -85,7 +85,9 @@ def _blocking(tmp_path: Path) -> Gate:
     _ = shutil.copytree(Path(enumeration.__file__).parent, copy, ignore=shutil.ignore_patterns('__pycache__'))
     gate = Gate.load(copy, enumeration.GATE)
     held = gate.hashes(gate.canon(_checkout).text)
-    measured = Calibration(held, 'unread here', 8, 8, 1.0, 0.0, 0.0, pair=True)
+    measured = Calibration(
+        held, 'unread here', pull_requests=PULL_REQUESTS, findings=FINDINGS, recovered=FINDINGS, false_findings=0
+    )
     _ = (copy / RECORD).write_text(measured.to_json())
     assert gate.record() == measured
     return gate
