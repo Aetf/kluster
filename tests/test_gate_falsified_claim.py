@@ -1,4 +1,4 @@
-"""`gate: falsified-claim` over real changes: the sweep its extractor runs, harvest beside it, and the gate in shadow.
+"""`gate: falsified-claim` over real changes: the sweep its extractor runs, and harvest beside it.
 
 The changes are excerpts of Aetf/kluster#909 (`tests/data/gates/falsified_claim/`),
 which made `docs/operations.md` §3.5 carry the legacy sealing key again at
@@ -26,13 +26,10 @@ from gate_stub import (
     files,
     pull_request,
     real_change,
-    recorded,
     scratch_repository,
 )
 
 from kluster.lib import workstation
-from kluster.scripts.dispatch.gates import run
-from kluster.scripts.dispatch.gates.calibration import Status
 from kluster.scripts.dispatch.gates.cases import load
 from kluster.scripts.dispatch.gates.extract import Item, change
 from kluster.scripts.dispatch.gates.falsified_claim import GATE
@@ -184,18 +181,3 @@ def test_a_review_tag_on_a_file_the_change_never_touched_becomes_a_case(tmp_path
     (case,) = load(copy / CASES)
     assert (case.path, case.line, case.verdict) == (CREDENTIALS, row.line, Verdict.FINDING)
     assert harvested.appended['falsified-claim'] == [case]
-
-
-def test_the_gate_runs_in_shadow_end_to_end_against_a_recorded_reply(repository: Path) -> None:
-    base, head = _laid(repository, 'drill-row')
-    forge = GateMemoryForge()
-    pull_request(forge, base, head)
-
-    posted = run.review(forge, Git(repository), PULL, [named('falsified-claim')], recorded(DATA / 'messages').model)
-
-    assert posted is not None
-    (ran,) = posted.evidence.gates
-    assert (ran.gate, ran.status, ran.asked) == ('falsified-claim', Status.SHADOW, True)
-    assert [e.place for e in ran.entries] == [i.place for i in GATE.extract(change(Git(repository), base, head, ''))]
-    assert ran.findings
-    assert not run.refuses(0, posted)

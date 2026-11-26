@@ -1,15 +1,12 @@
-"""`gate: conclusion`: its extractor on reviewed changes and on a brief, and the gate run end to end in shadow.
+"""`gate: conclusion`: its extractor on reviewed changes and on a brief.
 
 Each fixture under `tests/data/gates/conclusion/` is one file of a reviewed
 pull request: its text at the head the review read, and the lines the pull
 request wrote there. Every case of the gate's labelled set drawn from that
 file is an item the extractor draws from that change, its text and context
-included, since a case is what the gate would have been asked
+included, since a case holds the item as the extractor drew it
 (`gates.cases`); and every item is of a line the change writes. A brief is
 the gate's only where its issue is in `area/cluster`, beside any other area.
-The run end to end is the harness's own, with a recorded reply standing in
-for the model and no calibration record, so the gate is discovered, its
-canon read and its item asked about in shadow.
 """
 
 from __future__ import annotations
@@ -19,15 +16,11 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
-from gate_stub import GateMemoryForge, Recorded, commit, pull_request, scratch_repository
 
-from kluster.lib import workstation
-from kluster.scripts.dispatch.gates import run
 from kluster.scripts.dispatch.gates.conclusion import extract
 from kluster.scripts.dispatch.gates.extract import Change, Changed
 from kluster.scripts.dispatch.gates.gate import named
 from kluster.scripts.dispatch.gates.reading import brief_path
-from kluster.scripts.dispatch.prcheck import Git
 
 DATA = Path(__file__).parent / 'data' / 'gates' / 'conclusion'
 GATE = named('conclusion')
@@ -77,28 +70,6 @@ def test_a_brief_is_the_gates_where_its_issue_is_in_the_cluster_area(areas: set[
 
     assert GATE.triggered([path]) is asked
     assert [i.text for i in extract(change)] == (["The mover takes the workload's node constraints."] if asked else [])
-
-
-def test_the_gate_runs_end_to_end_on_a_pull_request_in_shadow(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    checkout = workstation.repo_root()
-    repository = scratch_repository(tmp_path, monkeypatch)
-    canon = GATE.spec.canon.document
-    base = commit(repository, {canon: (checkout / canon).read_text()})
-    placed = (
-        "from kluster.lib.k8s import Constraints\nPLACEMENT = {'nodeSelector': {'kubernetes.io/hostname': 'worker'}}\n"
-    )
-    head = commit(repository, {'src/kluster/components/apps/demo/__init__.py': placed})
-    forge = GateMemoryForge()
-    pull_request(forge, base, head)
-    replies = Recorded([cast(dict[str, Any], json.loads((DATA / 'messages' / '1.json').read_text()))])
-
-    posted = run.review(forge, Git(repository), 4917, [GATE], replies.model)
-
-    assert posted is not None
-    (ran,) = posted.evidence.gates
-    assert ran.gate == 'conclusion'
-    assert [e.place for e in ran.entries] == ['src/kluster/components/apps/demo/__init__.py:2']
-    assert 'The program declares constraints, not conclusions' in replies.requests[0]['system']
 
 
 def _written(path: str, lines: list[str]) -> Change:

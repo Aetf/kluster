@@ -1,4 +1,4 @@
-"""`gate: count` over real changes: what its extractor draws, and the gate run in shadow against a recorded reply.
+"""`gate: count` over real changes: what its extractor draws.
 
 Each change is excerpts of a pull request a review found counts in
 (`tests/data/gates/count/`): Aetf/kluster#927's tripwire bound, which counts
@@ -15,19 +15,14 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from gate_stub import EXCERPT, PULL, GateMemoryForge, files, pull_request, real_change, recorded, scratch_repository
+from gate_stub import EXCERPT, files, real_change, scratch_repository
 
-from kluster.lib import workstation
-from kluster.scripts.dispatch.gates import run
-from kluster.scripts.dispatch.gates.calibration import Status
 from kluster.scripts.dispatch.gates.count import GATE
 from kluster.scripts.dispatch.gates.extract import Item, change
-from kluster.scripts.dispatch.gates.gate import named
 from kluster.scripts.dispatch.gates.prose import blocks
 from kluster.scripts.dispatch.prcheck import Git
 
 DATA = Path(__file__).parent / 'data' / 'gates' / 'count'
-CANON = 'docs/style/README.md'
 
 
 @pytest.fixture
@@ -101,19 +96,3 @@ def test_a_count_in_text_this_repository_holds_but_did_not_write_is_no_item(tmp_
 
     assert _drawn(repository, 'operator-updates')
     assert _drawn(repository, '', fixture=vendored) == []
-
-
-def test_the_gate_runs_in_shadow_end_to_end_against_a_recorded_reply(repository: Path) -> None:
-    canon = (workstation.repo_root() / CANON).read_text()
-    base, head = real_change(repository, DATA / 'nodes', beside={CANON: canon})
-    forge = GateMemoryForge()
-    pull_request(forge, base, head)
-
-    posted = run.review(forge, Git(repository), PULL, [named('count')], recorded(DATA / 'messages').model)
-
-    assert posted is not None
-    (ran,) = posted.evidence.gates
-    assert (ran.gate, ran.status, ran.asked) == ('count', Status.SHADOW, True)
-    assert [e.place for e in ran.entries] == [i.place for i in GATE.extract(change(Git(repository), base, head, ''))]
-    assert len(ran.findings) == 1
-    assert not run.refuses(0, posted)

@@ -176,12 +176,12 @@ def _gates(number: int) -> int:
     posted = run.review(forge, git, number, gate.discover(), run.messages)
     for ran in posted.evidence.gates if posted is not None else ():
         if ran.unheard:
-            log.warning('%s, %s, gave no verdict: %s', ran.gate, ran.status, ran.why)
+            log.warning('%s, %s: %s', ran.gate, ran.status, ran.said)
         for entry in ran.findings:
             log.warning('%s, %s: %s%s', ran.gate, ran.status, entry.place, ' (appealed)' if entry.appeal else '')
     if run.refuses(0, posted):
         log.error(
-            '#%d: a blocking gate holds a finding or an undecided item no appeal answers, or asked nothing', number
+            '#%d: a blocking gate holds a finding or an undecided place no appeal answers, or gave no verdict', number
         )
     return REFUSED if run.refuses(len(report.findings), posted) else DONE
 

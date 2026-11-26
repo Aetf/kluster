@@ -1,38 +1,33 @@
 """`dispatch claim` and `queue` ask the model gates that read briefs about the brief, once its preconditions pass.
 
 The gates are this repository's `enumeration` and `conclusion`, their canon
-read from the checkout, and the model a recorded reply that finds the one
-item each gate draws from the brief. With no calibration record a gate is in
-shadow: its finding lands in the dispatcher's log and the claim goes ahead.
-A gate whose record earns `blocking`, written here against a copy of the
-gate, refuses the claim on the same finding, on an item its samples left
-undecided, wherever it asks nothing, and where its canonical section does
-not read, with nothing on the forge changed. A gate whose extractor raises
-on the brief asks nothing, and the other gates ask. A gate whose trigger
-names no brief, as a trigger of every path does not, asks nothing about
-one. The
-command line hands the claim the brief's file, so `dispatch claim` asks the
-gates as the step does. The rest of the claim's preconditions are
-`test_dispatch_ledger.py`'s.
+read from the checkout, and the model a recorded reply that finds one line
+of the brief. Each gate is shown the brief whole. Its findings land in the
+dispatcher's log and the claim goes ahead, whatever status the gate's
+calibration earns: a record that earns `blocking`, written here against a
+copy of the gate, refuses nothing, and neither does such a gate where no
+model can be asked, its canonical section does not read, or its samples
+leave the brief undecided, each of which the log names. A gate whose
+trigger names no brief, as a trigger of every path does not, asks nothing
+about one. The command line hands the claim the brief's file, so
+`dispatch claim` asks the gates as the step does. The rest of the claim's preconditions are `test_dispatch_ledger.py`'s.
 """
 
 from __future__ import annotations
 
-import json
 import logging
 import shutil
 from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
-from typing import Any, cast
 
 import pytest
-from gate_stub import Recorded
+from gate_stub import Recorded, reply
 from memory_forge import MemoryForge
 
 from kluster.lib import workstation
 from kluster.scripts.dispatch import brief, claim, cli, ledger, serialized
-from kluster.scripts.dispatch.claim import Asking, BriefFile, Precondition
+from kluster.scripts.dispatch.claim import Asking, BriefFile
 from kluster.scripts.dispatch.forge import Milestone
 from kluster.scripts.dispatch.gates import enumeration
 from kluster.scripts.dispatch.gates.calibration import Calibration, Status
@@ -42,7 +37,9 @@ from kluster.scripts.dispatch.gates.model import KeyMissing, Model
 PARALLEL = 'Parallel — non-blocking'
 ISSUE = 917
 SESSION = 'session-a'
-REPLY = Path(__file__).parent / 'data' / 'gates' / 'enumeration' / 'messages' / '1.json'
+#: Where the claim shows the brief of an issue in `area/cluster`, and the line of it the recorded reply finds.
+SHOWN = ':brief/cluster/b-917-demo.md'
+FOUND = 10
 
 #: A brief whose prose holds one sentence of each gate's kind: an entry to add, and a node to run on.
 TEXT = """---
@@ -63,9 +60,12 @@ def _checkout(path: str) -> str | None:
     return file.read_text() if file.is_file() else None
 
 
+def _replies() -> Recorded:
+    return Recorded([reply([{'path': SHOWN, 'line': FOUND, 'end_line': FOUND, 'why': 'It pins the pods to a node.'}])])
+
+
 def _asking(*gates: Gate, model: Callable[[], Model] | None = None) -> Asking:
-    replies = Recorded([cast(dict[str, Any], json.loads(REPLY.read_text()))])
-    return Asking(gates or (named('enumeration'), named('conclusion')), _checkout, model or replies.model)
+    return Asking(gates or (named('enumeration'), named('conclusion')), _checkout, model or _replies().model)
 
 
 def _forge(*labels: str) -> MemoryForge:
@@ -98,22 +98,6 @@ def _caught_all(tmp_path: Path) -> Gate:
     return Gate.load(copy, replace(enumeration.GATE, trigger=('**',)))
 
 
-def _raising(tmp_path: Path) -> Gate:
-    """A copy of `enumeration` whose extractor raises on whatever it reads."""
-
-    def extract(_: object) -> list[Any]:
-        raise SyntaxError('invalid syntax')
-
-    copy = tmp_path / 'raising'
-    _ = shutil.copytree(Path(enumeration.__file__).parent, copy, ignore=shutil.ignore_patterns('__pycache__'))
-    return Gate.load(copy, replace(enumeration.GATE, extract=extract))
-
-
-def _silent(reply: dict[str, Any]) -> dict[str, Any]:
-    """`reply` answering no item."""
-    return {**reply, 'content': [{'type': 'text', 'text': json.dumps({'items': []})}]}
-
-
 def _no_key() -> Model:
     raise KeyMissing('no model gates key on this machine')
 
@@ -122,17 +106,21 @@ def test_a_shadow_gates_findings_on_the_brief_are_logged_and_the_claim_goes_ahea
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     forge = _forge()
+    replies = _replies()
 
     with caplog.at_level(logging.WARNING):
-        verdict = claim.claim(forge, _dispatch(), ISSUE, serialized.read(), _asking())
+        verdict = claim.claim(forge, _dispatch(), ISSUE, serialized.read(), _asking(model=replies.model))
 
+    # Each gate is shown the brief whole, its front matter included.
+    assert replies.requests
+    assert all(line in r['messages'][0]['content'] for r in replies.requests for line in TEXT.splitlines())
     assert verdict.brief_evidence is not None
     found = {(r.gate, r.status, e.place) for r in verdict.brief_evidence.gates for e in r.findings}
     assert found == {
-        ('enumeration', Status.SHADOW, ':brief/cluster/b-917-demo.md:9'),
-        ('conclusion', Status.SHADOW, ':brief/cluster/b-917-demo.md:10'),
+        ('enumeration', Status.SHADOW, f'{SHOWN}:{FOUND}'),
+        ('conclusion', Status.SHADOW, f'{SHOWN}:{FOUND}'),
     }
-    assert ':brief/cluster/b-917-demo.md:9' in caplog.text
+    assert f'{SHOWN}:{FOUND}' in caplog.text
     assert ledger.CLAIMED in forge.issues_[ISSUE].labels
 
 
@@ -144,32 +132,68 @@ def test_the_brief_of_an_issue_outside_the_cluster_area_is_not_the_conclusion_ga
 
 
 @pytest.mark.parametrize('step', ['claim', 'queue'])
-def test_a_blocking_gates_finding_on_the_brief_refuses_and_changes_nothing(tmp_path: Path, step: str) -> None:
+def test_a_blocking_gates_finding_on_the_brief_is_logged_and_refuses_nothing(
+    tmp_path: Path, step: str, caplog: pytest.LogCaptureFixture
+) -> None:
     forge = _forge()
     asking = _asking(_blocking(tmp_path))
 
-    with pytest.raises(claim.Refused) as refused:
+    with caplog.at_level(logging.WARNING):
         if step == 'claim':
-            _ = claim.claim(forge, _dispatch(), ISSUE, serialized.read(), asking)
+            verdict = claim.claim(forge, _dispatch(), ISSUE, serialized.read(), asking)
         else:
-            _ = claim.queue(forge, _dispatch(), ISSUE, serialized.read(), TEXT, asking)
+            verdict = claim.queue(forge, _dispatch(), ISSUE, serialized.read(), TEXT, asking)
 
-    assert [r.precondition for r in refused.value.refusals] == [Precondition.BRIEF_GATE]
-    assert ':brief/cluster/b-917-demo.md:9' in str(refused.value)
-    assert forge.issues_[ISSUE].comments == []
-    assert forge.issues_[ISSUE].labels.isdisjoint(ledger.CLAIMS)
+    assert verdict.brief_evidence is not None
+    assert [(r.status, [e.place for e in r.findings]) for r in verdict.brief_evidence.gates] == [
+        (Status.BLOCKING, [f'{SHOWN}:{FOUND}'])
+    ]
+    assert f'enumeration, blocking: {SHOWN}:{FOUND}' in caplog.text
+    assert not forge.issues_[ISSUE].labels.isdisjoint(ledger.CLAIMS)
 
 
-def test_where_no_model_can_be_asked_a_blocking_gate_refuses_and_a_shadow_one_lets_the_claim_through(
-    tmp_path: Path,
-) -> None:
+def test_where_no_model_can_be_asked_the_gates_ask_nothing_and_the_claim_goes_ahead(tmp_path: Path) -> None:
     shadow = claim.claim(_forge(), _dispatch(), ISSUE, serialized.read(), _asking(model=_no_key))
+    blocking = claim.claim(_forge(), _dispatch(), ISSUE, serialized.read(), _asking(_blocking(tmp_path), model=_no_key))
+
     assert shadow.brief_evidence is not None
     assert [(r.gate, r.asked) for r in shadow.brief_evidence.gates] == [('enumeration', False), ('conclusion', False)]
+    assert blocking.brief_evidence is not None
+    assert [(r.status, r.asked) for r in blocking.brief_evidence.gates] == [(Status.BLOCKING, False)]
 
-    with pytest.raises(claim.Refused) as refused:
-        _ = claim.claim(_forge(), _dispatch(), ISSUE, serialized.read(), _asking(_blocking(tmp_path), model=_no_key))
-    assert [r.precondition for r in refused.value.refusals] == [Precondition.BRIEF_GATE]
+
+def test_a_place_a_blocking_gate_left_undecided_on_the_brief_is_logged_and_the_claim_goes_ahead(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    unread = {**reply([]), 'content': [{'type': 'text', 'text': 'not a reply in the schema'}]}
+    forge = _forge()
+    model = Recorded([*_replies().bodies, unread, unread]).model
+
+    with caplog.at_level(logging.WARNING):
+        verdict = claim.claim(forge, _dispatch(), ISSUE, serialized.read(), _asking(_blocking(tmp_path), model=model))
+
+    assert verdict.brief_evidence is not None
+    assert f'enumeration, blocking: {SHOWN}:{FOUND}: no verdict' in caplog.text
+    assert f'enumeration, blocking: {SHOWN}:1–' in caplog.text
+    assert ledger.CLAIMED in forge.issues_[ISSUE].labels
+
+
+def test_a_blocking_gate_whose_canon_does_not_read_logs_that_it_asked_nothing_and_the_claim_goes_ahead(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    forge = _forge()
+
+    def unread(_: str) -> str | None:
+        return None
+
+    asking = replace(_asking(_blocking(tmp_path)), canon=unread)
+
+    with caplog.at_level(logging.INFO):
+        verdict = claim.claim(forge, _dispatch(), ISSUE, serialized.read(), asking)
+
+    assert verdict.brief_evidence is not None
+    assert 'enumeration on the brief, blocking: asked nothing: its canonical section does not read' in caplog.text
+    assert ledger.CLAIMED in forge.issues_[ISSUE].labels
 
 
 def test_the_command_line_hands_the_claim_the_brief_and_the_gates_ask_about_it(
@@ -185,7 +209,7 @@ def test_the_command_line_hands_the_claim_the_brief_and_the_gates_ask_about_it(
     with caplog.at_level(logging.WARNING):
         assert cli.main(['claim', str(ISSUE), str(written)]) == cli.DONE
 
-    assert 'enumeration, shadow: :brief/cluster/b-917-demo.md:9' in caplog.text
+    assert f'enumeration, shadow: {SHOWN}:{FOUND}' in caplog.text
     assert ledger.CLAIMED in forge.issues_[ISSUE].labels
 
 
@@ -196,51 +220,3 @@ def test_a_gate_whose_trigger_names_no_brief_asks_nothing_about_one(tmp_path: Pa
 
     assert verdict.brief_evidence is not None
     assert [r.gate for r in verdict.brief_evidence.gates] == ['enumeration']
-
-
-def test_an_item_a_blocking_gate_left_undecided_on_the_brief_refuses_the_claim(tmp_path: Path) -> None:
-    reply = cast(dict[str, Any], json.loads(REPLY.read_text()))
-    forge = _forge()
-
-    with pytest.raises(claim.Refused) as refused:
-        _ = claim.claim(
-            forge,
-            _dispatch(),
-            ISSUE,
-            serialized.read(),
-            _asking(_blocking(tmp_path), model=Recorded([reply, _silent(reply), _silent(reply)]).model),
-        )
-
-    assert [r.precondition for r in refused.value.refusals] == [Precondition.BRIEF_GATE]
-    assert 'no verdict' in str(refused.value)
-    assert forge.issues_[ISSUE].comments == []
-
-
-def test_a_blocking_gate_whose_canon_does_not_read_refuses_the_claim(tmp_path: Path) -> None:
-    forge = _forge()
-
-    def unread(_: str) -> str | None:
-        return None
-
-    asking = replace(_asking(_blocking(tmp_path)), canon=unread)
-
-    with pytest.raises(claim.Refused) as refused:
-        _ = claim.claim(forge, _dispatch(), ISSUE, serialized.read(), asking)
-
-    assert [r.precondition for r in refused.value.refusals] == [Precondition.BRIEF_GATE]
-    assert forge.issues_[ISSUE].comments == []
-
-
-def test_a_gate_whose_extractor_raises_on_the_brief_asks_nothing_and_leaves_the_others_to_ask(tmp_path: Path) -> None:
-    forge = _forge()
-
-    verdict = claim.claim(
-        forge, _dispatch(), ISSUE, serialized.read(), _asking(named('conclusion'), _raising(tmp_path))
-    )
-
-    assert verdict.brief_evidence is not None
-    ran = {r.gate: r for r in verdict.brief_evidence.gates}
-    assert (ran['raising'].asked, ran['raising'].status) == (False, Status.SHADOW)
-    assert 'its extractor failed' in ran['raising'].why
-    assert ran['conclusion'].asked
-    assert ledger.CLAIMED in forge.issues_[ISSUE].labels

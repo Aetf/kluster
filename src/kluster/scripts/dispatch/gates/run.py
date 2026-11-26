@@ -2,18 +2,18 @@
 
 It runs after `prcheck`'s deterministic checks, on the same pull request
 read from the same local store. A gate runs where the change touches a path
-its trigger matches; its canonical section is read from the tree at the
+its trigger matches, and is shown each file and commit message its trigger
+matches (`view.parts`); its canonical section is read from the tree at the
 head, so a change to the canon is judged by the canon it makes. How a gate
 is made ready to ask, and how the gates are asked, is shared with the
 claim, which asks the gates about a brief (`prepare`, `asked`): a gate's
 status is its calibration record's only while that record measured the
 gate as it now runs (`calibration.standing`); a gate whose canonical
 section does not read asks nothing, and its line in the comment says why;
-so does a gate whose extractor raised (`drawn`), which leaves every other
-gate to run, and every gate where no model can be asked, for a key this
-workstation does not hold (`messages`). So does every gate of a run whose
-record would not fit in one comment even as verdicts alone
-(`comment.fits`), which asks nothing and spends nothing.
+so does every gate where no model can be asked, for a key this workstation
+does not hold (`messages`). So does every gate of a run whose record would
+not fit in one comment even as verdicts alone (`comment.fits`): their
+answers are dropped, and the comment says why.
 
 The comment of a run at the head the pull request already has a comment of
 is edited in place, keeping the appeals that comment records; a run at a new
@@ -27,20 +27,16 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 
 from ..prcheck import Git
-from . import comment
+from . import comment, view
 from .ask import Asked, judge
 from .calibration import Status, standing
-from .comment import Entry, Evidence, Ran
+from .comment import Evidence, Ran
 from .extract import Change, Item, change
 from .forge import GateForge, PullComment
 from .gate import Gate, GateUnreadable
 from .model import KeyMissing, Messages, Model, key
-from .verdict import SAMPLES, Answer, Verdict
 
 log = logging.getLogger(__name__)
-
-#: The samples of an item every sample finds: the longest an entry's verdicts run to.
-_ALL = tuple(Answer(Verdict.FINDING, '') for _ in range(SAMPLES))
 
 
 @dataclass(frozen=True)
@@ -59,16 +55,16 @@ def findings_comment(comments: Sequence[PullComment], head: str) -> PullComment 
 
 
 class ExtractorFailed(RuntimeError):
-    """A gate's extractor raised, so the gate has no items to ask about."""
+    """A gate's extractor raised, so it drew no item."""
 
 
 def drawn(g: Gate, changed: Change) -> list[Item]:
-    """`g`'s items from `changed`. Raises `ExtractorFailed`, naming the file the extractor last read.
+    """`g`'s items from `changed`, which `harvest` records a review's tags as. Raises `ExtractorFailed`.
 
     An extractor is the gate's own code over a change nothing vetted, so it
     can fail on a file it was not written for, a Python file that does not
-    parse among them. That fails the one gate, which then asks nothing and is
-    recorded so, rather than the run of every gate on the pull request.
+    parse among them. That fails the one gate at that head, named by the file
+    the extractor last read, rather than the harvest of every pull request.
     """
     read: list[str] = []
 
@@ -112,9 +108,9 @@ def prepare(g: Gate, canon: Callable[[str], str | None], changed: Change, at: st
     Its status is what its calibration record earns against the gate as it
     now runs. A gate whose section does not read asks nothing, and stays
     blocking where its record earned that: a canon moved out from under a
-    gate does not open it. A gate whose extractor raised asks nothing too
-    (`drawn`). `at` is the commit whose tree `canon` reads, which the link
-    to the rule names; a tree that is no commit, a checkout, gives no link.
+    gate does not open it. `at` is the commit whose tree `canon` reads, which
+    the link to the rule names; a tree that is no commit, a checkout, gives
+    no link.
     """
     try:
         section = g.canon(canon)
@@ -125,12 +121,8 @@ def prepare(g: Gate, canon: Callable[[str], str | None], changed: Change, at: st
         return _unasked(g, status, f'its canonical section does not read: {exc}')
     status, why = standing(g.record(), g.hashes(section.text))
     rule = g.rule(at, section) if at is not None else ''
-    try:
-        items = drawn(g, changed)
-    except ExtractorFailed as exc:
-        log.error('%s asks nothing: %s', g.name, exc)
-        return _unasked(g, status, str(exc), rule)
-    return Prepared(g, rule, status, why, Asked(system=g.system(section.text), model=g.spec.model, items=items))
+    parts = view.parts(changed, g.spec.trigger)
+    return Prepared(g, rule, status, why, Asked(system=g.system(section.text), model=g.spec.model, parts=parts))
 
 
 def asked(prepared: Sequence[Prepared], model: Callable[[], Model]) -> list[Ran]:
@@ -147,9 +139,9 @@ def asked(prepared: Sequence[Prepared], model: Callable[[], Model]) -> list[Ran]
             status=p.status,
             why=p.why,
             rule=p.rule,
-            entries=tuple(Entry(j.item.path, j.item.line, j.item.end_line, j.samples) for j in verdicts),
+            entries=tuple(entries),
         )
-        for p, verdicts in zip(prepared, judged, strict=True)
+        for p, entries in zip(prepared, judged, strict=True)
     ]
 
 
@@ -171,34 +163,19 @@ def review(forge: GateForge, git: Git, number: int, gates: Sequence[Gate], model
             prepared.append(ready)
         else:
             unread.append(ready)
-    skeleton = Evidence(
-        pull.head,
-        tuple(
-            Ran(
-                p.gate.name,
-                p.gate.spec.model,
-                p.status,
-                p.why,
-                p.rule,
-                tuple(Entry(i.path, i.line, i.end_line, _ALL) for i in p.asked.items),
-            )
-            for p in prepared
-        )
-        + tuple(unread),
-    )
-    if not comment.fits(skeleton):
-        log.error('#%d: the gates ask nothing: their items would not fit in one findings comment', number)
+    ran = asked(prepared, model)
+    if not comment.fits(Evidence(pull.head, tuple(ran + unread))):
+        log.error('#%d: the gates answered more than one findings comment holds; their answers are dropped', number)
         ran = [
-            _unasked(
-                p.gate,
-                p.status,
-                f'its {len(p.asked.items)} items would not fit in one comment, with the other gates',
-                p.rule,
+            replace(
+                r,
+                why=f'its {len(r.entries)} places would not fit in one comment, with the other gates',
+                entries=(),
+                asked=False,
+                dropped=True,
             )
-            for p in prepared
+            for r in ran
         ]
-    else:
-        ran = asked(prepared, model)
     held = findings_comment(forge.pull_comments(number), pull.head)
     evidence = Evidence(pull.head, tuple(ran + unread)).appealed(comment.parse(held.body) if held else None)
     body = comment.render(evidence)
@@ -214,7 +191,7 @@ def review(forge: GateForge, git: Git, number: int, gates: Sequence[Gate], model
 def refuses(deterministic: int, posted: Posted | None) -> bool:
     """Whether `dispatch gates` exits non-zero: on a deterministic finding, or where a blocking gate cannot pass.
 
-    A blocking gate cannot pass while it holds a finding or an item its
+    A blocking gate cannot pass while it holds a finding or a place its
     samples left undecided that no appeal answers, or asked nothing, so a gate
     that blocks never fails open. A shadow gate decides nothing here, whatever
     it found or failed to ask.

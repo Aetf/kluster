@@ -1,11 +1,12 @@
-"""A gate's verdict on one item: three samples, and the majority that stands.
+"""A gate's verdict on one place: three samples, and the majority that stands.
 
-Each item is asked about `SAMPLES` times, and a finding stands on
-`MAJORITY` of them. A sample the model did not answer, for a reply that
-was refused, cut short, not in the schema or never made, counts toward
-neither verdict. An item whose unanswered samples could still have made a
-finding stand is `undecided`: a shadow gate passes it, and a blocking gate
-treats it as a finding no appeal has answered yet.
+Each call is asked `SAMPLES` times, and a finding stands where `MAJORITY`
+of them find it. A sample the model did not answer, for a reply that was
+refused, cut short, not in the schema or never made, counts toward neither
+verdict. A place whose unanswered samples could still have made a finding
+stand is `undecided`: a shadow gate passes it, and a blocking gate treats
+it as a finding no appeal has answered yet. A place is one a sample found
+(`ask.matched`), or one of `calibrate`'s labelled items (`Judged`).
 """
 
 from __future__ import annotations
@@ -16,14 +17,14 @@ from dataclasses import dataclass
 
 from .extract import Item
 
-#: How many times each item is asked.
+#: How many times each call is asked.
 SAMPLES = 3
 #: How many of those samples a finding stands on.
 MAJORITY = 2
 
 
 class Verdict(enum.StrEnum):
-    """What one sample says of an item, in the words of the output schema."""
+    """What one sample says of a place."""
 
     FINDING = 'finding'
     PASS = 'pass'
@@ -31,13 +32,13 @@ class Verdict(enum.StrEnum):
 
 @dataclass(frozen=True)
 class Answer:
-    """One sample's verdict on one item, and its one-sentence reason."""
+    """One sample's verdict on one place, and its one-sentence reason."""
 
     verdict: Verdict
     why: str
 
 
-#: A sample's answer for one item; None where the sample gave none.
+#: A sample's answer for one place; None where the sample gave none.
 Sample = Answer | None
 
 
@@ -50,8 +51,8 @@ def undecided(samples: Sequence[Sample]) -> bool:
     """Whether the samples that answered nothing could still have made a finding stand.
 
     A sample that answered nothing counts toward neither verdict, which is
-    right for a model that declined an item. For a call that failed it is no
-    verdict at all, and an item those samples leave short of a majority either
+    right for a model that declined a place. For a call that failed it is no
+    verdict at all, and a place those samples leave short of a majority either
     way is one the gate has not judged.
     """
     found = sum(1 for s in samples if s is not None and s.verdict is Verdict.FINDING)

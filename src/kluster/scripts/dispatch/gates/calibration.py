@@ -3,7 +3,7 @@
 `dispatch gates calibrate <name>` asks the gate about every case of its
 labelled set and writes `calibration.json`: the hashes of what it measured,
 which are the prompt (`prompt.md` with the harness's own fixed text,
-`ask.harness`), the canonical text and the model id, the hash of the set,
+`gate.Gate.hashes`), the canonical text and the model id, the hash of the set,
 and what the set scored. A gate blocks only while those scores meet the
 bar and all three of those hashes still match the gate as it is run;
 anything else is `shadow`, posted and advisory, with the reason said
@@ -40,6 +40,14 @@ FALSE_POSITIVES = 1 / 20
 MINIMUM = 8
 #: The falsifier pair, the first cases of every set: the verdict each is labelled, and every sample must give.
 PAIR = (Verdict.FINDING, Verdict.PASS)
+#: How many lines apart two findings at one path may lie and still name one place: a model and a reviewer, or
+#: two samples, point at one defect a line or two apart (`ask.matched`).
+MARGIN = 2
+
+
+def near(first: int, last: int, other_first: int, other_last: int) -> bool:
+    """Whether lines `first`–`last` and `other_first`–`other_last` of one path name one place: within `MARGIN`."""
+    return max(first, other_first) - min(last, other_last) <= MARGIN
 
 
 class Status(enum.StrEnum):

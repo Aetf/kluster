@@ -23,9 +23,9 @@ as the one file of a change that writes it whole, at a path under
 `BRIEFS` that names the areas of its issue. A gate asks about a brief only
 where its trigger names briefs, a pattern rooted at `BRIEFS` that matches
 the path (`asks_about_briefs`), so a trigger that takes every path of a
-pull request, `**`, takes no brief. Its extractor draws from a brief by the
-path's form (`is_brief`). No path of this repository starts with `:`, so no
-path a pull request touches is read as a brief.
+pull request, `**`, takes no brief. An extractor that reads briefs tells
+one by the path's form (`is_brief`). No path of this repository starts with
+`:`, so no path a pull request touches is read as a brief.
 
 An extractor selects, among a file's passages, the ones its own question is
 about. What a Python passage's question needs beside it is its context

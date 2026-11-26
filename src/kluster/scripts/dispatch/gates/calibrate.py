@@ -2,8 +2,11 @@
 
 The canonical section is read from the checkout the command runs in, which
 is the tree the record's hash of it is held against (`calibration`). Each
-case is asked as the gate asks any item, three samples to a batch, so the
-record measures the verdict `dispatch gates` would give.
+case is asked as an item, three samples to a batch (`ask.judge_items`), and
+the record's hash of the prompt takes that ask's harness
+(`gate.Gate.hashes`). `dispatch gates` shows a gate the change whole
+(`ask.judge`), so a record written here measures another prompt than it
+asks, and the gate runs there in shadow.
 
 What the record holds is the aggregate the bar reads. Why the gate judged
 each case as it did is the run's `Judgement`, which the command prints
@@ -21,7 +24,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from .ask import Asked, judge
+from .ask import ItemsAsked, judge_items
 from .calibration import PAIR, Calibration, digest, measure, pair_held
 from .cases import Case
 from .gate import CASES, RECORD, Gate, GateUnreadable
@@ -118,7 +121,7 @@ def calibrate(gate: Gate, checkout: Path, model: Callable[[], Model]) -> Calibra
 
     canon = gate.canon(text).text
     log.info('asking %s about %d cases, on %s', gate.name, len(cases), gate.spec.model)
-    (judged,) = judge([Asked(gate.system(canon), gate.spec.model, [c.item for c in cases])], model)
+    (judged,) = judge_items([ItemsAsked(gate.system(canon), gate.spec.model, [c.item for c in cases])], model)
     judgement = Judgement(cases, judged)
     missing = judgement.unanswered()
     if missing:
@@ -132,7 +135,8 @@ def calibrate(gate: Gate, checkout: Path, model: Callable[[], Model]) -> Calibra
             'read skipped its item or answered it twice; the run logged a warning for each but the last',
             judgement,
         )
-    record = measure(cases, judged, cases=digest((gate.directory / CASES).read_text()), hashes=gate.hashes(canon))
+    hashes = gate.hashes(canon, items=True)
+    record = measure(cases, judged, cases=digest((gate.directory / CASES).read_text()), hashes=hashes)
     _ = (gate.directory / RECORD).write_text(record.to_json())
     log.info('wrote %s: %s', gate.directory / RECORD, record.status)
     return Calibrated(record, judgement)

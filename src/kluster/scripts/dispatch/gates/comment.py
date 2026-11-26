@@ -4,23 +4,25 @@ The comment opens `## Gate findings (head <sha>)`, and a run at the same
 head edits it in place, while a run at a new head posts another (dispatch.md
 §3). Under the findings it carries the run's whole record as a fenced `json`
 block: every gate that ran, with its status and why, its model and the link
-to its canonical section; and every item it asked about, passes included,
-by its place, with one letter for each sample's verdict and any appeal of
-it. That record is what `harvest` pairs a review of the same head against,
-so a gate's finding the reviewer did not raise and a reviewer's finding the
-gate passed both surface as calibration cases.
+to its canonical section; and every place any of its samples found, and
+every stretch its samples left undecided (`ask.matched`), by its place,
+with one letter for each sample's word there and any appeal of it. A place
+no sample found is a pass, and holds no entry. That record is what
+`harvest` pairs a review of the same head against, so a gate's finding the
+reviewer did not raise and a reviewer's finding the gate passed both
+surface as calibration cases.
 
 **The comment fits in one GitHub comment, whatever the run.** GitHub
 refuses a body over `LIMIT` characters, and a refused comment would leave
 the run's calls paid for and nothing recorded. So the record is compact,
 its entries grouped by path, and the samples' reasons are what gives way:
-`render` keeps the reasons of every item whose samples are not a unanimous
+`render` keeps the reasons of every entry whose samples are not a unanimous
 pass, then of standing findings alone, then none, and last drops the list
-of findings and undecided items above the record, which holds every one
-of them. The verdicts
-always stay, since they are what a review pairs against. Where a run's
-items would not fit even as verdicts alone (`fits`), its gates ask nothing
-and are recorded as having asked nothing.
+of findings and undecided places above the record, which holds every one
+of them. The verdicts always stay, since they are what a review pairs
+against. Where a run's entries would not fit even as verdicts alone
+(`fits`), its gates' answers are dropped and each is recorded as having
+given no verdict.
 """
 
 from __future__ import annotations
@@ -31,11 +33,15 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from typing import Any, cast
 
-from .calibration import Status
+from .calibration import Status, near
 from .verdict import Answer, Sample, Verdict, reason, stands, undecided
 
-#: The record's version, which a reader newer than a record reads and an older one refuses.
-VERSION = 1
+#: The record's version, which a reader newer than a record reads and an older one refuses. From version 2
+#: an entry is a place a sample found or the samples left undecided, and a place of a file the gate was shown
+#: that no entry holds is one it passed. A version 1 record is a run of the item ask, which holds an entry for
+#: every item asked, passes included, so a place no entry holds there was never asked about
+#: (`Evidence.version`, which `harvest` reads).
+VERSION = 2
 
 #: The longest body GitHub takes for a comment, in characters.
 LIMIT = 65_536
@@ -65,7 +71,7 @@ class EvidenceTooLong(ValueError):
 
 @dataclass(frozen=True)
 class Entry:
-    """One item a gate asked about, by its place, with its samples and any appeal of it."""
+    """One place of a gate's run, with each sample's word on it and any appeal of it."""
 
     path: str
     line: int
@@ -80,7 +86,7 @@ class Entry:
 
     @property
     def undecided(self) -> bool:
-        """Whether the samples that answered nothing leave the item unjudged (`verdict.undecided`)."""
+        """Whether the samples that answered nothing leave the place unjudged (`verdict.undecided`)."""
         return undecided(self.samples)
 
     @property
@@ -103,8 +109,11 @@ class Ran:
     #: The link to its canonical section at the head; empty where the section did not read.
     rule: str
     entries: tuple[Entry, ...]
-    #: Whether the gate asked its model; False where its canon did not read or no model could be asked.
+    #: Whether the gate's answers are recorded; False where its canon did not read, no model could be asked, or
+    #: what it answered would not fit in one comment.
     asked: bool = True
+    #: Whether the gate asked and its answers were dropped, for they would not fit in one comment.
+    dropped: bool = False
 
     @property
     def findings(self) -> list[Entry]:
@@ -112,18 +121,29 @@ class Ran:
 
     @property
     def open(self) -> list[Entry]:
-        """Each entry a blocking status holds against the change: a finding, or an item left undecided."""
+        """Each entry a blocking status holds against the change: a finding, or a place left undecided."""
         return [e for e in self.entries if e.finding or e.undecided]
 
     @property
     def silent(self) -> bool:
-        """Whether the gate had items to ask about and no sample answered any of them."""
+        """Whether no sample of the gate answered: every entry is a place no sample's answer reached."""
         return bool(self.entries) and all(s is None for e in self.entries for s in e.samples)
 
     @property
     def unheard(self) -> bool:
-        """Whether the gate gave no verdict: it asked nothing, or nothing it asked was answered."""
+        """Whether the gate gave no verdict: it asked nothing, its answers were dropped, or nothing was answered."""
         return not self.asked or self.silent
+
+    @property
+    def said(self) -> str:
+        """Why the gate runs as it does, and, where it gave no verdict, which way it gave none."""
+        if self.dropped:
+            return f'gave no verdict, its answers dropped: {self.why}'
+        if not self.asked:
+            return f'asked nothing: {self.why}'
+        if self.silent:
+            return f'{self.why}. No sample answered any of them'
+        return self.why
 
 
 @dataclass(frozen=True)
@@ -132,6 +152,8 @@ class Evidence:
 
     head: str
     gates: tuple[Ran, ...]
+    #: The version of the record the run is read from, or is written as (`VERSION`).
+    version: int = VERSION
 
     @property
     def unanswered(self) -> list[tuple[Ran, Entry]]:
@@ -139,11 +161,53 @@ class Evidence:
         return [(ran, e) for ran in self.gates if ran.status is Status.BLOCKING for e in ran.open if e.appeal is None]
 
     def appealed(self, held: Evidence | None) -> Evidence:
-        """This run with the appeals `held`, a run at the same head, records."""
+        """This run with the appeals `held`, a run at the same head, records.
+
+        A run's places move a line or two between runs, so an appeal of a
+        finding goes to the nearest finding of the same gate and path that is
+        near it (`calibration.near`), ties to the earlier line. An appeal of a
+        place left undecided goes to an undecided place of the same gate over
+        the same lines, which the same head cuts the same way. Each appeal goes
+        to one entry at most, so a place the run split in two is answered once
+        and the other half is held again, and a finding is never answered by
+        an appeal of a call that failed.
+        """
         if held is None or held.head != self.head:
             return self
-        return self.with_appeals(
-            {(ran.gate, e.path, e.line, e.end_line): e.appeal for ran in held.gates for e in ran.entries if e.appeal}
+        appeals = sorted(
+            ((ran.gate, e) for ran in held.gates for e in ran.entries if e.appeal is not None),
+            key=lambda held: (held[0], held[1].path, held[1].line, held[1].end_line),
+        )
+        given: dict[tuple[str, int], str] = {}
+        for gate, appealed in appeals:
+            ran = next((r for r in self.gates if r.gate == gate), None)
+            if ran is None:
+                continue
+
+            def fits(e: Entry, appealed: Entry = appealed) -> bool:
+                if e.path != appealed.path:
+                    return False
+                if appealed.finding:
+                    return e.finding and near(appealed.line, appealed.end_line, e.line, e.end_line)
+                return not e.finding and e.undecided and (e.line, e.end_line) == (appealed.line, appealed.end_line)
+
+            open_ = [
+                (n, e) for n, e in enumerate(ran.entries) if (gate, n) not in given and e.appeal is None and fits(e)
+            ]
+            nearest = min(open_, key=lambda ne: (abs(ne[1].line - appealed.line), ne[1].line), default=None)
+            if nearest is not None and appealed.appeal is not None:
+                given[(gate, nearest[0])] = appealed.appeal
+        return replace(
+            self,
+            gates=tuple(
+                replace(
+                    ran,
+                    entries=tuple(
+                        replace(e, appeal=given.get((ran.gate, n), e.appeal)) for n, e in enumerate(ran.entries)
+                    ),
+                )
+                for ran in self.gates
+            ),
         )
 
     def with_appeals(self, reasons: Mapping[Place, str]) -> Evidence:
@@ -175,7 +239,7 @@ def _letters(samples: Sequence[Sample]) -> str:
     return ''.join(LETTERS[s.verdict] if s is not None else NONE for s in samples)
 
 
-#: Which items' reasons a rendering keeps, from the most to the least.
+#: Which entries' reasons a rendering keeps, from the most to the least.
 _KEEP_SPLIT, _KEEP_FINDINGS, _KEEP_NONE = 'split', 'findings', 'none'
 
 
@@ -206,17 +270,16 @@ def _record(evidence: Evidence, keep: str) -> str:
             'why': r.why,
             'rule': r.rule,
             'asked': r.asked,
+            'dropped': r.dropped,
             'paths': paths,
         }
 
-    record = {'version': VERSION, 'head': evidence.head, 'gates': [ran(r) for r in evidence.gates]}
+    record = {'version': evidence.version, 'head': evidence.head, 'gates': [ran(r) for r in evidence.gates]}
     return json.dumps(record, ensure_ascii=False, separators=(',', ':'))
 
 
 def _gate_line(ran: Ran) -> str:
-    said = f'asked nothing: {ran.why}' if not ran.asked else ran.why
-    heard = ' No sample answered any of them.' if ran.silent else ''
-    return f'- **{ran.gate}** on `{ran.model}`, {ran.status}: {said}. {len(ran.entries)} items asked.{heard}'
+    return f'- **{ran.gate}** on `{ran.model}`, {ran.status}: {ran.said}. {len(ran.entries)} places recorded.'
 
 
 def _body(evidence: Evidence, keep: str, listed: bool) -> str:
@@ -226,7 +289,7 @@ def _body(evidence: Evidence, keep: str, listed: bool) -> str:
     lines = [
         HEADING.format(head=evidence.head),
         '',
-        f'{findings} findings and {len(listing) - findings} items left undecided, {blocking} of them under a '
+        f'{findings} findings and {len(listing) - findings} places left undecided, {blocking} of them under a '
         'blocking gate. A shadow gate is advisory: it has not been measured at the bar a blocking gate meets '
         '(docs/framework/dispatch.md §3).',
         '',
@@ -260,7 +323,7 @@ def render(evidence: Evidence) -> str:
         if len(body) <= LIMIT:
             return body
     raise EvidenceTooLong(
-        f'{sum(len(r.entries) for r in evidence.gates)} items do not fit in one comment of {LIMIT} characters '
+        f'{sum(len(r.entries) for r in evidence.gates)} entries do not fit in one comment of {LIMIT} characters '
         'even as verdicts alone'
     )
 
@@ -319,6 +382,7 @@ def parse(body: str) -> Evidence | None:
     try:
         return Evidence(
             head=head,
+            version=version,
             gates=tuple(
                 Ran(
                     gate=str(ran['gate']),
@@ -332,6 +396,7 @@ def parse(body: str) -> Evidence | None:
                         for row in rows
                     ),
                     asked=bool(ran['asked']),
+                    dropped=bool(ran.get('dropped', False)),
                 )
                 for ran in cast(list[dict[str, Any]], raw['gates'])
             ),

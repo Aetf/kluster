@@ -69,7 +69,7 @@ def test_a_record_whose_hash_mismatches_reads_as_shadow_and_says_why(
     if part == 'prompt':
         _ = (stub.directory / gate.PROMPT).write_text(f'{stub.prompt}\nAnswer briefly.\n')
     elif part == 'harness':
-        monkeypatch.setattr(ask, 'FRAME', f'{ask.FRAME} Answer briefly.')
+        monkeypatch.setattr(ask, 'ITEM_FRAME', f'{ask.ITEM_FRAME} Answer briefly.')
     elif part == 'counts':
         monkeypatch.setattr(ask, 'MAJORITY', ask.MAJORITY - 1)
     elif part == 'canon':
@@ -80,9 +80,12 @@ def test_a_record_whose_hash_mismatches_reads_as_shadow_and_says_why(
     def text(path: str) -> str | None:
         return (checkout / path).read_text()
 
-    status, why = standing(stub.record(), stub.hashes(stub.canon(text).text))
+    now = stub.hashes(stub.canon(text).text, items=True)
+    status, why = standing(stub.record(), now)
 
-    assert stub.stale(text) == [said]
+    record = stub.record()
+    assert record is not None
+    assert record.hashes.changed(now) == [said]
     assert status is Status.SHADOW
     assert why.startswith(f'{said} changed since the calibration record was measured')
 
@@ -163,7 +166,9 @@ def checkout(tmp_path: Path) -> Path:
     return root
 
 
-def test_a_gate_that_meets_the_bar_earns_blocking_and_runs_blocking(tmp_path: Path, checkout: Path) -> None:
+def test_a_gate_that_meets_the_bar_earns_blocking_on_the_items_it_measured_and_runs_in_shadow_on_a_change(
+    tmp_path: Path, checkout: Path
+) -> None:
     stub = stub_gate(tmp_path)
     _ = _set(stub)
 
@@ -174,7 +179,11 @@ def test_a_gate_that_meets_the_bar_earns_blocking_and_runs_blocking(tmp_path: Pa
 
     assert (record.status, record.recall, record.false_positives, record.pair) == (Status.BLOCKING, 1.0, 0.0, True)
     assert stub.record() == record
-    assert standing(stub.record(), stub.hashes(stub.canon(lambda _: RULE).text))[0] is Status.BLOCKING
+    canon = stub.canon(lambda _: RULE).text
+    assert standing(stub.record(), stub.hashes(canon, items=True))[0] is Status.BLOCKING
+    # `dispatch gates` shows the gate the change whole, which the record did not measure.
+    assert stub.stale(lambda _: RULE) == ['the prompt']
+    assert standing(stub.record(), stub.hashes(canon))[0] is Status.SHADOW
 
 
 def test_a_falsifier_pair_that_slips_in_one_sample_keeps_the_gate_in_shadow(tmp_path: Path, checkout: Path) -> None:
@@ -189,7 +198,7 @@ def test_a_falsifier_pair_that_slips_in_one_sample_keeps_the_gate_in_shadow(tmp_
 
     # Two samples of three still find it, and recall over the set is whole: the pair alone keeps it out.
     assert (record.status, record.recall, record.pair) == (Status.SHADOW, 1.0, False)
-    status, why = standing(record, stub.hashes(stub.canon(lambda _: RULE).text))
+    status, why = standing(record, stub.hashes(stub.canon(lambda _: RULE).text, items=True))
     assert status is Status.SHADOW
     assert 'its first two cases' in why
 

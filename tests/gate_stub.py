@@ -4,17 +4,19 @@ Its own module because the harness, calibration and harvest cases all run the
 same gate, and a test module is not imported by another
 (`tests/test_suite_imports.py`). The gate is `tests/data/gates/stub/`, copied
 into the case's own directory so that a record a case writes stays its own;
-its question is about the lines a change writes under `docs/notes/`, and its
-canon is a section of `docs/rule.md` in the scratch repository.
+it is shown each file a change writes under `docs/`, its question is about
+the lines a change writes into a note, and its canon is a section of
+`docs/rule.md` in the scratch repository.
 
-A real gate's cases run it the same way over a recorded change
-(`real_change`): excerpts of a pull request's files at its base and its
-head, under `tests/data/gates/<gate>/`.
+A real gate's extractor cases read a recorded change (`real_change`):
+excerpts of a pull request's files at its base and its head, under
+`tests/data/gates/<gate>/`.
 
 The replies are Messages API response bodies (`tests/data/gates/stub/messages/`)
 in the shape the API documents, served by a transport handed to the real
 client, so a run builds its requests and reads its replies through the SDK
-with no network and no key. Each call takes the next body in turn.
+with no network and no key. Each call takes the next body in turn. A case
+that needs other findings builds the body with `reply`.
 """
 
 from __future__ import annotations
@@ -205,6 +207,20 @@ class Recorded:
             http_client=anthropic.DefaultHttpxClient(transport=httpx2.MockTransport(self._serve)),
             retries=0,
         )
+
+
+def reply(findings: list[dict[str, object]]) -> dict[str, Any]:
+    """A Messages API body whose text is a gate's reply holding `findings`."""
+    return {
+        'id': 'msg_stub',
+        'type': 'message',
+        'role': 'assistant',
+        'model': 'claude-haiku-5-5',
+        'content': [{'type': 'text', 'text': json.dumps({'findings': findings})}],
+        'stop_reason': 'end_turn',
+        'stop_sequence': None,
+        'usage': {'input_tokens': 412, 'output_tokens': 96},
+    }
 
 
 def recorded(messages: Path = STUB / 'messages') -> Recorded:

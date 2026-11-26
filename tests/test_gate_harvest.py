@@ -1,14 +1,16 @@
 """`harvest`: the places a review tags become cases of the stub gate's set, paired with the gate's run at that head.
 
 The pull request writes three lines into a note, and one into a file the
-gate draws nothing from, and the stub gate's run at
-its head (`gate_stub`'s recorded replies) finds the first and passes the
-other two. The review then tags the second a finding, which the gate passed,
-and holds the third clean, naming it by its file name alone.
+gate's extractor draws nothing from, and the stub gate's run at its head
+(`gate_stub`'s recorded replies) finds the first, which stands, and the
+third in one sample alone. No sample finds the second, which the gate was
+shown and so passed. The review then tags the second a finding, and holds
+the third clean, naming it by its file name alone.
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 
@@ -27,7 +29,9 @@ from gate_stub import (
 
 from kluster.scripts.dispatch.gates import narration, run
 from kluster.scripts.dispatch.gates.extract import Change, Item, message_path
+from kluster.scripts.dispatch.gates.gate import Gate
 from kluster.scripts.dispatch.gates.harvest import HarvestGit, harvest
+from kluster.scripts.dispatch.gates.model import KeyMissing, Model
 from kluster.scripts.dispatch.gates.verdict import Verdict
 
 NOTE = 'docs/notes/placement.md'
@@ -42,9 +46,17 @@ def repository(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 
 def _reviewed(
-    tmp_path: Path, repository: Path, review: str, *, mine: bool = True, ran: bool = True, status: int = 200
+    tmp_path: Path,
+    repository: Path,
+    review: str,
+    *,
+    mine: bool = True,
+    ran: bool = True,
+    status: int = 200,
+    gate: Gate | None = None,
+    model: Callable[[], Model] | None = None,
 ) -> tuple[GateMemoryForge, str]:
-    """A pull request the stub gate has run on, with `review`, its `{head}` filled, on it; and its head."""
+    """A pull request `gate`, the stub gate unless named, has run on, with `review`, its `{head}` filled, on it."""
     base = commit(repository, {RULE_DOCUMENT: RULE})
     head = commit(repository, {NOTE: '\n'.join(LINES) + '\n', OTHER: 'The queue runs on the homelab node.\n'})
     forge = GateMemoryForge()
@@ -52,7 +64,8 @@ def _reviewed(
     replies = recorded()
     replies.status = status
     if ran:
-        _ = run.review(forge, HarvestGit(repository), PULL, [stub_gate(tmp_path / 'run')], replies.model)
+        ran_gate = gate or stub_gate(tmp_path / 'run')
+        _ = run.review(forge, HarvestGit(repository), PULL, [ran_gate], model or replies.model)
     _ = forge.say(PULL, review.format(head=head[:12]), mine=mine)
     return forge, head
 
@@ -89,6 +102,38 @@ def test_a_reviews_tags_become_cases_and_each_disagreement_with_the_gate_is_repo
     ]
 
 
+def _no_key() -> Model:
+    raise KeyMissing('no model gates key on this machine')
+
+
+def _disagreements(notes: list[str]) -> list[str]:
+    return [note for note in notes if 'disagrees' in note]
+
+
+@pytest.mark.parametrize('why', ['not shown', 'not asked', 'a version 1 record'])
+def test_a_place_with_no_entry_is_no_pass_where_the_run_did_not_judge_it(
+    tmp_path: Path, repository: Path, why: str
+) -> None:
+    stub = stub_gate(tmp_path)
+    if why == 'not shown':
+        # The gate is shown the other file alone, so the note is no file it judged.
+        gate = replace(stub, spec=replace(stub.spec, trigger=(OTHER,)))
+        forge, _ = _reviewed(tmp_path, repository, REVIEW, gate=gate)
+    elif why == 'not asked':
+        gate = stub
+        forge, _ = _reviewed(tmp_path, repository, REVIEW, model=_no_key)
+    else:
+        gate = stub
+        forge, _ = _reviewed(tmp_path, repository, REVIEW)
+        held = forge.pull_comments(PULL)[0]
+        forge.edit(held.id, held.body.replace('{"version":2,', '{"version":1,'))
+
+    harvested = harvest(forge, HarvestGit(repository), [PULL], [gate])
+
+    assert [c.line for c in stub.cases()] == [2, 3]
+    assert _disagreements(harvested.notes) == []
+
+
 def test_harvesting_the_same_review_again_appends_nothing(tmp_path: Path, repository: Path) -> None:
     forge, _ = _reviewed(tmp_path, repository, REVIEW)
     stub = stub_gate(tmp_path)
@@ -118,7 +163,7 @@ def test_a_place_the_extractor_draws_no_item_at_is_reported_and_not_appended(tmp
     harvested = harvest(forge, HarvestGit(repository), [PULL], [stub])
 
     assert stub.cases() == []
-    assert any('stub draws no item at docs/other.md:1, so the gate never saw it' in note for note in harvested.notes)
+    assert any('stub draws no item at docs/other.md:1, so it makes no case' in note for note in harvested.notes)
 
 
 def test_a_tag_on_a_file_the_change_never_touched_is_read_against_the_tree(tmp_path: Path, repository: Path) -> None:

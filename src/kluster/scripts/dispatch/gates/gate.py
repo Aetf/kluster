@@ -16,7 +16,7 @@ from ..forge import CODE
 from ..paths import OwnedPath
 from ..prcheck import section_lines
 from . import calibration
-from .ask import harness
+from .ask import harness, item_harness
 from .cases import Case
 from .cases import load as load_cases
 from .extract import Change, Item
@@ -69,8 +69,10 @@ class Spec:
     """What a gate's package declares: its canon, its trigger, its extractor and its model."""
 
     canon: Canon
-    #: The path patterns a change must touch for the gate to run, in the owned paths' forms (`paths.OwnedPath`).
+    #: The path patterns, in the owned paths' forms (`paths.OwnedPath`), of the files a change must touch for
+    #: the gate to run, and of the files and commit messages it is then shown (`view.parts`).
     trigger: tuple[str, ...]
+    #: What draws the item a review's tag of the gate is recorded as (`harvest`); the ask reads none.
     extract: Extractor
     model: str = DEFAULT_MODEL
 
@@ -103,13 +105,17 @@ class Gate:
         """The prompt with the canonical section's text in its place."""
         return self.prompt.replace(PLACEHOLDER, canon)
 
-    def hashes(self, canon: str) -> calibration.Hashes:
+    def hashes(self, canon: str, *, items: bool = False) -> calibration.Hashes:
         """What a calibration of this gate is a measurement of, with `canon` as the canonical text.
 
         The prompt is `prompt.md` with the harness's own fixed text after it
-        (`ask.harness`): both are what the model is asked.
+        (`ask.harness`): both are what the model is asked. With `items`, the
+        harness is that of the item batches `calibrate` asks
+        (`ask.item_harness`), which is what its record measures, so a record
+        it writes measures some other prompt than `dispatch gates` asks.
         """
-        return calibration.Hashes.of(prompt=f'{self.prompt}\n{harness()}', canon=canon, model=self.spec.model)
+        fixed = item_harness() if items else harness()
+        return calibration.Hashes.of(prompt=f'{self.prompt}\n{fixed}', canon=canon, model=self.spec.model)
 
     def triggered(self, paths: Collection[str]) -> bool:
         owned = [OwnedPath.parse(pattern) for pattern in self.spec.trigger]
