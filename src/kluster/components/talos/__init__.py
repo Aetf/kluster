@@ -210,6 +210,31 @@ CONTROL_PLANE_RESERVATION = ControlPlaneReservation(
     eviction_hard={'memory.available': '1Gi'},
 )
 
+#: How many terminated pods the cluster holds before the controller manager
+#: deletes the surplus (`--terminated-pod-gc-threshold`), evicted pods first
+#: and then the oldest (`gcTerminated`, `pkg/controller/podgc`, Kubernetes
+#: v1.36). It stays above what job history keeps. Each CronJob keeps its last
+#: successful and failed Jobs, as many as its `successfulJobsHistoryLimit` and
+#: `failedJobsHistoryLimit` say, three and one by default, and each Job keeps
+#: its pods, one per attempt up to its `backoffLimit` and one more. A failed
+#: Job's pods are what a failed backup, drill or pull leaves for the playbook
+#: its alert names, and a threshold under job history would have them
+#: deleted.
+#:
+#: The room above job history is how many other terminated pods that evidence
+#: outlives. A failed Job stays until later failures push it out of its
+#: CronJob's history, so its pods are often the oldest terminated pods in the
+#: cluster, the first the collector takes once the threshold is passed.
+#: Other terminated pods come from a node's graceful shutdown: each pod a
+#: Deployment ran there stays `Failed` beside its replacement, where a
+#: DaemonSet or a StatefulSet deletes its own. The threshold is held at no
+#: less than twice job history, so that room is at least job history's own
+#: size again: a CronJob whose history would bring job history past half the
+#: threshold raises it. Kubernetes' default, 12,500, lies far above any job
+#: history here, so under it terminated pods are never collected for their
+#: number.
+TERMINATED_POD_GC_THRESHOLD = 200
+
 #: The write rate, in MB/s, a control plane's boot volume takes beside etcd
 #: with etcd's syncs intact: writes held to it kept an etcd-shaped
 #: `fdatasync` at a p99 of 1.6 ms, where an image unpack's shape at the
@@ -562,7 +587,7 @@ def hostname_document(hostname: str) -> dict[str, Any]:
 
 
 def control_plane_patch(*, cert_sans: Sequence[str], secretbox_secret: str | None = None) -> dict[str, Any]:
-    """What only a control plane has: the apiserver, etcd and its disk, its reservation, the CNI, the service proxy, apid's SANs, the Talos grant.
+    """What only a control plane has: the apiserver, the controller manager, etcd and its disk, its reservation, the CNI, the service proxy, apid's SANs, the Talos grant.
 
     A worker's configuration has no apiserver to harden and no etcd to
     encrypt or read, and the CNI and kube-proxy are installed by the control
@@ -595,6 +620,18 @@ def control_plane_patch(*, cert_sans: Sequence[str], secretbox_secret: str | Non
     not for the API server, so the control planes' API servers restart
     together, and the API goes unanswered for as long as one restart takes.
     etcd, a Talos service, is untouched.
+
+    The controller manager collects terminated pods past
+    `TERMINATED_POD_GC_THRESHOLD`. Talos sets no value of its own for the
+    flag and lets `extraArgs` override it, since it is none of the flags
+    Talos' merge policy denies (`ControlPlaneStaticPodController`, Talos
+    v1.13.9). The whole of `cluster` is among the fields Talos applies
+    immediately, so the threshold reboots no node: a changed
+    `cluster.controllerManager` rewrites the controller manager's static pod
+    on each control plane, the kubelet replaces it, and the workload
+    controllers pause whenever the replaced manager held the leader lease,
+    until another manager takes it.
+    The API server and etcd are untouched.
 
     `cert_sans` go into two certificates, which read two fields: the
     Kubernetes API server's (`cluster.apiServer.certSANs`) and apid's
@@ -660,6 +697,9 @@ def control_plane_patch(*, cert_sans: Sequence[str], secretbox_secret: str | Non
                 # A public 6443 warrants both, defaults notwithstanding.
                 'extraArgs': {'anonymous-auth': 'false', 'audit-log-path': '/var/log/audit/kube/kube-apiserver.log'},
                 'resources': {'requests': dict(CONTROL_PLANE_RESERVATION.api_server_requests)},
+            },
+            'controllerManager': {
+                'extraArgs': {'terminated-pod-gc-threshold': str(TERMINATED_POD_GC_THRESHOLD)},
             },
             'etcd': {
                 'advertisedSubnets': [str(conventions.VCN_CIDR)],

@@ -282,6 +282,10 @@ machine_secrets
     role alone (an item below); the **Talos ingress firewall** (the next
     item); kube-apiserver `anonymous-auth=false` pinned and audit
     logging on (a public 6443 warrants both, defaults notwithstanding);
+    on the control planes, the controller manager's
+    `terminated-pod-gc-threshold` (`TERMINATED_POD_GC_THRESHOLD`), held
+    above what CronJob history keeps so that a failed run's pods are not
+    the first collected;
     the dedicated-VIP node's secondary private IP on its physical link;
     the **local-path volume** (`/var/mnt/storage`, storage.md §2 — the
     StorageClass's provisioner is k8s-base's, but the directory under
