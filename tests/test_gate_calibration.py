@@ -490,6 +490,38 @@ def test_a_head_the_forge_no_longer_serves_drops_its_cases_whatever_the_store_ho
     assert calibrated.judgement.dropped == [(3, gone, (lost,))]
 
 
+def test_a_case_on_no_line_its_change_writes_is_left_out_and_named_and_one_on_an_unshown_path_counts(
+    tmp_path: Path, repository: Path
+) -> None:
+    stub = stub_gate(tmp_path)
+    history = _history(repository, stub, 2)
+    long = 'docs/notes/long.md'
+    lines = ['It runs on node 3.', *(f'Line {n}.' for n in range(2, 12)), 'It keeps a week.']
+    base = commit(repository, {long: '\n'.join(lines) + '\n'})
+    # Pull request 3 rewrites line 12 alone; a case at line 1, far outside the margin of it, is one the gate is
+    # never asked about, and the line naming a node there is one its findings are dropped on.
+    head = commit(
+        repository,
+        {long: '\n'.join([*lines[:-1], 'It keeps a day.']) + '\n', 'src/app.py': 'NODE = "homelab"\n'},
+    )
+    history.forge.requests[3] = replace(history.forge.requests[2], number=3, head=head, base=base)
+    source = 'https://github.com/Aetf/kluster/pull/3#issuecomment-3'
+    off = Case(3, head, long, 1, 1, Verdict.FINDING, source)
+    on = Case(3, head, long, 12, 12, Verdict.PASS, source)
+    # A review finding at a path the change writes and the gate is not shown, which it missed.
+    unshown = Case(3, head, 'src/app.py', 1, 1, Verdict.FINDING, source)
+    held = ''.join(f'{c.to_json()}\n' for c in [*history.cases, off, on, unshown])
+    _ = (stub.directory / CASES).write_text(held)
+
+    calibrated = calibrate(stub, repository, Scripted, history.forge, Git(repository))
+
+    assert (calibrated.record.pull_requests, calibrated.record.findings, calibrated.record.recovered) == (3, 3, 2)
+    assert calibrated.judgement.left_out == [off]
+    assert f'case {long}:1 lies on no line the change writes' in calibrated.report()
+    # The history is measured as it stands and kept as it was.
+    assert (stub.directory / CASES).read_text() == held
+
+
 def test_a_head_the_forge_serves_and_the_store_lacks_refuses_naming_it(tmp_path: Path, repository: Path) -> None:
     stub = stub_gate(tmp_path)
     history = _history(repository, stub, 2)

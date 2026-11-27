@@ -37,8 +37,8 @@ from .calibration import Status, near
 from .verdict import Answer, Sample, Verdict, reason, stands, undecided
 
 #: The record's version, which a reader newer than a record reads and an older one refuses. From version 2
-#: an entry is a place a sample found or the samples left undecided, and a place of a file the gate was shown
-#: that no entry holds is one it passed. A version 1 record is a run of the item ask, which holds an entry for
+#: an entry is a place a sample found or the samples left undecided, and a place on the lines the change writes
+#: of a file the gate was shown that no entry holds is one it passed. A version 1 record is a run of the item ask, which holds an entry for
 #: every item asked, passes included, so a place no entry holds there was never asked about
 #: (`Evidence.version`, which `harvest` reads).
 VERSION = 2

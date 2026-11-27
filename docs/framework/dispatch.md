@@ -1168,7 +1168,8 @@ trigger matches, `:commit/<sha>`, the subject being line 1. A file the
 change deletes, one that is not text, and text this repository holds but
 did not write, generated or recorded, are not shown. No code of the
 gate's own narrows what the question is about. The model is asked which
-of what it is shown breaks the gate's rule, and answers with findings,
+of the lines the change writes break the gate's rule, reading the rest of
+what it is shown as their context, and answers with findings,
 each a place, a path and the lines it is about at the head, and a
 reason. The schema of each call names the paths it showed, and a reply
 that names another is a sample that answered nothing; a finding at a
@@ -1176,11 +1177,20 @@ line the call did not show is dropped. What a
 gate is shown goes into one call up to a fixed bound, and past the bound
 into more, cut by file, and a file too long alone into runs of its
 lines, each with the hunks it holds. Each call is asked three times, and
-the reply is held to that schema by the API's structured outputs. The
-samples' findings at one path, taken in order of their lines, each join
-the earliest place whose own lines they lie within a margin of, which is
-set beside the bar (`gates.calibration`), and that holds no finding of
-their sample; a finding that joins none opens a place. So a place is
+the reply is held to that schema by the API's structured outputs.
+**A finding stands only on the lines the change writes at the head**,
+within a margin set beside the bar (`gates.calibration`): the lines it
+adds or rewrites, every line of a file it adds and of a commit's message
+among them, and, where a hunk only removes lines, the line either side
+of where they stood. The gate's question is which of the change's lines
+break its rule, and a line the change leaves as it was is the reviewer's.
+Each sample's findings anywhere else are dropped before the samples are
+matched, by `dispatch gates` and `calibrate` alike, and the run logs how
+many it dropped at each path. Each call's fixed text tells the model the
+same, and the run reads those lines off the rows the call shows. The samples'
+findings left at one path, taken in order of their lines, each join the
+earliest place whose own lines they lie within the margin of, and that
+holds no finding of their sample; a finding that joins none opens a place. So a place is
 linked within itself, each of its findings within the margin of another
 of them, it holds at most one finding of each sample, whatever order the
 samples came back in, and a finding stands on two samples of the three.
@@ -1306,7 +1316,12 @@ finding of the gate recovers a review finding, a case tagged
 lie within the margin, one to one: a model and a reviewer point at one
 defect a line or two apart, and exact lines would score that as a miss
 and a false finding. A finding that recovers none is false where a case
-tagged `[gate:<name> clean]` names its place. **The score** is the
+tagged `[gate:<name> clean]` names its place. A case at a file the gate
+is shown whose place lies outside the margin of every line the change
+writes there is a place the gate is never asked about: `calibrate`
+leaves it out of the score and names it, as it names a head the forge
+no longer serves, and the history keeps it as it was. A review finding
+at a file the gate is not shown counts as one it missed. **The score** is the
 review findings recovered over the whole history, and the false
 findings per pull request the gate ran on. The bar sets a floor on the
 share of review findings recovered, a ceiling on the false findings per
@@ -1419,10 +1434,11 @@ that opens `[gate` and then `:` or a space and does not read as a tag.
 account wrote, a comment whose first line is a review's heading as
 above or `## Ruling` alone, into a case of that gate, at a place the gate is shown at the
 head the place is at: a tag on
-a file the change does not write, or on a line the file does not hold
+a file the change does not write, on a line the file does not hold
+there, or on one outside the margin of every line the change writes
 there, makes no case, since the gate is never asked about it, and
 harvest reports it. Against the run recorded at the same head, where a
-place of a file the gate was shown that no finding of its run stands
+place on the lines the change writes that no finding of its run stands
 within the margin of is one it passed, it reports each case the gate
 judged otherwise, and each finding of the gate the review left
 untagged, which a tag then makes a case. Every

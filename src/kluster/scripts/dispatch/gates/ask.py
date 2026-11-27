@@ -13,6 +13,15 @@ saying why. A finding that names a line the call did not show is no finding
 reply that does not read, or names a path the call did not show, is a
 sample that answered nothing.
 
+A finding stands only where it meets the lines the change writes at the
+head (`view.Part.written`), within `calibration.MARGIN`, and the call's
+fixed text tells the model so (`FRAME`). Each sample's findings elsewhere
+are dropped before its call's samples are matched (`written`), so a place
+is made only of findings that stand on what the change writes, and
+`dispatch gates` and `calibrate` drop alike. How many were dropped, at
+each path, is counted beside the entries (`Judged.dropped`) and logged
+(`log_dropped`).
+
 A call's samples are matched into entries (`matched`), whatever order the
 samples came back in: each finding at a path joins the earliest place
 whose own lines it lies within `calibration.MARGIN` of and that holds no
@@ -89,8 +98,11 @@ FRAME = (
     'which. Under it, each line of the file as the change leaves it, with its line number, then `+` where the '
     'change writes the line or a space where it leaves it as it was; a line the change removes stands where it '
     "was, with no number and `-`. A path under `:commit/` is the message of one of the change's commits, its "
-    'subject line 1. Report each finding by the path its part names and the first and last line numbers it is '
-    'about, with one sentence saying why. Report no finding where there is none.'
+    'subject line 1. Report a finding only about lines the change writes: a line marked `+`, or, where the '
+    'change only removes lines, the line either side of where they stood. A finding far from them is dropped, '
+    'since the change leaves those lines as they were. Report each finding by the path its part names and '
+    'the first and last line numbers it is about, with one sentence saying why. Report no finding where there '
+    'is none.'
 )
 
 
@@ -214,6 +226,35 @@ def findings(reply: Reply, call: Sequence[Part]) -> Found:
     return out
 
 
+def written(samples: Sequence[Found], call: Sequence[Part]) -> tuple[list[Found], dict[str, int]]:
+    """`samples`, one call's, each holding only its findings within `MARGIN` of a line the change writes at their path.
+
+    A finding stands where a part of the call at its path holds its lines
+    so (`view.Part.writes`). Beside them, how many findings were dropped at
+    each path, over every sample.
+    """
+    dropped: dict[str, int] = {}
+    kept: list[Found] = []
+    for found in samples:
+        if found is None:
+            kept.append(None)
+            continue
+        stands: list[Finding] = []
+        for finding in found:
+            if any(p.path == finding.path and p.writes(finding.line, finding.end_line) for p in call):
+                stands.append(finding)
+            else:
+                dropped[finding.path] = dropped.get(finding.path, 0) + 1
+        kept.append(stands)
+    return kept, dropped
+
+
+def log_dropped(who: str, dropped: Mapping[str, int]) -> None:
+    """Log, for `who`, how many findings of its samples stood on no line the change writes, at each path."""
+    for path, count in sorted(dropped.items()):
+        log.info('%s: %d findings of its samples at %s stand on no line the change writes; dropped', who, count, path)
+
+
 #: A place: the finding of each sample there, None for a sample that found nothing there.
 Place = list[Finding | None]
 
@@ -306,6 +347,8 @@ class Judged:
     entries: list[Entry]
     #: The samples, over every call of the gate, that answered nothing (`findings`).
     unanswered: int
+    #: How many findings of its samples stood on no line the change writes, at each path (`written`).
+    dropped: Mapping[str, int]
 
 
 def judge(asked: Sequence[Asked], model: Callable[[], Model]) -> list[Judged]:
@@ -313,7 +356,7 @@ def judge(asked: Sequence[Asked], model: Callable[[], Model]) -> list[Judged]:
     cut = [calls(a.parts) for a in asked]
     jobs = [(gate, call) for gate, found in enumerate(cut) for call in range(len(found)) for _ in range(SAMPLES)]
     if not jobs:
-        return [Judged([], 0) for _ in asked]
+        return [Judged([], 0, {}) for _ in asked]
     asking = model()
     log.info('asking %d calls: %d gates, %d samples of each call', len(jobs), len(asked), SAMPLES)
 
@@ -328,13 +371,15 @@ def judge(asked: Sequence[Asked], model: Callable[[], Model]) -> list[Judged]:
     samples: dict[tuple[int, int], list[Found]] = {}
     for job, got in zip(jobs, replies, strict=True):
         samples.setdefault(job, []).append(got)
-    return [
-        Judged(
-            sorted(
-                (e for call, parts in enumerate(found) for e in matched(parts, samples[(gate, call)])),
-                key=lambda e: (e.path, e.line, e.end_line),
-            ),
-            sum(1 for call in range(len(found)) for got in samples[(gate, call)] if got is None),
-        )
-        for gate, found in enumerate(cut)
-    ]
+    judged: list[Judged] = []
+    for gate, found in enumerate(cut):
+        entries: list[Entry] = []
+        dropped: dict[str, int] = {}
+        for call, parts in enumerate(found):
+            kept, gone = written(samples[(gate, call)], parts)
+            entries += matched(parts, kept)
+            for path, count in gone.items():
+                dropped[path] = dropped.get(path, 0) + count
+        unanswered = sum(1 for call in range(len(found)) for got in samples[(gate, call)] if got is None)
+        judged.append(Judged(sorted(entries, key=lambda e: (e.path, e.line, e.end_line)), unanswered, dropped))
+    return judged

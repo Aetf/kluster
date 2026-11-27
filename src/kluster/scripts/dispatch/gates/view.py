@@ -8,6 +8,15 @@ commit's message is shown the same way at the place that names it
 (`change.message_path`), the subject being line 1, every line of it
 written by the change.
 
+A finding stands only on the lines the change writes at the head
+(`Part.written`), and those are read off the rows the gate is shown, so
+what the gate is told to report on and what a finding is kept on are one
+reading of one set of marks: each line marked `+`, every line of a file the
+change adds and of a commit's message among them; and where a hunk only
+removes, the line either side of where its lines stood, which is all the
+head holds for a finding about the removal to name. A hunk that rewrites
+lines adds none besides the lines it writes.
+
 A gate is shown each such file whose path its trigger matches (`parts`):
 every file the change adds, modifies or retypes whose text is this
 repository's own writing (`change.written_here`) and is text at all, and
@@ -24,8 +33,10 @@ from __future__ import annotations
 
 from collections.abc import Collection, Sequence
 from dataclasses import dataclass
+from functools import cached_property
 
 from ..paths import OwnedPath
+from .calibration import near
 from .change import Change, Changed, message_path, written_here
 
 #: How a row marks a line the change writes, one it leaves as it was, and one it removes.
@@ -69,6 +80,47 @@ class Part:
 
     def shows(self, line: int) -> bool:
         return self.first <= line <= self.last
+
+    @cached_property
+    def written(self) -> tuple[tuple[int, int], ...]:
+        """Each run of lines the change writes at the head, first and last, that this part's rows show.
+
+        A line marked `WRITTEN`; and where removed rows stand ahead of a line
+        the change leaves, or after the last line, the change only removed
+        them there, so the line either side of them. Removed rows ahead of a
+        written line are what the hunk rewrote, and add no line. A run of a
+        part holds every removed row with the line after it (`runs`), so the
+        runs of a part, between them, give the part's own.
+        """
+        found: set[int] = set()
+        removed = False
+        for row in self.rows:
+            if row.number is None:
+                removed = True
+                continue
+            if row.mark == WRITTEN:
+                found.add(row.number)
+            elif removed:
+                found.update((row.number - 1, row.number))
+            removed = False
+        if removed:
+            found.add(self.total)
+        runs: list[tuple[int, int]] = []
+        for number in sorted(found - {0}):
+            if runs and runs[-1][1] == number - 1:
+                runs[-1] = (runs[-1][0], number)
+            else:
+                runs.append((number, number))
+        return tuple(runs)
+
+    def writes(self, line: int, end_line: int) -> bool:
+        """Whether lines `line`–`end_line` come within `calibration.MARGIN` of a line the change writes (`written`).
+
+        What a finding (`ask.written`) and a case (`harvest`, `calibrate`)
+        must meet to stand: a place off those lines is one the gate is never
+        asked about.
+        """
+        return any(near(line, end_line, first, last) for first, last in self.written)
 
     def render(self) -> str:
         whole = '' if (self.first, self.last) == (1, self.total) else f', lines {self.first}–{self.last}'
