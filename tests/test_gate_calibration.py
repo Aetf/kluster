@@ -376,9 +376,9 @@ def test_a_pull_request_the_gate_does_not_run_on_counts_its_findings_missed_and_
     assert (record.pull_requests, record.findings, record.recovered) == (2, 3, 2)
 
 
-def _entry(path: str, line: int) -> Entry:
+def _entry(path: str, line: int, end_line: int | None = None) -> Entry:
     found = Answer(Verdict.FINDING, 'found')
-    return Entry(path, line, line, (found, found, found))
+    return Entry(path, line, line if end_line is None else end_line, (found, found, found))
 
 
 def test_gate_findings_recover_review_findings_one_to_one_whatever_order_they_come_in() -> None:
@@ -391,6 +391,45 @@ def test_gate_findings_recover_review_findings_one_to_one_whatever_order_they_co
 
     assert [len(s.recovered) for s in scores] == [2, 2]
     assert [s.unconfirmed for s in scores] == [(), ()]
+
+
+def test_each_gate_finding_is_judged_against_the_case_at_its_own_place_before_a_neighbors() -> None:
+    def case(line: int, end_line: int, verdict: Verdict) -> Case:
+        return Case(934, 'a' * 40, 'physical.md', line, end_line, verdict, 'https://example.invalid/review')
+
+    # A passage crowded with cases: each gate finding lies within the margin of a neighbor's case as well as at its own.
+    cases = [case(9, 10, Verdict.PASS), case(11, 34, Verdict.FINDING), case(20, 34, Verdict.FINDING)]
+    found = [_entry('physical.md', 9, 10), _entry('physical.md', 11, 34), _entry('physical.md', 20, 34)]
+
+    scored = score(cases, found)
+
+    assert [(c.place, e.place) for c, e in scored.recovered] == [
+        ('physical.md:11–34', 'physical.md:11–34'),
+        ('physical.md:20–34', 'physical.md:20–34'),
+    ]
+    assert [(e.place, c.place) for e, c in scored.false] == [('physical.md:9–10', 'physical.md:9–10')]
+    assert scored.unconfirmed == ()
+
+
+def test_a_gate_finding_takes_a_neighbors_case_where_its_own_place_would_leave_a_review_finding_unrecovered() -> None:
+    source = 'https://example.invalid/review'
+    cases = [Case(1, 'a' * 40, 'a.md', line, line, Verdict.FINDING, source) for line in (11, 13)]
+    # Line 11 is the first review finding's own place and within the margin of the second; line 9 is near the first
+    # alone, so only the pairing that sends line 11 to its neighbor recovers both.
+    found = [_entry('a.md', 11), _entry('a.md', 9)]
+
+    scored = score(cases, found)
+
+    assert [(c.line, e.line) for c, e in scored.recovered] == [(11, 9), (13, 11)]
+
+
+def test_a_false_finding_is_confirmed_by_the_pass_at_its_own_place_before_a_neighboring_one() -> None:
+    source = 'https://example.invalid/review'
+    cases = [Case(1, 'a' * 40, 'a.md', line, line, Verdict.PASS, source) for line in (8, 9)]
+
+    scored = score(cases, [_entry('a.md', 9)])
+
+    assert [c.line for _, c in scored.false] == [9]
 
 
 def test_a_gate_finding_recovers_no_review_finding_at_the_same_lines_of_another_file() -> None:
