@@ -55,6 +55,32 @@ def near(first: int, last: int, other_first: int, other_last: int) -> bool:
     return max(first, other_first) - min(last, other_last) <= MARGIN
 
 
+@dataclass(frozen=True, order=True)
+class Fit:
+    """How closely two places of one path fit; the closer, the greater.
+
+    The fields compare in order, so a pair at one place outranks any that
+    merely overlap, and more lines shared outranks fewer lines between. A
+    pairing of many places fits as its pairs do summed field by field: the
+    pairs at one place it holds, then the lines its pairs share, then minus
+    the lines between those that share none (`calibrate.score`).
+    """
+
+    #: The pairs whose two places are one: the same first line and the same last.
+    exact: int = 0
+    #: The lines the two places share.
+    overlap: int = 0
+    #: Minus the lines between two places that share none.
+    nearness: int = 0
+
+
+def fit(first: int, last: int, other_first: int, other_last: int) -> Fit:
+    """How closely lines `first`–`last` and `other_first`–`other_last` of one path fit (`Fit`)."""
+    gap = max(first, other_first) - min(last, other_last)
+    exact = (first, last) == (other_first, other_last)
+    return Fit(int(exact), max(0, 1 - gap), -max(0, gap - 1))
+
+
 class Status(enum.StrEnum):
     """Whether a gate's findings block: `blocking` sends a fix cycle; `shadow` is posted and advisory."""
 

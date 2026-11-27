@@ -184,12 +184,15 @@ def _pair(tagged: Case, gate: str, evidence: Evidence | None, source: str) -> No
     """The disagreement between a review's case and the gate's verdict at the same head; None where none.
 
     The gate found the place where a finding of its run stands near it
-    (`cases.Case.near`), which is how `calibrate` matches them, and otherwise
-    passed it, in a record of `comment.VERSION` 2 or later where the gate
-    asked, `tagged` being a case harvest made, and so on a line the change
-    writes; in an earlier one, whose entries are the items it asked, a place
-    no entry is near was not asked. A place the gate's samples left undecided
-    is no verdict to disagree with, and is reported as one.
+    (`cases.Case.near`), the reach within which `calibrate` pairs a finding
+    with a case, and otherwise passed it, in a record of `comment.VERSION` 2
+    or later where the gate asked, `tagged` being a case harvest made, and
+    so on a line the change writes; in an earlier one, whose entries are the
+    items it asked, a place no entry is near was not asked. A place the
+    gate's samples left undecided is no verdict to disagree with, and is
+    reported as one. The case is read alone, so a finding near it counts
+    whether or not it stands at another case's own place, where `calibrate`
+    pairs each finding with one case (`calibrate.score`).
     """
     ran = next((r for r in evidence.gates if r.gate == gate), None) if evidence else None
     if ran is None or evidence is None:

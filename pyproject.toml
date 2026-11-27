@@ -75,6 +75,10 @@ dependencies = [
     # `httpx2`, whose transport the gates' cases hand the client a recorded
     # response through.
     "anthropic>=2.7.0,<3",
+    # The pairing of a gate's findings with a pull request's cases that
+    # `dispatch gates calibrate` scores (`kluster.scripts.dispatch.gates.calibrate`):
+    # a maximum-cardinality, maximum-weight matching.
+    "networkx>=3.7,<4",
 ]
 
 [project.scripts]
@@ -113,6 +117,8 @@ dev = [
     # typeshed's stubs come with it.
     "psutil>=7.2.2,<8",
     "types-psutil>=7.2.2,<8",
+    # `networkx` ships no annotations; typeshed's stubs for it.
+    "types-networkx>=3.6.1.20261119,<4",
 ]
 ##
 ## Project management section

@@ -34,8 +34,14 @@ Each pull request is scored alone (`score`). A finding of the gate, one that
 stands on its samples, recovers a review finding, a case labelled `finding`,
 where both name one path and their lines lie within `calibration.MARGIN`,
 one to one: each review finding is recovered once, and each gate finding
-recovers one at most. A gate finding that recovers none is false where a
-case labelled `pass` names its place, and is unconfirmed where no case does.
+recovers one at most. The pairs are as many as there can be, and of the
+pairings that many, the one whose pairs fit best: a gate finding at a
+review finding's own place first, then one sharing the most lines with it,
+then the nearest (`calibration.Fit`). So a gate finding is judged against
+the case at its own place before any case near it, wherever that leaves
+no fewer review findings recovered. A gate finding
+that recovers none is false where a case labelled `pass` names its place,
+and is unconfirmed where no case does.
 The record's score is the review findings recovered over the whole history
 and the false findings per pull request the gate ran on (`Tally`,
 `calibration.Calibration`).
@@ -86,10 +92,12 @@ from dataclasses import dataclass
 from fractions import Fraction
 from pathlib import Path
 
+import networkx as nx
+
 from ..prcheck import Git, PullUnreadable
 from . import view
 from .ask import Asked, Judged, judge, log_clean, log_dropped
-from .calibration import Calibration, digest
+from .calibration import MARGIN, Calibration, Fit, digest, fit
 from .cases import Case
 from .change import change
 from .comment import Entry
@@ -114,45 +122,69 @@ class Score:
     unconfirmed: tuple[Entry, ...] = ()
 
 
-def _augment(
-    finding: int, found: Sequence[Entry], review: Sequence[Case], held: dict[int, int], seen: set[int]
-) -> bool:
-    """Whether gate finding `finding` takes a review finding, moving another gate finding off one where it can."""
-    entry = found[finding]
-    for index, case in enumerate(review):
-        if index in seen or not case.near(entry.path, entry.line, entry.end_line):
-            continue
-        seen.add(index)
-        if index not in held or _augment(held[index], found, review, held, seen):
-            held[index] = finding
-            return True
-    return False
+def _fit(case: Case, entry: Entry) -> Fit:
+    return fit(case.line, case.end_line, entry.line, entry.end_line)
+
+
+def _pairing(found: Sequence[Entry], review: Sequence[Case]) -> dict[int, int]:
+    """The index of the gate finding that recovers each review finding, by the review finding's index.
+
+    As many pairs as there can be, and of the pairings of that size, the one
+    that fits best (`calibration.Fit`): `networkx`'s maximum-weight matching
+    among those of maximum cardinality, over a weight for each pair that
+    sums the way fits compare. Each field of a fit is weighed in a unit
+    greater than any difference the fields after it can make over a pairing
+    of at most `pairs` pairs: `MARGIN` plus a pair's nearness lies from one
+    to `MARGIN`, and a pair's overlap is at most the greatest of any pair.
+    """
+    fits = {
+        (f, r): _fit(case, entry)
+        for f, entry in enumerate(found)
+        for r, case in enumerate(review)
+        if case.near(entry.path, entry.line, entry.end_line)
+    }
+    if not fits:
+        return {}
+    pairs = min(len(found), len(review))
+    overlap = pairs * MARGIN + 1
+    exact = overlap * (pairs * max(pair.overlap for pair in fits.values()) + 1)
+    graph: nx.Graph[tuple[str, int]] = nx.Graph()
+    for (f, r), pair in fits.items():
+        weight = pair.exact * exact + pair.overlap * overlap + MARGIN + pair.nearness
+        graph.add_edge(('found', f), ('case', r), weight=weight)
+    held: dict[int, int] = {}
+    for one, other in nx.max_weight_matching(graph, maxcardinality=True):
+        (_, f), (_, r) = (one, other) if one[0] == 'found' else (other, one)
+        held[r] = f
+    return held
 
 
 def score(cases: Sequence[Case], found: Sequence[Entry]) -> Score:
     """The score of one pull request at one head: its `cases`, and `found`, the gate's findings there.
 
-    Gate findings are matched to review findings one to one, as many as can
-    be: a finding near two review findings takes the one no other finding
-    can, so the count recovered does not turn on the order the findings come
-    in.
+    Gate findings are paired with review findings one to one, as many as
+    there can be, so the count recovered does not turn on the order the
+    findings come in; and of the pairings of that size, the one that fits
+    best (`_pairing`): a gate finding at a review finding's own place, then
+    one sharing the most lines with it, then the nearest. So a gate finding
+    is judged against the case at its own place before any case near it,
+    and where a gate finding recovers none, the case labelled `pass` that
+    fits it best is the one that confirms it false.
     """
     review = [c for c in cases if c.verdict is Verdict.FINDING]
     clean = [c for c in cases if c.verdict is Verdict.PASS]
-    held: dict[int, int] = {}
-    for finding in range(len(found)):
-        _ = _augment(finding, found, review, held, set())
+    held = _pairing(found, review)
     taken = set(held.values())
     false: list[tuple[Entry, Case]] = []
     unconfirmed: list[Entry] = []
     for index, entry in enumerate(found):
         if index in taken:
             continue
-        confirming = next((c for c in clean if c.near(entry.path, entry.line, entry.end_line)), None)
-        if confirming is None:
+        confirming = [c for c in clean if c.near(entry.path, entry.line, entry.end_line)]
+        if not confirming:
             unconfirmed.append(entry)
         else:
-            false.append((entry, confirming))
+            false.append((entry, max(confirming, key=lambda c: _fit(c, entry))))
     recovered = tuple((review[index], found[finding]) for index, finding in sorted(held.items()))
     return Score(recovered, tuple(false), tuple(unconfirmed))
 

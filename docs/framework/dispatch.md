@@ -1332,9 +1332,15 @@ finding of the gate recovers a review finding, a case tagged
 `[gate:<name>]`, where both name one path at that head and their lines
 lie within the margin, one to one: a model and a reviewer point at one
 defect a line or two apart, and exact lines would score that as a miss
-and a false finding. A finding that recovers none is false where a case
-tagged `[gate:<name> clean]` names its place. A case at a file the gate
-is shown whose place lies outside the margin of every line the change
+and a false finding. The pairs are as many as there can be, and of the
+pairings that many, `calibrate` takes the one whose pairs fit best: a
+finding at a case's own place first, then one sharing the most lines
+with it, then the nearest. So where cases crowd one passage, each finding
+is judged against the case at its own place before any case near it,
+and a case at its own place is not spent on a neighbor's finding unless
+that leaves a review finding unrecovered. A finding that recovers none
+is false where a case tagged `[gate:<name> clean]` names its place. A
+case at a file the gate is shown whose place lies outside the margin of every line the change
 writes there is a place the gate is never asked about: `calibrate`
 leaves it out of the score and names it, as it names a head the forge
 no longer serves, and the history keeps it as it was. A review finding
