@@ -1,0 +1,21 @@
+{
+  "cases": "cf15ec52fc0a409e8b5b9474eb8d7acb59143a3caaaacef57939d5c6cfae55b0",
+  "false_findings": 85,
+  "false_per_pull_request": 4.0476190476190474,
+  "findings": 46,
+  "hashes": {
+    "canon": "ff2bca9a45c44c3f5c2750562f97347b9d0cca01ca66a296708f830f926419a4",
+    "examples": "9085ee9f0f5574b38b8c2e68ee6e6b056c0d0d3baf1f10868c98a37a824079f1",
+    "model": "26f6cf65acbd60862113d9e31ae957c4adf5fb966ae79f33a6fa8ac45e228e41",
+    "prompt": "7648b3e7cbe26ded3721fb96809ba94b049718e67a702fa34dcfa5162a322434"
+  },
+  "measured": {
+    "canon": "### Every artifact is as-built\n\nDocs, comments and commit messages say what is, not what was done: no\n\"verified on\", no narrative of attempts, no history the reader has to\nsubtract.\n\nProvenance is narration too. Where a thing came from \u2014 the review, the\nissue, the pull request or the conversation that asked for it or found\nit \u2014 is the story of how it got there, and the artifact leaves it out.\nA reason is cited where this repository's own documents hold it: a\ndoc, a comment or a commit message names the document that holds a\nreason, never a review, an issue comment or a pull request as the\nreason a thing is so. A ruling is one such reason: \"ruled in\nkluster-ops#NNN\" is metadata of how a thing was decided, so the\nruling's record stays in the ledger, and the document states the rule.\n\nThese references are not provenance, and stay:\n\n* the ledger line that names the issue a change belongs to, in its pull\n  request's description ([dispatch.md](docs/framework/dispatch.md) \u00a71.1)\n  and in its commit message;\n* a runbook's record of a run, which keeps the issue the run was made\n  under: \"**Done on 2026-11-22** (`kluster-ops#935`)\";\n* a third party's own record, such as its documentation, its source or\n  an issue in its tracker, cited as evidence of how that party behaves.\n",
+    "model": "claude-haiku-5-5",
+    "prompt": "You are shown a change under review: each file it writes, whole, with what\nit writes marked, and the messages of its commits. Ask one question of the\nprose the change writes, in a document, a comment, a docstring or a commit\nmessage: does a passage narrate history, attempts, verification or\nprovenance \u2014 the review, issue, pull request or conversation of this\nrepository's work that a thing came from, or that it gives as the reason a\nthing is so \u2014 instead of stating what is?\n\nReport each passage that does, with one sentence saying why. Whether a\npassage is true, clear or complete is not asked.\n\nThe rule, as this repository states it:\n\n{canon}\n"
+  },
+  "pull_requests": 21,
+  "recall": 0.6521739130434783,
+  "recovered": 30,
+  "status": "shadow"
+}
