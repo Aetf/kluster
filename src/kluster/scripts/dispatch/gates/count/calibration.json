@@ -1,0 +1,21 @@
+{
+  "cases": "4c4da4dfd43301d194b35f97d36ef37678c401ead481607a5a5a04e49926214e",
+  "false_findings": 2,
+  "false_per_pull_request": 0.2222222222222222,
+  "findings": 32,
+  "hashes": {
+    "canon": "ae7ab10da5f36bec8e17d187ae8dbb4a0da00bf1ce1d198352c33772227d4f28",
+    "examples": "9085ee9f0f5574b38b8c2e68ee6e6b056c0d0d3baf1f10868c98a37a824079f1",
+    "model": "26f6cf65acbd60862113d9e31ae957c4adf5fb966ae79f33a6fa8ac45e228e41",
+    "prompt": "1b69ef3e6fa397012cff4b094a34d01681cebfb2a2d82cde3bcdc8ed84391a2f"
+  },
+  "measured": {
+    "canon": "### A count stands beside the members it counts\n\n**A count is written only where the members it counts are in view** \u2014\nin the same paragraph, or in the list or the subsections immediately\nbelow it. There the number is a reading aid the reader verifies on the\nspot, and anyone who grows the list is already looking at it: a set\nthat grows is not the problem, distance is. Everywhere else the count\nis a liability, and a set counted anywhere other than immediately above\nits own members is named without a number \u2014 \"a decision that moved\nduring construction\", not \"one decision moved\". Dropping it turns a\nsentence that goes **false** as the set grows into one that goes\n**incomplete**, and incomplete fails open, because a reader who follows\nit finds more than was promised instead of hunting for something that\nis no longer there.\n\n**A count in a comment is a claim about a list the reader cannot see**,\nso the members it counts are never in view as the paragraph above means\nit. Prose counts members that sit in the same document, where a reader\nverifies the number on the spot. A comment counts a body of code\ninstead \u2014 declarations spread down a file, some of them conditional \u2014\nand nothing brings the two together: the comment is read where it\nstands, the code changes where it stands, and a reader who disagrees\nwith the number has no way to tell which of them is wrong.\nName the members, or point at the list, and let the code be the census:\n\"the pinhole is the only conditional policy\", not \"ten rules, one\nforward\".\n",
+    "model": "claude-haiku-5-5",
+    "prompt": "You are shown a change under review: each file it writes, whole, with what\nit writes marked. Ask of each number the change writes in prose, in\na document, a comment or a docstring, whether it counts the members of a\nset, and if it does, whether the rule below allows that count where it\nstands: are the members it counts in view? A number that counts no\nmembers, such as a duration, a size or a rate, is no finding.\n\nReport each count the rule does not allow where it stands, with one\nsentence saying why.\n\nThe rule:\n\n{canon}\n"
+  },
+  "pull_requests": 9,
+  "recall": 0.625,
+  "recovered": 20,
+  "status": "shadow"
+}
