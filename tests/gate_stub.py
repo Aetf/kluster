@@ -12,7 +12,9 @@ The replies are Messages API response bodies (`tests/data/gates/stub/messages/`)
 in the shape the API documents, served by a transport handed to the real
 client, so a run builds its requests and reads its replies through the SDK
 with no network and no key. Each call takes the next body in turn. A case
-that needs other findings builds the body with `reply`.
+that needs other findings builds the body with `reply`. A case that needs
+the rate limit has the transport refuse its first calls with a `429`, and
+the client's waits are recorded rather than slept.
 """
 
 from __future__ import annotations
@@ -155,24 +157,48 @@ class Recorded:
     bodies: list[dict[str, Any]]
     #: The status every call is answered with.
     status: int = 200
+    #: How many requests, the first ones, are refused for the rate limit, each naming `retry_after`.
+    limited: int = 0
+    #: The wait a refusal names, in seconds, as the API's `retry-after` header carries it.
+    retry_after: str = '20'
     requests: list[dict[str, Any]] = field(default_factory=list[dict[str, Any]])
     headers: list[httpx2.Headers] = field(default_factory=list[httpx2.Headers])
+    #: Every wait the client slept, in seconds, in order.
+    slept: list[float] = field(default_factory=list[float])
     _lock: threading.Lock = field(default_factory=threading.Lock)
 
     def _serve(self, request: httpx2.Request) -> httpx2.Response:
         with self._lock:
+            limited = len(self.requests) < self.limited
             served = self.bodies[len(self.requests) % len(self.bodies)]
             self.requests.append(cast(dict[str, Any], json.loads(request.content)))
             self.headers.append(request.headers)
+        if limited:
+            return httpx2.Response(429, headers={'retry-after': self.retry_after}, json=RATE_LIMITED)
         return httpx2.Response(self.status, json=served)
 
+    def _sleep(self, seconds: float) -> None:
+        with self._lock:
+            self.slept.append(seconds)
+
     def model(self) -> Messages:
-        """The real client, its transport this one, and a key that is no key; it retries no call."""
+        """The real client, its transport this one, and a key that is no key; it retries no call, and sleeps on no wait."""
         return Messages.with_key(
             'not-a-key',
             http_client=anthropic.DefaultHttpxClient(transport=httpx2.MockTransport(self._serve)),
             retries=0,
+            sleep=self._sleep,
         )
+
+
+#: The body of a `429`, in the shape the API documents for a rate limit.
+RATE_LIMITED: dict[str, Any] = {
+    'type': 'error',
+    'error': {
+        'type': 'rate_limit_error',
+        'message': 'This request would exceed the rate limit for your organization of 50,000 input tokens per minute.',
+    },
+}
 
 
 def reply(findings: list[dict[str, object]]) -> dict[str, Any]:

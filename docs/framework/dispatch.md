@@ -1204,8 +1204,17 @@ Console API key the register files for them
 ([credentials.md](../credentials.md) §3), which nothing else reads.
 Running them spends the API credit of the organization that key belongs
 to, and no CI job runs a gate. On a workstation that does not hold the
-key, every gate asks nothing, and the comment says so. A call the API
-still fails after the SDK's retries is a sample that answered nothing.
+key, every gate asks nothing, and the comment says so. **A call the API
+refuses for the key's rate limit, a `429`, is waited out** as the API's
+`retry-after` says, each wait logged before it starts with the API's
+reason and its length, for up to a bound over the call set beside the
+client (`gates.model`): the limit clears as the minute it is metered
+over passes, so the refusal is no failure of the call. The calls in
+flight at once are bounded beside the pool that sends them
+(`gates.ask`), a handful, so a run seldom provokes the refusals it then
+waits out. Any other failure the SDK retries. A call the API still fails
+after that, or still refuses once its waits reach the bound, is a sample
+that answered nothing.
 Where a call's unanswered samples could still have made a finding stand,
 every file, or run of a file's lines, it showed is left undecided, and
 so is a place a sample found that they could still have made stand: a
@@ -1350,7 +1359,8 @@ against, the head a review read or a findings comment ran at, and not a
 commit a review cites in its prose. Otherwise,
 harvest reports the place and records nothing. A review may name a place in the same form, and the case is
 then that pull request's too. A calibration in which any sample answered
-nothing, an API error left after the SDK's retries among the causes,
+nothing, an API error left after the SDK's retries or a rate limit
+that outlasted the bound among the causes,
 measured nothing about what that sample's call showed, so it too writes
 no record, leaves the one already there, and says why.
 

@@ -14,6 +14,7 @@ prompt carries as examples are cased on their own beside it.
 from __future__ import annotations
 
 import json
+import logging
 import re
 import threading
 from dataclasses import dataclass, field, replace
@@ -24,6 +25,7 @@ from typing import Any
 import pytest
 from gate_stub import (
     PULL,
+    RATE_LIMITED,
     RULE,
     RULE_DOCUMENT,
     GateMemoryForge,
@@ -36,7 +38,7 @@ from gate_stub import (
     stub_gate,
 )
 
-from kluster.scripts.dispatch.gates import ask, comment, examples, run, view
+from kluster.scripts.dispatch.gates import ask, comment, examples, model, run, view
 from kluster.scripts.dispatch.gates.appeal import AppealRefused, appeals, apply, record
 from kluster.scripts.dispatch.gates.ask import Finding
 from kluster.scripts.dispatch.gates.calibration import FINDINGS, MARGIN, PULL_REQUESTS, Calibration, Status, near
@@ -348,6 +350,49 @@ def test_a_call_the_api_fails_is_a_sample_that_answered_nothing_and_the_comment_
     assert ran.silent
     assert 'No sample answered any of them.' in forge.pull_comments(PULL)[0].body
     assert not run.refuses(0, posted)
+
+
+def test_a_call_the_api_rate_limits_waits_as_it_says_and_its_sample_answers(
+    tmp_path: Path, repository: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    forge = _forge(repository)
+    replies = recorded()
+    replies.limited = 1
+
+    with caplog.at_level(logging.INFO, logger=model.__name__):
+        posted = run.review(forge, Git(repository), PULL, [stub_gate(tmp_path)], replies.model)
+
+    # The refused call is made again after the wait the API named, and every sample answers.
+    assert (len(replies.requests), replies.slept) == (SAMPLES + 1, [20.0])
+    assert posted is not None
+    (ran,) = posted.evidence.gates
+    assert all(s is not None for e in ran.entries for s in e.samples)
+    assert [(e.line, e.finding) for e in ran.entries] == [(1, True), (3, False)]
+    # The wait is logged before it is slept, with the API's reason and its length.
+    (waited,) = [r.getMessage() for r in caplog.records if 'rate-limited' in r.getMessage()]
+    assert 'waiting 20 s' in waited
+    assert RATE_LIMITED['error']['message'] in waited
+
+
+def test_a_call_the_api_rate_limits_past_the_bound_is_a_sample_that_answered_nothing(
+    tmp_path: Path, repository: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    forge = _forge(repository)
+    replies = recorded()
+    replies.limited = 10 * SAMPLES
+    half = model.RATE_LIMIT_WAIT / 2
+    replies.retry_after = str(half)
+
+    with caplog.at_level(logging.INFO, logger=model.__name__):
+        posted = run.review(forge, Git(repository), PULL, [stub_gate(tmp_path)], replies.model)
+
+    # Each call waits until its waits reach the bound, and its sample then answers nothing.
+    assert (len(replies.requests), replies.slept) == (3 * SAMPLES, [half] * 2 * SAMPLES)
+    assert posted is not None
+    (ran,) = posted.evidence.gates
+    assert ran.silent
+    past = [r for r in caplog.records if r.levelno == logging.WARNING and 'past the' in r.getMessage()]
+    assert len(past) == SAMPLES
 
 
 def test_a_deterministic_finding_refuses_whatever_the_gates_say() -> None:

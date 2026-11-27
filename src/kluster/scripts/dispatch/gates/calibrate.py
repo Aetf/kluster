@@ -467,7 +467,7 @@ def calibrate(gate: Gate, checkout: Path, model: Callable[[], Model], forge: Gat
         raise Unanswered(
             f'{gate.name}: {unanswered} samples answered nothing. A sample that answered nothing '
             f'measured nothing about what its call showed, so {gate.directory / RECORD} is left as it was. A sample '
-            'answers nothing where its call failed, where its reply stopped short (a refusal, the token bound) or '
+            'answers nothing where its call failed, the rate limit outlasting the wait a call gives it among the causes, where its reply stopped short (a refusal, the token bound) or '
             'did not read, and where it named a path its call did not show; the run logged a warning for each',
             judgement,
             standing,
