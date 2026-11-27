@@ -269,8 +269,13 @@ These references are not provenance, and stay:
 * the ledger line that names the issue a change belongs to, in its pull
   request's description ([dispatch.md](docs/framework/dispatch.md) §1.1)
   and in its commit message;
+* a commit message's trailers that name who wrote it and the session it
+  was written in (`Co-Authored-By`, `Claude-Session`);
 * a runbook's record of a run, which keeps the issue the run was made
   under: "**Done on 2026-11-22** (`kluster-ops#935`)";
+* an RFC's status header ([rfc.md](docs/framework/rfc.md) §2.1): its
+  dated `Status:` line, which for an implemented RFC names where its
+  content now lives, and its dated `Updated:` lines;
 * a third party's own record, such as its documentation, its source or
   an issue in its tracker, cited as evidence of how that party behaves.
 
