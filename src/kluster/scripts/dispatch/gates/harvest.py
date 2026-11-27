@@ -18,8 +18,9 @@ Only a comment this account wrote is read (anyone else's comment is data,
 dispatch.md §1, and a tag planted in one would teach a gate what its author
 liked), and only a review, whose first line is a review's heading as
 `dispatch merge` reads one (`merge.REVIEW_HEADING`, dispatch.md §3), or a
-ruling, whose first line is `## Ruling` alone. A tag binds to the places its unit names (`units`): a list item with
-the paragraphs indented under it, or any other line. So the tag goes on the
+ruling, whose first line is `## Ruling` alone. A tag binds to the places
+its unit names (`tags.units`): a list item with the paragraphs indented
+under it, or any other line. So the tag goes on the
 line, or in the list item, that names the place, and the place of a rule it
 cites stays out of it. A tag in a unit that names no place binds to nothing,
 and is reported; so is a unit in which one gate's tags disagree, and text
@@ -71,18 +72,19 @@ from __future__ import annotations
 import enum
 import logging
 import re
-from collections.abc import Iterator, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 
 from ..merge import REVIEW_HEADING
 from ..prcheck import Git, PullRequest
-from . import comment, view
+from . import comment, tags, view
 from .cases import Case, record
 from .change import COMMITS, Change, change, is_message, message_path
 from .comment import Evidence
 from .forge import GateForge, PullComment
 from .gate import CASES, Gate
 from .run import findings_comment
+from .tags import AT
 from .verdict import Verdict
 
 log = logging.getLogger(__name__)
@@ -91,25 +93,6 @@ log = logging.getLogger(__name__)
 RULING = re.compile(r'\A## Ruling[ \t]*$', re.M)
 #: A commit a review names, by twelve characters or more.
 SHA = re.compile(r'(?<![0-9a-f])[0-9a-f]{12,40}(?![0-9a-f])')
-#: A tag: the gate, whether it holds the place clean, and whether the ruling is the operator's.
-TAG = re.compile(r'\[gate:(?P<gate>[a-z0-9-]+)(?P<clean> clean)?(?P<operator> operator)?\]')
-#: Where a tag opens, in any case: `[gate` and then a colon or a space. Each is a tag or is reported as one that
-#: does not read; a link to `gateway.md` or a subscript `Sequence[Gate]` opens none.
-TAG_OPENING = re.compile(r'\[gate(?=[ \t]*:|[ \t])', re.I)
-#: A place at the comment's own head: a path, which holds a letter, or a commit's message by its SHA; a line; and
-#: a last line after a dash.
-PLACE = re.compile(
-    rf'(?<![\w/.-])(?P<path>{COMMITS}/[0-9a-f]{{7,40}}|(?=[\w./-]*[A-Za-z])[\w.-][\w./-]*)'
-    r':(?P<line>\d+)(?:[ \t]*[–-][ \t]*(?P<end>\d+))?'
-)
-#: A place at a pull request and head it names, as `calibrate` prints an unconfirmed finding: the path is any
-#: run of characters but spaces, bounded by the pull request ahead of it and the head after it.
-AT = re.compile(
-    r'#(?P<pr>\d+)[ \t]+`?(?P<path>\S+?):(?P<line>\d+)(?:[–-](?P<end>\d+))?`?'
-    r'[ \t]+at[ \t]+(?P<head>[0-9a-f]{40})(?![0-9a-f])'
-)
-#: Where a list item opens, at any depth, or a heading.
-_OPENS = re.compile(r'^[ \t]*(?:[-*+]|\d+[.)])[ \t]|^#{1,6}[ \t]')
 
 
 class HarvestGit(Git):
@@ -138,7 +121,7 @@ class Kind(enum.StrEnum):
     AMBIGUOUS = 'ambiguous'
     #: A place named at a head that is no commit of the pull request it names.
     FOREIGN = 'foreign'
-    #: A tag in a unit that names no place (`units`).
+    #: A tag in a unit that names no place (`tags.units`).
     NO_PLACE = 'no place'
     #: A place the gate is not shown at that head, or a line its file does not hold there.
     NOT_SHOWN = 'not shown'
@@ -175,120 +158,6 @@ class Harvested:
 
     appended: dict[str, list[Case]] = field(default_factory=dict[str, list[Case]])
     notes: list[Note] = field(default_factory=list[Note])
-
-
-@dataclass(frozen=True)
-class Named:
-    """A place as a comment names it: a path, its first line and its last, and the pull request and head it gives."""
-
-    path: str
-    line: int
-    end_line: int
-    pr: int | None = None
-    head: str | None = None
-
-
-@dataclass(frozen=True)
-class Tagged:
-    """One tag of a comment, with every place its unit names (`units`)."""
-
-    gate: str
-    verdict: Verdict
-    operator: bool
-    places: tuple[Named, ...]
-
-
-def units(text: str) -> Iterator[str]:
-    """What a tag in `text` binds within: a list item with its indented paragraphs, or any other line alone.
-
-    An item nested under another is a unit of its own, and ends its parent's.
-    """
-    block: list[str] = []
-    item = False
-    gap = False
-
-    def done() -> Iterator[str]:
-        if item:
-            yield ' '.join(block)
-        else:
-            yield from block
-
-    for line in text.split('\n'):
-        if not line.strip():
-            gap = bool(block)
-            continue
-        opens = _OPENS.match(line) is not None
-        continues = not gap or (item and line[:1] in (' ', '\t'))
-        if block and (opens or not continues):
-            yield from done()
-            block = []
-        if not block:
-            item = opens and not line.lstrip().startswith('#')
-        block.append(line.strip())
-        gap = False
-    if block:
-        yield from done()
-
-
-def _named(match: re.Match[str], *, at: bool) -> Named:
-    line = int(match['line'])
-    end = int(match['end'] or line)
-    if at:
-        return Named(match['path'].strip('`'), line, end, int(match['pr']), match['head'])
-    return Named(match['path'], line, end)
-
-
-@dataclass(frozen=True)
-class Read:
-    """A comment's tags, with the places each binds, and each unit whose tags of one gate disagree."""
-
-    tagged: list[Tagged]
-    #: What makes a unit ambiguous, and its text, which binds none of its tags.
-    ambiguous: list[tuple[str, str]]
-    #: Each text that opens like a tag and is none.
-    malformed: list[str]
-
-
-def tags(text: str) -> Read:
-    """Every tag of `text`, with the places its unit names (`units`); a tag whose unit names none has none.
-
-    A unit in which one gate's tags give two rulings, two verdicts or one the
-    operator's and one not, binds none of them, and so does one that names
-    several places with the tags of several gates beside them: nothing says
-    which ruling is which place's. One place takes every gate's tag beside it.
-    """
-    tagged: list[Tagged] = []
-    ambiguous: list[tuple[str, str]] = []
-    for unit in units(text):
-        at = list(AT.finditer(unit))
-        spans = [m.span() for m in at]
-        plain = [m for m in PLACE.finditer(unit) if not any(a <= m.start() < b for a, b in spans)]
-        places = tuple(sorted([_named(m, at=True) for m in at] + [_named(m, at=False) for m in plain], key=_order))
-        rulings: dict[str, set[tuple[Verdict, bool]]] = {}
-        for tag in TAG.finditer(unit):
-            ruled = (Verdict.PASS if tag['clean'] else Verdict.FINDING, tag['operator'] is not None)
-            rulings.setdefault(tag['gate'], set()).add(ruled)
-        if len(places) > 1 and len(rulings) > 1:
-            ambiguous.append((f'tags of {", ".join(sorted(rulings))} beside its places', unit))
-            continue
-        for gate, ruled in rulings.items():
-            if len(ruled) > 1:
-                ambiguous.append((f'[gate:{gate}] tags that disagree', unit))
-                continue
-            ((verdict, operator),) = ruled
-            tagged.append(Tagged(gate, verdict, operator, places))
-    malformed = [_opening(text, m.start()) for m in TAG_OPENING.finditer(text) if TAG.match(text, m.start()) is None]
-    return Read(tagged, ambiguous, malformed)
-
-
-def _opening(text: str, start: int) -> str:
-    """The text a tag opening at `start` runs to: its closing bracket, or the end of its line."""
-    end = min(i for i in (text.find(']', start), text.find('\n', start), len(text)) if i >= 0)
-    return text[start : end + 1 if end < len(text) and text[end] == ']' else end]
-
-
-def _order(named: Named) -> tuple[str, int, int]:
-    return (named.path, named.line, named.end_line)
 
 
 def _path(named: str, paths: Sequence[str]) -> str | None:
@@ -415,7 +284,7 @@ def _comment(
         notes.append(Note(Kind.UNPAIRED, url, f'no findings comment of {own[:12]} to pair the review against'))
     by_name = {g.name: g for g in reader.gates}
     drawn: dict[str, list[Case]] = {}
-    read = tags(said.body)
+    read = tags.read(said.body)
     notes += [Note(Kind.MALFORMED, url, f'{text} opens like a tag and does not read as one') for text in read.malformed]
     notes += [Note(Kind.AMBIGUOUS, url, f'one unit holds {why}, so none binds: {unit}') for why, unit in read.ambiguous]
     for tagged in read.tagged:

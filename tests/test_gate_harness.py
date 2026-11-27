@@ -6,8 +6,9 @@ third in one, and the second in none, so the majority, the evidence of
 every sample and the places no sample found all show. The client is the
 SDK's own, given a transport that serves those replies, so no case here
 reaches the network or holds a key. What a gate is shown of a change, how a
-long one is cut into calls, and how the samples' findings are matched into
-places are cased on their own beside it.
+long one is cut into calls, how the samples' findings are matched into
+places, and which of its cases a gate's prompt carries as examples are
+cased on their own beside it.
 """
 
 from __future__ import annotations
@@ -15,7 +16,7 @@ from __future__ import annotations
 import json
 import re
 import threading
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from itertools import permutations
 from pathlib import Path
 
@@ -34,12 +35,13 @@ from gate_stub import (
     stub_gate,
 )
 
-from kluster.scripts.dispatch.gates import ask, comment, run, view
+from kluster.scripts.dispatch.gates import ask, comment, examples, run, view
 from kluster.scripts.dispatch.gates.appeal import AppealRefused, appeals, apply, record
 from kluster.scripts.dispatch.gates.ask import Finding
-from kluster.scripts.dispatch.gates.calibration import FINDINGS, MARGIN, PULL_REQUESTS, Status, near
+from kluster.scripts.dispatch.gates.calibration import FINDINGS, MARGIN, PULL_REQUESTS, Calibration, Status, near
+from kluster.scripts.dispatch.gates.cases import Case
 from kluster.scripts.dispatch.gates.change import change, message_path
-from kluster.scripts.dispatch.gates.gate import RECORD, Gate
+from kluster.scripts.dispatch.gates.gate import CASES, RECORD, Gate
 from kluster.scripts.dispatch.gates.model import KeyMissing, Model, Reply, Request
 from kluster.scripts.dispatch.gates.verdict import Answer, Verdict
 from kluster.scripts.dispatch.prcheck import Git, Hunk
@@ -64,19 +66,17 @@ def _forge(repository: Path) -> GateMemoryForge:
 
 def _blocking(gate: Gate) -> None:
     """Write the record of a calibration that earned `blocking` for `gate` as the scratch tree holds it."""
-    held = gate.hashes(gate.canon(lambda _: RULE).text)
-    _ = (gate.directory / RECORD).write_text(
-        json.dumps(
-            {
-                'hashes': {'prompt': held.prompt, 'canon': held.canon, 'model': held.model},
-                'cases': 'unread here',
-                'pull_requests': PULL_REQUESTS,
-                'findings': FINDINGS,
-                'recovered': FINDINGS,
-                'false_findings': 0,
-            }
-        )
+    canon = gate.canon(lambda _: RULE).text
+    measured = Calibration(
+        gate.hashes(canon),
+        gate.measured(canon),
+        'unread here',
+        pull_requests=PULL_REQUESTS,
+        findings=FINDINGS,
+        recovered=FINDINGS,
+        false_findings=0,
     )
+    _ = (gate.directory / RECORD).write_text(measured.to_json())
 
 
 def _verdicts(evidence: comment.Evidence) -> list[tuple[str, str, int, int, tuple[Verdict | None, ...]]]:
@@ -624,3 +624,124 @@ def test_where_unanswered_samples_could_still_make_a_finding_stand_each_part_of_
     ]
     # One sample short leaves the two that answered a majority to pass on.
     assert one_missing == []
+
+
+def _case(path: str, verdict: Verdict, written: str) -> Case:
+    return Case(1, 'a' * 40, path, 1, 1, verdict, f'https://example.invalid/{path}', written)
+
+
+def test_the_examples_share_the_most_directories_then_are_the_latest_a_finding_and_a_pass_in_turn() -> None:
+    finding = Verdict.FINDING
+    near_old = _case('docs/notes/x.md', finding, '2026-11-01T00:00:00Z')
+    near_new = _case('docs/notes/z.md', finding, '2026-11-02T00:00:00Z')
+    far_newest = _case('docs/other/y.md', finding, '2026-11-03T00:00:00Z')
+    near_pass = _case('docs/notes/w.md', Verdict.PASS, '2026-10-01T00:00:00Z')
+    far_pass = _case('src/q.py', Verdict.PASS, '2026-11-05T00:00:00Z')
+    cases = [far_pass, near_old, far_newest, near_pass, near_new]
+    seen = ['docs/notes/placement.md']
+
+    chosen = examples.select(cases, seen, lambda case: case, 4)
+    # A case the store cannot show is passed over for the next of its kind.
+    shown = examples.select(cases, seen, lambda case: None if case is near_new else case, 4)
+
+    assert chosen == [near_new, near_pass, near_old, far_pass]
+    assert shown == [near_old, near_pass, far_newest, far_pass]
+
+
+def test_a_pull_requests_run_carries_examples_with_their_lines_and_the_reason_their_tag_binds(
+    tmp_path: Path, repository: Path
+) -> None:
+    _ = commit(repository, {RULE_DOCUMENT: RULE})
+    # A change reviewed before the one under review, which its base holds.
+    earlier = commit(repository, {'docs/notes/queue.md': 'The queue runs on the edge node.\nThe queue keeps a day.\n'})
+    head = commit(repository, {NOTE: '\n'.join(LINES) + '\n'})
+    forge = GateMemoryForge()
+    pull_request(forge, earlier, head)
+    review = forge.say(
+        4000,
+        f'## Review (head {earlier})\n\n'
+        '- docs/notes/queue.md:1 names the node the queue runs on [gate:stub]\n'
+        '- docs/notes/queue.md:2 [gate:stub clean] states a retention, which the rule allows\n\n'
+        'A paragraph that names no place.\n',
+    )
+    gate = stub_gate(tmp_path)
+    held = [
+        Case(4000, earlier, 'docs/notes/queue.md', 1, 1, Verdict.FINDING, review.url, review.created),
+        Case(4000, earlier, 'docs/notes/queue.md', 2, 2, Verdict.PASS, review.url, review.created),
+    ]
+    _ = (gate.directory / CASES).write_text(''.join(f'{c.to_json()}\n' for c in held))
+    replies = recorded()
+
+    _ = run.review(forge, Git(repository), PULL, [gate], replies.model)
+
+    system = replies.requests[0]['system']
+    assert system.startswith('You are shown a change under review.')
+    shown = system[system.index(examples.HEADING) :]
+    assert 'The queue runs on the edge node.' in shown
+    assert 'The queue keeps a day.' in shown
+    assert 'The review: docs/notes/queue.md:1 names the node the queue runs on\n' in shown
+    assert 'The review: docs/notes/queue.md:2 states a retention, which the rule allows' in shown
+    assert 'names no place' not in shown
+    assert '[gate:' not in shown
+
+
+def test_a_comment_that_tags_nothing_gives_a_finding_the_unit_naming_its_place_and_a_pass_nothing() -> None:
+    body = (
+        '## Review (head 0123456789ab)\n\n'
+        '**1. should-fix: `docs/notes/queue.md:3–5`, a placement.** It names the node the queue runs on.\n\n'
+        'The rest of `docs/notes/queue.md:40` reads well.\n'
+    )
+    finding = Case(1, 'a' * 40, 'docs/notes/queue.md', 4, 4, Verdict.FINDING, 'https://example.invalid/review')
+    held = replace(finding, verdict=Verdict.PASS)
+
+    assert examples.cut(body, 'stub', finding) == (
+        '**1. should-fix: `docs/notes/queue.md:3–5`, a placement.** It names the node the queue runs on.'
+    )
+    assert examples.cut(body, 'stub', held) is None
+    # A comment that tags anything gives a case only the unit its tag binds.
+    assert examples.cut(f'{body}\n- docs/notes/other.md:1 [gate:stub]\n', 'stub', finding) is None
+
+
+#: Two review comments of this repository, recorded as the forge serves them, which name places with no tag.
+REVIEWS = Path(__file__).parent / 'data' / 'gates' / 'reviews'
+
+
+@pytest.mark.parametrize(
+    ('comment', 'gate', 'case', 'reason'),
+    [
+        pytest.param(
+            '7033524978',
+            'enumeration',
+            Case(896, 'a1ed77e19f2e', 'src/kluster/components/apps/jellyfin/__init__.py', 61, 82, Verdict.FINDING, ''),
+            '**4. `src/kluster/components/apps/jellyfin/__init__.py:61` — should-fix.** The owned set is a list',
+            id='its-first-line-over-an-earlier-unit-inside-it',
+        ),
+        pytest.param(
+            '7065069765',
+            'count',
+            Case(927, 'a107653d79a6', 'src/kluster/components/monitoring/__init__.py', 164, 164, Verdict.FINDING, ''),
+            '`src/kluster/components/monitoring/__init__.py:164`: "the chart\'s four and the history store".',
+            id='its-exact-place-over-an-earlier-unit-opening-on-it',
+        ),
+    ],
+)
+def test_a_comment_that_tags_nothing_gives_a_finding_the_unit_naming_the_closest_place(
+    comment: str, gate: str, case: Case, reason: str
+) -> None:
+    body = (REVIEWS / f'{comment}.txt').read_text()
+
+    found = examples.cut(body, gate, case)
+
+    assert found is not None
+    assert found.startswith(reason)
+
+
+def test_two_units_naming_places_as_close_to_a_finding_give_it_no_reason() -> None:
+    body = (
+        '## Review (head 0123456789ab)\n\n'
+        '- `docs/notes/queue.md:4` names the node the queue runs on.\n'
+        '- `docs/notes/queue.md:4` repeats the count of its replicas.\n'
+    )
+    finding = Case(1, 'a' * 40, 'docs/notes/queue.md', 4, 4, Verdict.FINDING, 'https://example.invalid/review')
+
+    assert examples.cut(body, 'stub', finding) is None

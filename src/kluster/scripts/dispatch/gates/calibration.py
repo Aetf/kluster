@@ -1,22 +1,28 @@
 """Whether a gate's verdict blocks: its calibration record, and the bar the record is held to.
 
 `dispatch gates calibrate <name>` asks the gate about every pull request of
-its history, as `dispatch gates` asks it, and writes `calibration.json`: the
+its history as `dispatch gates` asks it, its examples drawn from every other
+pull request's cases, and writes `calibration.json`: the
 hashes of what it measured, which are the prompt (`prompt.md` with the
-harness's own fixed text, `gate.Gate.hashes`), the canonical text and the
-model id, the hash of the history, and what the history scored. The score
-is the review findings the gate recovered over the whole history, and the
-false findings it made per pull request it ran on (`calibrate`). A gate
-blocks only while that score meets the bar and all three of those hashes
-still match the gate as it is run; anything else is `shadow`, posted and
-advisory, with the reason said (`standing`). A case added to the history
-stales nothing: it moves the next measurement. A run in which any sample
-answered nothing, or that made a finding no case confirms, writes no record
-and leaves the one already there (`calibrate.Unanswered`,
-`calibrate.Unconfirmed`). The record holds no sample's reason; the command
-prints each one. A pytest case holds every record's hashes against its gate
-in the tree, so an edit to a prompt, a model or a canonical section turns
-the gate red until it is measured again (dispatch.md §3).
+harness's own fixed text, `gate.Gate.hashes`), the canonical text, the model
+id and the example selection (`examples.selection`); the gate it measured in
+clear, its `prompt.md`, its canonical text and its model id (`Measured`),
+which the next calibration asks again beside a candidate (`calibrate`); the
+hash of the history; and what the history scored. The score is the review
+findings the gate recovered over the whole history, and the false findings
+it made per pull request it ran on (`calibrate`). A gate blocks only while
+that score meets the bar and every one of those hashes still matches the
+gate as it is run; anything else is `shadow`, posted and advisory, with the
+reason said (`standing`). A case added to the history stales nothing: it
+moves the next measurement. A run in which any sample answered nothing,
+that made a finding no case confirms, or whose candidate did worse than the
+gate the record holds or the score the record holds, writes no record and
+leaves the one already there
+(`calibrate.Unanswered`, `calibrate.Unconfirmed`, `calibrate.Regressed`).
+The record holds no sample's reason; the command prints each one. A pytest
+case holds every record's hashes against its gate in the tree, so an edit to
+a prompt, a model, a canonical section or the example selection turns the
+gate red until it is measured again (dispatch.md §3).
 
 The bar is this repository's, not the canon's, and moving it re-derives
 every status at once.
@@ -71,16 +77,36 @@ class Hashes:
     prompt: str
     canon: str
     model: str
+    #: The example selection: the rule that chooses a run's examples, and the budget (`examples.selection`).
+    examples: str
 
     @classmethod
-    def of(cls, *, prompt: str, canon: str, model: str) -> Hashes:
-        return cls(prompt=digest(prompt), canon=digest(canon), model=digest(model))
+    def of(cls, *, prompt: str, canon: str, model: str, examples: str) -> Hashes:
+        return cls(prompt=digest(prompt), canon=digest(canon), model=digest(model), examples=digest(examples))
 
     def changed(self, now: Hashes) -> list[str]:
         """The parts that differ between this measurement and `now`, in words."""
         parts = (('the prompt', self.prompt, now.prompt), ('the canonical text', self.canon, now.canon))
-        parts += (('the model', self.model, now.model),)
+        parts += (('the model', self.model, now.model), ('the example selection', self.examples, now.examples))
         return [name for name, then, current in parts if then != current]
+
+
+@dataclass(frozen=True)
+class Measured:
+    """The gate a record measured, in clear: what the next calibration asks again beside a candidate (`calibrate`).
+
+    The harness and the example selection are code, which only the code of
+    the record's time can ask; what the record holds of them is their
+    hashes, and where those moved the next calibration holds a candidate
+    against the record's score instead.
+    """
+
+    #: The gate's `prompt.md`.
+    prompt: str
+    #: The canonical section's text.
+    canon: str
+    #: The exact model id.
+    model: str
 
 
 @dataclass(frozen=True)
@@ -88,6 +114,7 @@ class Calibration:
     """A gate's calibration record."""
 
     hashes: Hashes
+    measured: Measured
     #: The sha256 of the `cases.jsonl` it measured.
     cases: str
     #: The pull requests of the history the gate ran on, its trigger matching a path they touch.
@@ -146,8 +173,17 @@ def load(path: Path) -> Calibration:
     try:
         raw = cast(dict[str, Any], json.loads(path.read_text()))
         hashes = cast(dict[str, Any], raw['hashes'])
+        measured = cast(dict[str, Any], raw['measured'])
         return Calibration(
-            hashes=Hashes(prompt=str(hashes['prompt']), canon=str(hashes['canon']), model=str(hashes['model'])),
+            hashes=Hashes(
+                prompt=str(hashes['prompt']),
+                canon=str(hashes['canon']),
+                model=str(hashes['model']),
+                examples=str(hashes['examples']),
+            ),
+            measured=Measured(
+                prompt=str(measured['prompt']), canon=str(measured['canon']), model=str(measured['model'])
+            ),
             cases=str(raw['cases']),
             pull_requests=int(raw['pull_requests']),
             findings=int(raw['findings']),

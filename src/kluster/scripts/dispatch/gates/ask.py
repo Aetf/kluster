@@ -1,7 +1,8 @@
 """Asking a gate about a change: what it is shown, cut into calls at a bound, each asked `SAMPLES` times, the findings matched.
 
-Each call carries the gate's prompt with its canonical section, and as data
-the parts of the change the gate is shown (`view`): each file whole with the
+Each call carries the gate's prompt with its canonical section, then the
+examples the run drew from the gate's history (`examples`), and as data the
+parts of the change the gate is shown (`view`): each file whole with the
 diff inline, and each commit message its trigger takes. Parts go into a call
 in order up to `CALL_CAP`, and a part too long alone is cut into runs of its
 lines (`view.Part.runs`). The reply is held by the API's structured outputs
@@ -38,6 +39,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any, cast
 
+from . import examples
 from .calibration import MARGIN, near
 from .comment import Entry
 from .model import MAX_TOKENS, Model, Reply, Request, dumps
@@ -94,11 +96,18 @@ FRAME = (
 
 @dataclass(frozen=True)
 class Asked:
-    """One gate's question: its prompt with its canon, its model, and the parts of the change it is shown."""
+    """One gate's question: its prompt with its canon, its model, the parts of the change it is shown, its examples."""
 
     system: str
     model: str
     parts: Sequence[Part]
+    #: The examples the prompt carries after the gate's own, as `examples.Library.prompt` renders them; empty for none.
+    examples: str = ''
+
+    @property
+    def prompt(self) -> str:
+        """What the call's system prompt is: the gate's prompt with its canon, then its examples."""
+        return f'{self.system}\n\n{self.examples}' if self.examples else self.system
 
 
 @dataclass(frozen=True)
@@ -144,7 +153,9 @@ def user(call: Sequence[Part]) -> str:
 def harness() -> str:
     """What every call asks besides the gate's own prompt, and how its samples are counted.
 
-    The frame and the schema are what a call says; the number of samples,
+    The frame and the schema are what a call says, and so is what a call that
+    carries examples says around them (`examples.FRAME` and the forms of an
+    example's heading, rows and reason); the number of samples,
     the majority a finding stands on, the margin samples' findings match
     within, the bound on a call and on a reply decide every verdict. A
     calibration's hash of the prompt takes all of it (`gate.Gate.hashes`),
@@ -158,7 +169,15 @@ def harness() -> str:
         'call_cap': CALL_CAP,
         'max_tokens': MAX_TOKENS,
     }
-    return f'{FRAME}\n{dumps(SCHEMA)}\n{dumps(counted)}'
+    shown = {
+        'heading': examples.HEADING,
+        'frame': examples.FRAME,
+        'example': examples.EXAMPLE,
+        'row': examples.ROW,
+        'ruled': dict(examples.RULED),
+        'reason': examples.REASON,
+    }
+    return f'{FRAME}\n{dumps(SCHEMA)}\n{dumps(counted)}\n{dumps(shown)}'
 
 
 def findings(reply: Reply, call: Sequence[Part]) -> Found:
@@ -302,7 +321,7 @@ def judge(asked: Sequence[Asked], model: Callable[[], Model]) -> list[Judged]:
         gate, call = job
         parts = cut[gate][call]
         a = asked[gate]
-        return findings(asking.ask(Request(a.model, a.system, user(parts), schema(parts))), parts)
+        return findings(asking.ask(Request(a.model, a.prompt, user(parts), schema(parts))), parts)
 
     with ThreadPoolExecutor(max_workers=PARALLEL) as pool:
         replies = list(pool.map(ask, jobs))

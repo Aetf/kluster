@@ -1,0 +1,127 @@
+## Review (combined)
+
+Head reviewed: `a1ed77e19f2eb4e2a50c64c52b716cf9fdb516a0`.
+
+**Verdict: changes requested.** There is one blocking finding. The merge refuses a byte order mark, and Jellyfin's own network-configuration migration writes one. This server ran that migration when it went from 10.8.13 to 10.9.7. Everything else is either should-fix or a nit. The owned set is right, the script fails closed, and the tests catch every mutation I tried.
+
+### Findings
+
+**1. `src/kluster/components/apps/jellyfin/shell/network-merge.sh:17-21`, `:98` — blocking.** The script refuses a file that starts with a UTF-8 byte order mark. The server's own code writes such a file.
+
+- The legacy server was upgraded from 10.8.13 to 10.9.7 (the history of `image:jellyfin` in kluster-code's `Pulumi.dev.yaml`). On that first 10.9 start, `MigrateNetworkConfiguration` rewrote `network.xml` with `XmlWriter.Create(path, new XmlWriterSettings { Indent = true })`. The same code is still in 10.11.4, at `Jellyfin.Server/Migrations/PreStartupRoutines/MigrateNetworkConfiguration.cs`.
+- `XmlWriterSettings.Encoding` defaults to `Encoding.UTF8`. `XmlEncodedRawTextWriter` writes that encoding's preamble when the stream is at position 0, so the file starts with `EF BB BF`.
+- Only a save from the dashboard's networking page rewrites the file without the mark. That save goes through `MyXmlSerializer`, a `StreamWriter` with a null encoding.
+- Run in the pinned image, the merge refuses such a file with `line 1 opens no NetworkConfiguration element`, and the pod does not start. Unless the networking page was saved after the 10.9.7 upgrade, Wave C finds jellyfin down, and someone has to edit the file by hand during the cutover.
+- The test that settles it is `head -c3 network.xml | od -An -tx1` on the legacy claim.
+
+The rewrite I would accept:
+
+- On line 1 of each file, take a leading `\357\273\277` off `t` before `feed` classifies the line, and print the line as it was read. mawk in the pinned image accepts `sub(/^\357\273\277/, "", t)`; I checked.
+- Add a refusal-side counterpart: a `KEPT` with the mark in front that has to merge, with each owned element set.
+- Make the shape comment say the declaration may follow a UTF-8 byte order mark, which the server's migration writes.
+
+**2. `src/kluster/components/apps/jellyfin/__init__.py:47-49` and `tests/test_apps_jellyfin.py:731` — should-fix.** The address filter the file keeps can refuse the kubelet's probes, and no test covers it.
+
+- `/health` passes through `UseIPBasedAccessValidation` before `MapHealthChecks` (`Startup.cs`, `Configure`).
+- The kubelet probes from an address of the node, not from loopback.
+- Suppose the file keeps a `LocalNetworkSubnets` that leaves that address out. `ShouldAllowServerAccess` then treats the probe as remote. With `EnableRemoteAccess` on, as the component owns it, the probe is refused when the kept `RemoteIPFilter` is non-empty and either an allowlist (`IsRemoteIPFilterBlacklist` false) that does not cover the address, or a blocklist that does. The server answers 503.
+- After 60 failed tries the startup probe gives up, and later the liveness probe restarts the server.
+- Before this change, the file was installed whole and these settings went back to their defaults, so this is a new exposure.
+- The server-start case asks from `127.0.0.1` inside the container, and `httpContext.IsLocal()` exempts that address. So the case cannot see this failure.
+
+I am not asking for the filter to be owned, since the operator's ruling leaves it to the dashboard. What I would accept:
+
+- One docstring sentence: "a remote address filter the file keeps must admit the address the kubelet probes from, or the server refuses its probes".
+- A fourth item in the PR's "Unproven live" list: before the cutover, read the copied file's `LocalNetworkSubnets`, `RemoteIPFilter` and `IsRemoteIPFilterBlacklist`; on the first run, confirm the pod goes Ready.
+
+**3. `src/kluster/components/apps/jellyfin/__init__.py:76-79` — should-fix.** The change makes a docstring claim false. The sentence "the server counts every private address as on its local network" holds only while the file names no local subnets: the RFC 1918 ranges are `InitializeLan`'s fallback. The same docstring (line 48) now says the file's local subnets are kept. Rewrite: "…which is private, and a private address is on the server's local network unless the file's local subnets leave it out, so a client from the internet could pass as a home one."
+
+**4. `src/kluster/components/apps/jellyfin/__init__.py:61` — should-fix.** The owned set is a list, not a definition.
+
+The mechanism does define it: the script takes the owned set from the rendered file, and there is no second list. But the docstring names the owned elements one by one. It describes the side left to the file only through three examples (line 47-49), and finding 2 is a case that list leaves out.
+
+What I would accept, ahead of today's list: "The component owns a setting when the pod's own wiring decides its value — the Service's port, the probes, the Gateways in front of it, the exposure's rows — so a value carried over from the old host would break the pod. Every other setting, which clients the server serves and what address it publishes, is the dashboard's, and must still admit the probes (below)."
+
+**5. `src/kluster/components/apps/jellyfin/__init__.py:160-162` — nit.** Leaving `InternalHttpsPort` to the file is safe only because `HTTP_PORT` is the server's `DefaultHttpPort`.
+
+When the HTTP and HTTPS ports collide, `ApplicationHost.Init` resets both to their defaults, 8096 and 8920. Today that reset lands on the same port. If `HTTP_PORT` ever moves off 8096, a file whose HTTPS port equals the new value would move the server to 8096. A clause on `HTTP_PORT`'s comment would make the coupling visible.
+
+**6. `src/kluster/components/apps/jellyfin/shell/network-merge.sh:28` — nit.** The merged file does not keep the original's mode. Because of `umask 077` it comes out `0600` (a `0644` file became `0600` in the pinned image). The old `install -m 0600` did the same, and the server reads the file as the same user, so nothing breaks. Say so in the header comment: "the result is the pod user's, mode 0600, since the file can hold the certificate's password".
+
+**7. `src/kluster/components/apps/jellyfin/shell/network-merge.sh:149` — nit.** There is no flush to disk before the rename. If the node crashes after the `mv` and before writeback, some filesystems leave an empty file. The next start refuses that file, so the failure is closed, but jellyfin stays down until someone restores the file. `sync "$config.merged"` before the `mv` closes the gap; coreutils in the image accepts a file argument.
+
+**8. `tests/test_apps_jellyfin.py:522` — nit.** `KEPT_SUBNETS` restates `KEPT`. Derive it from `KEPT`, for example `json.dumps(strings(ET.fromstring(KEPT), 'LocalNetworkSubnets'))`. Then an edit to the fixture cannot leave the log assertion pointing at the old value.
+
+### Owned set, checked against 10.11.4
+
+Every owned element is necessary:
+
+- `BaseUrl`: `app.Map(config.BaseUrl, …)`.
+- `InternalHttpPort`: the Service and the probes use it.
+- `EnableHttps`: with a certificate present in the claim, Kestrel would add an HTTPS listener, and `RequireHttps` would start redirecting.
+- `EnableIPv4` and `LocalNetworkAddresses`: `GetAllBindInterfaces`.
+- `KnownProxies`: `ConfigureForwardHeaders`.
+- `AutoDiscovery` and `EnableRemoteAccess`: the exposure needs them.
+
+Every element left to the file is safe, apart from finding 2:
+
+- `RequireHttps`: takes effect only while `ListenWithHttps` (`Startup.cs:171`), which needs `EnableHttps`.
+- The certificate fields: `GetCertificate` only loads the file, a missing path returns null, and nothing serves the certificate while `EnableHttps` is off.
+- `InternalHttpsPort`: safe today (finding 5).
+- `PublishedServerUriBySubnet`: `InitializeOverrides` returns before reading it whenever the startup `PublishedServerUrl` is set.
+- `EnablePublishedServerUriByRequest`: it changes only `GetSmartApiUrl(HttpRequest)`. That builds the URL from the request's host and scheme, which the known proxies' forwarded headers supply.
+- `EnableIPv6`: the pod ranges are dual-stack, so Kestrel binds `[::]` in dual mode, and discovery binds `IPAddress.Any` whatever the setting.
+- `IgnoreVirtualInterfaces` and `VirtualInterfaceNames`: they change only the interface list. With no bind address the server binds the wildcard, and the LAN fallback comes from the RFC ranges, not from the interfaces.
+
+### The script
+
+I ran 31 fixtures through the declared command in the pinned image: user 1000, every capability dropped, no network.
+
+- **Refused**, with the file left byte-identical and nothing left beside it: a byte order mark, CRLF, a comment, CDATA, a value spanning two lines, two elements on one line, the whole file on one line, a mismatched close, a list that never closes, text before a list's close, a second root, trailing junk, the wrong root, a self-closing root, a file holding only the declaration, a file holding only whitespace, and cuts in the declaration, after the root opens, and inside the closing tag.
+- **Merged correctly**: entities in values, quotes, attributes on a leaf or an item, `>` inside an attribute, tabs for indentation, no final newline, non-ASCII values, a root holding no elements, and two copies of an owned list. The first copy is replaced and the second dropped.
+- **Disk full** (a 4 KiB tmpfs): exit 1, `close failed on file "/dev/stdout" (No space left on device)`, and the original is intact.
+- **Second start**: I merged, ran the server to `Startup complete`, stopped it, and merged again. The server had not rewritten the file, and the second merge exited 0.
+
+Writing beside the file and renaming over it is atomic, since both are in one directory.
+
+### Shell or Python
+
+**sh plus awk is acceptable here.** AGENTS.md names "a context with no interpreter" as a reason for a shell script, and this image has no interpreter.
+
+The builder's premise is partly off. The repository's precedent for this exact problem, syncthing, took a second pinned image (`versions:image-syncthing-config`, yq). So a second pin is a cost, not a bar. Even so, an init container on a minimal Python image is not clearly better:
+
+- Its pin and the stack argument for it would fall outside this change's paths.
+- It means a second pull on the worker.
+- Its gain is a real parser. That gain is real only with ElementTree, which raises on a truncated file. yq does not: syncthing's own header says it reads a file cut short as nothing.
+
+Against that, the awk recognizer fails closed on everything I threw at it. Its one miss is finding 1, and that is a three-line fix.
+
+### Tests
+
+I applied each mutation alone and reverted it.
+
+| Mutation | Cases that fail |
+| --- | --- |
+| The script copies the rendered file over the server's | initial state, keeps every other setting, all three refusals, server start |
+| The script prints the server's own element in place of an owned one | sets each owned setting, server start |
+| The end-of-file check is removed | refusals `empty` and `cut-between-lines` |
+| The add-before-the-end path is removed | sets each owned setting |
+| The script writes in place instead of beside the file | refusals `cut-within-a-line` and `cut-between-lines`, server start |
+| The script leaves `.merged` behind on a refusal | all three refusals |
+
+**`PULL_TIMEOUT` (45 s).** This PR's `checks` run (44694689776) passed on a fresh GitHub-hosted runner with an empty image store: 6110 passed, 1 skipped, `Tests` step 12 min 03 s. So the cold pull of the 1.61 GB unpacked image fit in the bound there. That is one data point.
+
+The margin I would watch: several xdist workers can call `pulled()` at once. Each pull's 45 s then includes waiting on the other's storage lock. The failure would be a named `TimeoutExpired`, not a hang. If it flakes, the cure is a pre-pull in the `Podman` step, as for the Postgres images (`ci.md`). That is outside this PR.
+
+**Style.** I found no change-detectors beyond finding 8. The value assertions on the rendered file (`BaseUrl == ''`, `EnableIPv4 == 'true'`) follow the existing tests in the module, and the server-start case covers the behavior behind them. The docstring and the comments are written as-built.
+
+### Gate (reviewer's run)
+
+- `typecheck`: exit 0.
+- `tests/test_apps_jellyfin.py` through `gate-run`: 41 passed.
+- `ruff check` and `ruff format --check` on the changed files: clean.
+
+As the brief said, I did not run the full pytest.
+
+**Verdict: changes requested.** Finding 1 blocks. Findings 2 to 4 belong in the same fix cycle.
+

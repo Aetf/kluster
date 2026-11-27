@@ -15,6 +15,11 @@ does not hold (`messages`). So does every gate of a run whose record would
 not fit in one comment even as verdicts alone (`comment.fits`): their
 answers are dropped, and the comment says why.
 
+A pull request's run draws each gate's examples from every case of its
+history (`examples`). The claim asks about a brief without them: its
+verdict blocks nothing, and no record measures how a gate reads a brief
+(dispatch.md §2.1), so nothing would show whether examples help it.
+
 The comment of a run at the head the pull request already has a comment of
 is edited in place, keeping the appeals that comment records; a run at a new
 head posts a new one. A run no gate's trigger matches posts nothing.
@@ -32,6 +37,7 @@ from .ask import Asked, judge
 from .calibration import Status, standing
 from .change import Change, change
 from .comment import Evidence, Ran
+from .examples import Library
 from .forge import GateForge, PullComment
 from .gate import Gate, GateUnreadable
 from .model import KeyMissing, Messages, Model, key
@@ -74,7 +80,13 @@ def _unasked(g: Gate, status: Status, why: str, rule: str = '') -> Ran:
     return Ran(g.name, g.spec.model, status, why, rule, (), asked=False)
 
 
-def prepare(g: Gate, canon: Callable[[str], str | None], changed: Change, at: str | None = None) -> Prepared | Ran:
+def prepare(
+    g: Gate,
+    canon: Callable[[str], str | None],
+    changed: Change,
+    at: str | None = None,
+    examples: Library | None = None,
+) -> Prepared | Ran:
     """`g` ready to ask about `changed`, its canonical section read through `canon`; where it cannot ask, why.
 
     Its status is what its calibration record earns against the gate as it
@@ -82,7 +94,8 @@ def prepare(g: Gate, canon: Callable[[str], str | None], changed: Change, at: st
     blocking where its record earned that: a canon moved out from under a
     gate does not open it. `at` is the commit whose tree `canon` reads, which
     the link to the rule names; a tree that is no commit, a checkout, gives
-    no link.
+    no link. With `examples`, its prompt carries the examples drawn from
+    every case of its history for the paths it is shown; without, none.
     """
     try:
         section = g.canon(canon)
@@ -94,7 +107,9 @@ def prepare(g: Gate, canon: Callable[[str], str | None], changed: Change, at: st
     status, why = standing(g.record(), g.hashes(section.text))
     rule = g.rule(at, section) if at is not None else ''
     parts = view.parts(changed, g.spec.trigger)
-    return Prepared(g, rule, status, why, Asked(system=g.system(section.text), model=g.spec.model, parts=parts))
+    shown = '' if examples is None else examples.prompt(g.name, g.cases(), [p.path for p in parts])
+    asking = Asked(system=g.system(section.text), model=g.spec.model, parts=parts, examples=shown)
+    return Prepared(g, rule, status, why, asking)
 
 
 def asked(prepared: Sequence[Prepared], model: Callable[[], Model]) -> list[Ran]:
@@ -129,8 +144,9 @@ def review(forge: GateForge, git: Git, number: int, gates: Sequence[Gate], model
     log.info('#%d: running %s', number, ', '.join(g.name for g in triggered))
     prepared: list[Prepared] = []
     unread: list[Ran] = []
+    library = Library(git, forge)
     for g in triggered:
-        ready = prepare(g, lambda path: git.text(pull.head, path), changed, pull.head)
+        ready = prepare(g, lambda path: git.text(pull.head, path), changed, pull.head, library)
         if isinstance(ready, Prepared):
             prepared.append(ready)
         else:

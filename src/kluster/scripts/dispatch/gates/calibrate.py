@@ -15,7 +15,9 @@ measured nothing. The gate runs on a pull request where
 its trigger matches a path the change touches, and is asked there as
 `dispatch gates` asks it (`view.parts`, `ask.judge`), with its canonical
 section read from the checkout the command runs in, which is the tree the
-record's hash of it is held against.
+record's hash of it is held against. Its examples there are drawn from
+every other pull request's cases (`examples`), so no case is scored by a
+prompt that holds it.
 
 Each pull request is scored alone (`score`). A finding of the gate, one that
 stands on its samples, recovers a review finding, a case labelled `finding`,
@@ -24,20 +26,42 @@ one to one: each review finding is recovered once, and each gate finding
 recovers one at most. A gate finding that recovers none is false where a
 case labelled `pass` names its place, and is unconfirmed where no case does.
 The record's score is the review findings recovered over the whole history
-and the false findings per pull request the gate ran on
-(`calibration.Calibration`).
+and the false findings per pull request the gate ran on (`Tally`,
+`calibration.Calibration`).
 
-Two kinds of run measured too little to write a record, and each leaves the
-record already there as it was: one in which a sample answered nothing,
-since that sample measured nothing about what its call showed
-(`Unanswered`); and one in which a gate finding stands unconfirmed, since
-the score cannot say whether it is false (`Unconfirmed`), which lists each
-such finding as `#<pr> <path>:<lines> at <head>`, the form a ruling names
-it by for `harvest` to record it at that pull request and head
-(dispatch.md §3).
+**A candidate is recorded only where it does no worse.** Where the gate
+has a record that measured another prompt, canonical text or model than
+the checkout holds (`calibration.Measured`), the gate as the record holds
+it, `STANDING`, is asked beside the gate as the checkout holds it,
+`CANDIDATE`, in the one run: every pull request of the history, each with
+the same examples. The harness, its example rows among it, and the example
+selection are code, which only the code of the record's time can ask, so
+both gates are asked with them as they run now. Where the record measured
+those otherwise (`gate.hashes_of`), whether or not the prompt, text or
+model moved too, the candidate is also held against the score the record
+holds (`Tally.of`): by counts where the history is the one the record
+measured, its cases' hash and its counts of review findings and pull
+requests the same, which is exact; and as rates where the history has
+changed since, the share recovered and the false findings per pull request
+(`Tally.no_worse_in_rate_than`), which is weaker, since the two scores
+come from different histories and samples of their own. A candidate that
+does worse by either writes nothing and raises `Regressed`, naming both
+scores. A gate with no record, or whose record measured exactly what the
+checkout and the code now ask, is asked once, and its score is held to the
+bar alone.
 
-Why the gate judged each place as it did is the run's `Judgement`, which
-the command prints (`Judgement.report`) and the record leaves out: every
+A run whose samples measured too little writes no record either, and
+leaves the one already there as it was: one in which a sample of either
+gate answered nothing, since that sample measured nothing about what its
+call showed (`Unanswered`); and one in which a finding of either gate
+stands unconfirmed, since the score cannot say whether it is false
+(`Unconfirmed`), which lists each such finding as
+`#<pr> <path>:<lines> at <head>`, the form a ruling names it by for
+`harvest` to record it at that pull request and head (dispatch.md §3).
+
+Why the gate judged each place as it did is the run's `Judgement`, one for
+each gate asked, which the command prints (`report`) and the record leaves
+out: every
 case beside its label with what the gate made of it, every place a sample
 found with each sample's word and reason, so a miss can be read without
 asking again.
@@ -48,6 +72,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from fractions import Fraction
 from pathlib import Path
 
 from ..prcheck import Git, PullUnreadable
@@ -57,8 +82,9 @@ from .calibration import Calibration, digest
 from .cases import Case
 from .change import change
 from .comment import Entry
+from .examples import Library
 from .forge import GateForge
-from .gate import CASES, RECORD, Gate, GateUnreadable
+from .gate import CASES, RECORD, Gate, GateUnreadable, hashes_of
 from .model import Model
 from .verdict import Verdict
 
@@ -171,6 +197,46 @@ class Reviewed:
 
 
 @dataclass(frozen=True)
+class Tally:
+    """A gate's score over a run of its history: the review findings it recovered, and its false findings."""
+
+    #: The pull requests of the history the gate ran on, its trigger matching a path they touch.
+    pull_requests: int
+    #: The review findings of the history, the cases labelled `finding`.
+    findings: int
+    recovered: int
+    false_findings: int
+
+    @classmethod
+    def of(cls, record: Calibration) -> Tally:
+        """The score a record holds."""
+        return cls(record.pull_requests, record.findings, record.recovered, record.false_findings)
+
+    @property
+    def recall(self) -> Fraction:
+        """The share of the review findings recovered; all of none."""
+        return Fraction(self.recovered, self.findings) if self.findings else Fraction(1)
+
+    @property
+    def false_per_pull_request(self) -> Fraction:
+        return Fraction(self.false_findings, self.pull_requests) if self.pull_requests else Fraction(0)
+
+    def no_worse_than(self, other: Tally) -> bool:
+        """Whether this score recovers no fewer review findings than `other` and makes no more false findings per pull request."""
+        return self.recovered >= other.recovered and self.false_per_pull_request <= other.false_per_pull_request
+
+    def no_worse_in_rate_than(self, other: Tally) -> bool:
+        """Whether this score recovers no smaller a share of its review findings than `other` and makes no more false findings per pull request."""
+        return self.recall >= other.recall and self.false_per_pull_request <= other.false_per_pull_request
+
+    def __str__(self) -> str:
+        return (
+            f'{self.recovered} of {self.findings} review findings recovered, {self.false_findings} false findings '
+            f'over {self.pull_requests} pull requests'
+        )
+
+
+@dataclass(frozen=True)
 class Judgement:
     """A gate's run over its history, a pull request and a head at a time, in the order of its cases."""
 
@@ -194,36 +260,67 @@ class Judgement:
     def unconfirmed(self) -> list[tuple[Reviewed, Entry]]:
         return [(r, e) for r in self.reviewed for e in r.score.unconfirmed]
 
+    @property
+    def tally(self) -> Tally:
+        reviewed = self.reviewed
+        return Tally(
+            pull_requests=len({r.pr for r in reviewed if r.ran}),
+            findings=sum(1 for r in reviewed for c in r.cases if c.verdict is Verdict.FINDING),
+            recovered=sum(len(r.score.recovered) for r in reviewed),
+            false_findings=sum(len(r.score.false) for r in reviewed),
+        )
 
-class Unanswered(Exception):
-    """A calibration some of whose samples answered nothing: it measured nothing about what their calls showed.
+
+#: What the parts of a record's hashes are where `prompt.md` is the same and the code that asks it moved.
+_CODE = {'the prompt': 'the fixed text every call carries'}
+
+#: What the report calls the gate as the tree holds it, and the gate as its record holds it, where both ran.
+CANDIDATE = 'the gate as the checkout holds it'
+STANDING = 'the gate as its calibration record holds it'
+
+
+class Refusal(Exception):
+    """A calibration that writes no record, leaving any record already there as it was.
 
     Carries the run's `judgement`, so the reasons of the samples that did
-    answer are still there to be read.
+    answer are still there to be read, and the judgement of the gate as its
+    record holds it, `standing`, where the run measured it beside the
+    candidate.
     """
 
-    def __init__(self, message: str, judgement: Judgement) -> None:
+    def __init__(self, message: str, judgement: Judgement, standing: Judgement | None = None) -> None:
         super().__init__(message)
         self.judgement = judgement
+        self.standing = standing
+
+    def report(self) -> str:
+        return report(self.judgement, self.standing)
 
 
-class Unmeasured(Exception):
+class Unanswered(Refusal):
+    """A calibration some of whose samples answered nothing: it measured nothing about what their calls showed."""
+
+
+class Unmeasured(Refusal):
     """A calibration whose every head the forge no longer serves: it measured nothing, and writes no record."""
 
-    def __init__(self, message: str, judgement: Judgement) -> None:
-        super().__init__(message)
-        self.judgement = judgement
 
-
-class Unconfirmed(Exception):
+class Unconfirmed(Refusal):
     """A calibration that made a finding no case confirms or refutes: the score cannot count it either way.
 
-    Carries the run's `judgement`, whose `unconfirmed` lists each such finding.
+    Its `judgement` and `standing` list each such finding (`Judgement.unconfirmed`).
     """
 
-    def __init__(self, message: str, judgement: Judgement) -> None:
-        super().__init__(message)
-        self.judgement = judgement
+
+class Regressed(Refusal):
+    """A candidate that did worse over the history than the gate as its record holds it, in one run of both."""
+
+
+def report(judgement: Judgement, standing: Judgement | None) -> str:
+    """The run's report: the candidate's, then, where the run measured it too, the standing gate's."""
+    if standing is None:
+        return judgement.report()
+    return '\n'.join([f'{CANDIDATE}:', judgement.report(), f'{STANDING}:', standing.report()])
 
 
 @dataclass(frozen=True)
@@ -232,15 +329,26 @@ class Calibrated:
 
     record: Calibration
     judgement: Judgement
+    #: The run of the gate as its record held it, where the run measured it beside the candidate.
+    standing: Judgement | None = None
+
+    def report(self) -> str:
+        return report(self.judgement, self.standing)
 
 
 def calibrate(gate: Gate, checkout: Path, model: Callable[[], Model], forge: GateForge, git: Git) -> Calibrated:
     """Measure `gate` against its history, with its canon as `checkout` holds it, and write its record.
 
-    Raises `Unanswered`, `Unconfirmed` or `Unmeasured`, leaving any record
-    already there as it was, and `prcheck.PullUnreadable` where the local store `git` reads
-    does not hold a commit a pull request of the history needs and the forge
-    still serves.
+    Where the gate has a record that measured another prompt, canonical
+    text or model, that gate is asked too, beside it, in the same run;
+    where it measured another harness or example selection, the record's
+    own score stands in for it. The record is written only where the gate
+    as the checkout holds it does no worse than either.
+
+    Raises a `Refusal`, one of `Unanswered`, `Unconfirmed`, `Unmeasured`
+    and `Regressed`, leaving any record already there as it was, and
+    `prcheck.PullUnreadable` where the local store `git` reads does not hold
+    a commit a pull request of the history needs and the forge still serves.
     """
     cases = gate.cases()
     if not cases:
@@ -251,7 +359,14 @@ def calibrate(gate: Gate, checkout: Path, model: Callable[[], Model], forge: Gat
         return file.read_text() if file.is_file() else None
 
     canon = gate.canon(text).text
-    system = gate.system(canon)
+    candidate = gate.measured(canon)
+    held = gate.record()
+    beside = held.measured if held is not None and held.measured != candidate else None
+    # The parts of what the record measured that only the code of its time can ask: the harness, its example rows
+    # among it, and the example selection.
+    moved = [] if held is None else held.hashes.changed(hashes_of(held.measured))
+    moved = [_CODE.get(part, part) for part in moved]
+    asking = [candidate] if beside is None else [candidate, beside]
     # The history's pull requests at their heads, in the order each one's first case comes in.
     history: dict[tuple[int, str], list[Case]] = {}
     for case in cases:
@@ -278,44 +393,95 @@ def calibrate(gate: Gate, checkout: Path, model: Callable[[], Model], forge: Gat
         raise PullUnreadable(
             f'the local store holds no commit of {", ".join(missing)}; fetch them, and run the calibration again'
         )
-    ran: dict[tuple[int, str], Asked] = {}
+    library = Library(git, forge)
+    ran: dict[tuple[int, str], list[Asked]] = {}
     for pr, head in history:
         changed = change(git, git.merge_base(bases[pr], head), head)
-        if gate.triggered(changed.paths):
-            ran[(pr, head)] = Asked(system, gate.spec.model, view.parts(changed, gate.spec.trigger))
+        if not gate.triggered(changed.paths):
+            continue
+        parts = view.parts(changed, gate.spec.trigger)
+        # Every other pull request's cases, so that no case is scored by a prompt that holds it.
+        others = [c for (other, _), held_cases in history.items() if other != pr for c in held_cases]
+        log.info('drawing the examples of #%d', pr)
+        shown = library.prompt(gate.name, others, [p.path for p in parts])
+        ran[(pr, head)] = [Asked(gate.system(m.canon, m.prompt), m.model, parts, examples=shown) for m in asking]
     log.info(
         'asking %s about %d pull requests of its history, on %s; %d more it does not run on',
         gate.name,
         len(ran),
-        gate.spec.model,
+        ' and, beside it as its record holds it, '.join(m.model for m in asking),
         len(history) - len(ran),
     )
-    judged = dict(zip(ran, judge(list(ran.values()), model), strict=True))
-    judgement = Judgement(
-        [_reviewed(pr, head, held, judged.get((pr, head))) for (pr, head), held in history.items()], dropped
-    )
-    if judgement.unanswered:
+    answers = iter(judge([a for at in ran.values() for a in at], model))
+    judged = {at: [next(answers) for _ in asked] for at, asked in ran.items()}
+    judgements = [
+        Judgement(
+            [
+                _reviewed(pr, head, held_cases, judged[(pr, head)][n] if (pr, head) in judged else None)
+                for (pr, head), held_cases in history.items()
+            ],
+            dropped,
+        )
+        for n in range(len(asking))
+    ]
+    judgement = judgements[0]
+    standing = judgements[1] if beside is not None else None
+    unanswered = sum(j.unanswered for j in judgements)
+    if unanswered:
         raise Unanswered(
-            f'{gate.name}: {judgement.unanswered} samples answered nothing. A sample that answered nothing '
+            f'{gate.name}: {unanswered} samples answered nothing. A sample that answered nothing '
             f'measured nothing about what its call showed, so {gate.directory / RECORD} is left as it was. A sample '
             'answers nothing where its call failed, where its reply stopped short (a refusal, the token bound) or '
             'did not read, and where it named a path its call did not show; the run logged a warning for each',
             judgement,
+            standing,
         )
-    if judgement.unconfirmed:
-        places = ''.join(f'\n- #{r.pr} {e.place} at {r.head}' for r, e in judgement.unconfirmed)
+    unconfirmed = {f'#{r.pr} {e.place} at {r.head}': None for j in judgements for r, e in j.unconfirmed}
+    if unconfirmed:
+        places = ''.join(f'\n- {place}' for place in unconfirmed)
         raise Unconfirmed(
-            f'{gate.name}: {len(judgement.unconfirmed)} findings no case confirms or refutes, so '
+            f'{gate.name}: {len(unconfirmed)} findings no case confirms or refutes, so '
             f'{gate.directory / RECORD} is left as it was. A comment headed `## Ruling` on any pull request of '
             'this repository rules on each, a line for each place as it stands below, with the tag of the gate '
             "and the ruling's verdict beside it (dispatch.md §3); `dispatch gates harvest` of that pull request "
             f'records it.{places}',
             judgement,
+            standing,
         )
-    record = _measured(judgement, cases=digest((gate.directory / CASES).read_text()), gate=gate, canon=canon)
+    if standing is not None and not judgement.tally.no_worse_than(standing.tally):
+        raise Regressed(
+            f'{gate.name}: {CANDIDATE} did worse over the history than {STANDING}, so '
+            f'{gate.directory / RECORD} is left as it was. A candidate is recorded only where it recovers no '
+            f'fewer review findings and makes no more false findings per pull request. {CANDIDATE}: '
+            f'{judgement.tally}; {STANDING}: {standing.tally}',
+            judgement,
+            standing,
+        )
+    history_hash = digest((gate.directory / CASES).read_text())
+    if held is not None and moved:
+        recorded = Tally.of(held)
+        tally = judgement.tally
+        # The history the record measured, where its cases and the counts they come to are the same.
+        same = held.cases == history_hash and (tally.findings, tally.pull_requests) == (
+            recorded.findings,
+            recorded.pull_requests,
+        )
+        if not (tally.no_worse_than(recorded) if same else tally.no_worse_in_rate_than(recorded)):
+            how = 'by counts, over the same history' if same else 'as rates, the history having changed since'
+            raise Regressed(
+                f'{gate.name}: {CANDIDATE} did worse than the score its record holds, measured under '
+                f'{" and ".join(moved)} as they were then, which only the code of that time can ask again; '
+                f'compared {how}. So {gate.directory / RECORD} is left as it was. {CANDIDATE}: {tally}; '
+                f'the record: {recorded}',
+                judgement,
+                standing,
+            )
+    record = _measured(judgement, cases=history_hash, gate=gate, canon=canon)
     _ = (gate.directory / RECORD).write_text(record.to_json())
+    if standing is not None:
+        log.info('%s: %s, beside %s: %s', CANDIDATE, judgement.tally, STANDING, standing.tally)
     log.info('wrote %s: %s', gate.directory / RECORD, record.status)
-    return Calibrated(record, judgement)
+    return Calibrated(record, judgement, standing)
 
 
 def _reviewed(pr: int, head: str, cases: Sequence[Case], judged: Judged | None) -> Reviewed:
@@ -325,13 +491,14 @@ def _reviewed(pr: int, head: str, cases: Sequence[Case], judged: Judged | None) 
 
 
 def _measured(judgement: Judgement, *, cases: str, gate: Gate, canon: str) -> Calibration:
-    """The record of `judgement`: the score over the whole history."""
-    reviewed = judgement.reviewed
+    """The record of `judgement`: the gate it measured, and the score over the whole history."""
+    tally = judgement.tally
     return Calibration(
         hashes=gate.hashes(canon),
+        measured=gate.measured(canon),
         cases=cases,
-        pull_requests=len({r.pr for r in reviewed if r.ran}),
-        findings=sum(1 for r in reviewed for c in r.cases if c.verdict is Verdict.FINDING),
-        recovered=sum(len(r.score.recovered) for r in reviewed),
-        false_findings=sum(len(r.score.false) for r in reviewed),
+        pull_requests=tally.pull_requests,
+        findings=tally.findings,
+        recovered=tally.recovered,
+        false_findings=tally.false_findings,
     )

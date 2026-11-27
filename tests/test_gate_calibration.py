@@ -27,13 +27,22 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import pytest
-from gate_stub import RULE, RULE_DOCUMENT, SPEC, GateMemoryForge, commit, scratch_repository, stub_gate
+from gate_stub import RULE, RULE_DOCUMENT, SPEC, GateMemoryForge, commit, git, scratch_repository, stub_gate
 
 from kluster.lib import workstation
 from kluster.scripts.dispatch import cli
 from kluster.scripts.dispatch.forge import ForgeError
-from kluster.scripts.dispatch.gates import ask, gate, run
-from kluster.scripts.dispatch.gates.calibrate import Unanswered, Unconfirmed, Unmeasured, calibrate, score
+from kluster.scripts.dispatch.gates import ask, examples, gate, run
+from kluster.scripts.dispatch.gates.calibrate import (
+    CANDIDATE,
+    STANDING,
+    Regressed,
+    Unanswered,
+    Unconfirmed,
+    Unmeasured,
+    calibrate,
+    score,
+)
 from kluster.scripts.dispatch.gates.calibration import (
     FALSE_FINDINGS,
     FINDINGS,
@@ -80,13 +89,22 @@ class Scripted:
     stray: str | None = None
     #: How many calls to fail, as the API does when it still fails after the SDK's retries, before answering.
     failures: int = 0
+    #: Words of a system prompt under which it finds nothing.
+    blind: str | None = None
+    #: Words of a system prompt under which alone it finds a GPU's line in `false`; under any prompt where None.
+    false_when: str | None = None
+    #: Every request it was asked.
+    asked: list[Request] = field(default_factory=list[Request])
     _lock: threading.Lock = field(default_factory=threading.Lock)
 
     def ask(self, request: Request) -> Reply:
         with self._lock:
+            self.asked.append(request)
             if self.failures:
                 self.failures -= 1
                 return Reply(None, 'the call failed: APIConnectionError')
+        if self.blind is not None and self.blind in request.system:
+            return Reply(json.dumps({'findings': []}))
         found: list[dict[str, object]] = []
         path = ''
         for line in request.user.split('\n'):
@@ -96,7 +114,7 @@ class Scripted:
                 said = row['text']
                 if (
                     ('node' in said and path not in self.missed)
-                    or ('GPU' in said and path in self.false)
+                    or ('GPU' in said and path in self.false and (self.false_when or '') in request.system)
                     or (self.stray is not None and self.stray in said)
                 ):
                     number = int(row['number'])
@@ -164,6 +182,11 @@ def _calibrate(stub: Gate, history: History, model: Model) -> Calibration:
         ('margin', 'the prompt'),
         ('canon', 'the canonical text'),
         ('model', 'the model'),
+        ('budget', 'the example selection'),
+        ('selection', 'the example selection'),
+        ('when', 'the example selection'),
+        ('key', 'the example selection'),
+        ('row', 'the prompt'),
     ],
 )
 def test_a_record_whose_hash_mismatches_reads_as_shadow_and_says_why(
@@ -180,6 +203,17 @@ def test_a_record_whose_hash_mismatches_reads_as_shadow_and_says_why(
         monkeypatch.setattr(ask, 'MAJORITY', ask.MAJORITY - 1)
     elif part == 'margin':
         monkeypatch.setattr(ask, 'MARGIN', ask.MARGIN + 1)
+    elif part == 'budget':
+        monkeypatch.setattr(examples, 'BUDGET', examples.BUDGET + 1)
+    elif part == 'selection':
+        monkeypatch.setattr(examples, 'RULE', examples.RULE[:-1])
+    elif part == 'when':
+        # The comment's id no longer breaks a tie between rulings written in the same second.
+        monkeypatch.setattr(Case, 'when', property(lambda case: (case.written, 0)))
+    elif part == 'key':
+        monkeypatch.setattr(Case, 'key', property(lambda case: (case.pr, case.path, case.line, case.end_line)))
+    elif part == 'row':
+        monkeypatch.setattr(examples, 'ROW', '{number:>6} | {text}')
     elif part == 'canon':
         _ = (repository / RULE_DOCUMENT).write_text(RULE.replace('never where it runs', 'never where it lives'))
     else:
@@ -513,3 +547,196 @@ def test_only_a_422_from_the_commits_endpoint_reads_as_a_commit_the_forge_no_lon
             _ = GateGh().serves('f' * 40)
     else:
         assert GateGh().serves('f' * 40) is not gone
+
+
+def _reviewed(history: History, stub: Gate) -> None:
+    """Each pull request of `history` given a review whose tags rule its cases, each case's source that review."""
+    ruled: list[Case] = []
+    for n, request in sorted(history.forge.requests.items()):
+        held = [c for c in history.cases if c.pr == n]
+        lines = [
+            f'- {c.path}:{c.line} [gate:stub{"" if c.verdict is Verdict.FINDING else " clean"}] ruling {n}.{c.line}'
+            for c in held
+        ]
+        said = history.forge.say(n, f'## Review (head {request.head})\n\n' + '\n'.join(lines) + '\n')
+        ruled += [replace(c, source=said.url, written=said.created) for c in held]
+    _ = (stub.directory / CASES).write_text(''.join(f'{c.to_json()}\n' for c in ruled))
+
+
+def test_each_pull_request_is_asked_with_examples_drawn_from_every_other_pull_requests_cases_alone(
+    tmp_path: Path, repository: Path
+) -> None:
+    stub = stub_gate(tmp_path)
+    # Fewer cases than the budget, so that every case a pull request may be shown is shown.
+    size = examples.BUDGET // 2
+    history = _history(repository, stub, size)
+    _reviewed(history, stub)
+    scripted = Scripted()
+
+    _ = _calibrate(stub, history, scripted)
+
+    asked = {_ASKED_ABOUT.findall(r.user)[0]: r.system for r in scripted.asked}
+    assert sorted(asked) == [_note(n) for n in range(1, size + 1)]
+    for n in range(1, size + 1):
+        system = asked[_note(n)]
+        assert f'ruling {n}.' not in system
+        assert _note(n) not in system
+        assert all(
+            f'ruling {other}.1' in system and f'ruling {other}.2' in system
+            for other in range(1, size + 1)
+            if other != n
+        )
+
+
+#: The note a request asks about, as its part's heading names it.
+_ASKED_ABOUT = re.compile(r'^## (docs/notes/\S+) \(', re.M)
+
+#: Words a candidate's prompt carries, under which the scripted model finds nothing.
+_BLIND = 'Report nothing.'
+
+
+def test_a_candidate_that_does_worse_than_the_gate_its_record_holds_writes_nothing_and_reports_both(
+    tmp_path: Path, repository: Path
+) -> None:
+    stub = stub_gate(tmp_path)
+    history = _history(repository, stub, 2)
+    _ = _calibrate(stub, history, Scripted(blind=_BLIND))
+    before = (stub.directory / RECORD).read_text()
+    _ = (stub.directory / gate.PROMPT).write_text(f'{stub.prompt}\n{_BLIND}\n')
+    scripted = Scripted(blind=_BLIND)
+
+    with pytest.raises(Regressed) as refused:
+        _ = _calibrate(stub, history, scripted)
+
+    assert (stub.directory / RECORD).read_text() == before
+    assert refused.value.standing is not None
+    assert (refused.value.judgement.tally.recovered, refused.value.standing.tally.recovered) == (0, 2)
+    assert f'{CANDIDATE}: 0 of 2 review findings recovered' in str(refused.value)
+    assert f'{STANDING}: 2 of 2 review findings recovered' in str(refused.value)
+    # Both gates are asked in the one run, each pull request three times by each.
+    assert sorted(_BLIND in r.system for r in scripted.asked) == [False] * 6 + [True] * 6
+
+
+def test_a_candidate_that_does_no_worse_is_recorded_measured_beside_the_gate_its_record_holds(
+    tmp_path: Path, repository: Path
+) -> None:
+    stub = stub_gate(tmp_path)
+    history = _history(repository, stub, 2)
+    prompt = stub.prompt
+    _ = (stub.directory / gate.PROMPT).write_text(f'{prompt}\n{_BLIND}\n')
+    _ = _calibrate(stub, history, Scripted(blind=_BLIND))
+    _ = (stub.directory / gate.PROMPT).write_text(prompt)
+
+    calibrated = calibrate(stub, repository, lambda: Scripted(blind=_BLIND), history.forge, Git(repository))
+
+    # The gate its record held is asked from the record's prompt, which finds nothing.
+    assert calibrated.standing is not None
+    assert (calibrated.record.recovered, calibrated.standing.tally.recovered) == (2, 0)
+    assert stub.record() == calibrated.record
+    assert calibrated.record.measured.prompt == prompt
+
+
+def test_a_pull_request_reviewed_at_two_heads_is_shown_the_rulings_of_neither(tmp_path: Path, repository: Path) -> None:
+    stub = stub_gate(tmp_path)
+    size = examples.BUDGET // 2
+    history = _history(repository, stub, size)
+    _reviewed(history, stub)
+    # Pull request 1 again at a second head over its own base, reviewed there too.
+    first = history.forge.requests[1]
+    _ = git(repository, 'checkout', '-q', '--detach', first.base)
+    second = commit(repository, {_note(1): 'It runs on node 1 still.\nIt requests a GPU.\n'})
+    said = history.forge.say(
+        1,
+        f'## Review (head {second})\n\n- {_note(1)}:1 [gate:stub] ruling 1b.1\n- {_note(1)}:2 [gate:stub clean] ruling 1b.2\n',
+    )
+    again = [
+        Case(1, second, _note(1), 1, 1, Verdict.FINDING, said.url, said.created),
+        Case(1, second, _note(1), 2, 2, Verdict.PASS, said.url, said.created),
+    ]
+    with (stub.directory / CASES).open('a') as held:
+        _ = held.write(''.join(f'{c.to_json()}\n' for c in again))
+    scripted = Scripted()
+
+    _ = _calibrate(stub, history, scripted)
+
+    asked = [(_ASKED_ABOUT.findall(r.user)[0], r.system) for r in scripted.asked]
+    own = [system for note, system in asked if note == _note(1)]
+    # Three samples at each of its two heads, none shown a ruling of either.
+    assert len(own) == 6
+    assert not any('ruling 1.' in system or 'ruling 1b.' in system for system in own)
+    assert all('ruling 1b.1' in system for note, system in asked if note != _note(1))
+
+
+def test_a_candidate_that_recovers_as_much_and_makes_more_false_findings_writes_nothing(
+    tmp_path: Path, repository: Path
+) -> None:
+    stub = stub_gate(tmp_path)
+    history = _history(repository, stub, 2)
+    # Under the candidate's words alone, it finds the GPU line of the first note, which a case holds clean.
+    scripted = Scripted(false={_note(1)}, false_when=_BLIND)
+    _ = _calibrate(stub, history, scripted)
+    before = (stub.directory / RECORD).read_text()
+    _ = (stub.directory / gate.PROMPT).write_text(f'{stub.prompt}\n{_BLIND}\n')
+
+    with pytest.raises(Regressed) as refused:
+        _ = _calibrate(stub, history, scripted)
+
+    assert (stub.directory / RECORD).read_text() == before
+    assert refused.value.standing is not None
+    tallies = [refused.value.judgement.tally, refused.value.standing.tally]
+    assert [(t.recovered, t.false_findings) for t in tallies] == [(2, 1), (2, 0)]
+
+
+def test_a_change_to_the_fixed_text_alone_that_does_worse_than_the_records_score_writes_nothing(
+    tmp_path: Path, repository: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stub = stub_gate(tmp_path)
+    history = _history(repository, stub, 2)
+    _ = _calibrate(stub, history, Scripted(blind=_BLIND))
+    before = (stub.directory / RECORD).read_text()
+    # The words the model finds nothing under, in the fixed text above every example.
+    monkeypatch.setattr(examples, 'FRAME', f'{examples.FRAME} {_BLIND}')
+    scripted = Scripted(blind=_BLIND)
+
+    with pytest.raises(Regressed) as refused:
+        _ = _calibrate(stub, history, scripted)
+
+    assert (stub.directory / RECORD).read_text() == before
+    # The record's prompt, canon and model are the checkout's, so the gate is asked once, against the record's score.
+    assert (refused.value.standing, len(scripted.asked)) == (None, 6)
+    assert refused.value.judgement.tally.recovered == 0
+    assert 'compared by counts' in str(refused.value)
+
+
+def test_against_a_history_grown_since_the_record_a_selection_change_is_held_to_its_score_as_rates(
+    tmp_path: Path, repository: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stub = stub_gate(tmp_path)
+    history = _history(repository, stub, 3)
+    grown = (stub.directory / CASES).read_text()
+    _ = (stub.directory / CASES).write_text(''.join(f'{c.to_json()}\n' for c in history.cases if c.pr != 3))
+    _ = _calibrate(stub, history, Scripted())
+    before = (stub.directory / RECORD).read_text()
+    _ = (stub.directory / CASES).write_text(grown)
+    monkeypatch.setattr(examples, 'BUDGET', examples.BUDGET + 1)
+
+    # Two of three recovered: as many as the record's two of two, and a smaller share.
+    with pytest.raises(Regressed) as refused:
+        _ = _calibrate(stub, history, Scripted(missed={_note(3)}))
+
+    assert (stub.directory / RECORD).read_text() == before
+    assert 'compared as rates' in str(refused.value)
+
+
+def test_a_change_to_the_selection_alone_that_does_no_worse_is_recorded(
+    tmp_path: Path, repository: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stub = stub_gate(tmp_path)
+    history = _history(repository, stub, 2)
+    held = _calibrate(stub, history, Scripted())
+    monkeypatch.setattr(examples, 'BUDGET', examples.BUDGET + 1)
+
+    record = _calibrate(stub, history, Scripted())
+
+    assert record.hashes.examples != held.hashes.examples
+    assert stub.record() == record

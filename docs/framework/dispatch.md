@@ -806,17 +806,16 @@ retry starts afresh:
     gates are `enumeration`, for every brief, and `conclusion`, for
     the brief of an issue in `area/cluster`. Their canonical sections
     are read from the dispatcher's checkout, which is the tree the
-    claim runs in, and each gate is shown the brief whole. Their
-    verdicts land in the claim's log. That is where the dispatcher
-    runs the claim, and the brief can still be rewritten before the
-    agent is spawned. A pull request is public, and a brief can name
-    what a public page must not. **A verdict on a brief refuses
-    nothing**, whatever status the gate's calibration earns. That
-    status is measured on pull requests, and no history holds a brief,
-    so it says nothing of how the gate reads one; and the brief is
-    rewritten before the agent is spawned whichever way a verdict
-    reads. No appeal is recorded against a brief, which is rewritten
-    instead.
+    claim runs in, and each gate is shown the brief whole, with no
+    examples (§3). Their verdicts land in the claim's log. That is
+    where the dispatcher runs the claim, and the brief can still be
+    rewritten before the agent is spawned. A pull request is public, and a brief
+    can name what a public page must not. **A verdict on a brief refuses
+    nothing**, whatever status the gate's calibration earns. That status
+    is measured on pull requests, and no history holds a brief, so it
+    says nothing of how the gate reads one; and the brief is rewritten
+    before the agent is spawned whichever way a verdict reads. No appeal
+    is recorded against a brief, which is rewritten instead.
 -   **`dispatch queue <issue> <brief>`** is the claim for the cloud
     queue (§1.4), under the same preconditions: the brief as a
     `## Brief` comment, the record, then `cloud/ready`, taking off the
@@ -861,7 +860,9 @@ retry starts afresh:
     gates' findings go into one comment on the pull request, the only
     thing the command writes. Its three steps keep those gates honest:
     `dispatch gates calibrate <gate>` measures a gate against its
-    history and writes its record; `dispatch gates harvest <pr>...`
+    history, beside the gate its record holds where the two differ,
+    and writes its record where it does no worse;
+    `dispatch gates harvest <pr>...`
     records in each gate's history the places the reviews and rulings on
     those pull requests tag; and `dispatch gates appeal <pr> <report>` writes a
     builder's appeals into the comment of the pull request's head.
@@ -1270,11 +1271,37 @@ operator's at its place, which the operator's keeps out, naming both
 sources. A comment that rules one place two ways rules it neither way,
 and harvest reports it.
 
+**A gate's prompt carries its most relevant cases as examples**, after
+its rule, up to a fixed budget, chosen by a rule that turns on the
+cases and the paths the run is shown alone: the cases whose path shares
+the most leading directories with a file the run is shown, then the
+most recent by when their ruling was written, a finding and a pass in
+turn. An example shows a finding in the place it occurs, which a
+definition alone does not. Each shows its place's lines as the local
+store holds them at the case's head, whether the review found the place
+breaks the rule or held it to the rule, and the reason its comment
+gives, read through the forge, since a case holds no text: the line or
+list item in which the gate's tag bound the case, as harvest binds it.
+A comment that tags nothing gives a finding the line or item that names
+the place closest to it: its own place exactly, then a place that opens
+on its first line, then the one fewest lines from it within the margin.
+Where two are as close, it gives none, since nothing says which is the
+case's. It gives a pass nothing, since a place a review names untagged
+is named for a defect. The budget and the rule are set beside
+each other, in `gates.examples`. `dispatch gates` draws a pull request's
+examples from every case of the gate. **An example is never scored**:
+`calibrate` measures each pull request with examples drawn from every
+other pull request's cases, so no case is scored by a prompt that holds
+it. A brief is asked with none: its verdict blocks nothing, and no
+record measures how a gate reads a brief (§2.1), so nothing would show
+whether examples help it.
+
 **A gate is measured per pull request, against past reviews.**
 `dispatch gates calibrate <gate>` asks the gate about each pull request
-of its history as `dispatch gates` asks it, with its canonical section
-read from the dispatcher's checkout, and scores each pull request
-alone. A finding of the gate recovers a review finding, a case tagged
+of its history as `dispatch gates` asks it, its examples drawn from
+every other pull request's cases, with its canonical section read from
+the dispatcher's checkout, and scores each pull request alone. A
+finding of the gate recovers a review finding, a case tagged
 `[gate:<name>]`, where both name one path at that head and their lines
 lie within the margin, one to one: a model and a reviewer point at one
 defect a line or two apart, and exact lines would score that as a miss
@@ -1312,9 +1339,42 @@ nothing, an API error left after the SDK's retries among the causes,
 measured nothing about what that sample's call showed, so it too writes
 no record, leaves the one already there, and says why.
 
+**A change to a gate is recorded only where it does no worse on the
+whole history.** Where the gate's record measured another prompt,
+canonical text or model than the checkout holds, `calibrate` asks the
+gate as the record holds it beside the gate as the checkout holds it,
+in one run over the whole history, each pull request with the same
+examples, and writes the record only where the candidate recovers no
+fewer review findings and makes no more false findings per pull
+request. Otherwise, it writes nothing, leaves the record as it was, and
+reports both scores. The two are measured together, on the history as
+it stands, rather than the candidate against the score the record holds,
+which was measured on the history as it stood then and by samples of
+their own: two runs of one prompt part by as much as a change to it
+moves the score.
+
+The fixed text every call carries, the form of an example's rows among
+it, and the example selection are code, which only the code of its time
+can ask again, so the gate as the record holds it is asked with them as
+they run now. Where the record measured them otherwise, the candidate
+is also held against the score the record holds, even where the
+prompt, text or model moved too, and the same refusal follows where it
+does worse. Where the history is the one the record measured, the same cases
+and the same counts of review findings and pull requests, that is by
+counts and exact. Where the history has changed since, it is by rates,
+the share of review findings recovered and the false findings per pull
+request. That check is weaker: the two runs are scored on different
+histories, and by samples of their own, so a rate can move with the
+cases added rather than with the change. A gate with no record is
+measured alone, against the bar, and so is one whose record measured
+exactly what the checkout and the code now ask.
+
 The record, `calibration.json`, holds the hashes of the gate's prompt,
-the canonical text and its model id, the hash of the history it
-measured, and the score. A case added
+the canonical text, its model id and the example selection, which is
+the rule that chooses a run's examples and the budget; the gate it
+measured in clear, its `prompt.md`, its canonical text and its model id,
+which the next calibration asks again beside a candidate; the hash of
+the history it measured; and the score. A case added
 stales nothing: it moves the next measurement. Why the gate judged each
 place as it did stays out of the record: `calibrate` prints every case
 to standard output beside its label with what the gate made of it, and
@@ -1325,12 +1385,12 @@ edit to any of them is an edit to the prompt. The status is read off
 the record's score against the bar as it stands, so a moved bar applies
 at once. A gate that blocks stays blocking where its canonical section
 does not read at the head, and then refuses, since it asked nothing. A
-record that measured some other prompt, text or model reads as shadow,
-and the comment says which part changed. A test case holds every record
-against its gate in the tree, so such an edit fails the gate until
-`calibrate` runs again. A builder holds no key and writes no record, so
-a gate lands without one and runs in shadow until the dispatcher
-measures it, in a pull request of its own.
+record that measured some other prompt, text, model or example
+selection reads as shadow, and the comment says which part changed. A
+test case holds every record against its gate in the tree, so such an
+edit fails the gate until `calibrate` runs again. A builder holds no key
+and writes no record, so a gate lands without one and runs in shadow
+until the dispatcher measures it, in a pull request of its own.
 
 **A blocking finding goes back to the builder as a fix cycle before any
 reviewer is commissioned.** The builder fixes it, and the gates run

@@ -116,6 +116,9 @@ class GateMemoryForge(MemoryForge):
     def pull_commits(self, number: int) -> list[str]:
         return [self.requests[number].head]
 
+    def comment_at(self, url: str) -> PullComment | None:
+        return next((c for thread in self.threads.values() for c in thread if c.url == url), None)
+
     def say(self, number: int, body: str, *, mine: bool = True) -> PullComment:
         """A comment on pull request `number`, by this account or, with `mine` false, by another."""
         identity = sum(len(t) for t in self.threads.values()) + 1
