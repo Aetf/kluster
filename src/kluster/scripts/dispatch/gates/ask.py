@@ -57,8 +57,14 @@ from .view import Part
 
 log = logging.getLogger(__name__)
 
-#: How many calls run at once, across every gate of a run.
-PARALLEL = 8
+#: How many calls are in flight at once, across every gate of a run, a call
+#: waiting out the rate limit among them. The key's limits are per minute, in
+#: requests and in input and output tokens, and a calibration sends every call
+#: of a gate's history, each up to `CALL_CAP` tokens, so the bound is a handful
+#: rather than what the machine could send. A call the limit still refuses
+#: waits it out (`model.RATE_LIMIT_WAIT`), so this sets how often a run waits,
+#: not whether its samples answer.
+PARALLEL = 4
 
 #: The most a call's parts may run to, in estimated tokens. Far under a
 #: model's context, so a long change makes more calls rather than one the
