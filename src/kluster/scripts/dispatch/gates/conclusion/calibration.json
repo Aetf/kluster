@@ -1,21 +1,21 @@
 {
-  "cases": "e74a823d47a180f6b9649e762c5135c85b48a41430faca9497687cd945864d02",
-  "false_findings": 3,
-  "false_per_pull_request": 0.375,
-  "findings": 57,
+  "cases": "1221cdc2ca73cb38ad891b103ff8946062d16ccd3da30c6e476ef4705c8ed3bf",
+  "false_findings": 1,
+  "false_per_pull_request": 0.125,
+  "findings": 85,
   "hashes": {
     "canon": "93a2ca01098d27ad191a1fd9256b7563e87506a85d1dbe0f05b9bef61d54e2e4",
     "examples": "9085ee9f0f5574b38b8c2e68ee6e6b056c0d0d3baf1f10868c98a37a824079f1",
     "model": "26f6cf65acbd60862113d9e31ae957c4adf5fb966ae79f33a6fa8ac45e228e41",
-    "prompt": "080e65e5653b659bc6a92fa03e0403159a28c9fc7ea1c9156daa6f0b309b2dbc"
+    "prompt": "ea6ef85a9e412faca183bb3844907af500be291b63b13e65987e00ea3f62da87"
   },
   "measured": {
     "canon": "### The program declares constraints, not conclusions\n\nWhere a runtime mechanism derives an answer \u2014 the scheduler placing a\npod, a volume binding on the node its consumer runs on \u2014 the program\ndeclares the fact the mechanism derives it from: the device a pod\nrequests, the volume it mounts, the egress it needs. It never states the\nanswer. A conclusion written into a declaration is a second statement of\na fact the mechanism already holds. It agrees until the fact moves, and\nthen the program forces the old answer. A pod that requests a GPU is\nscheduled only onto a node that offers one, so nothing restates the\ndevice's node label, and a mover takes its placement from the workload\nthat uses the volume rather than from a copy of that workload's\nrequirements. Where a constraint has to be written explicitly, it is\nbuilt from the declaration that implies it and says which fact it stands\nfor. A conclusion about where something runs belongs in planning\ndocuments and nowhere in the program.\n",
     "model": "claude-haiku-5-5",
-    "prompt": "You are shown a change under review: each file it writes, whole, with what\nit writes marked. Ask one question of what the change writes: does a\npassage, code or prose, state an answer a runtime mechanism derives, such as\nthe node, site or pool something runs on, where the program should declare\nthe fact that answer is derived from?\n\nReport each passage that does, with one sentence saying why, and judge each\nonly against the rule below.\n\nThe rule, as this repository states it:\n\n{canon}\n"
+    "prompt": "Ask one question of what the change writes, in code or in prose: does it\nwrite into the program an answer a runtime mechanism derives, where the\nprogram should declare the fact the mechanism derives it from, or does it\nwrite a constraint that is not built from the declaration implying it?\n\nThe answer is where a pod runs, or what places it there, and a passage\ncan write it without naming a node, a site or a pool. Judge a passage by\nwhat it does, whatever its words. It breaks the rule where it takes one\nof these shapes:\n\n- It writes again, beside a declaration, a value the mechanism already\n  reads from that declaration: a requirement on where a pod runs, or a\n  record of the nodes that offer what it requests, that the pod's own\n  requests or mounts already lead the scheduler to.\n- It places a pod that works on a workload's behalf, such as a mover\n  that backs up, restores or copies the workload's volume, by a copy of\n  the requirements the workload states, rather than by the workload that\n  uses the volume. Every passage of that design is a finding: the code\n  that builds the copy or hands it on, the field or record that keeps\n  it, a check that compares the kept copy with what it was copied from\n  and refuses where they differ, and the docstring or comment that\n  states it as the design.\n- It writes, as a value of the program, something concluded from how\n  things stand today rather than declared on each thing it is a fact of,\n  so that it agrees only until that fact moves.\n- It states where something runs as a bare position, in a title, a\n  headline or a description of the component, where the facts that\n  lead there are what the program declares.\n- It writes a constraint explicitly that is not built from the\n  declaration implying it, or that does not say which fact it stands\n  for.\n\nA copy, in the rule's sense, is placement handed to one pod taken from\nanother's requirements. A passage holds to the rule where it does none\nof the above, and in particular:\n\n- where a workload's own pod states the constraints its component\n  declares, with the holds of what it mounts or requests composed in,\n  and where a field or parameter carries what that pod states: that is\n  the declaration, not a copy;\n- where it says how a mechanism binds a volume or places a pod, which\n  pod's placement a binding follows included, without stating the answer\n  the mechanism reaches;\n- where it refuses a combination of declarations that the mechanism\n  itself, by how it binds or places, would leave no node for: that\n  refusal holds where nothing is copied, and checks no copy;\n- where it gives a placement together with the fact it follows from and\n  the declaration that carries it;\n- where it writes a constraint for a fact no mechanism reads, built from\n  that fact and naming it.\n\nThe reason names the answer the passage writes and the declaration or\nworkload it should come from instead.\n\nThe rule, as this repository states it:\n\n{canon}\n"
   },
   "pull_requests": 8,
-  "recall": 0.2807017543859649,
-  "recovered": 16,
+  "recall": 0.7647058823529411,
+  "recovered": 65,
   "status": "shadow"
 }
