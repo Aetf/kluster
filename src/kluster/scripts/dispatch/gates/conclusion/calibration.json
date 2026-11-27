@@ -1,0 +1,21 @@
+{
+  "cases": "e74a823d47a180f6b9649e762c5135c85b48a41430faca9497687cd945864d02",
+  "false_findings": 3,
+  "false_per_pull_request": 0.375,
+  "findings": 57,
+  "hashes": {
+    "canon": "93a2ca01098d27ad191a1fd9256b7563e87506a85d1dbe0f05b9bef61d54e2e4",
+    "examples": "9085ee9f0f5574b38b8c2e68ee6e6b056c0d0d3baf1f10868c98a37a824079f1",
+    "model": "26f6cf65acbd60862113d9e31ae957c4adf5fb966ae79f33a6fa8ac45e228e41",
+    "prompt": "080e65e5653b659bc6a92fa03e0403159a28c9fc7ea1c9156daa6f0b309b2dbc"
+  },
+  "measured": {
+    "canon": "### The program declares constraints, not conclusions\n\nWhere a runtime mechanism derives an answer \u2014 the scheduler placing a\npod, a volume binding on the node its consumer runs on \u2014 the program\ndeclares the fact the mechanism derives it from: the device a pod\nrequests, the volume it mounts, the egress it needs. It never states the\nanswer. A conclusion written into a declaration is a second statement of\na fact the mechanism already holds. It agrees until the fact moves, and\nthen the program forces the old answer. A pod that requests a GPU is\nscheduled only onto a node that offers one, so nothing restates the\ndevice's node label, and a mover takes its placement from the workload\nthat uses the volume rather than from a copy of that workload's\nrequirements. Where a constraint has to be written explicitly, it is\nbuilt from the declaration that implies it and says which fact it stands\nfor. A conclusion about where something runs belongs in planning\ndocuments and nowhere in the program.\n",
+    "model": "claude-haiku-5-5",
+    "prompt": "You are shown a change under review: each file it writes, whole, with what\nit writes marked. Ask one question of what the change writes: does a\npassage, code or prose, state an answer a runtime mechanism derives, such as\nthe node, site or pool something runs on, where the program should declare\nthe fact that answer is derived from?\n\nReport each passage that does, with one sentence saying why, and judge each\nonly against the rule below.\n\nThe rule, as this repository states it:\n\n{canon}\n"
+  },
+  "pull_requests": 8,
+  "recall": 0.2807017543859649,
+  "recovered": 16,
+  "status": "shadow"
+}
