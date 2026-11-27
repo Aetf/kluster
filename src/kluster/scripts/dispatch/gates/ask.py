@@ -6,12 +6,18 @@ parts of the change the gate is shown (`view`): each file whole with the
 diff inline, and each commit message its trigger takes. Parts go into a call
 in order up to `CALL_CAP`, and a part too long alone is cut into runs of its
 lines (`view.Part.runs`). The reply is held by the API's structured outputs
-to the call's schema (`schema`): every finding a place, one of the paths the
+to the call's schema (`schema`): every item a place, one of the paths the
 call showed and its first and last line at the head, with one sentence
-saying why. A finding that names a line the call did not show is no finding
-(`findings`), so a place is posted only where the model was shown it. A
-reply that does not read, or names a path the call did not show, is a
-sample that answered nothing.
+saying why and then whether the place breaks the rule, so the model gives
+its reason before its verdict. Only an item whose verdict says the place
+breaks the rule is a finding; the rest are set aside as judged clean before
+anything else is made of the reply (`findings`), so a sample that lists a
+place only to say it is clean adds nothing to it, and how many each call's
+samples set aside is counted beside the entries (`Judged.clean`) and logged
+(`log_clean`). A finding that names a line the call did not show is no
+finding, so a place is posted only where the model was shown it. A reply
+that does not read, or names a path the call did not show, is a sample
+that answered nothing.
 
 A finding stands only where it meets the lines the change writes at the
 head (`view.Part.written`), within `calibration.MARGIN`, and the call's
@@ -72,8 +78,8 @@ PARALLEL = 4
 #: shown hold, so most are one call.
 CALL_CAP = 60_000
 
-#: What a reply must be: every finding a place at the head and one sentence why. Each call names the paths
-#: a finding may give (`schema`).
+#: What a reply must be: every item a place at the head, one sentence why, then whether the place breaks the
+#: rule, the verdict after the reason it rests on. Each call names the paths an item may give (`schema`).
 SCHEMA: Mapping[str, object] = {
     'type': 'object',
     'properties': {
@@ -86,8 +92,9 @@ SCHEMA: Mapping[str, object] = {
                     'line': {'type': 'integer'},
                     'end_line': {'type': 'integer'},
                     'why': {'type': 'string'},
+                    'breaks_rule': {'type': 'boolean'},
                 },
-                'required': ['path', 'line', 'end_line', 'why'],
+                'required': ['path', 'line', 'end_line', 'why', 'breaks_rule'],
                 'additionalProperties': False,
             },
         }
@@ -106,9 +113,11 @@ FRAME = (
     "was, with no number and `-`. A path under `:commit/` is the message of one of the change's commits, its "
     'subject line 1. Report a finding only about lines the change writes: a line marked `+`, or, where the '
     'change only removes lines, the line either side of where they stood. A finding far from them is dropped, '
-    'since the change leaves those lines as they were. Report each finding by the path its part names and '
-    'the first and last line numbers it is about, with one sentence saying why. Report no finding where there '
-    'is none.'
+    'since the change leaves those lines as they were. The list holds only places that break the rule: report '
+    'each by the path its part names and the first and last line numbers it is about, then one sentence saying '
+    'why, then `breaks_rule`, true where that reason finds the place breaks the rule and false where it finds '
+    'it does not. An item whose `breaks_rule` is false is no finding and is set aside, so list no place that '
+    'does not break the rule, and report no finding where there is none.'
 )
 
 
@@ -140,6 +149,14 @@ class Finding:
 
 #: A sample's findings in one call; None where the sample answered nothing.
 Found = list[Finding] | None
+
+
+@dataclass(frozen=True)
+class Read:
+    """One sample's reply to a call: its findings, and how many of its items it judged clean, which were set aside."""
+
+    found: Found
+    clean: int
 
 
 def calls(parts: Sequence[Part], cap: int = CALL_CAP) -> list[list[Part]]:
@@ -198,38 +215,42 @@ def harness() -> str:
     return f'{FRAME}\n{dumps(SCHEMA)}\n{dumps(counted)}\n{dumps(shown)}'
 
 
-def findings(reply: Reply, call: Sequence[Part]) -> Found:
+def findings(reply: Reply, call: Sequence[Part]) -> Read:
     """The findings of `reply` to `call`; None where it answered nothing, does not read, or names a path not shown.
 
-    A finding whose first line no part of the call showed at its path is
-    left out, logged; one whose last line runs past the part that shows its
-    first is held to that part's last.
+    An item whose verdict says its place does not break the rule is set
+    aside, counted, before the rest is read: it is no finding, wherever it
+    lies. A finding whose first line no part of the call showed at its path
+    is left out, logged; one whose last line runs past the part that shows
+    its first is held to that part's last.
     """
     if reply.text is None:
         log.warning('a sample answered nothing: %s', reply.unanswered)
-        return None
+        return Read(None, 0)
     try:
         raw = cast(dict[str, Any], json.loads(reply.text))
         rows = [
-            (str(r['path']), int(r['line']), int(r['end_line']), str(r['why']))
+            (str(r['path']), int(r['line']), int(r['end_line']), str(r['why']), r['breaks_rule'])
             for r in cast(list[dict[str, Any]], raw['findings'])
         ]
+        if not all(isinstance(breaks, bool) for *_, breaks in rows):
+            raise TypeError('an item whose breaks_rule is no boolean')
     except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
         log.warning('a sample did not read: %r', exc)
-        return None
+        return Read(None, 0)
     paths = {p.path for p in call}
     strays = sorted({path for path, *_ in rows if path not in paths})
     if strays:
         log.warning('a sample named %s, which the call did not show, and so answered nothing', ', '.join(strays))
-        return None
+        return Read(None, 0)
     out: list[Finding] = []
-    for path, line, end_line, why in rows:
+    for path, line, end_line, why, _ in (r for r in rows if r[4]):
         shown = next((p for p in call if p.path == path and p.shows(line)), None)
         if shown is None:
             log.warning('a sample named %s:%d, which the call did not show; left out', path, line)
             continue
         out.append(Finding(path, line, min(max(end_line, line), shown.last), why))
-    return out
+    return Read(out, sum(1 for r in rows if not r[4]))
 
 
 def written(samples: Sequence[Found], call: Sequence[Part]) -> tuple[list[Found], dict[str, int]]:
@@ -253,6 +274,13 @@ def written(samples: Sequence[Found], call: Sequence[Part]) -> tuple[list[Found]
                 dropped[finding.path] = dropped.get(finding.path, 0) + 1
         kept.append(stands)
     return kept, dropped
+
+
+def log_clean(who: str, clean: Sequence[int]) -> None:
+    """Log, for `who`, how many items its samples judged clean and set aside, at each call that set any aside."""
+    for call, count in enumerate(clean, start=1):
+        if count:
+            log.info('%s: call %d of %d: %d items its samples judged clean; set aside', who, call, len(clean), count)
 
 
 def log_dropped(who: str, dropped: Mapping[str, int]) -> None:
@@ -355,6 +383,8 @@ class Judged:
     unanswered: int
     #: How many findings of its samples stood on no line the change writes, at each path (`written`).
     dropped: Mapping[str, int]
+    #: How many items its samples judged clean and so set aside, at each of its calls in turn (`findings`).
+    clean: tuple[int, ...]
 
 
 def judge(asked: Sequence[Asked], model: Callable[[], Model]) -> list[Judged]:
@@ -362,11 +392,11 @@ def judge(asked: Sequence[Asked], model: Callable[[], Model]) -> list[Judged]:
     cut = [calls(a.parts) for a in asked]
     jobs = [(gate, call) for gate, found in enumerate(cut) for call in range(len(found)) for _ in range(SAMPLES)]
     if not jobs:
-        return [Judged([], 0, {}) for _ in asked]
+        return [Judged([], 0, {}, ()) for _ in asked]
     asking = model()
     log.info('asking %d calls: %d gates, %d samples of each call', len(jobs), len(asked), SAMPLES)
 
-    def ask(job: tuple[int, int]) -> Found:
+    def ask(job: tuple[int, int]) -> Read:
         gate, call = job
         parts = cut[gate][call]
         a = asked[gate]
@@ -374,7 +404,7 @@ def judge(asked: Sequence[Asked], model: Callable[[], Model]) -> list[Judged]:
 
     with ThreadPoolExecutor(max_workers=PARALLEL) as pool:
         replies = list(pool.map(ask, jobs))
-    samples: dict[tuple[int, int], list[Found]] = {}
+    samples: dict[tuple[int, int], list[Read]] = {}
     for job, got in zip(jobs, replies, strict=True):
         samples.setdefault(job, []).append(got)
     judged: list[Judged] = []
@@ -382,10 +412,11 @@ def judge(asked: Sequence[Asked], model: Callable[[], Model]) -> list[Judged]:
         entries: list[Entry] = []
         dropped: dict[str, int] = {}
         for call, parts in enumerate(found):
-            kept, gone = written(samples[(gate, call)], parts)
+            kept, gone = written([got.found for got in samples[(gate, call)]], parts)
             entries += matched(parts, kept)
             for path, count in gone.items():
                 dropped[path] = dropped.get(path, 0) + count
-        unanswered = sum(1 for call in range(len(found)) for got in samples[(gate, call)] if got is None)
-        judged.append(Judged(sorted(entries, key=lambda e: (e.path, e.line, e.end_line)), unanswered, dropped))
+        unanswered = sum(1 for call in range(len(found)) for got in samples[(gate, call)] if got.found is None)
+        clean = tuple(sum(got.clean for got in samples[(gate, call)]) for call in range(len(found)))
+        judged.append(Judged(sorted(entries, key=lambda e: (e.path, e.line, e.end_line)), unanswered, dropped, clean))
     return judged

@@ -6,7 +6,7 @@
  "content": [
   {
    "type": "text",
-   "text": "{\"findings\": [{\"path\": \"docs/notes/placement.md\", \"line\": 1, \"end_line\": 1, \"why\": \"It states where the service runs.\"}]}"
+   "text": "{\"findings\": [{\"path\": \"docs/notes/placement.md\", \"line\": 1, \"end_line\": 1, \"why\": \"It states where the service runs.\", \"breaks_rule\": true}]}"
   }
  ],
  "stop_reason": "end_turn",
