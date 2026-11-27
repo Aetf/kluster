@@ -73,7 +73,7 @@ def test_every_gates_record_measures_the_gate_as_the_tree_holds_it() -> None:
     stale = {g.name: changed for g in gate.discover() if (changed := g.stale(text))}
 
     # A gate named here runs in shadow until `dispatch gates calibrate <name>` measures it again.
-    assert stale == {'narration': ['the canonical text']}
+    assert stale == {}
 
 
 #: A row of a part as the user turn renders it: the line's number, its mark, its text.
