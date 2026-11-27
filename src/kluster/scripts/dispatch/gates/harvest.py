@@ -49,7 +49,10 @@ the one commit of the change whose SHA opens with the one it names, by
 seven characters or more, where the gate is shown that message. A place the
 gate is not shown at that head, or a line its file does not hold there, is
 reported and makes no case, since a gate is never asked about it and so
-could not be measured on it.
+could not be measured on it. So is a place of a file the gate is shown that
+lies on no line the change writes there, within `calibration.MARGIN`
+(`view.Part.writes`): a finding of the gate stands only on those lines
+(`ask.written`), so no run could answer it.
 
 The case is the place and the verdict, with the comment as its source and
 the time the comment was written (`cases`). A comment that rules one place
@@ -60,11 +63,12 @@ keeps out, is reported with both, and harvesting rulings the history
 already reflects writes nothing and reports no ruling.
 Where a review's pull request carries the findings comment of the review's
 head, each case at that head is paired with the gate's entries there, the
-places its samples found, and a place of a file the gate was shown where no
-finding of its run stands near it is one it passed; a disagreement is
-reported, and so is each finding the gate made that the review left
-untagged, which a tag then makes a case. Where it carries none, that is
-reported too: nothing was paired. Every report is a `Note`, by its `Kind`.
+places its samples found, and a place on the lines the change writes
+where no finding of its run stands near it is one it passed, since only
+such a place makes a case to pair; a disagreement is reported, and so is
+each finding the gate made that the review left untagged, which a tag
+then makes a case. Where it carries none, that is reported too: nothing
+was paired. Every report is a `Note`, by its `Kind`.
 """
 
 from __future__ import annotations
@@ -125,6 +129,8 @@ class Kind(enum.StrEnum):
     NO_PLACE = 'no place'
     #: A place the gate is not shown at that head, or a line its file does not hold there.
     NOT_SHOWN = 'not shown'
+    #: A place of a file the gate is shown that lies on no line the change writes there (`view.Part.writes`).
+    UNWRITTEN = 'unwritten'
     #: A place the gate's samples left undecided.
     UNDECIDED = 'undecided'
     #: A place the gate judged otherwise than the ruling.
@@ -180,7 +186,8 @@ def _pair(tagged: Case, gate: str, evidence: Evidence | None, source: str) -> No
     The gate found the place where a finding of its run stands near it
     (`cases.Case.near`), which is how `calibrate` matches them, and otherwise
     passed it, in a record of `comment.VERSION` 2 or later where the gate
-    asked; in an earlier one, whose entries are the items it asked, a place
+    asked, `tagged` being a case harvest made, and so on a line the change
+    writes; in an earlier one, whose entries are the items it asked, a place
     no entry is near was not asked. A place the gate's samples left undecided
     is no verdict to disagree with, and is reported as one.
     """
@@ -353,6 +360,13 @@ def _comment(
                 written=said.created,
                 operator=tagged.operator,
             )
+            if not part.writes(case.line, case.end_line):
+                why = (
+                    f'{case.place} lies on no line the change writes at {at[1][:12]}, so {gate.name} is never asked '
+                    'about it and it makes no case; not appended'
+                )
+                notes.append(Note(Kind.UNWRITTEN, url, why, case.place))
+                continue
             drawn.setdefault(gate.name, []).append(case)
             if at == (pull.number, own):
                 disagreement = _pair(case, gate.name, evidence, url)

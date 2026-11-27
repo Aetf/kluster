@@ -13,11 +13,21 @@ store does not hold refuses the run, naming it, since a fetch brings it in;
 so does a history every head of which is dropped (`Unmeasured`), which
 measured nothing. The gate runs on a pull request where
 its trigger matches a path the change touches, and is asked there as
-`dispatch gates` asks it (`view.parts`, `ask.judge`), with its canonical
+`dispatch gates` asks it (`view.parts`, `ask.judge`), a finding standing
+only on the lines the change writes (`ask.written`), with its canonical
 section read from the checkout the command runs in, which is the tree the
 record's hash of it is held against. Its examples there are drawn from
 every other pull request's cases (`examples`), so no case is scored by a
 prompt that holds it.
+
+A case at a path the gate is shown is measured only where the gate could
+answer it: on a line the change writes at its head, within
+`calibration.MARGIN` (`view.Part.writes`), as `harvest` makes them. A case
+of a pull request the gate runs on at such a path whose place is off those
+lines is left out of the score, the history as it was, and the report
+names it (`Judgement.left_out`). A case at a path the gate is not shown
+counts as it always has: a review finding there is one the gate missed. It
+still serves as an example, as it does for `dispatch gates`.
 
 Each pull request is scored alone (`score`). A finding of the gate, one that
 stands on its samples, recovers a review finding, a case labelled `finding`,
@@ -77,7 +87,7 @@ from pathlib import Path
 
 from ..prcheck import Git, PullUnreadable
 from . import view
-from .ask import Asked, Judged, judge
+from .ask import Asked, Judged, judge, log_dropped
 from .calibration import Calibration, digest
 from .cases import Case
 from .change import change
@@ -243,12 +253,19 @@ class Judgement:
     reviewed: Sequence[Reviewed]
     #: Each pull request and head of the history the forge no longer serves, with its cases, left out.
     dropped: Sequence[tuple[int, str, tuple[Case, ...]]] = ()
+    #: Each case of a pull request the gate ran on, at a path it was shown, whose place lies on no line the change
+    #: writes there, left out.
+    left_out: Sequence[Case] = ()
 
     def report(self) -> str:
         rows = [row for r in self.reviewed for row in r.report()]
         rows += [
             f'#{pr} at {head[:12]}: the forge no longer serves this head, so its {len(cases)} cases are left out'
             for pr, head, cases in self.dropped
+        ]
+        rows += [
+            f'#{case.pr} at {case.head[:12]}: case {case.place} lies on no line the change writes, so it is left out'
+            for case in self.left_out
         ]
         return '\n'.join(rows)
 
@@ -394,14 +411,28 @@ def calibrate(gate: Gate, checkout: Path, model: Callable[[], Model], forge: Gat
             f'the local store holds no commit of {", ".join(missing)}; fetch them, and run the calibration again'
         )
     library = Library(git, forge)
+    # The history as it holds the cases, which the examples are drawn from.
+    recorded = {at: list(held_cases) for at, held_cases in history.items()}
+    left_out: list[Case] = []
     ran: dict[tuple[int, str], list[Asked]] = {}
-    for pr, head in history:
+    for pr, head in recorded:
         changed = change(git, git.merge_base(bases[pr], head), head)
         if not gate.triggered(changed.paths):
             continue
         parts = view.parts(changed, gate.spec.trigger)
+        # A case at a path the gate is shown whose place none of its parts writes; one at a path no part shows
+        # counts as before, a review finding the gate was not shown.
+        off = [
+            c
+            for c in recorded[(pr, head)]
+            if (at := [p for p in parts if p.path == c.path]) and not any(p.writes(c.line, c.end_line) for p in at)
+        ]
+        for case in off:
+            log.warning('#%d: case %s lies on no line the change writes at %s; left out', pr, case.place, head[:12])
+        left_out += off
+        history[(pr, head)] = [c for c in recorded[(pr, head)] if c not in off]
         # Every other pull request's cases, so that no case is scored by a prompt that holds it.
-        others = [c for (other, _), held_cases in history.items() if other != pr for c in held_cases]
+        others = [c for (other, _), held_cases in recorded.items() if other != pr for c in held_cases]
         log.info('drawing the examples of #%d', pr)
         shown = library.prompt(gate.name, others, [p.path for p in parts])
         ran[(pr, head)] = [Asked(gate.system(m.canon, m.prompt), m.model, parts, examples=shown) for m in asking]
@@ -414,6 +445,10 @@ def calibrate(gate: Gate, checkout: Path, model: Callable[[], Model], forge: Gat
     )
     answers = iter(judge([a for at in ran.values() for a in at], model))
     judged = {at: [next(answers) for _ in asked] for at, asked in ran.items()}
+    for (pr, head), answered in judged.items():
+        for which, found in zip((CANDIDATE, STANDING), answered, strict=False):
+            named = f', {which}' if beside is not None else ''
+            log_dropped(f'{gate.name} on #{pr} at {head[:12]}{named}', found.dropped)
     judgements = [
         Judgement(
             [
@@ -421,6 +456,7 @@ def calibrate(gate: Gate, checkout: Path, model: Callable[[], Model], forge: Gat
                 for (pr, head), held_cases in history.items()
             ],
             dropped,
+            left_out,
         )
         for n in range(len(asking))
     ]

@@ -32,6 +32,7 @@ from gate_stub import (
 )
 
 from kluster.scripts.dispatch.gates import run
+from kluster.scripts.dispatch.gates.calibration import MARGIN
 from kluster.scripts.dispatch.gates.cases import Case
 from kluster.scripts.dispatch.gates.change import message_path
 from kluster.scripts.dispatch.gates.gate import CASES, Gate
@@ -185,6 +186,33 @@ def test_a_place_the_gate_is_not_shown_at_the_reviewed_head_makes_no_case(
 
     assert stub.cases() == []
     assert (Kind.NOT_SHOWN, path) in _kinds(harvested.notes)
+
+
+def test_a_tag_outside_the_margin_of_every_line_the_change_writes_makes_no_case_and_is_reported(
+    tmp_path: Path, repository: Path
+) -> None:
+    lines = [f'The queue holds item {n}.' for n in range(1, 13)]
+    base = commit(repository, {RULE_DOCUMENT: RULE, OTHER: '\n'.join(lines) + '\n'})
+    # Line 6 rewritten: lines within the margin of it make cases, and line 6 + MARGIN + 1 does not.
+    head = commit(
+        repository, {OTHER: '\n'.join([*lines[:5], 'The queue runs on the homelab node.', *lines[6:]]) + '\n'}
+    )
+    forge = GateMemoryForge()
+    pull_request(forge, base, head)
+    far = 6 + MARGIN + 1
+    _ = forge.say(
+        PULL,
+        f'## Review (combined)\n\nRead at {head[:12]}.\n\n'
+        f'- `{OTHER}:6` states a placement. [gate:stub]\n'
+        f'- `{OTHER}:{6 + MARGIN}` holds an item. [gate:stub clean]\n'
+        f'- `{OTHER}:{far}` holds an item. [gate:stub clean]\n',
+    )
+    stub = stub_gate(tmp_path)
+
+    harvested = harvest(forge, HarvestGit(repository), [PULL], [stub])
+
+    assert [(c.line, c.verdict) for c in stub.cases()] == [(6, Verdict.FINDING), (6 + MARGIN, Verdict.PASS)]
+    assert (Kind.UNWRITTEN, f'{OTHER}:{far}') in _kinds(harvested.notes)
 
 
 def test_a_tag_in_an_indented_paragraph_binds_and_one_naming_no_place_is_reported(

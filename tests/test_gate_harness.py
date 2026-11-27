@@ -6,9 +6,9 @@ third in one, and the second in none, so the majority, the evidence of
 every sample and the places no sample found all show. The client is the
 SDK's own, given a transport that serves those replies, so no case here
 reaches the network or holds a key. What a gate is shown of a change, how a
-long one is cut into calls, how the samples' findings are matched into
-places, and which of its cases a gate's prompt carries as examples are
-cased on their own beside it.
+long one is cut into calls, which lines a finding may stand on, how the
+samples' findings are matched into places, and which of its cases a gate's
+prompt carries as examples are cased on their own beside it.
 """
 
 from __future__ import annotations
@@ -19,6 +19,7 @@ import threading
 from dataclasses import dataclass, field, replace
 from itertools import permutations
 from pathlib import Path
+from typing import Any
 
 import pytest
 from gate_stub import (
@@ -43,7 +44,7 @@ from kluster.scripts.dispatch.gates.cases import Case
 from kluster.scripts.dispatch.gates.change import change, message_path
 from kluster.scripts.dispatch.gates.gate import CASES, RECORD, Gate
 from kluster.scripts.dispatch.gates.model import KeyMissing, Model, Reply, Request
-from kluster.scripts.dispatch.gates.verdict import Answer, Verdict
+from kluster.scripts.dispatch.gates.verdict import SAMPLES, Answer, Verdict
 from kluster.scripts.dispatch.prcheck import Git, Hunk
 
 NOTE = 'docs/notes/placement.md'
@@ -534,6 +535,88 @@ def test_a_part_past_a_calls_bound_is_cut_into_runs_and_the_runs_into_calls() ->
     assert all(f'lines {r.first}–{r.last}' in r.render() for r in runs[:-1])
     # At every bound, no run but the last ends on the removed line.
     assert all(run.rows[-1].number is not None for bound in range(20, long.size()) for run in long.runs(bound))
+
+
+def _twelve(name: str) -> str:
+    return ''.join(f'{name} line {n}.\n' for n in range(1, 13))
+
+
+def _writes(repository: Path) -> tuple[str, list[view.Part]]:
+    """The head of a change, and what a gate whose trigger takes every path is shown of it.
+
+    The change rewrites line 6 of one file, deletes line 6 of another and
+    the last line of a third, adds a fourth, and its one commit's message
+    runs to twelve lines.
+    """
+    base = commit(
+        repository,
+        {
+            'docs/modified.md': _twelve('Modified'),
+            'docs/removed.md': _twelve('Removed'),
+            'docs/trailing.md': _twelve('Trailing'),
+        },
+    )
+    removed = _twelve('Removed').splitlines(keepends=True)
+    head = commit(
+        repository,
+        {
+            'docs/modified.md': _twelve('Modified').replace('Modified line 6.', 'Line 6, rewritten.'),
+            'docs/removed.md': ''.join(removed[:5] + removed[6:]),
+            'docs/trailing.md': ''.join(_twelve('Trailing').splitlines(keepends=True)[:11]),
+            'docs/added.md': _twelve('Added'),
+        },
+        'docs: notes\n\n' + ''.join(f'Body line {n}.\n' for n in range(3, 13)),
+    )
+    return head, view.parts(change(Git(repository), base, head), ('**',))
+
+
+def _asked(parts: list[view.Part], replies: Recorded) -> ask.Judged:
+    (judged,) = ask.judge([ask.Asked('You are a stub.', 'claude-haiku-5-5', parts)], replies.model)
+    return judged
+
+
+@pytest.mark.parametrize(
+    ('path', 'kept', 'dropped'),
+    [
+        # Line 6 rewritten: the margin either side of it, and nothing beyond.
+        pytest.param('docs/modified.md', [6 - MARGIN, 6 + MARGIN], [6 - MARGIN - 1, 6 + MARGIN + 1], id='modified'),
+        # Old line 6 removed, from between lines 5 and 6 at the head: either side of where it stood.
+        pytest.param('docs/removed.md', [5 - MARGIN, 6 + MARGIN], [5 - MARGIN - 1, 6 + MARGIN + 1], id='deletion'),
+        # The last line removed, after line 11, the last at the head: only the line ahead of it is left to name.
+        pytest.param('docs/trailing.md', [11 - MARGIN, 11], [11 - MARGIN - 1], id='trailing deletion'),
+        pytest.param('docs/added.md', [1, 12], [], id='added'),
+        pytest.param(':commit', [1, 12], [], id='commit message'),
+    ],
+)
+def test_a_finding_stands_only_within_the_margin_of_a_line_the_change_writes(
+    repository: Path, path: str, kept: list[int], dropped: list[int]
+) -> None:
+    head, parts = _writes(repository)
+    path = message_path(head) if path == ':commit' else path
+    said: list[dict[str, object]] = [
+        {'path': path, 'line': n, 'end_line': n, 'why': f'at {n}'} for n in sorted(kept + dropped)
+    ]
+
+    judged = _asked(parts, Recorded([reply(said)]))
+
+    # Every sample found every line asked, so each line kept is a finding of its own on every sample.
+    assert [(e.path, e.line, e.end_line, e.finding) for e in judged.entries] == [(path, n, n, True) for n in kept]
+    assert judged.dropped == ({path: SAMPLES * len(dropped)} if dropped else {})
+
+
+def test_findings_on_lines_the_change_does_not_write_are_dropped_before_the_samples_are_matched(
+    repository: Path,
+) -> None:
+    _, parts = _writes(repository)
+
+    def at(line: int) -> dict[str, Any]:
+        return reply([{'path': 'docs/modified.md', 'line': line, 'end_line': line, 'why': f'at {line}'}])
+
+    # Two samples agree only on a line past the margin of the rewritten line 6; the third finds a line within it,
+    # within the margin of theirs, which would join them into one place standing on all three.
+    judged = _asked(parts, Recorded([at(6 + MARGIN + 1), at(6 + MARGIN + 1), at(6 + MARGIN - 1)]))
+
+    assert [(e.line, e.end_line, e.finding) for e in judged.entries] == [(6 + MARGIN - 1, 6 + MARGIN - 1, False)]
 
 
 def test_a_finding_at_a_line_the_call_did_not_show_is_left_out_and_one_running_past_it_is_held_to_it() -> None:
