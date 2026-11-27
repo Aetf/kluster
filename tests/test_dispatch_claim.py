@@ -84,9 +84,15 @@ def _blocking(tmp_path: Path) -> Gate:
     copy = tmp_path / 'enumeration'
     _ = shutil.copytree(Path(enumeration.__file__).parent, copy, ignore=shutil.ignore_patterns('__pycache__'))
     gate = Gate.load(copy, enumeration.GATE)
-    held = gate.hashes(gate.canon(_checkout).text)
+    canon = gate.canon(_checkout).text
     measured = Calibration(
-        held, 'unread here', pull_requests=PULL_REQUESTS, findings=FINDINGS, recovered=FINDINGS, false_findings=0
+        gate.hashes(canon),
+        gate.measured(canon),
+        'unread here',
+        pull_requests=PULL_REQUESTS,
+        findings=FINDINGS,
+        recovered=FINDINGS,
+        false_findings=0,
     )
     _ = (copy / RECORD).write_text(measured.to_json())
     assert gate.record() == measured

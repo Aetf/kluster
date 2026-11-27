@@ -19,6 +19,7 @@ from . import calibration
 from .ask import harness
 from .cases import Case
 from .cases import load as load_cases
+from .examples import selection
 
 #: The model a gate is asked on unless it names another: the cheapest that
 #: meets a gate's calibration bar is the one it stays on (dispatch.md §3).
@@ -96,17 +97,23 @@ class Gate:
     def prompt(self) -> str:
         return (self.directory / PROMPT).read_text()
 
-    def system(self, canon: str) -> str:
-        """The prompt with the canonical section's text in its place."""
-        return self.prompt.replace(PLACEHOLDER, canon)
+    def system(self, canon: str, prompt: str | None = None) -> str:
+        """The prompt, `prompt.md` unless `prompt` is another, with the canonical section's text in its place."""
+        return (self.prompt if prompt is None else prompt).replace(PLACEHOLDER, canon)
 
     def hashes(self, canon: str) -> calibration.Hashes:
         """What a calibration of this gate is a measurement of, with `canon` as the canonical text.
 
         The prompt is `prompt.md` with the harness's own fixed text after it
-        (`ask.harness`): both are what the model is asked.
+        (`ask.harness`): both are what the model is asked. The example
+        selection is the rule that chooses the examples the prompt carries,
+        and the budget (`examples.selection`).
         """
-        return calibration.Hashes.of(prompt=f'{self.prompt}\n{harness()}', canon=canon, model=self.spec.model)
+        return hashes_of(self.measured(canon))
+
+    def measured(self, canon: str) -> calibration.Measured:
+        """The gate as a record holds it in clear, with `canon` as the canonical text."""
+        return calibration.Measured(prompt=self.prompt, canon=canon, model=self.spec.model)
 
     def triggered(self, paths: Collection[str]) -> bool:
         owned = [OwnedPath.parse(pattern) for pattern in self.spec.trigger]
@@ -141,6 +148,18 @@ class Gate:
     def cases(self) -> list[Case]:
         path = self.directory / CASES
         return load_cases(path) if path.is_file() else []
+
+
+def hashes_of(measured: calibration.Measured) -> calibration.Hashes:
+    """The hashes of `measured` as this code asks it: its `prompt.md` with the harness after it, and today's selection.
+
+    A record whose hashes differ from these where its `measured` is the
+    same was measured under another harness or example selection, which
+    only the code of its time could ask again (`calibrate`).
+    """
+    return calibration.Hashes.of(
+        prompt=f'{measured.prompt}\n{harness()}', canon=measured.canon, model=measured.model, examples=selection()
+    )
 
 
 def discover(package: Path = PACKAGE, module: str = __name__.rpartition('.')[0]) -> list[Gate]:

@@ -117,11 +117,18 @@ def build_parser() -> argparse.ArgumentParser:
     _ = running.add_argument('pr', type=int)
     calibrating = steps.add_parser(
         'calibrate',
-        help='measure a gate against its history and write its record, or refuse where the run measured too little',
+        help=(
+            'measure a gate against its history and write its record, or refuse where the run measured too little '
+            'or the gate did worse than its record'
+        ),
         description=(
-            'Ask a gate about every pull request of its history, print each case with what the gate made of it and '
-            'each place a sample found with its reason, and write its calibration record; a run in which a sample '
-            'answered nothing, or that made a finding no case confirms, writes none and refuses (dispatch.md §3).'
+            'Ask a gate about every pull request of its history, with examples drawn from every other pull '
+            "request's cases, print each case with what the gate made of it and each place a sample found with its "
+            'reason, and write its calibration record. Where the record measured another prompt, canonical text or '
+            'model, that gate is asked beside it in the same run; where it measured another harness or example '
+            "selection, the record's score stands in for it; and the record is written only where the gate as the "
+            'checkout holds it does no worse. A run in which a sample answered nothing, that made a finding no case '
+            'confirms, or that did worse writes none and refuses (dispatch.md §3).'
         ),
     )
     _ = calibrating.add_argument('gate', help='the gate, by the name of its directory with - for _')
@@ -196,11 +203,11 @@ def _gate_step(args: argparse.Namespace) -> int:
         root = workstation.repo_root()
         try:
             calibrated = calibrate.calibrate(gate.named(args.gate), root, run.messages, GateGh(), prcheck.Git(root))
-        except (calibrate.Unanswered, calibrate.Unconfirmed, calibrate.Unmeasured) as exc:
-            print(exc.judgement.report())
+        except calibrate.Refusal as exc:
+            print(exc.report())
             log.error('refused: %s', exc)
             return REFUSED
-        print(calibrated.judgement.report())
+        print(calibrated.report())
         log.info('%s: %s', args.gate, calibrated.record.status)
         for shortfall in calibrated.record.shortfalls():
             log.warning('%s: %s', args.gate, shortfall)

@@ -1,0 +1,99 @@
+## Review (combined)
+
+Head reviewed: `a107653d79a68e579aa97bbf1a0538c259013f9e`. Correctness and style, against the brief, the design (kluster-ops#900, comment 7064458517), the operator source at v0.74.0, and the canon.
+
+**Verdict: no blocking findings. Approve once the four should-fix findings are addressed.** The mechanism is sound at v0.74.0, the tripwire's anchor is a real reconcile signal, and the first apply cannot roll a pod that matches its resource. One coverage gap the design does not name is real. I reproduced it by mutation (S1).
+
+### Blocking
+
+None.
+
+### Should-fix
+
+**S1. The chart-side coverage case misses a second gap, besides the one the design names.** `tests/test_operator_updates.py:412`
+
+`rendering` is the set of keys whose record has `<key>.spec.managedMetadata.annotations`. `update_crds` writes that path only for the maps listed in `SPEC_PASS_THROUGH` (`src/kluster/scripts/update_crds/values.py:76-85`), a hand-written list that equals `CHART_RESOURCES`. So the check is only as complete as a second hand list.
+
+Failure scenario, reproduced: I added `'vmauth': {'enabled': True}` to `_stack_values`, and both coverage cases stayed **green**. `VMAuth` has `spec.managedMetadata` in the bundle and renders a Deployment, so the chart would install a VM resource with no mark. The same holds for `vmcluster`, `vlsingle`, `vlagent`, `vtsingle` and the others.
+
+The PR's live check (§7 item 1) runs once, on this merge, so a later PR that turns one of these on has no backstop. The test's docstring ("names `<key>.spec.managedMetadata.annotations` for every key the chart renders such a resource from") is false for those keys.
+
+The rewrite I would accept is by definition, from the record alone. A top-level key whose record has `<key>.spec` is a resource the chart renders from that key's spec. Today exactly the operator keys have that path: `alertmanager`, `vlagent`, `vlcluster`, `vldistributed`, `vlsingle`, `vmagent`, `vmalert`, `vmauth`, `vmcluster`, `vmdistributed`, `vmsingle`, `vtcluster`, `vtsingle`.
+
+```python
+resources = {key for key in tops if f'{key}.spec' in paths}           # what the chart renders a spec from
+assert resources & configured <= marked                               # every configured one is marked
+assert marked <= {key for key in resources if f'{key}.spec.managedMetadata.annotations' in paths}
+```
+
+With this, enabling `vmauth` turns the case red. Marking it then forces a `SPEC_PASS_THROUGH` entry, so the record carries its `managedMetadata` path. If a kind without `managedMetadata` is ever turned on, the case asks for a decision, which is the safe direction. The other acceptable fix is to name this residual next to the design's one: in the module docstring, the test docstring and the PR body.
+
+**S2. The removal list does not name every place the layer reaches.** `src/kluster/components/monitoring/operator_updates.py:30-46`
+
+The docstring lists the module, its two call sites, the tripwire module, the controller manager's pin and container, and the two docs entries. Removing exactly those leaves the following behind:
+
+- the module-docstring paragraph at `src/kluster/components/monitoring/__init__.py:164-167` and the sentence in `stack_values`'s docstring at `:496-498`, both naming `operator_updates`;
+- `tests/pinned_image.py:8-10`, which names `tests/test_operator_updates.py`;
+- `docs/operations.md:176` and the `renovate.json5:761` note, which name `kube-controller-manager` as an entry of `CONTROL_PLANE_PINS`;
+- `ApiServer.alongside` and `running`'s `controllers` parameter (`tests/control_plane.py:22-30`, `:145`, `:225-235`, `:286-293`). The list does not say whether these go with the layer or stay as harness capability.
+
+The workaround rule asks that removal be "deleting that one layer". A list of members goes stale the way S1's list did.
+
+Rewrite I would accept: state it by definition, then give today's instances. For example: "Removing the layer deletes everything that exists for it: every mention of `operator_updates`, `RENDERED_FROM` or `tests/test_operator_updates.py`, and the controller manager's pin with every procedure that moves it. Today that is …", with the list above. Also say whether `alongside` and `controllers` stay.
+
+The code half of the claim is true. Deleting the module and the two call lines restores the values and the spec byte for byte: `test_the_layer_adds_the_mark_and_nothing_else` shows it, and the mark is added after Grafana's datasource digest, so neither adding nor removing the layer rolls Grafana.
+
+**S3. `tests/pinned_image.py:8-10` states something false today, and one line is not wrapped.**
+
+The paragraph says an image nothing deploys is pinned "beside what keeps the pin on the fleet's", then adds "So is an image the deployment pulls through a chart's default … today the VictoriaMetrics operator's". Nothing keeps `OPERATOR` on the fleet's: that is kluster-ops#909, deferred.
+
+The pin is correct today. `charts/victoria-metrics-operator/Chart.yaml` in 0.91.2 has `appVersion: v0.74.0`, and the registry serves `sha256:c4fde419…` for that tag. But the sentence claims a guard that does not exist.
+
+Rewrite I would accept: "An image the deployment pulls through a chart's default, with no pin of its own in `Pulumi.yaml`, is pinned in the module whose cases run it: today the VictoriaMetrics operator's, in `tests/test_operator_updates.py`, which nothing yet holds to the chart's release (kluster-ops#909)." Wrap line 10 to the paragraph's width (it is about 130 columns; the lines around it are about 78).
+
+**S4. Two counts point at members that are not in view** (style/README.md, "A count in a comment is a claim about a list the reader cannot see").
+
+- `src/kluster/components/monitoring/__init__.py:164`: "the chart's four and the history store". The four are `CHART_RESOURCES`, in another module, and the count goes false when that tuple grows. Accept: "Each VM resource, the chart's (`operator_updates.CHART_RESOURCES`) and the history store, carries …".
+- `tests/test_operator_updates.py:88-90`: "behind the pulls of four images" with `4 * pinned_image.PULL_TIMEOUT`. The images are listed in `tests/control_plane.py` and here. Accept: derive the factor, `(len(CONTROL_PLANE_PINS) + 1) * pinned_image.PULL_TIMEOUT`, and say "the control plane's pins and the operator's".
+
+### Notes
+
+**N1. The history store's mark leaves out the operator's own configuration.** `src/kluster/components/monitoring/__init__.py:916`
+
+The design specifies the history mark as its spec plus the chart. The operator that renders it is also configured from the stack values under `victoria-metrics-operator`: today `crds`, `admissionWebhooks` and `resources`, none of which changes rendering. A future `env` default there (`VM_VMSINGLEDEFAULT_*` and the like) would change what the history store renders without moving its mark. If that dropped a field, the defect returns for that one resource.
+
+Cheap fix: add the values under `victoria-metrics-operator` to the history spec's digest input. Or name it as a residual. Nothing is affected today.
+
+**N2. The pin tie the brief asked for is deferred.** kluster-ops#909 has a closing condition. Until it lands, a chart bump that moves the operator leaves the tripwire running v0.74.0, so case 1, the removal condition, is observed on the wrong release. With S3 fixed, the prose stops claiming otherwise.
+
+**N3. Scope.** `docs/operations.md`, `renovate.json5` and `tests/pinned_image.py` are outside the brief's owned paths. The design §7 says to stop and report such a file. None of them is serialized, and the dispatcher's brief asks for these three changes to be reviewed. The changes to `operations.md` and `renovate.json5` are correct: the test that holds the pins iterates the dict, so it covers the new entry, and the `kube-controller-manager:v1.36.3` digest matches the registry. `pinned_image.py` is S3.
+
+**N4. Verified, no finding.**
+
+- **The digest.**
+  - It is stable across processes: identical marks under `PYTHONHASHSEED` 1, 2 and 3, from the real chart pin.
+  - The spelling is fixed: `json.dumps(sort_keys=True)`, and anything that is not JSON raises.
+  - `helm template` of chart 0.91.2 with the stack values renders `VMAgent`, `VMAlert`, `VMAlertmanager` and `VMSingle` carrying the mark. The chart never touches `managedMetadata`.
+  - Today no other VM resource kind that carries `managedMetadata` renders, so the residual the design names is empty.
+- **Where it lands.**
+  - In `deploy.go:65-78` and `statefulset.go:140-153`, `metaChanged || specDiff` leads to `existingObj.Spec = newObj.Spec` and an `Update`.
+  - VMAgent (`vmagent.go:295`), VMAlert (`vmalert.go:185`) and VMSingle (`vmsingle.go:158`) take `reconcile.Deployment`. VMAlertmanager (`alertmanager.go:99`) takes `reconcile.StatefulSet`.
+- **The live consequence.**
+  - `PodAnnotations()` reads only `podMetadata` on all four kinds, so the mark reaches no pod template.
+  - Both reconcilers merge the live template annotations back in, which keeps `kubectl rollout restart`.
+  - VMAlertmanager's `volumeClaimTemplates` take `claimTemplate.Annotations`, not `FinalAnnotations`, so `isSTSRecreateRequired` does not fire.
+  - VMSingle's PVC does receive the mark (`vmsingle.go:65`), but `modifyPVC` makes it a metadata update only.
+  - A pod rolls on the first apply only where its template diverged from its resource, which is the repair the PR's live check names.
+- **The anchor.**
+  - `controllers.go:322-363` writes `operational` together with `observedGeneration`, in a `defer`, after `cb()` succeeds on that generation's object.
+  - `until` asserts only when its monotonic bound expires.
+  - The `VMAlertmanager` cases take about 16 seconds for two reconciles, against a `READY_TIMEOUT` of 60 seconds per wait.
+- **Mutations.**
+  - With the two call sites reverted, both coverage cases are red.
+  - With the digest replaced by a constant, the detour is red on both kinds.
+  - Case 1 asserts the upstream defect itself and goes red only when the operator changes, which is the removal condition, so it is a tripwire and not a change-detector.
+- **Container hygiene.** Every container is created with `--rm`, the label, `--timeout` and `LOG_TO_FILE`. The containers that share the server's network are removed before `etcd`. No container or volume was left after three runs.
+- **Gate.** `typecheck` exit 0. The three modules: 265 passed, none skipped. `ruff check`, `ruff format --check` and `lint-imports` (6 kept) are clean. `ltex-cli-plus` on the three touched docs reports 0 findings, with the configuration control at 0 findings with the word lists against 45 with `{}`.
+
+**Naming.** `marked_spec` and `marked_values` follow the participle form of `memory.merged`. `operator_updates` beside `operator_objects` reads as the operator's updates, which is what the layer makes whole. No change asked.
+
