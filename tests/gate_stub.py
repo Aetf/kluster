@@ -202,13 +202,18 @@ RATE_LIMITED: dict[str, Any] = {
 
 
 def reply(findings: list[dict[str, object]]) -> dict[str, Any]:
-    """A Messages API body whose text is a gate's reply holding `findings`."""
+    """A Messages API body whose text is a gate's reply holding `findings`.
+
+    The schema requires each item's verdict, so an item that gives none is
+    sent as one that judges its place to break the rule.
+    """
+    items = [{'breaks_rule': True, **item} for item in findings]
     return {
         'id': 'msg_stub',
         'type': 'message',
         'role': 'assistant',
         'model': 'claude-haiku-5-5',
-        'content': [{'type': 'text', 'text': json.dumps({'findings': findings})}],
+        'content': [{'type': 'text', 'text': json.dumps({'findings': items})}],
         'stop_reason': 'end_turn',
         'stop_sequence': None,
         'usage': {'input_tokens': 412, 'output_tokens': 96},

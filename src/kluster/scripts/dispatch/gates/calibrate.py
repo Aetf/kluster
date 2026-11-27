@@ -13,7 +13,8 @@ store does not hold refuses the run, naming it, since a fetch brings it in;
 so does a history every head of which is dropped (`Unmeasured`), which
 measured nothing. The gate runs on a pull request where
 its trigger matches a path the change touches, and is asked there as
-`dispatch gates` asks it (`view.parts`, `ask.judge`), a finding standing
+`dispatch gates` asks it (`view.parts`, `ask.judge`), an item its samples
+judged clean set aside and logged (`ask.findings`), a finding standing
 only on the lines the change writes (`ask.written`), with its canonical
 section read from the checkout the command runs in, which is the tree the
 record's hash of it is held against. Its examples there are drawn from
@@ -87,7 +88,7 @@ from pathlib import Path
 
 from ..prcheck import Git, PullUnreadable
 from . import view
-from .ask import Asked, Judged, judge, log_dropped
+from .ask import Asked, Judged, judge, log_clean, log_dropped
 from .calibration import Calibration, digest
 from .cases import Case
 from .change import change
@@ -448,7 +449,9 @@ def calibrate(gate: Gate, checkout: Path, model: Callable[[], Model], forge: Gat
     for (pr, head), answered in judged.items():
         for which, found in zip((CANDIDATE, STANDING), answered, strict=False):
             named = f', {which}' if beside is not None else ''
-            log_dropped(f'{gate.name} on #{pr} at {head[:12]}{named}', found.dropped)
+            who = f'{gate.name} on #{pr} at {head[:12]}{named}'
+            log_clean(who, found.clean)
+            log_dropped(who, found.dropped)
     judgements = [
         Judgement(
             [

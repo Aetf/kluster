@@ -432,7 +432,7 @@ class EveryLine:
         with self._lock:
             self.calls += 1
         shown = re.findall(r'^ *(\d+) \+ ', request.user, re.M)
-        found = [{'path': NOTE, 'line': int(n), 'end_line': int(n), 'why': 'f'} for n in shown]
+        found = [{'path': NOTE, 'line': int(n), 'end_line': int(n), 'why': 'f', 'breaks_rule': True} for n in shown]
         return Reply(json.dumps({'findings': found}))
 
 
@@ -664,19 +664,46 @@ def test_findings_on_lines_the_change_does_not_write_are_dropped_before_the_samp
     assert [(e.line, e.end_line, e.finding) for e in judged.entries] == [(6 + MARGIN - 1, 6 + MARGIN - 1, False)]
 
 
+def test_an_item_its_sample_judged_clean_is_set_aside_and_one_it_judged_to_break_the_rule_stands(
+    repository: Path,
+) -> None:
+    _, parts = _writes(repository)
+    said: list[dict[str, object]] = [
+        {'path': 'docs/modified.md', 'line': 6, 'end_line': 6, 'why': 'Not a count; no finding.', 'breaks_rule': False},
+        {'path': 'docs/added.md', 'line': 3, 'end_line': 3, 'why': 'It counts the members.', 'breaks_rule': True},
+    ]
+
+    judged = _asked(parts, Recorded([reply(said)]))
+
+    assert [(e.path, e.line, e.end_line, e.finding) for e in judged.entries] == [('docs/added.md', 3, 3, True)]
+    # The one call's samples each set the clean item aside.
+    assert judged.clean == (SAMPLES,)
+
+
+def test_two_samples_that_agree_only_on_a_place_they_judged_clean_make_no_place(repository: Path) -> None:
+    _, parts = _writes(repository)
+
+    def at(breaks: bool) -> dict[str, Any]:
+        return reply([{'path': 'docs/modified.md', 'line': 6, 'end_line': 6, 'why': 'at 6', 'breaks_rule': breaks}])
+
+    judged = _asked(parts, Recorded([at(False), at(False), reply([])]))
+
+    assert judged.entries == []
+
+
 def test_a_finding_at_a_line_the_call_did_not_show_is_left_out_and_one_running_past_it_is_held_to_it() -> None:
     call = [_part('docs/a.md', 3)]
     said = [
-        {'path': 'docs/a.md', 'line': 2, 'end_line': 9, 'why': 'runs past'},
-        {'path': 'docs/a.md', 'line': 7, 'end_line': 7, 'why': 'not shown'},
+        {'path': 'docs/a.md', 'line': 2, 'end_line': 9, 'why': 'runs past', 'breaks_rule': True},
+        {'path': 'docs/a.md', 'line': 7, 'end_line': 7, 'why': 'not shown', 'breaks_rule': True},
     ]
-    stray = [*said, {'path': 'src/x.py', 'line': 1, 'end_line': 1, 'why': 'no such part'}]
+    stray = [*said, {'path': 'src/x.py', 'line': 1, 'end_line': 1, 'why': 'no such part', 'breaks_rule': True}]
 
     found = ask.findings(Reply(json.dumps({'findings': said})), call)
 
-    assert found == [Finding('docs/a.md', 2, 3, 'runs past')]
+    assert found.found == [Finding('docs/a.md', 2, 3, 'runs past')]
     # A path the call did not show fails the schema, so the sample answered nothing rather than passed.
-    assert ask.findings(Reply(json.dumps({'findings': stray})), call) is None
+    assert ask.findings(Reply(json.dumps({'findings': stray})), call).found is None
 
 
 def test_samples_findings_within_the_margin_name_one_place_and_a_finding_stands_on_two() -> None:

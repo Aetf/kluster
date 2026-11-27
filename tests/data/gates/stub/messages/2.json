@@ -6,7 +6,7 @@
  "content": [
   {
    "type": "text",
-   "text": "{\"findings\": [{\"path\": \"docs/notes/placement.md\", \"line\": 1, \"end_line\": 1, \"why\": \"It names the node the cache runs on.\"}, {\"path\": \"docs/notes/placement.md\", \"line\": 3, \"end_line\": 3, \"why\": \"It states how long entries stay, which is no placement but reads as one.\"}]}"
+   "text": "{\"findings\": [{\"path\": \"docs/notes/placement.md\", \"line\": 1, \"end_line\": 1, \"why\": \"It names the node the cache runs on.\", \"breaks_rule\": true}, {\"path\": \"docs/notes/placement.md\", \"line\": 3, \"end_line\": 3, \"why\": \"It states how long entries stay, which is no placement but reads as one.\", \"breaks_rule\": true}]}"
   }
  ],
  "stop_reason": "end_turn",

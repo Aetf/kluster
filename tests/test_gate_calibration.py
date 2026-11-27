@@ -18,6 +18,7 @@ script, finding each line that names a node, except where told otherwise.
 from __future__ import annotations
 
 import json
+import logging
 import math
 import re
 import sys
@@ -58,7 +59,7 @@ from kluster.scripts.dispatch.gates.forge import GateGh
 from kluster.scripts.dispatch.gates.gate import CASES, RECORD, Gate
 from kluster.scripts.dispatch.gates.harvest import HarvestGit, harvest
 from kluster.scripts.dispatch.gates.model import Model, Reply, Request
-from kluster.scripts.dispatch.gates.verdict import Answer, Verdict
+from kluster.scripts.dispatch.gates.verdict import SAMPLES, Answer, Verdict
 from kluster.scripts.dispatch.prcheck import Git, PullRequest, PullUnreadable
 
 
@@ -87,6 +88,8 @@ class Scripted:
     false: Collection[str] = ()
     #: Words of a line it finds wherever it is shown.
     stray: str | None = None
+    #: Words of a line it lists wherever it is shown, judging its place clean.
+    clean: str | None = None
     #: How many calls to fail, as the API does when it still fails after the SDK's retries, before answering.
     failures: int = 0
     #: Words of a system prompt under which it finds nothing.
@@ -118,7 +121,20 @@ class Scripted:
                     or (self.stray is not None and self.stray in said)
                 ):
                     number = int(row['number'])
-                    found.append({'path': path, 'line': number, 'end_line': number, 'why': f'scripted for {said}'})
+                    found.append(
+                        {
+                            'path': path,
+                            'line': number,
+                            'end_line': number,
+                            'why': f'scripted for {said}',
+                            'breaks_rule': True,
+                        }
+                    )
+                elif self.clean is not None and self.clean in said:
+                    number = int(row['number'])
+                    found.append(
+                        {'path': path, 'line': number, 'end_line': number, 'why': 'no finding', 'breaks_rule': False}
+                    )
         return Reply(json.dumps({'findings': found}))
 
 
@@ -273,6 +289,22 @@ def test_a_gate_that_recovers_every_finding_and_makes_none_false_earns_blocking_
     assert stub.record() == record
     # The record measures the gate as a pull request's run asks it.
     assert stub.stale(lambda path: (repository / path).read_text()) == []
+
+
+def test_a_place_the_samples_list_as_clean_is_no_finding_and_the_log_counts_each_set_aside(
+    tmp_path: Path, repository: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    stub = stub_gate(tmp_path)
+    history = _history(repository, stub, PULL_REQUESTS)
+
+    # Every sample lists the line a case labelled `pass` names, judging it clean.
+    with caplog.at_level(logging.INFO):
+        record = _calibrate(stub, history, Scripted(clean='GPU'))
+
+    assert (record.status, record.recovered, record.false_findings) == (Status.BLOCKING, PULL_REQUESTS, 0)
+    set_aside = [r.getMessage() for r in caplog.records if 'judged clean' in r.getMessage()]
+    assert len(set_aside) == PULL_REQUESTS
+    assert all(f': {SAMPLES} items' in message for message in set_aside)
 
 
 #: The most review findings of `PULL_REQUESTS` a gate at the bar misses, and the most false findings it makes.

@@ -33,7 +33,7 @@ from dataclasses import dataclass, replace
 
 from ..prcheck import Git
 from . import comment, view
-from .ask import Asked, judge, log_dropped
+from .ask import Asked, judge, log_clean, log_dropped
 from .calibration import Status, standing
 from .change import Change, change
 from .comment import Evidence, Ran
@@ -115,8 +115,9 @@ def prepare(
 def asked(prepared: Sequence[Prepared], model: Callable[[], Model]) -> list[Ran]:
     """Each prepared gate, asked; each recorded as asking nothing where no model can be asked.
 
-    The findings each gate's samples made on no line the change writes are
-    logged, by path, and dropped (`ask.written`).
+    How many items each gate's samples judged clean, which were set aside,
+    is logged by call (`ask.findings`); the findings they made on no line the
+    change writes are logged, by path, and dropped (`ask.written`).
     """
     try:
         judged = judge([p.asked for p in prepared], model)
@@ -124,6 +125,7 @@ def asked(prepared: Sequence[Prepared], model: Callable[[], Model]) -> list[Ran]
         log.error('the gates ask nothing: %s', exc)
         return [_unasked(p.gate, p.status, f'no model could be asked: {exc}', p.rule) for p in prepared]
     for p, found in zip(prepared, judged, strict=True):
+        log_clean(p.gate.name, found.clean)
         log_dropped(p.gate.name, found.dropped)
     return [
         Ran(

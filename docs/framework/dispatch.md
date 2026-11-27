@@ -1169,10 +1169,18 @@ change deletes, one that is not text, and text this repository holds but
 did not write, generated or recorded, are not shown. No code of the
 gate's own narrows what the question is about. The model is asked which
 of the lines the change writes break the gate's rule, reading the rest of
-what it is shown as their context, and answers with findings,
-each a place, a path and the lines it is about at the head, and a
-reason. The schema of each call names the paths it showed, and a reply
-that names another is a sample that answered nothing; a finding at a
+what it is shown as their context, and answers with a list of places,
+each a path and the lines it is about at the head, a reason, and after
+the reason a verdict on whether the place breaks the rule, so the model
+gives its reason before it judges. **Only a place whose verdict says it
+breaks the rule is a finding**: a place judged clean is set aside before
+anything else is made of the reply, by `dispatch gates`, a claim and
+`calibrate` alike, so a sample that lists a place only to say it is
+clean adds nothing to it, and the run logs how many places each call's
+samples set aside. The call's fixed text says the list holds only places
+that break the rule, and what the verdict means. The schema of each call
+names the paths it showed, and a reply that names another is a sample
+that answered nothing; a finding at a
 line the call did not show is dropped. What a
 gate is shown goes into one call up to a fixed bound, and past the bound
 into more, cut by file, and a file too long alone into runs of its
