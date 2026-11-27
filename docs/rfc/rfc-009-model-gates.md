@@ -1,8 +1,27 @@
 # RFC 009: The Model Gates
 
-*   **Status:** Accepted, 2026-11-26. A promoted design of 2026-11-21.
-    Its harness and gates are on `main`, each in shadow; §10 says which
-    of their parts this design keeps and which it retires.
+*   **Status:** Implemented, 2026-11-27. Every slice of §13 is merged,
+    a calibration of each gate among them. The text below is kept as
+    the accepted proposal rather than as a description of the system.
+    What the system *is* lives in the documents §12 names: how a pull
+    request and a brief are put to the gates, and a verdict on a brief
+    refusing nothing, in [framework/dispatch.md](../framework/dispatch.md)
+    §2.1; what a gate is asked and over what, its history of cases, its
+    examples, its measurement against past reviews, the regression check
+    and what makes it blocking, in dispatch.md §3; §4's rule in
+    [style/README.md](../style/README.md), under "A rule a model gate
+    quotes holds its heading alone"; a gate's parts in the package
+    documentation of `src/kluster/scripts/dispatch/gates/`, with the bar
+    in its `calibration` module and the example selection in its
+    `examples` module; and the key in [credentials.md](../credentials.md)
+    §3. Where this text and a design document disagree, the design
+    document is right. One decision moved in the building: §6 lets a
+    case's source be any comment, an operator's ruling in a private
+    repository included, and what was built records a case only from a
+    review or a ruling on a pull request of this repository, an
+    operator's ruling entering as the dispatcher's relay of it, tagged
+    `operator`; dispatch.md §3 holds it. Accepted 2026-11-26, a promoted
+    design of 2026-11-21.
 *   **Created:** 2026-11-26
 *   **Authority:** AGENTS.md,
     [framework/dispatch.md](../framework/dispatch.md) and `docs/style/`.
