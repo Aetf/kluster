@@ -83,7 +83,7 @@ seemed to guard moves into a test of behavior or into the design.
     paragraph. It is deleted, and what stays are relations: every
     register row appears in the rendered help.
 
-## A test holds a value still only against a second source
+### A test holds a value still only against a second source
 
 This is the rule above applied to a literal on an assertion's expected
 side. A literal is a change detector unless something other than the
