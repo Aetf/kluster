@@ -6,13 +6,13 @@ what stands in its way at once. `claim` and `queue` change the forge only when
 `check` returns none. What each precondition is, and the section of
 dispatch.md it comes from, is `Precondition`'s.
 
-Every brief, whatever its role, is then asked about whole by the model
-gates whose trigger names a brief (`ask_about_brief`, dispatch.md §2.1),
-with their canon read from the dispatcher's checkout. Their verdicts land in
-the dispatcher's log, which is where the claim is run and where the brief
-can still be rewritten before the agent is spawned, and not on a pull
-request, which is public while a brief may name what a public page must
-not. They refuse nothing, whatever status a gate's calibration earns: that
+Every brief, whatever its role, is then asked about whole by each model
+gate whose trigger names it (`ask_about_brief`, dispatch.md §2.1), and by
+none where no trigger does, each gate's canon read from the dispatcher's
+checkout. Their verdicts land in the dispatcher's log, which is where the
+claim is run and where the brief can still be rewritten before the agent
+is spawned, and not on a pull request, which is public while a brief may
+name what a public page must not. They refuse nothing, whatever status a gate's calibration earns: that
 status is measured on pull requests, and says nothing of how the gate reads
 a brief.
 
