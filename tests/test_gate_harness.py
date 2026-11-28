@@ -234,10 +234,10 @@ def test_a_change_reads_both_sides_of_each_hunk(repository: Path) -> None:
 
 
 def test_an_appeal_line_is_read_wherever_the_report_holds_it() -> None:
-    report = 'Report.\n  Gate appeal: change-detector tests/test_x.py:12: it holds a relation.\nThanks.'
+    report = 'Report.\n  Gate appeal: two-words tests/test_x.py:12: it holds a relation.\nThanks.'
 
     assert [(a.gate, a.path, a.line, a.reason) for a in appeals(report)] == [
-        ('change-detector', 'tests/test_x.py', 12, 'it holds a relation.')
+        ('two-words', 'tests/test_x.py', 12, 'it holds a relation.')
     ]
 
 
@@ -281,19 +281,19 @@ def test_an_appeal_answers_nothing_of_another_gate_or_path_at_the_same_lines(gat
 
 def test_a_finding_in_a_commits_message_is_named_by_its_place_and_appealed_there() -> None:
     sha = 'c' * 40
-    found = comment.Entry(message_path(sha), 3, 5, (Answer(Verdict.FINDING, 'it narrates'),) * 3)
-    ran = comment.Ran('narration', 'claude-haiku-5-5', Status.BLOCKING, 'why', '', (found,))
+    found = comment.Entry(message_path(sha), 3, 5, (Answer(Verdict.FINDING, 'a reason'),) * 3)
+    ran = comment.Ran('stub', 'claude-haiku-5-5', Status.BLOCKING, 'why', '', (found,))
     evidence = comment.Evidence('a' * 40, (ran,))
 
     rendered = comment.render(evidence)
     assert f'`:commit/{sha}:3–5`' in rendered
     held = comment.parse(rendered)
     assert held is not None
-    appealed = apply(held, appeals(f'Gate appeal: narration :commit/{sha}:4: it states what the tree holds.'))
+    appealed = apply(held, appeals(f'Gate appeal: stub :commit/{sha}:4: it holds to the rule.'))
     assert appealed.unanswered == []
     # A commit named by less than its full SHA is refused, saying so, rather than read as no appeal at all.
     with pytest.raises(AppealRefused, match='full SHA'):
-        _ = apply(held, appeals(f'Gate appeal: narration :commit/{sha[:12]}:4: it states what the tree holds.'))
+        _ = apply(held, appeals(f'Gate appeal: stub :commit/{sha[:12]}:4: it holds to the rule.'))
 
 
 def test_a_planted_findings_comment_by_another_account_is_neither_edited_nor_read(
@@ -866,7 +866,7 @@ REVIEWS = Path(__file__).parent / 'data' / 'gates' / 'reviews'
     [
         pytest.param(
             '7033524978',
-            'enumeration',
+            'stub',
             Case(896, 'a1ed77e19f2e', 'src/kluster/components/apps/jellyfin/__init__.py', 61, 82, Verdict.FINDING, ''),
             '**4. `src/kluster/components/apps/jellyfin/__init__.py:61` — should-fix.** The owned set is a list',
             id='its-first-line-over-an-earlier-unit-inside-it',

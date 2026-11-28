@@ -802,10 +802,11 @@ retry starts afresh:
     matches the path the brief is read at. The brief is read as a
     change that writes one file whole, at `:brief/<areas>/<file>`,
     where the areas are the issue's `area/*` labels, so a trigger that
-    takes every path of a pull request takes no brief. Today those
-    gates are `enumeration`, for every brief, and `conclusion`, for
-    the brief of an issue in `area/cluster`. Their canonical sections
-    are read from the dispatcher's checkout, which is the tree the
+    takes every path of a pull request takes no brief. Today that gate
+    is `conclusion`, for the brief of an issue in `area/cluster`, and
+    the brief of any other issue is asked nothing. The canonical
+    sections of the gates a brief goes to are read from the
+    dispatcher's checkout, which is the tree the
     claim runs in, and each gate is shown the brief whole, with no
     examples (§3). Their verdicts land in the claim's log. That is
     where the dispatcher runs the claim, and the brief can still be
