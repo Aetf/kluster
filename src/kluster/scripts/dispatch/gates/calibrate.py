@@ -15,9 +15,11 @@ measured nothing. The gate runs on a pull request where
 its trigger matches a path the change touches, and is asked there as
 `dispatch gates` asks it (`view.parts`, `ask.judge`), an item its samples
 judged clean set aside and logged (`ask.findings`), a finding standing
-only on the lines the change writes (`ask.written`), with its canonical
-section read from the checkout the command runs in, which is the tree the
-record's hash of it is held against. Its examples there are drawn from
+only on the lines the change writes (`ask.written`), its tools reading the
+repository from the store at that head and that merge base (`tree`), so a
+historical head reads as a live one does, and its canonical section read
+from the checkout the command runs in, which is the tree the record's hash
+of it is held against. Its examples there are drawn from
 every other pull request's cases (`examples`), so no case is scored by a
 prompt that holds it.
 
@@ -105,6 +107,7 @@ from .examples import Library
 from .forge import GateForge
 from .gate import CASES, RECORD, Gate, GateUnreadable, hashes_of
 from .model import Model
+from .tree import Tree, TreeGit
 from .verdict import Verdict
 
 log = logging.getLogger(__name__)
@@ -449,7 +452,8 @@ def calibrate(gate: Gate, checkout: Path, model: Callable[[], Model], forge: Gat
     left_out: list[Case] = []
     ran: dict[tuple[int, str], list[Asked]] = {}
     for pr, head in recorded:
-        changed = change(git, git.merge_base(bases[pr], head), head)
+        base = git.merge_base(bases[pr], head)
+        changed = change(git, base, head)
         if not gate.triggered(changed.paths):
             continue
         parts = view.parts(changed, gate.spec.trigger)
@@ -468,7 +472,8 @@ def calibrate(gate: Gate, checkout: Path, model: Callable[[], Model], forge: Gat
         others = [c for (other, _), held_cases in recorded.items() if other != pr for c in held_cases]
         log.info('drawing the examples of #%d', pr)
         shown = library.prompt(gate.name, others, [p.path for p in parts])
-        ran[(pr, head)] = [Asked(gate.system(m.canon, m.prompt), m.model, parts, examples=shown) for m in asking]
+        tree = Tree(TreeGit(git.root), head, base)
+        ran[(pr, head)] = [Asked(gate.system(m.canon, m.prompt), m.model, parts, tree, examples=shown) for m in asking]
     log.info(
         'asking %s about %d pull requests of its history, on %s; %d more it does not run on',
         gate.name,

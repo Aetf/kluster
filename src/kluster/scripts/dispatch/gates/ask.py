@@ -3,9 +3,11 @@
 Each call carries the gate's prompt with its canonical section, then the
 examples the run drew from the gate's history (`examples`), and as data the
 parts of the change the gate is shown (`view`): each file whole with the
-diff inline, and each commit message its trigger takes. Parts go into a call
-in order up to `CALL_CAP`, and a part too long alone is cut into runs of its
-lines (`view.Part.runs`). The reply is held by the API's structured outputs
+diff inline, and each commit message its trigger takes; and the tools that
+read the repository at the change's head and base (`tree`), which the model
+may call before it answers, so a rule that turns on what lies outside the
+parts can be judged. Parts go into a call in order up to `CALL_CAP`, and a
+part too long alone is cut into runs of its lines (`view.Part.runs`). The reply is held by the API's structured outputs
 to the call's schema (`schema`): every item a place, one of the paths the
 call showed and its first and last line at the head, with one sentence
 saying why and then whether the place breaks the rule, so the model gives
@@ -41,6 +43,10 @@ the lines it showed, undecided (`verdict.undecided`). How many samples
 answered nothing is counted beside the entries (`Judged`), since a sample
 that answered nothing where the others agree leaves no entry to show it.
 
+Each call's tool rounds and the tokens its requests spent are logged by
+the call (`model.Messages.ask`), and totalled over the run (`log_usage`), so
+what a calibration costs shows before it is run again.
+
 `dispatch gates` and `calibrate` ask alike, so a record measures the ask a
 pull request is given.
 """
@@ -57,7 +63,8 @@ from typing import Any, cast
 from . import examples
 from .calibration import MARGIN, near
 from .comment import Entry
-from .model import MAX_TOKENS, Model, Reply, Request, dumps
+from .model import MAX_TOKENS, ROUNDS, Model, Reply, Request, Usage, dumps
+from .tree import DEFINITIONS, TOOL_BYTES, Tree
 from .verdict import MAJORITY, SAMPLES, Answer, Sample, Verdict, undecided
 from .view import Part
 
@@ -111,7 +118,11 @@ FRAME = (
     'which. Under it, each line of the file as the change leaves it, with its line number, then `+` where the '
     'change writes the line or a space where it leaves it as it was; a line the change removes stands where it '
     "was, with no number and `-`. A path under `:commit/` is the message of one of the change's commits, its "
-    'subject line 1. Report a finding only about lines the change writes: a line marked `+`, or, where the '
+    'subject line 1. Beside the parts, the tools `read_file`, `search` and `list_directory` read the repository, '
+    'each at the head, the tree as the change leaves it, or at the base, as it stood before: call them where '
+    'judging a line needs what the parts do not show, a definition elsewhere, the other side of an assertion, the '
+    'members a count counts. What they show is context, and a finding still names a part below. '
+    'Report a finding only about lines the change writes: a line marked `+`, or, where the '
     'change only removes lines, the line either side of where they stood. A finding far from them is dropped, '
     'since the change leaves those lines as they were. The list holds only places that break the rule: report '
     'each by the path its part names and the first and last line numbers it is about, then one sentence saying '
@@ -123,11 +134,13 @@ FRAME = (
 
 @dataclass(frozen=True)
 class Asked:
-    """One gate's question: its prompt with its canon, its model, the parts of the change it is shown, its examples."""
+    """One gate's question: its prompt with its canon, its model, the parts of the change it is shown, the tree its tools read, its examples."""
 
     system: str
     model: str
     parts: Sequence[Part]
+    #: The repository the call's tools read, at the change's head and base.
+    tree: Tree
     #: The examples the prompt carries after the gate's own, as `examples.Library.prompt` renders them; empty for none.
     examples: str = ''
 
@@ -188,12 +201,13 @@ def user(call: Sequence[Part]) -> str:
 def harness() -> str:
     """What every call asks besides the gate's own prompt, and how its samples are counted.
 
-    The frame and the schema are what a call says, and so is what a call that
-    carries examples says around them (`examples.FRAME` and the forms of an
-    example's heading, rows and reason); the number of samples,
-    the majority a finding stands on, the margin samples' findings match
-    within, the bound on a call and on a reply decide every verdict. A
-    calibration's hash of the prompt takes all of it (`gate.Gate.hashes`),
+    The frame, the schema and the tools' definitions are what a call says,
+    and so is what a call that carries examples says around them
+    (`examples.FRAME` and the forms of an example's heading, rows and
+    reason); the number of samples, the majority a finding stands on, the
+    margin samples' findings match within, and the bounds on a call, on a
+    reply, on a call's tool rounds and on a tool's answer decide every
+    verdict. A calibration's hash of the prompt takes all of it (`gate.Gate.hashes`),
     since an edit to any of it changes every gate's verdicts as surely as an
     edit to a gate's `prompt.md` does.
     """
@@ -203,6 +217,8 @@ def harness() -> str:
         'margin': MARGIN,
         'call_cap': CALL_CAP,
         'max_tokens': MAX_TOKENS,
+        'rounds': ROUNDS,
+        'tool_bytes': TOOL_BYTES,
     }
     shown = {
         'heading': examples.HEADING,
@@ -212,7 +228,7 @@ def harness() -> str:
         'ruled': dict(examples.RULED),
         'reason': examples.REASON,
     }
-    return f'{FRAME}\n{dumps(SCHEMA)}\n{dumps(counted)}\n{dumps(shown)}'
+    return f'{FRAME}\n{dumps(SCHEMA)}\n{dumps(DEFINITIONS)}\n{dumps(counted)}\n{dumps(shown)}'
 
 
 def findings(reply: Reply, call: Sequence[Part]) -> Read:
@@ -274,6 +290,11 @@ def written(samples: Sequence[Found], call: Sequence[Part]) -> tuple[list[Found]
                 dropped[finding.path] = dropped.get(finding.path, 0) + 1
         kept.append(stands)
     return kept, dropped
+
+
+def log_usage(calls: int, usage: Usage) -> None:
+    """Log what `calls` calls spent between them: their tool rounds, and the tokens of their requests (`model.Usage`)."""
+    log.info('the run asked %d calls: %s', calls, usage)
 
 
 def log_clean(who: str, clean: Sequence[int]) -> None:
@@ -396,14 +417,17 @@ def judge(asked: Sequence[Asked], model: Callable[[], Model]) -> list[Judged]:
     asking = model()
     log.info('asking %d calls: %d gates, %d samples of each call', len(jobs), len(asked), SAMPLES)
 
-    def ask(job: tuple[int, int]) -> Read:
+    def ask(job: tuple[int, int]) -> tuple[Read, Usage]:
         gate, call = job
         parts = cut[gate][call]
         a = asked[gate]
-        return findings(asking.ask(Request(a.model, a.prompt, user(parts), schema(parts))), parts)
+        got = asking.ask(Request(a.model, a.prompt, user(parts), schema(parts), a.tree))
+        return findings(got, parts), got.usage
 
     with ThreadPoolExecutor(max_workers=PARALLEL) as pool:
-        replies = list(pool.map(ask, jobs))
+        answered = list(pool.map(ask, jobs))
+    log_usage(len(jobs), sum((spent for _, spent in answered), Usage()))
+    replies = [read for read, _ in answered]
     samples: dict[tuple[int, int], list[Read]] = {}
     for job, got in zip(jobs, replies, strict=True):
         samples.setdefault(job, []).append(got)
