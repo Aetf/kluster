@@ -1187,6 +1187,22 @@ gate is shown goes into one call up to a fixed bound, and past the bound
 into more, cut by file, and a file too long alone into runs of its
 lines, each with the hunks it holds. Each call is asked three times, and
 the reply is held to that schema by the API's structured outputs.
+**Beside what it is shown, a gate reads the whole repository** through
+read-only tools the model calls before it answers: a file whole or a run
+of its lines, a search of the tree for a regular expression, optionally
+under a path, and a directory's listing (`gates.tree`). Each answers from
+the local store at a commit, the change's head unless the call names its
+base, so no checkout is made or written, a historical head under
+`calibrate` reads as a live one does, and nothing outside the repository
+is reachable; a claim's gates read at the commit the dispatcher's
+checkout is at. A path outside the tree, or one that names nothing at
+the commit, is an error the model reads, and the call goes on. The loop
+is the SDK's own tool runner, bounded in tool rounds per call and in the
+bytes one answer holds (`gates.model`, `gates.tree`); a call still
+reading at the bound is a sample that answered nothing, and the run logs
+each call's rounds and tokens and their total. What the tools return is
+context: the places a finding may name are still the parts the call
+showed.
 **A finding stands only on the lines the change writes at the head**,
 within a margin set beside the bar (`gates.calibration`): the lines it
 adds or rewrites, every line of a file it adds and of a commit's message

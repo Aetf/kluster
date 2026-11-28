@@ -20,7 +20,7 @@ import threading
 from dataclasses import dataclass, field, replace
 from itertools import permutations
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from gate_stub import (
@@ -36,6 +36,8 @@ from gate_stub import (
     reply,
     scratch_repository,
     stub_gate,
+    tool_use,
+    tree,
 )
 
 from kluster.scripts.dispatch.gates import ask, comment, examples, model, run, view
@@ -45,7 +47,8 @@ from kluster.scripts.dispatch.gates.calibration import FINDINGS, MARGIN, PULL_RE
 from kluster.scripts.dispatch.gates.cases import Case
 from kluster.scripts.dispatch.gates.change import change, message_path
 from kluster.scripts.dispatch.gates.gate import CASES, RECORD, Gate
-from kluster.scripts.dispatch.gates.model import KeyMissing, Model, Reply, Request
+from kluster.scripts.dispatch.gates.model import ROUNDS, KeyMissing, Model, Reply, Request
+from kluster.scripts.dispatch.gates.tree import Tree, TreeGit
 from kluster.scripts.dispatch.gates.verdict import SAMPLES, Answer, Verdict
 from kluster.scripts.dispatch.prcheck import Git, Hunk
 
@@ -615,9 +618,15 @@ def _writes(repository: Path) -> tuple[str, list[view.Part]]:
     return head, view.parts(change(Git(repository), base, head), ('**',))
 
 
-def _asked(parts: list[view.Part], replies: Recorded) -> ask.Judged:
-    (judged,) = ask.judge([ask.Asked('You are a stub.', 'claude-haiku-5-5', parts)], replies.model)
+def _asked(parts: list[view.Part], replies: Recorded, at: Tree) -> ask.Judged:
+    (judged,) = ask.judge([ask.Asked('You are a stub.', 'claude-haiku-5-5', parts, at)], replies.model)
     return judged
+
+
+def _last(repository: Path) -> Tree:
+    """The tree of the last commit of `repository` and the one before it."""
+    store = TreeGit(repository)
+    return tree(repository, store.commit('HEAD'), store.commit('HEAD~1'))
 
 
 @pytest.mark.parametrize(
@@ -642,7 +651,7 @@ def test_a_finding_stands_only_within_the_margin_of_a_line_the_change_writes(
         {'path': path, 'line': n, 'end_line': n, 'why': f'at {n}'} for n in sorted(kept + dropped)
     ]
 
-    judged = _asked(parts, Recorded([reply(said)]))
+    judged = _asked(parts, Recorded([reply(said)]), _last(repository))
 
     # Every sample found every line asked, so each line kept is a finding of its own on every sample.
     assert [(e.path, e.line, e.end_line, e.finding) for e in judged.entries] == [(path, n, n, True) for n in kept]
@@ -659,7 +668,7 @@ def test_findings_on_lines_the_change_does_not_write_are_dropped_before_the_samp
 
     # Two samples agree only on a line past the margin of the rewritten line 6; the third finds a line within it,
     # within the margin of theirs, which would join them into one place standing on all three.
-    judged = _asked(parts, Recorded([at(6 + MARGIN + 1), at(6 + MARGIN + 1), at(6 + MARGIN - 1)]))
+    judged = _asked(parts, Recorded([at(6 + MARGIN + 1), at(6 + MARGIN + 1), at(6 + MARGIN - 1)]), _last(repository))
 
     assert [(e.line, e.end_line, e.finding) for e in judged.entries] == [(6 + MARGIN - 1, 6 + MARGIN - 1, False)]
 
@@ -673,7 +682,7 @@ def test_an_item_its_sample_judged_clean_is_set_aside_and_one_it_judged_to_break
         {'path': 'docs/added.md', 'line': 3, 'end_line': 3, 'why': 'It counts the members.', 'breaks_rule': True},
     ]
 
-    judged = _asked(parts, Recorded([reply(said)]))
+    judged = _asked(parts, Recorded([reply(said)]), _last(repository))
 
     assert [(e.path, e.line, e.end_line, e.finding) for e in judged.entries] == [('docs/added.md', 3, 3, True)]
     # The one call's samples each set the clean item aside.
@@ -686,9 +695,128 @@ def test_two_samples_that_agree_only_on_a_place_they_judged_clean_make_no_place(
     def at(breaks: bool) -> dict[str, Any]:
         return reply([{'path': 'docs/modified.md', 'line': 6, 'end_line': 6, 'why': 'at 6', 'breaks_rule': breaks}])
 
-    judged = _asked(parts, Recorded([at(False), at(False), reply([])]))
+    judged = _asked(parts, Recorded([at(False), at(False), reply([])]), _last(repository))
 
     assert judged.entries == []
+
+
+#: Where the tools' cases read a definition, a path no trigger of theirs shows.
+DEFINED = 'spec/defined.md'
+
+
+def _defined(repository: Path) -> tuple[str, str, list[view.Part]]:
+    """The base and head of a change that writes a note naming a set and rewrites where the set is defined.
+
+    The definition reads differently at the base, at the head and in the
+    working copy, and the gate is shown only the note.
+    """
+    base = commit(repository, {DEFINED: 'The set is defined at the base.\n', NOTE: 'A note.\n'})
+    head = commit(repository, {DEFINED: 'The set is defined at the head.\n', NOTE: 'A note.\nIt names the set.\n'})
+    _ = (repository / DEFINED).write_text('The set is defined in the working copy.\n')
+    return base, head, view.parts(change(Git(repository), base, head), ('docs/**',))
+
+
+def _answers(replies: Recorded) -> list[dict[str, Any]]:
+    """Each tool's answer the requests carried, in the order they were sent."""
+    last = [request['messages'][-1]['content'] for request in replies.requests]
+    blocks = [
+        cast(dict[str, Any], b) for content in last if isinstance(content, list) for b in cast(list[Any], content)
+    ]
+    return [block for block in blocks if block['type'] == 'tool_result']
+
+
+#: The final answer of the tools' cases: the line of the note that names the set.
+NAMED = reply([{'path': NOTE, 'line': 2, 'end_line': 2, 'why': 'It names a set defined elsewhere.'}])
+
+
+@pytest.mark.parametrize('side', ['head', 'base'])
+def test_a_tool_round_is_answered_from_the_commit_it_names_and_not_from_the_working_copy(
+    repository: Path, side: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    base, head, parts = _defined(repository)
+    answer = {**NAMED, 'usage': {**NAMED['usage'], 'cache_read_input_tokens': 3000}}
+    replies = Recorded([tool_use('read_file', {'path': DEFINED, 'side': side}, cached=3000), answer], by_turn=True)
+
+    with caplog.at_level(logging.INFO, logger=ask.__name__):
+        judged = _asked(parts, replies, tree(repository, head, base))
+
+    # Each sample read the definition as the commit of its side holds it, and the working copy not at all.
+    answers = [str(a['content']) for a in _answers(replies)]
+    assert len(answers) == SAMPLES
+    assert all(f'The set is defined at the {side}.' in a and 'working copy' not in a for a in answers)
+    # After the round, the answer reads into findings as a call without one does.
+    assert [(e.path, e.line, e.finding) for e in judged.entries] == [(NOTE, 2, True)]
+    # Every request asks the API to cache its prompt, the tool round's among them.
+    assert [r.get('cache_control') for r in replies.requests] == [{'type': 'ephemeral'}] * (2 * SAMPLES)
+    # The run totals each call's rounds and tokens: a round and an answer each, at the stub's usage, the tool
+    # round's reply having written its prompt to the cache and the answer's read it.
+    (total,) = [r.getMessage() for r in caplog.records if r.getMessage().startswith('the run asked')]
+    assert total == (
+        f'the run asked {SAMPLES} calls: {SAMPLES} tool rounds, {SAMPLES * 2 * 412} input tokens, '
+        f'{SAMPLES * 3000} written to the cache and {SAMPLES * 3000} read from it, {SAMPLES * (24 + 96)} output tokens'
+    )
+
+
+@pytest.mark.parametrize(
+    ('arguments', 'reason'),
+    [
+        pytest.param({'path': 'docs/absent.md'}, 'no file at docs/absent.md at the head', id='no such file'),
+        pytest.param({'path': 'docs', 'side': 'base'}, 'no file at docs at the base', id='a directory'),
+        pytest.param({'path': '../outside.md'}, 'outside the repository', id='climbs out'),
+        pytest.param({'path': '/etc/hostname'}, 'outside the repository', id='absolute'),
+        pytest.param({'path': ':commit/0123456789ab'}, 'not a path of the repository', id='a pseudo-path'),
+    ],
+)
+def test_a_path_that_names_no_file_of_the_tree_is_an_error_answer_and_the_call_goes_on(
+    tmp_path: Path, repository: Path, arguments: dict[str, object], reason: str
+) -> None:
+    _ = (tmp_path / 'outside.md').write_text('A file beside the repository.\n')
+    base, head, parts = _defined(repository)
+    replies = Recorded([tool_use('read_file', arguments), NAMED], by_turn=True)
+
+    judged = _asked(parts, replies, tree(repository, head, base))
+
+    answers = _answers(replies)
+    assert [a.get('is_error') for a in answers] == [True] * SAMPLES
+    assert all(reason in str(a['content']) and 'beside the repository' not in str(a['content']) for a in answers)
+    assert (judged.unanswered, [(e.line, e.finding) for e in judged.entries]) == (0, [(2, True)])
+
+
+def test_a_call_still_reading_at_the_bound_on_its_rounds_is_a_sample_that_answered_nothing(repository: Path) -> None:
+    base, head, parts = _defined(repository)
+    replies = Recorded([tool_use('search', {'pattern': 'set'})], by_turn=True)
+
+    judged = _asked(parts, replies, tree(repository, head, base))
+
+    # Every reply asked for a tool, so each call ended at the bound, after its rounds and the reply past them.
+    assert len(replies.requests) == SAMPLES * (ROUNDS + 1)
+    assert judged.unanswered == SAMPLES
+    assert all(s is None for e in judged.entries for s in e.samples)
+
+
+def test_after_a_tool_round_a_finding_on_a_line_the_change_does_not_write_is_still_dropped(repository: Path) -> None:
+    _, parts = _writes(repository)
+    said: list[dict[str, object]] = [
+        {'path': 'docs/modified.md', 'line': n, 'end_line': n, 'why': f'at {n}'} for n in (6, 6 + MARGIN + 1)
+    ]
+    replies = Recorded([tool_use('list_directory', {'path': 'docs'}), reply(said)], by_turn=True)
+
+    judged = _asked(parts, replies, _last(repository))
+
+    assert 'modified.md' in str(_answers(replies)[0]['content'])
+    assert [(e.path, e.line, e.finding) for e in judged.entries] == [('docs/modified.md', 6, True)]
+    assert judged.dropped == {'docs/modified.md': SAMPLES}
+
+
+def test_a_tool_round_the_api_rate_limits_waits_as_it_says_and_the_call_goes_on(repository: Path) -> None:
+    base, head, parts = _defined(repository)
+    replies = Recorded([tool_use('read_file', {'path': DEFINED}), NAMED], by_turn=True, limited_rounds=SAMPLES)
+
+    judged = _asked(parts, replies, tree(repository, head, base))
+
+    # Each refused request is sent again after its wait, and the call goes on from it rather than from its start.
+    assert (len(replies.requests), replies.slept) == (SAMPLES * 3, [20.0] * SAMPLES)
+    assert (judged.unanswered, [(e.line, e.finding) for e in judged.entries]) == (0, [(2, True)])
 
 
 def test_a_finding_at_a_line_the_call_did_not_show_is_left_out_and_one_running_past_it_is_held_to_it() -> None:

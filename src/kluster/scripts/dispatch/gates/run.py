@@ -3,10 +3,11 @@
 It runs after `prcheck`'s deterministic checks, on the same pull request
 read from the same local store. A gate runs where the change touches a path
 its trigger matches, and is shown each file and commit message its trigger
-matches (`view.parts`); its canonical section is read from the tree at the
-head, so a change to the canon is judged by the canon it makes. How a gate
-is made ready to ask, and how the gates are asked, is shared with the
-claim, which asks the gates about a brief (`prepare`, `asked`): a gate's
+matches (`view.parts`), and its tools read the repository at the pull
+request's head and at its merge base with the base branch (`tree`); its
+canonical section is read from the tree at the head, so a change to the
+canon is judged by the canon it makes. How a gate is made ready to ask,
+and how the gates are asked, is shared with the claim, which asks the gates about a brief (`prepare`, `asked`): a gate's
 status is its calibration record's only while that record measured the
 gate as it now runs (`calibration.standing`); a gate whose canonical
 section does not read asks nothing, and its line in the comment says why;
@@ -41,6 +42,7 @@ from .examples import Library
 from .forge import GateForge, PullComment
 from .gate import Gate, GateUnreadable
 from .model import KeyMissing, Messages, Model, key
+from .tree import Tree, TreeGit
 
 log = logging.getLogger(__name__)
 
@@ -84,10 +86,11 @@ def prepare(
     g: Gate,
     canon: Callable[[str], str | None],
     changed: Change,
+    tree: Tree,
     at: str | None = None,
     examples: Library | None = None,
 ) -> Prepared | Ran:
-    """`g` ready to ask about `changed`, its canonical section read through `canon`; where it cannot ask, why.
+    """`g` ready to ask about `changed`, its tools reading `tree`, its canonical section read through `canon`; where it cannot ask, why.
 
     Its status is what its calibration record earns against the gate as it
     now runs. A gate whose section does not read asks nothing, and stays
@@ -108,7 +111,7 @@ def prepare(
     rule = g.rule(at, section) if at is not None else ''
     parts = view.parts(changed, g.spec.trigger)
     shown = '' if examples is None else examples.prompt(g.name, g.cases(), [p.path for p in parts])
-    asking = Asked(system=g.system(section.text), model=g.spec.model, parts=parts, examples=shown)
+    asking = Asked(system=g.system(section.text), model=g.spec.model, parts=parts, tree=tree, examples=shown)
     return Prepared(g, rule, status, why, asking)
 
 
@@ -153,8 +156,9 @@ def review(forge: GateForge, git: Git, number: int, gates: Sequence[Gate], model
     prepared: list[Prepared] = []
     unread: list[Ran] = []
     library = Library(git, forge)
+    tree = Tree(TreeGit(git.root), pull.head, base)
     for g in triggered:
-        ready = prepare(g, lambda path: git.text(pull.head, path), changed, pull.head, library)
+        ready = prepare(g, lambda path: git.text(pull.head, path), changed, tree, pull.head, library)
         if isinstance(ready, Prepared):
             prepared.append(ready)
         else:

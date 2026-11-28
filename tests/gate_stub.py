@@ -11,10 +11,14 @@ the lines a change writes into a note, and its canon is a section of
 The replies are Messages API response bodies (`tests/data/gates/stub/messages/`)
 in the shape the API documents, served by a transport handed to the real
 client, so a run builds its requests and reads its replies through the SDK
-with no network and no key. Each call takes the next body in turn. A case
-that needs other findings builds the body with `reply`. A case that needs
-the rate limit has the transport refuse its first calls with a `429`, and
-the client's waits are recorded rather than slept.
+with no network and no key. Each request takes the next body in turn, or,
+for a call that reads the repository first, the body of the turn its
+conversation is at (`Recorded.by_turn`), whichever calls are in flight
+beside it. A case that needs other findings builds the body with `reply`,
+and a tool round with `tool_use`. A case that needs the rate limit has the
+transport refuse its first requests with a `429`, or its first requests
+that carry a tool's answer, and the client's waits are recorded rather
+than slept.
 """
 
 from __future__ import annotations
@@ -38,6 +42,7 @@ from kluster.scripts.dispatch.forge import CODE
 from kluster.scripts.dispatch.gates.forge import PullComment
 from kluster.scripts.dispatch.gates.gate import Canon, Gate, Spec
 from kluster.scripts.dispatch.gates.model import Messages
+from kluster.scripts.dispatch.gates.tree import Tree, TreeGit
 from kluster.scripts.dispatch.prcheck import PullRequest
 
 #: The stub gate as committed.
@@ -159,6 +164,11 @@ class Recorded:
     status: int = 200
     #: How many requests, the first ones, are refused for the rate limit, each naming `retry_after`.
     limited: int = 0
+    #: Whether a request takes the body of the turn its conversation is at, the replies it already holds,
+    #: the last body for every turn past them, rather than the next body in turn.
+    by_turn: bool = False
+    #: How many requests that carry a tool's answer, the first ones, are refused for the rate limit.
+    limited_rounds: int = 0
     #: The wait a refusal names, in seconds, as the API's `retry-after` header carries it.
     retry_after: str = '20'
     requests: list[dict[str, Any]] = field(default_factory=list[dict[str, Any]])
@@ -168,10 +178,17 @@ class Recorded:
     _lock: threading.Lock = field(default_factory=threading.Lock)
 
     def _serve(self, request: httpx2.Request) -> httpx2.Response:
+        sent = cast(dict[str, Any], json.loads(request.content))
+        turn = sum(1 for m in cast(list[dict[str, Any]], sent['messages']) if m['role'] == 'assistant')
         with self._lock:
             limited = len(self.requests) < self.limited
-            served = self.bodies[len(self.requests) % len(self.bodies)]
-            self.requests.append(cast(dict[str, Any], json.loads(request.content)))
+            if turn and self.limited_rounds:
+                self.limited_rounds -= 1
+                limited = True
+            served = self.bodies[
+                min(turn, len(self.bodies) - 1) if self.by_turn else len(self.requests) % len(self.bodies)
+            ]
+            self.requests.append(sent)
             self.headers.append(request.headers)
         if limited:
             return httpx2.Response(429, headers={'retry-after': self.retry_after}, json=RATE_LIMITED)
@@ -218,6 +235,28 @@ def reply(findings: list[dict[str, object]]) -> dict[str, Any]:
         'stop_sequence': None,
         'usage': {'input_tokens': 412, 'output_tokens': 96},
     }
+
+
+def tool_use(name: str, arguments: dict[str, object], cached: int = 0) -> dict[str, Any]:
+    """A Messages API body whose reply calls the tool `name` with `arguments`, and stops for its answer.
+
+    Its request wrote `cached` tokens of its prompt to the cache.
+    """
+    return {
+        'id': 'msg_stub_tool',
+        'type': 'message',
+        'role': 'assistant',
+        'model': 'claude-haiku-5-5',
+        'content': [{'type': 'tool_use', 'id': f'toolu_{name}', 'name': name, 'input': arguments}],
+        'stop_reason': 'tool_use',
+        'stop_sequence': None,
+        'usage': {'input_tokens': 412, 'output_tokens': 24, 'cache_creation_input_tokens': cached},
+    }
+
+
+def tree(repository: Path, head: str, base: str) -> Tree:
+    """The tree a call's tools read in `repository`, at `head` and `base`."""
+    return Tree(TreeGit(repository), head, base)
 
 
 def recorded(messages: Path = STUB / 'messages') -> Recorded:

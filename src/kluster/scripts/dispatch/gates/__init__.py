@@ -23,8 +23,9 @@ The modules, in the order a run reaches them: `change` reads the change,
 `view` renders what of it each gate is shown, `examples` chooses the cases
 the prompt carries as examples and reads their lines and reasons, `ask`
 cuts what the gate is shown into calls,
-asks each three times through `model` and matches the samples' findings
-into places, `calibration` says whether the gate's verdict blocks,
+asks each three times through `model`, whose calls may read the
+repository at the change's head and base through the tools of `tree`, and
+matches the samples' findings into places, `calibration` says whether the gate's verdict blocks,
 `comment` renders the one pull-request comment that carries the findings
 and the evidence behind them, `run` puts those together for
 `dispatch gates <pr>`, and `appeal` and `harvest` are the two ways a

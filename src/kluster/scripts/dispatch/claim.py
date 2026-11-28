@@ -9,12 +9,13 @@ dispatch.md it comes from, is `Precondition`'s.
 Every brief, whatever its role, is then asked about whole by each model
 gate whose trigger names it (`ask_about_brief`, dispatch.md §2.1), and by
 none where no trigger does, each gate's canon read from the dispatcher's
-checkout. Their verdicts land in the dispatcher's log, which is where the
+checkout and its tools reading the repository at the commit that checkout
+is at. Their verdicts land in the dispatcher's log, which is where the
 claim is run and where the brief can still be rewritten before the agent
 is spawned, and not on a pull request, which is public while a brief may
-name what a public page must not. They refuse nothing, whatever status a gate's calibration earns: that
-status is measured on pull requests, and says nothing of how the gate reads
-a brief.
+name what a public page must not. They refuse nothing, whatever status a
+gate's calibration earns: that status is measured on pull requests, and
+says nothing of how the gate reads a brief.
 
 The forge is read by `check` and written after the gates answer, so the
 window between the two runs as long as the model takes. Another dispatcher
@@ -47,6 +48,7 @@ from .gates.comment import Evidence, Ran
 from .gates.gate import Gate, discover
 from .gates.model import Model
 from .gates.run import Prepared, asked, messages, prepare
+from .gates.tree import Tree, checkout
 from .gates.verdict import reason
 from .paths import OwnedPath
 from .record import Event, Front, Record, RecordUnreadable, Waiver
@@ -330,15 +332,21 @@ def _record(dispatch: Dispatch, event: Event, verdict: Verdict) -> str:
     ).render()
 
 
+def _checkout_tree() -> Tree:
+    return checkout(workstation.repo_root())
+
+
 @dataclass(frozen=True)
 class Asking:
-    """What a brief is asked through: the gates, the tree their canonical sections are read from, and the model."""
+    """What a brief is asked through: the gates, the tree their canonical sections are read from, the model, and the tree their tools read."""
 
     gates: Sequence[Gate]
     #: The text of a path in the tree the canon is read from; None where it holds no such file.
     canon: Callable[[str], str | None]
     #: Made only where a gate is shown the brief.
     model: Callable[[], Model]
+    #: The repository the gates' tools read; made only where a gate is shown the brief.
+    tree: Callable[[], Tree] = _checkout_tree
 
 
 def _checkout(path: str) -> str | None:
@@ -360,8 +368,9 @@ def ask_about_brief(file: BriefFile, issue: Issue, sha256: str, asking: Asking) 
     gate asks about it where a pattern of its trigger names briefs and
     matches that path (`gates.change.asks_about_briefs`), and is shown it
     whole. Each gate's canonical section is read from the tree
-    `asking.canon` reads, and the gate is made ready and asked as a pull
-    request's gates are (`gates.run.prepare`, `gates.run.asked`).
+    `asking.canon` reads, its tools read the tree `asking.tree` makes, and
+    the gate is made ready and asked as a pull request's gates are
+    (`gates.run.prepare`, `gates.run.asked`).
     """
     areas = [label.removeprefix(ledger.AREA) for label in issue.labels if label.startswith(ledger.AREA)]
     path = brief_path(areas, file.name)
@@ -369,12 +378,15 @@ def ask_about_brief(file: BriefFile, issue: Issue, sha256: str, asking: Asking) 
     change = Change(head=sha256, files=(written,), text=lambda asked: file.text if asked == path else None)
     prepared: list[Prepared] = []
     unread: list[Ran] = []
-    for gate in (g for g in asking.gates if asks_about_briefs(g.spec.trigger, path)):
-        ready = prepare(gate, asking.canon, change)
-        if isinstance(ready, Prepared):
-            prepared.append(ready)
-        else:
-            unread.append(ready)
+    asks = [g for g in asking.gates if asks_about_briefs(g.spec.trigger, path)]
+    if asks:
+        tree = asking.tree()
+        for gate in asks:
+            ready = prepare(gate, asking.canon, change, tree)
+            if isinstance(ready, Prepared):
+                prepared.append(ready)
+            else:
+                unread.append(ready)
     log.info('asking %s about the brief', ', '.join(p.gate.name for p in prepared) or 'no gate')
     return Evidence(sha256, tuple(asked(prepared, asking.model) + unread))
 
